@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# JavaScript
+node_modules/
+dist/
+build/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Data, models, and generated artifacts
+data/
+artifacts/
+models/
+reports/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
