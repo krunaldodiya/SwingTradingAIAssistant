@@ -218,3 +218,41 @@ Official references:
 - <https://upstox.com/developer/api-documentation/analytics-token/>
 - <https://upstox.com/developer/api-documentation/authentication/>
 - <https://upstox.com/developer/api-documentation/access-token-request/>
+
+## ExpiryTrack NIFTY and India VIX migration opportunity
+
+Status: proposed for the next data sprint
+
+A read-only audit of ExpiryTrack's `market_data.duckdb` on 2026-08-04 found a
+24 GB physical database with 168,481,043 rows in one canonical `market_data`
+table. The table has a primary key on `(expired_instrument_key, ts)` and exposes
+3m, 5m, 15m, 30m, 1h, and 1d timeframes as views rather than duplicate stored
+tables.
+
+The requested reusable subset is approximately 129,042,075 one-minute rows:
+
+- NIFTY spot: 167,376 rows;
+- NIFTY futures: 479,169 rows;
+- NIFTY calls: 62,916,160 rows;
+- NIFTY puts: 65,311,622 rows; and
+- India VIX spot: 167,748 rows.
+
+Observed coverage begins on 2024-07-12 for NIFTY options, 2024-08-02 for NIFTY
+futures, and 2024-08-13 for NIFTY spot and India VIX. NIFTY derivatives extend
+through 2026-07-28; spot and India VIX extend through 2026-07-31. These ranges
+must be treated as observed source coverage, not an unverified claim of complete
+exchange history.
+
+Do not copy these candles into a second row-oriented DuckDB table. The proposed
+migration should attach or open the ExpiryTrack database read-only, select only
+`base_symbol IN ('NIFTY', 'INDIAVIX')`, normalize its derivative-specific legacy
+schema into the canonical nullable instrument schema, validate each bounded
+partition, and write the canonical result as immutable Parquet. The new DuckDB
+catalog should store manifests, checksums, lineage, quality findings, and source
+coverage while querying the Parquet directly.
+
+BANKNIFTY and SENSEX are intentionally excluded from the first migration because
+their source downloads are incomplete. Migration acceptance must also verify
+instrument identity mapping, OHLC envelopes, session timestamps, expected
+coverage, volume and OI semantics, partition-level row reconciliation, and
+idempotent restart behavior before the source database is considered imported.
