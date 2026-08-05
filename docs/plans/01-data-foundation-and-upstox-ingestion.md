@@ -215,6 +215,22 @@ Reader and writer batches are bounded to `65_536` candles. The reader closes on
 exhaustion and conversion failure; callers that stop early use its context
 manager or call `close()` explicitly.
 
+### ARK-43 Upstox equity canonical adapter
+
+**Approved decision — Linear ARK-43.** The pure
+`canonicalize_upstox_equity_candles` adapter maps already-normalized `Candle`
+values plus one resolved `Instrument` and caller-supplied `ingested_at` to a
+sorted tuple of ARK-31 canonical candles. Upstox Historical Candle V3 timestamps
+are timeframe starts, so the adapter maps their UTC instant directly without a
+shift. It supports only `NSE_EQ`/`EQ`, copies resolved identity, fixes the
+approved Upstox provenance values, sets every derivative field and canonical OI
+to `None`, and rejects positive source OI. It validates canonical uniqueness and
+does not fetch, store, inspect raw payloads, use clocks, or apply calendar rules.
+Its input is a finite `Sequence[Candle]` capped at 65,536 rows, safely above the
+44,640 minutes in any calendar month and aligned with one-month one-minute
+requests. Resolved identity must be NSE/NSE_EQ/EQ with absent derivative fields;
+source OI is only absent or exact finite zero.
+
 ### DuckDB catalog tables
 
 - `instrument_snapshots`: dated Upstox instrument metadata and source hash.

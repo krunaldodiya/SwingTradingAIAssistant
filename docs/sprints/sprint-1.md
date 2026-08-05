@@ -85,6 +85,7 @@ high-risk review.
 ## Status
 
 Planning started on 2026-08-05. ARK-31 froze the logical canonical schema and
-ARK-42 implements its physical Parquet mapping. ARK-43 normalizes provider data
+ARK-42 implements its physical Parquet mapping. The approved Linear ARK-43
+adapter maps normalized Upstox NSE equity candles into that logical contract
 before ARK-34. ARK-33 and ARK-40 remain ordered implementation children for
 physical reconciliation and manifest lifecycle respectively; ARK-44 is deferred.
