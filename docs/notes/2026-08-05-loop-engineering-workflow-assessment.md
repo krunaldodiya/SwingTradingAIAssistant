@@ -26,9 +26,10 @@ work but consume additional tokens; and worktrees isolate independent changes.
 - The root execution coordinator policy is accepted. For each active execution
   window, the project owner predesignates exactly one root coordinator: heartbeat
   target thread or active user-invoked Goal, never both. It owns one executable
-  WIP, routing, integration, completion judgment, and all Linear/Slack writes.
+  WIP, routing, integration, completion judgment, and all Linear mutations and
+  other authorized project-state writes.
 - Implementers, reviewers, and publishers return handoff evidence and do not
-  mutate Linear/Slack. Repository writes are serial: the coordinator writes its
+  mutate Linear. Repository writes are serial: the coordinator writes its
   authorized scope or delegates one exact file/worktree scope to one implementer.
   All write scopes, including non-overlapping scopes, are serialized. During
   delegation or any repository write, parallel agents are repository read-only;
@@ -71,6 +72,9 @@ work but consume additional tokens; and worktrees isolate independent changes.
 The issue-level lease/bootstrap/forced-release/generation/fencing proposals are
 superseded by the accepted root-coordinator policy. No timeout, inferred
 staleness, CAS, or automatic recovery mechanism is approved.
+
+Project Slack notifications are superseded by current ChatGPT mobile/desktop
+task visibility.
 
 ### Rejected or deferred
 

@@ -74,15 +74,12 @@ Linear project document or status update.
 
 ## Progress reporting
 
-For project/sprint/Slack notifications, send a concise user update whenever an
-executable story or task reaches `Done`, becomes materially blocked, needs user
-input, or changes the sprint goal. Use the current Codex task and the configured
-Slack DM for completion/blocker updates so the user can follow progress away from
-the workstation. Do not send those notifications for individual commands,
+Use the current Codex/ChatGPT task for material project or sprint updates when
+an executable story or task reaches `Done`, becomes materially blocked, needs
+user input, or changes the sprint goal. Do not report individual commands,
 ordinary red-green iterations, or unchanged status. Preserve concise in-session
 progress commentary during active work when it helps the user follow material
-progress. In-session commentary may continue; Slack, Linear, and other
-project-state writes are coordinator-only.
+progress. Linear and other authorized project-state writes are coordinator-only.
 
 Every sprint update reports:
 
@@ -136,9 +133,9 @@ delivery over throughput, batching, or partially completed work.
 For each active project execution window, the project owner predesignates
 exactly one root coordinator: the heartbeat target thread or an active
 user-invoked Goal, never both. The coordinator owns one executable WIP,
-routing, integration, completion judgment, and all Linear/Slack mutations.
-Implementers, reviewers, and publishers return evidence via handoff and do not
-mutate Linear or Slack.
+routing, integration, completion judgment, and all Linear mutations and other
+authorized project-state writes. Implementers, reviewers, and publishers return
+evidence via handoff and do not mutate Linear.
 
 Repository writes are serial. The coordinator may write its authorized scope or
 delegate one exact file/worktree scope to one implementer. While delegated, the
@@ -181,7 +178,7 @@ market-data safeguards.
   with `rg` and necessary ranges; never replace required full reads or quality
   gates, and run focused tests before broader checks.
 - Bound tool and log output to the evidence needed: retain the command, exit status and concise failure evidence, and omit repetitive output.
-- For project/sprint/Slack notifications, send concise updates only when a task
+- For material updates, use the current Codex/ChatGPT task only when a task
   completes, materially blocks, needs an input, or changes a decision; preserve
   concise in-session progress commentary. Handoffs state evidence and the exact
   next action, not a transcript.
