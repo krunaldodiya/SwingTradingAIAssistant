@@ -231,6 +231,19 @@ Its input is a finite `Sequence[Candle]` capped at 65,536 rows, safely above the
 requests. Resolved identity must be NSE/NSE_EQ/EQ with absent derivative fields;
 source OI is only absent or exact finite zero.
 
+### ARK-32 monthly request planner
+
+**Approved decision — Linear ARK-32.** A pure one-minute planner validates one
+resolved NSE/NSE_EQ/EQ equity instrument and exact built-in date and `1m` inputs,
+then produces immutable, contiguous, inclusive calendar-month requests. The
+user-approved rules reject dates before 2022-01-01 atomically rather than
+clipping them, and accept only `1m`; weekends and holidays remain in request
+coverage. It computes the month count before output allocation. From the exact
+built-in `date` contract and the approved lower bound, the derived natural
+representational bound is January 2022 through December 9999 (95,736 months).
+Planning is O(months), with no clock,
+HTTP, credential, storage, candle, or calendar-service dependency.
+
 ### DuckDB catalog tables
 
 - `instrument_snapshots`: dated Upstox instrument metadata and source hash.

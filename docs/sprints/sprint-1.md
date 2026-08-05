@@ -88,4 +88,6 @@ Planning started on 2026-08-05. ARK-31 froze the logical canonical schema and
 ARK-42 implements its physical Parquet mapping. The approved Linear ARK-43
 adapter maps normalized Upstox NSE equity candles into that logical contract
 before ARK-34. ARK-33 and ARK-40 remain ordered implementation children for
-physical reconciliation and manifest lifecycle respectively; ARK-44 is deferred.
+physical reconciliation and manifest lifecycle respectively. The approved Linear
+ARK-32 planner decomposes one-minute NSE equity date ranges into contiguous
+calendar-month requests before physical reconciliation. ARK-44 is deferred.
