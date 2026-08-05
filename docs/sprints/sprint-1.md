@@ -90,4 +90,7 @@ adapter maps normalized Upstox NSE equity candles into that logical contract
 before ARK-34. ARK-33 and ARK-40 remain ordered implementation children for
 physical reconciliation and manifest lifecycle respectively. The approved Linear
 ARK-32 planner decomposes one-minute NSE equity date ranges into contiguous
-calendar-month requests before physical reconciliation. ARK-44 is deferred.
+calendar-month requests before physical reconciliation. The approved Linear
+ARK-33 reconciliation boundary now decides deterministic `SKIP` or `REQUEST`
+outcomes from supplied manifest and physical evidence before any provider
+request; ARK-40 remains the separate lifecycle concern. ARK-44 is deferred.

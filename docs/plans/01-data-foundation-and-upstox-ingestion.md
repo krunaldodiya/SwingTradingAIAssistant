@@ -244,6 +244,35 @@ representational bound is January 2022 through December 9999 (95,736 months).
 Planning is O(months), with no clock,
 HTTP, credential, storage, candle, or calendar-service dependency.
 
+### ARK-33 partition reconciliation
+
+**Approved decision — Linear ARK-33.** A pure reconciliation boundary accepts a
+finite sequence of ARK-32 planned instrument-months and supplied manifest and
+physical-observation evidence, then returns one ordered immutable `SKIP` or
+`REQUEST` decision per plan. It never reads files, candles, databases, clocks,
+or providers. A partition is skipped only for exactly one matching evidence
+record whose manifest is verified, file exists, canonical relative paths match,
+lowercase SHA-256 values match, schema versions match and are physically
+compatible, recorded dates match the plan, and coverage and quality both pass.
+Missing or duplicate evidence requests the partition without inspecting or
+selecting an evidence record; duplicate plans and orphan evidence are invalid.
+`REQUEST` reasons are a stable ordered taxonomy: `MISSING_EVIDENCE`,
+`DUPLICATE_EVIDENCE`, `MANIFEST_NOT_VERIFIED`, `FILE_MISSING`,
+`PATH_INVALID_OR_MISMATCHED`, `CHECKSUM_INVALID_OR_MISMATCHED`,
+`SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE`, `RECORDED_RANGE_MISMATCHED`,
+`COVERAGE_NOT_PASSED`, and `QUALITY_NOT_PASSED`. Canonical paths are a lexical,
+filesystem-independent relative slash-separated form with no empty, `.`, or
+`..` components, no leading or trailing component whitespace, no backslashes,
+no colons, and only printable Unicode characters. Evidence may faithfully record missing or
+corrupt path, checksum, schema-version, and date observations as `None` or
+invalid content; reconciliation converts those facts into the matching request
+reason rather than fabricating values. Runtime scalar types remain exact. The
+physical partition identity is `(provider, exchange, segment, instrument_type,
+security_id, interval, year, month)`; symbols, provider instrument keys, and
+requested partial dates do not affect duplicate, matching, or orphan checks.
+The bounded input ceiling is 95,736 plans or evidence records; reconciliation is
+O(plans + evidence).
+
 ### DuckDB catalog tables
 
 - `instrument_snapshots`: dated Upstox instrument metadata and source hash.
