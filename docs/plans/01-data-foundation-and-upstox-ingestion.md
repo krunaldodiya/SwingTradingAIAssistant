@@ -273,10 +273,46 @@ requested partial dates do not affect duplicate, matching, or orphan checks.
 The bounded input ceiling is 95,736 plans or evidence records; reconciliation is
 O(plans + evidence).
 
+### ARK-40 manifest lifecycle
+
+**Approved decision — Linear ARK-40.** The lifecycle core is pure and owns one
+immutable current manifest per physical instrument-month; `ingestion_runs`
+owns immutable historical attempts and enforces historical run-ID uniqueness.
+The core enforces only current-ID inequality and does not accumulate caller
+history. Manifest fields are schema version, physical month plan, current run
+ID, state, validation outcome and policy version, candle schema version, actual
+UTC minute coverage, row count, lowercase SHA-256 checksum, canonical path,
+source version, full-precision UTC lifecycle timestamps, and failure category.
+It permits only `IN_PROGRESS` to `VERIFIED` or `FAILED`, `FAILED` to
+`IN_PROGRESS` retry, and `VERIFIED` to physical-invalidation `FAILED`.
+
+The failure taxonomy is exactly `INTERRUPTED`, `EMPTY_RESPONSE`,
+`PROVIDER_RETRYABLE`, `PROVIDER_NON_RETRYABLE`, `NORMALIZATION_FAILED`,
+`VALIDATION_FAILED`, `WRITE_FAILED`, `PUBLICATION_FAILED`, `FILE_MISSING`,
+`PATH_INVALID_OR_MISMATCHED`, `CHECKSUM_INVALID_OR_MISMATCHED`,
+`SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE`, `COVERAGE_NOT_PASSED`, and
+`QUALITY_NOT_PASSED`. From `IN_PROGRESS`, only the first eight are allowed:
+interruption/provider/normalization failures are `NOT_RUN`; empty and
+validation failures are `FAILED`; write and publication failures are `PASSED`.
+The last six are exclusively `VERIFIED` invalidations, remain `PASSED`, and
+preserve complete verified artifact and provenance evidence. `EMPTY_RESPONSE`
+is exactly zero rows with no schema, coverage, path, or checksum. Failed
+diagnostic coverage, when present, is paired and UTC minute-aligned but may be
+unordered or outside the plan; verified coverage alone is ordered and in-plan.
+
+ARK-33 remains a supplied-observation adapter: it performs no I/O and does not
+infer coverage from row counts or timestamps. Retry requires a caller-supplied
+new current run ID, source version, validation policy version, and timestamps;
+it preserves creation and plan but clears terminal artifacts and failure.
+Physical invalidation preserves verified provenance and artifacts. All lifecycle
+timestamps are caller-supplied full-precision UTC values; no lifecycle clock,
+calendar service, or timezone database is used.
+
 ### DuckDB catalog tables
 
 - `instrument_snapshots`: dated Upstox instrument metadata and source hash.
-- `ingestion_runs`: request, timing, code/config version, result, and error class.
+- `ingestion_runs`: immutable request-attempt history, timing, code/config
+  version, result, error class, and historical run-ID uniqueness.
 - `partitions`: instrument/month, requested range, actual range, row count,
   checksum, path, status, and timestamps.
 - `quality_issues`: gaps, duplicates, invalid OHLC envelopes, negative volume,

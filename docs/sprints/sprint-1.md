@@ -93,4 +93,6 @@ ARK-32 planner decomposes one-minute NSE equity date ranges into contiguous
 calendar-month requests before physical reconciliation. The approved Linear
 ARK-33 reconciliation boundary now decides deterministic `SKIP` or `REQUEST`
 outcomes from supplied manifest and physical evidence before any provider
-request; ARK-40 remains the separate lifecycle concern. ARK-44 is deferred.
+request. The approved Linear ARK-40 lifecycle now manages immutable pure
+manifest transitions and retry/invalidation evidence separately. ARK-44 is
+deferred.
