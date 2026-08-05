@@ -11,3 +11,4 @@ increment and future process decisions.
 ## Index
 
 - [Sprint 0 — Foundation](sprint-0.md)
+- [Sprint 1 — Resumable one-minute storage](sprint-1.md)

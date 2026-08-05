@@ -45,6 +45,12 @@ Use a hybrid layout:
 4. **Feather is not a canonical format.** It is useful for temporary dataframe
    interchange but is weaker than partitioned Parquet for durable datasets.
 
+This storage decision does not make Arrow or Parquet a dependency of the
+logical canonical candle model. **ARK-31** freezes that versioned logical model
+and its validation contract; **ARK-42** owns the separately versioned physical
+Parquet mapping, including its Arrow implementation details. The physical
+mapping must faithfully represent the ARK-31 model and cannot redefine it.
+
 For one-minute data, write one immutable file per instrument and calendar month.
 Download workers may prepare separate partitions concurrently; one coordinator
 updates the DuckDB catalog. Files become visible only after validation and an
@@ -111,7 +117,7 @@ References:
 
 ## Minimum schemas
 
-### Parquet candle columns
+### ARK-31 logical canonical candle schema v1
 
 - `provider`
 - `instrument_key`
@@ -130,9 +136,34 @@ References:
 - `source_version`
 - `adjustment_state` (`raw` initially)
 
-Uniqueness is `(provider, instrument_key, interval, ts)`. Derivative columns are
-nullable for equities and indices; no dummy expiry, strike, or contract type is
-permitted.
+`ts` is the inclusive bar-open timestamp for the one-minute half-open interval
+`[ts, ts + 1m)`. It persists as a timezone-aware UTC timestamp with zero
+seconds and microseconds; exchange-session interpretation converts it
+explicitly to the exchange timezone. The provider adapter must verify the
+provider's timestamp convention and translate it to this convention before
+constructing the canonical model; an unverified convention is invalid input.
+`ingested_at` is a timezone-aware UTC retrieval timestamp and is not required
+to be aligned to a minute boundary. Session-calendar validation is outside the
+canonical model constructor and is supplied by the applicable exchange-calendar
+validation boundary. `open`, `high`, `low`, `close`, and nullable `strike`/`oi`
+use finite IEEE-754 float64 values.
+`volume` is an integer greater than or equal to zero; boolean values are invalid.
+OHLC values must be nonnegative and satisfy the envelope
+`high >= max(open, close, low)` and `low <= min(open, close, high)`.
+
+Schema metadata records version `v1`. Uniqueness is
+`(provider, instrument_key, interval, ts)`. Derivative columns are nullable for
+equities and indices; no dummy expiry, strike, or contract type is permitted.
+The common scalar types and nullability are shared only where every supported
+instrument family has coherent semantics; family adapters own interpretation
+and validation of their fields. The RELIANCE equity adapter emits every
+derivative field as `None`.
+
+### ARK-42 physical Parquet mapping
+
+ARK-42 maps the ARK-31 logical canonical candle schema v1 to partitioned
+Parquet. It owns Arrow/Parquet field types, metadata encoding, and compatibility
+tests; ARK-31 deliberately has no Arrow or Parquet dependency.
 
 ### DuckDB catalog tables
 
@@ -143,9 +174,44 @@ permitted.
 - `quality_issues`: gaps, duplicates, invalid OHLC envelopes, negative volume,
   off-session timestamps, and unresolved anomalies.
 
+DuckDB stores catalog metadata only; it never stores candle rows. Candle rows
+remain in canonical Parquet and are queried through DuckDB's Parquet scans.
 Do not store credentials or access tokens in either Parquet or DuckDB.
 
 ## Non-functional requirements
+
+### Provider-request minimization
+
+- Fetch and persist one-minute candles as the canonical intraday source. Higher
+  intraday timeframes must be derived locally from verified one-minute
+  partitions with exchange-session-aware aggregation; requesting 3m, 5m, 15m,
+  30m, or hourly history from Upstox for the same covered range is prohibited.
+- **ARK-33 physical reconciliation:** a download plan is computed against the
+  DuckDB partition manifest before any authenticated candle request is sent. A
+  partition may be skipped only when its manifest status is verified and its
+  immutable Parquet file exists, its checksum matches, its schema version is
+  supported, and its recorded coverage passes the applicable quality policy.
+- **ARK-40 manifest lifecycle:** manifest state transitions, temporary output,
+  and terminal partition registration are managed as a separate lifecycle
+  concern from physical reconciliation and skip decisions.
+- Missing, unverified, corrupt, incompatible, or incomplete partitions are
+  scheduled independently. Do not restart an interrupted multi-month or
+  multi-instrument run from its original beginning.
+- Resume decisions must not use `MAX(ts)` as proof of completeness. Persist the
+  requested range, actual range, row count, checksum, validation outcome, source
+  version, and terminal partition state so interruption and repair are
+  deterministic.
+- Temporary files and in-progress catalog states are never treated as completed
+  work. After a crash, discard or quarantine abandoned temporary output and
+  retry only the affected partition.
+- Retries apply only to retryable provider failures, use bounded backoff and the
+  provider's `Retry-After` guidance when valid, and share one account-level rate
+  limiter across all workers.
+
+Higher-timeframe aggregation is a query or derived-artifact concern, not an
+ingestion request. Its exact session buckets, partial-bucket policy, and
+corporate-action adjustment version require a separately approved
+specification before those derived bars are exposed as research facts.
 
 ### Performance
 
@@ -252,6 +318,10 @@ The workflow must:
 - write Parquet through a temporary file and atomic rename;
 - record the partition checksum and coverage in DuckDB; and
 - resume without downloading already verified partitions.
+
+Implementation order within the storage path is **ARK-31**, then **ARK-43**
+(the normalized-to-canonical provider adapter), before **ARK-34**. **ARK-44**
+is deferred; it is not an implied part of ARK-31, ARK-43, or ARK-34.
 
 Initial query proof:
 
