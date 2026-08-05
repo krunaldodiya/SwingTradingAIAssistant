@@ -51,7 +51,11 @@ steps without changing the sprint goal. ARK-44 remains deferred.
 - Retryable requests use bounded backoff, valid `Retry-After` guidance, and one
   shared provider-account rate limiter.
 - ARK-31 schema v1 persists UTC timestamps, finite float64 price/strike/OI
-  values, nonnegative OHLC and volume constraints, and rejects boolean volume.
+  values, nonnegative OHLC and any nonnegative integer volume, and rejects
+  boolean volume. The approved Linear ARK-42 physical mapping rejects volume
+  above signed-int64 representability without changing ARK-31. It uses the exact
+  approved Arrow field order, nullability, metadata version, and Parquet
+  compatibility settings; DuckDB reads Parquet directly without a candle table.
 - `ts` is the inclusive UTC bar-open for `[ts, ts + 1m)`, with zero seconds and
   microseconds; adapters verify and translate provider timestamp conventions.
   `ingested_at` is UTC-aware and need not be minute-aligned, while session
@@ -80,9 +84,7 @@ high-risk review.
 
 ## Status
 
-Planning started on 2026-08-05. ARK-31 is approved to freeze the logical
-canonical schema, with ARK-42 owning its physical Parquet mapping and ARK-43
-normalizing provider data before ARK-34. ARK-33 and ARK-40 remain ordered
-implementation children for physical reconciliation and manifest lifecycle
-respectively; ARK-44 is deferred. No production Sprint 1 implementation existed
-at the start of the sprint.
+Planning started on 2026-08-05. ARK-31 froze the logical canonical schema and
+ARK-42 implements its physical Parquet mapping. ARK-43 normalizes provider data
+before ARK-34. ARK-33 and ARK-40 remain ordered implementation children for
+physical reconciliation and manifest lifecycle respectively; ARK-44 is deferred.

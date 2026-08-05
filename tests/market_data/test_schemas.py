@@ -274,6 +274,13 @@ def test_canonical_candle_rejects_invalid_volume(volume: object) -> None:
         _candle(volume=volume)
 
 
+@pytest.mark.parametrize(
+    "volume", [0, 9_223_372_036_854_775_807, 9_223_372_036_854_775_808, 10**100]
+)
+def test_canonical_candle_accepts_any_nonnegative_integer_volume(volume: int) -> None:
+    assert _candle(volume=volume).volume == volume
+
+
 class _IntSubclass(int):
     pass
 

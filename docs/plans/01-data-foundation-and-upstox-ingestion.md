@@ -161,9 +161,59 @@ derivative field as `None`.
 
 ### ARK-42 physical Parquet mapping
 
-ARK-42 maps the ARK-31 logical canonical candle schema v1 to partitioned
-Parquet. It owns Arrow/Parquet field types, metadata encoding, and compatibility
-tests; ARK-31 deliberately has no Arrow or Parquet dependency.
+**Approved decision — Linear ARK-42.** ARK-42 maps the ARK-31 logical canonical
+candle schema v1 to partitioned Parquet. It owns Arrow/Parquet field types,
+metadata encoding, and compatibility tests; ARK-31 deliberately has no Arrow or
+Parquet dependency.
+
+**Approved physical schema v1.** The immutable Arrow field order is:
+
+1. non-null `provider: string`
+2. non-null `instrument_key: string`
+3. non-null `security_id: string`
+4. non-null `symbol: string`
+5. non-null `exchange: string`
+6. non-null `segment: string`
+7. non-null `instrument_type: string`
+8. nullable `underlying_id: string`
+9. nullable `expiry: date32`
+10. nullable `strike: float64`
+11. nullable `option_type: string`
+12. non-null `interval: string`
+13. non-null `ts: timestamp[us, tz=UTC]`
+14. non-null `open: float64`
+15. non-null `high: float64`
+16. non-null `low: float64`
+17. non-null `close: float64`
+18. non-null `volume: int64` in the inclusive physical range `0` through
+    `9_223_372_036_854_775_807`
+19. nullable `oi: float64`
+20. non-null `ingested_at: timestamp[us, tz=UTC]`
+21. non-null `source_version: string`
+22. non-null `adjustment_state: string`
+
+The Arrow schema metadata must contain the application version requirement
+`swing_trading_ai_assistant.candle_schema_version` with bytes value `1`; it does
+not add a `schema_version` column. The v1 reader checks this metadata before it
+reads rows, rejects missing and unsupported versions separately, and accepts v1
+only when field order, names, types, and nullability exactly match the above
+contract. Row-to-domain conversion failures remain distinct from physical-schema
+incompatibility.
+
+Parquet writes use format version `2.6`, microsecond timestamp coercion without
+truncation, no deprecated INT96 timestamps, and stored Arrow schema metadata.
+PyArrow owns construction, conversion, and round-trip validation. DuckDB is an
+independent direct-Parquet compatibility check only; it does not create or store
+a candle table. Compression, dictionaries, row groups, page checksums, temporary
+or atomic publication, manifests, provider fetching, and orchestration remain
+the responsibility of later approved children.
+
+The ARK-31 logical `volume` contract remains any nonnegative built-in integer.
+ARK-42 rejects a logical volume above the physical signed-int64 maximum with an
+explicit non-representable-value error; it does not redefine the logical model.
+Reader and writer batches are bounded to `65_536` candles. The reader closes on
+exhaustion and conversion failure; callers that stop early use its context
+manager or call `close()` explicitly.
 
 ### DuckDB catalog tables
 
