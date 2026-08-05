@@ -308,6 +308,46 @@ Physical invalidation preserves verified provenance and artifacts. All lifecycle
 timestamps are caller-supplied full-precision UTC values; no lifecycle clock,
 calendar service, or timezone database is used.
 
+### ARK-34 atomic Parquet publication
+
+**Approved decision — Linear ARK-34.** The publisher accepts a caller-supplied
+storage-root `Path`, one exact ARK-32 plan, and one bounded sequence of exact
+canonical equity candles. The sequence admission ceiling is 65,536 values and
+is checked before indexing or storage I/O; semantic month validation remains
+strict, so a successful calendar-month partition has at most its number of
+days times 1,440 unique minutes (at most 44,640). It derives the sole canonical Hive path from the
+physical identity only: `candles/provider=.../exchange=.../segment=.../`
+`instrument_type=EQ/security_id=.../interval=1m/year=YYYY/month=MM/`
+`bars.parquet`; symbols and provider instrument keys are never path inputs.
+Every path-bearing identity value is an exact built-in ASCII string matching
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Hive components use known `key=` prefixes
+plus those validated values; no process lock is used, and concurrent writers
+converge through hard-link no-clobber. It reconstructs and validates every candle, rejects duplicates rather than
+deduplicating, sorts by UTC timestamp, and validates/re-reads through the
+authoritative temporary descriptor for exact ordered equality before publication;
+that descriptor remains retained through final publication checks.
+
+The caller-supplied storage root is a pre-existing durable real directory; the
+publisher never creates or resolves it.  It walks every derived descendant by
+directory descriptor with no-follow semantics, rejects links and non-directories,
+and fsyncs each parent after a newly-created child. Cleanup only removes its exact
+temporary sibling. Published evidence is sealed: exact revalidated plan, enum,
+canonical path, lowercase SHA-256, schema, counts, UTC coverage, source version,
+and byte size. Publication uses a hidden random mode-0600 sibling temporary file, a bounded
+streaming SHA-256, and local POSIX hard-link no-clobber publication followed by
+directory fsync. The storage root and its publication directories are
+application-owned and protected from untrusted same-directory mutation; portable
+Python cannot preserve a canonical pathname against an arbitrary writer after
+return. Legitimate concurrent publisher processes remain supported by no-clobber
+convergence. A matching existing file returns `ALREADY_PRESENT`; an invalid
+or different file is a conflict and is never overwritten or repaired. Any error
+after visibility raises an outcome-unknown publication error and leaves the
+final file for ARK-33 reconciliation. The publisher has no catalog, manifest,
+provider, DuckDB, clock, or credential side effects. ARK-42 fixes the writer to
+Parquet 2.6, Snappy, dictionary/statistics enabled, data-page v1, page checksums
+enabled, page index disabled, and at most one 65,536-row group. Byte stability is
+within the pinned PyArrow 25 runtime scope.
+
 ### DuckDB catalog tables
 
 - `instrument_snapshots`: dated Upstox instrument metadata and source hash.

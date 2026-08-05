@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Final, Self, cast
+from typing import Any, BinaryIO, Final, Self, cast
 
 import pyarrow as _pyarrow
 import pyarrow.parquet as _pyarrow_parquet
@@ -83,7 +83,7 @@ class CandleParquetReader(Iterator[tuple[CanonicalCandle, ...]]):
     explicitly call ``reader.close()``.
     """
 
-    def __init__(self, path: str | Path, batch_size: int) -> None:
+    def __init__(self, path: str | Path | BinaryIO, batch_size: int) -> None:
         _validate_batch_size(batch_size)
         self._closed = False
         self._parquet_file: Any = pq.ParquetFile(path)
@@ -145,7 +145,7 @@ class CandleParquetReader(Iterator[tuple[CanonicalCandle, ...]]):
 
 
 def write_candles_parquet(
-    path: str | Path,
+    path: str | Path | BinaryIO,
     candles: Iterable[CanonicalCandle],
     *,
     batch_size: int = _DEFAULT_BATCH_SIZE,
@@ -156,6 +156,12 @@ def write_candles_parquet(
         path,
         CANDLE_ARROW_SCHEMA,
         version="2.6",
+        compression="snappy",
+        use_dictionary=True,
+        write_statistics=True,
+        data_page_version="1.0",
+        write_page_checksum=True,
+        write_page_index=False,
         coerce_timestamps="us",
         allow_truncated_timestamps=False,
         use_deprecated_int96_timestamps=False,
@@ -173,7 +179,7 @@ def write_candles_parquet(
 
 
 def iter_candles_from_parquet(
-    path: str | Path, *, batch_size: int = _DEFAULT_BATCH_SIZE
+    path: str | Path | BinaryIO, *, batch_size: int = _DEFAULT_BATCH_SIZE
 ) -> CandleParquetReader:
     """Return a closeable reader that validates the schema before yielding rows."""
     return CandleParquetReader(path, batch_size)

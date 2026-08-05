@@ -1,0 +1,692 @@
+"""Bounded, durable, no-clobber publication of canonical equity-month Parquet."""
+
+from __future__ import annotations
+
+import errno
+import hashlib
+import os
+import re
+import secrets
+import stat
+from collections.abc import Sequence
+from contextlib import suppress
+from dataclasses import dataclass, fields
+from datetime import UTC, datetime, timedelta, timezone
+from enum import StrEnum
+from pathlib import Path
+from typing import Final, cast
+
+from .manifest_lifecycle import FailureCategory
+from .monthly_request_planner import PlannedInstrumentMonth
+from .parquet import (
+    MAX_PARQUET_BATCH_SIZE,
+    iter_candles_from_parquet,
+    write_candles_parquet,
+)
+from .schemas import CANDLE_SCHEMA_VERSION, CanonicalCandle
+
+_IST: Final = timezone(timedelta(hours=5, minutes=30))
+_SAFE_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_PATH_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._=-]{0,127}\Z")
+_READ_BUFFER_SIZE: Final = 64 * 1024
+_DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_FINAL_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+_PATH_VALUE_FIELDS: Final = (
+    "provider",
+    "exchange",
+    "segment",
+    "instrument_type",
+    "security_id",
+    "interval",
+)
+
+
+class PublicationOutcome(StrEnum):
+    PUBLISHED = "PUBLISHED"
+    ALREADY_PRESENT = "ALREADY_PRESENT"
+
+
+class PartitionPublicationError(RuntimeError):
+    failure_category = FailureCategory.PUBLICATION_FAILED
+
+
+class PartitionValidationError(PartitionPublicationError):
+    failure_category = FailureCategory.VALIDATION_FAILED
+
+
+class PartitionWriteError(PartitionPublicationError):
+    failure_category = FailureCategory.WRITE_FAILED
+
+
+class PublicationConflictError(PartitionPublicationError):
+    failure_category = FailureCategory.PUBLICATION_FAILED
+
+
+class PublicationOutcomeUnknown(PartitionPublicationError):
+    failure_category = FailureCategory.PUBLICATION_FAILED
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPartitionEvidence:
+    plan: PlannedInstrumentMonth
+    outcome: PublicationOutcome
+    canonical_path: str
+    checksum_sha256: str
+    candle_schema_version: int
+    row_count: int
+    actual_from_ts: datetime
+    actual_to_ts: datetime
+    source_version: str
+    byte_size: int
+
+    def __init_subclass__(cls) -> None:
+        raise TypeError("PublishedPartitionEvidence cannot be subclassed")
+
+    def __post_init__(self) -> None:
+        if not _valid_evidence(self):
+            raise ValueError("invalid published partition evidence")
+
+
+def publish_partition(  # noqa: C901
+    storage_root: Path, plan: PlannedInstrumentMonth, candles: Sequence[CanonicalCandle]
+) -> PublishedPartitionEvidence:
+    """Publish one partition without following untrusted path entries.
+
+    ``storage_root`` is deliberately a pre-existing durable directory.  Every
+    descendant is walked from its directory descriptor, never resolved by name.
+    """
+    validated_plan = _validated_plan(plan)
+    rows = _validated_rows(candles, validated_plan)
+    relative = _relative_path(validated_plan)
+    root_fd = _open_root(storage_root)
+    parent_fd: int | None = None
+    temp_name: str | None = None
+    temp_fd: int | None = None
+    visible = False
+    result: PublishedPartitionEvidence | None = None
+    primary: Exception | None = None
+    try:
+        parent_fd = _open_or_create_parents(root_fd, relative.split("/")[:-1])
+        temp_name, temp_fd = _create_temp(parent_fd)
+        _write_temp(temp_fd, rows)
+        digest, byte_size = _validate_fd(temp_fd, rows, PartitionWriteError)
+        try:
+            _link_temp(parent_fd, temp_name)
+            visible = True
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                visibility = _final_visibility(parent_fd)
+                if visibility is not False:
+                    visible = True
+                    raise PublicationOutcomeUnknown(
+                        "publication outcome unknown"
+                    ) from None
+                raise PartitionPublicationError("publication failed") from None
+            existing_digest, existing_size = _validate_existing_final(parent_fd, rows)
+            if existing_digest != digest or existing_size != byte_size:
+                raise PublicationConflictError(
+                    "partition publication conflict"
+                ) from None
+            _remove_temp(parent_fd, temp_name)
+            temp_name = None
+            descriptor, temp_fd = temp_fd, None
+            if not _close_one(descriptor):
+                raise PublicationOutcomeUnknown("publication outcome unknown") from None
+            result = _evidence(
+                validated_plan,
+                PublicationOutcome.ALREADY_PRESENT,
+                relative,
+                digest,
+                rows,
+                byte_size,
+            )
+        else:
+            _fsync_directory(parent_fd)
+            _remove_temp(parent_fd, temp_name)
+            temp_name = None
+            if not _final_matches_temp(parent_fd, temp_fd):
+                raise PublicationOutcomeUnknown("publication outcome unknown")
+            descriptor, temp_fd = temp_fd, None
+            if not _close_one(descriptor):
+                raise PublicationOutcomeUnknown("publication outcome unknown")
+            result = _evidence(
+                validated_plan,
+                PublicationOutcome.PUBLISHED,
+                relative,
+                digest,
+                rows,
+                byte_size,
+            )
+    except Exception as error:
+        primary = error
+        if temp_fd is not None:
+            descriptor, temp_fd = temp_fd, None
+            _close_one(descriptor, error)
+        if temp_name is not None and parent_fd is not None:
+            _cleanup_temp(parent_fd, temp_name, error)
+    return _finish_publication(result, primary, visible, parent_fd, root_fd)
+
+
+def _finish_publication(
+    result: PublishedPartitionEvidence | None,
+    primary: Exception | None,
+    visible: bool,
+    parent_fd: int | None,
+    root_fd: int,
+) -> PublishedPartitionEvidence:
+    close_succeeded = _close_all(parent_fd, root_fd, primary)
+    if visible and (primary is not None or not close_succeeded):
+        outcome = PublicationOutcomeUnknown("publication outcome unknown")
+        if primary is not None:
+            for note in getattr(primary, "__notes__", ()):
+                outcome.add_note(note)
+        if (
+            not close_succeeded
+            and "publication descriptor cleanup failed"
+            not in getattr(outcome, "__notes__", ())
+        ):
+            outcome.add_note("publication descriptor cleanup failed")
+        raise outcome from None
+    if primary is not None:
+        if isinstance(primary, PartitionPublicationError):
+            raise primary
+        raise PartitionWriteError("partition write failed") from None
+    if not close_succeeded or result is None:
+        raise PartitionWriteError("partition write failed")
+    return result
+
+
+def _validated_plan(plan: object) -> PlannedInstrumentMonth:
+    if type(plan) is not PlannedInstrumentMonth:
+        raise PartitionValidationError("invalid partition input")
+    try:
+        values = tuple(
+            getattr(plan, name) for name in PlannedInstrumentMonth.__dataclass_fields__
+        )
+        rebuilt = PlannedInstrumentMonth(*values)
+        if rebuilt != plan or not all(
+            _safe_component(getattr(rebuilt, field)) for field in _PATH_VALUE_FIELDS
+        ):
+            raise ValueError
+        return rebuilt
+    except Exception:
+        raise PartitionValidationError("invalid partition input") from None
+
+
+def _validated_rows(
+    candles: object, plan: PlannedInstrumentMonth
+) -> tuple[CanonicalCandle, ...]:
+    if not isinstance(candles, Sequence) or isinstance(candles, (str, bytes)):
+        raise PartitionValidationError("invalid partition input")
+    sequence = cast(Sequence[object], candles)
+    try:
+        count = len(sequence)
+    except Exception:
+        raise PartitionValidationError("invalid partition input") from None
+    if not 0 < count <= MAX_PARQUET_BATCH_SIZE:
+        raise PartitionValidationError("invalid partition input")
+    result: list[CanonicalCandle] = []
+    for index in range(count):
+        try:
+            value = sequence[index]
+            if type(value) is not CanonicalCandle:
+                raise ValueError
+            candle = CanonicalCandle(
+                **{field.name: getattr(value, field.name) for field in fields(value)}
+            )
+        except Exception:
+            raise PartitionValidationError("invalid partition input") from None
+        _validate_candle_for_plan(candle, plan)
+        result.append(candle)
+    ordered = tuple(sorted(result, key=lambda candle: candle.ts))
+    if len({candle.ts for candle in ordered}) != len(ordered) or any(
+        candle.source_version != ordered[0].source_version
+        or candle.ingested_at != ordered[0].ingested_at
+        for candle in ordered[1:]
+    ):
+        raise PartitionValidationError("invalid partition input")
+    return ordered
+
+
+def _validate_candle_for_plan(
+    candle: CanonicalCandle, plan: PlannedInstrumentMonth
+) -> None:
+    if (
+        candle.provider != plan.provider
+        or candle.instrument_key != plan.instrument_key
+        or candle.security_id != plan.security_id
+        or candle.symbol != plan.symbol
+        or candle.exchange != plan.exchange
+        or candle.segment != plan.segment
+        or candle.instrument_type != plan.instrument_type
+        or candle.interval != plan.interval
+        or candle.instrument_type != "EQ"
+        or any(
+            value is not None
+            for value in (
+                candle.underlying_id,
+                candle.expiry,
+                candle.strike,
+                candle.option_type,
+                candle.oi,
+            )
+        )
+        or not all(
+            _safe_component(value)
+            for value in (
+                candle.provider,
+                candle.exchange,
+                candle.segment,
+                candle.instrument_type,
+                candle.security_id,
+                candle.interval,
+            )
+        )
+    ):
+        raise PartitionValidationError("invalid partition input")
+    try:
+        local_date = candle.ts.astimezone(_IST).date()
+    except Exception:
+        raise PartitionValidationError("invalid partition input") from None
+    if not plan.from_date <= local_date <= plan.to_date:
+        raise PartitionValidationError("invalid partition input")
+
+
+def _relative_path(plan: PlannedInstrumentMonth) -> str:
+    if not all(_safe_component(getattr(plan, field)) for field in _PATH_VALUE_FIELDS):
+        raise ValueError("invalid path-bearing plan field")
+    return f"candles/provider={plan.provider}/exchange={plan.exchange}/segment={plan.segment}/instrument_type={plan.instrument_type}/security_id={plan.security_id}/interval={plan.interval}/year={plan.year:04d}/month={plan.month:02d}/bars.parquet"
+
+
+def _safe_component(value: object) -> bool:
+    return type(value) is str and _SAFE_COMPONENT.fullmatch(value) is not None
+
+
+def _safe_hive_component(component: str) -> bool:
+    if component == "candles":
+        return True
+    if component.startswith("year="):
+        return component[5:].isdigit() and len(component) == 9
+    if component.startswith("month="):
+        return component[6:] in {f"{month:02d}" for month in range(1, 13)}
+    for prefix in (
+        "provider=",
+        "exchange=",
+        "segment=",
+        "instrument_type=",
+        "security_id=",
+        "interval=",
+    ):
+        if component.startswith(prefix):
+            return _safe_component(component.removeprefix(prefix))
+    return False
+
+
+def _open_root(root: object) -> int:
+    if not isinstance(root, Path):
+        raise PartitionValidationError("invalid storage root")
+    try:
+        return os.open(root, _DIRECTORY_FLAGS)
+    except Exception:
+        raise PartitionPublicationError("storage unavailable") from None
+
+
+def _open_or_create_parents(  # noqa: C901
+    root_fd: int, components: list[str]
+) -> int:
+    current_fd = os.dup(root_fd)
+    current_already_closed = False
+    child_fd: int | None = None
+    try:
+        for component in components:
+            child_fd = None
+            if not _safe_hive_component(component):
+                raise ValueError
+            try:
+                child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=current_fd)
+            except FileNotFoundError:
+                with suppress(FileExistsError):
+                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=current_fd)
+            _fsync_directory(current_fd)
+            failure = PartitionPublicationError("unsafe publication path")
+            if not _close_for_primary(current_fd, failure):
+                _close_for_primary(child_fd, failure)
+                child_fd = None
+                current_already_closed = True
+                raise failure
+            current_fd = child_fd
+            child_fd = None
+        return current_fd
+    except PartitionPublicationError as failure:
+        if current_already_closed:
+            if child_fd is not None:
+                _close_for_primary(child_fd, failure)
+            raise
+        failure = PartitionPublicationError("unsafe publication path")
+        if child_fd is not None:
+            _close_for_primary(child_fd, failure)
+        _close_for_primary(current_fd, failure)
+        raise failure from None
+    except Exception:
+        failure = PartitionPublicationError("unsafe publication path")
+        if child_fd is not None:
+            _close_for_primary(child_fd, failure)
+        if not current_already_closed:
+            _close_for_primary(current_fd, failure)
+        raise failure from None
+
+
+def _create_temp(parent_fd: int) -> tuple[str, int]:
+    for _ in range(32):
+        name = f".publish-{secrets.token_hex(16)}.tmp"
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+                os.fchmod(descriptor, 0o600)
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+                raise ValueError
+            return name, descriptor
+        except FileExistsError:
+            continue
+        except Exception:
+            failure = PartitionWriteError("partition write failed")
+            if descriptor is not None:
+                _close_one(descriptor, failure)
+                _cleanup_temp(parent_fd, name, failure)
+            raise failure from None
+    raise PartitionWriteError("partition write failed")
+
+
+def _write_temp(descriptor: int, rows: tuple[CanonicalCandle, ...]) -> None:
+    try:
+        with os.fdopen(os.dup(descriptor), "wb") as handle:
+            write_candles_parquet(handle, rows, batch_size=MAX_PARQUET_BATCH_SIZE)
+        os.fsync(descriptor)
+    except Exception:
+        raise PartitionWriteError("partition write failed") from None
+
+
+def _validate_fd(
+    descriptor: int,
+    expected: tuple[CanonicalCandle, ...],
+    error_type: type[PartitionPublicationError],
+) -> tuple[str, int]:
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+            raise ValueError
+        with (
+            os.fdopen(os.dup(descriptor), "rb") as handle,
+            iter_candles_from_parquet(
+                handle, batch_size=MAX_PARQUET_BATCH_SIZE
+            ) as reader,
+        ):
+            expected_index = 0
+            for batch in reader:
+                for candle in batch:
+                    if (
+                        expected_index >= len(expected)
+                        or candle != expected[expected_index]
+                    ):
+                        raise ValueError
+                    expected_index += 1
+            if expected_index != len(expected):
+                raise ValueError
+        digest = _sha256_fd(descriptor)
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+        ):
+            raise ValueError
+        return digest, after.st_size
+    except Exception:
+        raise error_type("partition publication validation failed") from None
+
+
+def _sha256_fd(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    with os.fdopen(os.dup(descriptor), "rb") as handle:
+        while data := handle.read(_READ_BUFFER_SIZE):
+            digest.update(data)
+    return digest.hexdigest()
+
+
+def _open_existing_final(parent_fd: int) -> int:
+    descriptor: int | None = None
+    retained = False
+    try:
+        descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError
+        retained = True
+        return descriptor
+    except Exception:
+        raise PublicationConflictError("partition publication conflict") from None
+    finally:
+        if descriptor is not None and not retained:
+            _close_one(descriptor)
+
+
+def _validate_existing_final(
+    parent_fd: int, rows: tuple[CanonicalCandle, ...]
+) -> tuple[str, int]:
+    descriptor = _open_existing_final(parent_fd)
+    primary: PublicationConflictError | None = None
+    result: tuple[str, int] | None = None
+    try:
+        result = _validate_fd(descriptor, rows, PublicationConflictError)
+    except PublicationConflictError as error:
+        primary = error
+    closed = _close_one(descriptor, primary)
+    if primary is not None:
+        raise primary
+    if not closed or result is None:
+        failure = PublicationConflictError("partition publication conflict")
+        if not closed:
+            failure.add_note("publication descriptor cleanup failed")
+        raise failure
+    return result
+
+
+def _final_matches_temp(parent_fd: int, temp_fd: int) -> bool:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
+        temp = os.fstat(temp_fd)
+        final = os.fstat(descriptor)
+        matches = stat.S_ISREG(final.st_mode) and (temp.st_dev, temp.st_ino) == (
+            final.st_dev,
+            final.st_ino,
+        )
+        closed = _close_one(descriptor)
+        descriptor = None
+        return matches and closed
+    except Exception:
+        return False
+    finally:
+        if descriptor is not None:
+            _close_one(descriptor)
+
+
+def _final_visibility(parent_fd: int) -> bool | None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
+        return stat.S_ISREG(os.fstat(descriptor).st_mode)
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return None
+    finally:
+        if descriptor is not None:
+            _close_one(descriptor)
+
+
+def _link_temp(parent_fd: int, temp_name: str) -> None:
+    """Small race boundary: tests may synchronize immediately before link(2)."""
+    os.link(
+        temp_name,
+        "bars.parquet",
+        src_dir_fd=parent_fd,
+        dst_dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+
+
+def _close_one(descriptor: int, primary: Exception | None = None) -> bool:
+    try:
+        os.close(descriptor)
+        return True
+    except Exception:
+        if (
+            primary is not None
+            and "publication descriptor cleanup failed"
+            not in getattr(primary, "__notes__", ())
+        ):
+            primary.add_note("publication descriptor cleanup failed")
+        return False
+
+
+def _close_for_primary(descriptor: int, primary: Exception) -> bool:
+    closed = _close_one(descriptor, primary)
+    if not closed and "publication descriptor cleanup failed" not in getattr(
+        primary, "__notes__", ()
+    ):
+        primary.add_note("publication descriptor cleanup failed")
+    return closed
+
+
+def _close_all(*descriptors: int | Exception | None) -> bool:
+    primary = (
+        descriptors[-1]
+        if descriptors and isinstance(descriptors[-1], Exception)
+        else None
+    )
+    close_descriptors = descriptors[:-1] if primary is not None else descriptors
+    success = True
+    for descriptor in close_descriptors:
+        if isinstance(descriptor, int):
+            closed = _close_one(descriptor, primary)
+            if (
+                not closed
+                and primary is not None
+                and (
+                    "publication descriptor cleanup failed"
+                    not in getattr(primary, "__notes__", ())
+                )
+            ):
+                primary.add_note("publication descriptor cleanup failed")
+            success = closed and success
+    return success
+
+
+def _fsync_directory(descriptor: int) -> None:
+    try:
+        os.fsync(descriptor)
+    except Exception:
+        raise PublicationOutcomeUnknown("publication outcome unknown") from None
+
+
+def _remove_temp(parent_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+        _fsync_directory(parent_fd)
+    except Exception:
+        raise PublicationOutcomeUnknown("publication outcome unknown") from None
+
+
+def _cleanup_temp(parent_fd: int, name: str, primary: Exception) -> None:
+    failed = False
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        failed = True
+    try:
+        _fsync_directory(parent_fd)
+    except Exception:
+        failed = True
+    if failed and "temporary publication cleanup failed" not in getattr(
+        primary, "__notes__", ()
+    ):
+        primary.add_note("temporary publication cleanup failed")
+
+
+def _evidence(
+    plan: PlannedInstrumentMonth,
+    outcome: PublicationOutcome,
+    relative: str,
+    digest: str,
+    rows: tuple[CanonicalCandle, ...],
+    byte_size: int,
+) -> PublishedPartitionEvidence:
+    return PublishedPartitionEvidence(
+        plan,
+        outcome,
+        relative,
+        digest,
+        CANDLE_SCHEMA_VERSION,
+        len(rows),
+        rows[0].ts,
+        rows[-1].ts,
+        rows[0].source_version,
+        byte_size,
+    )
+
+
+def _valid_evidence(value: object) -> bool:
+    if type(value) is not PublishedPartitionEvidence:
+        return False
+    try:
+        plan = _validated_plan(value.plan)
+        max_rows = (plan.to_date.toordinal() - plan.from_date.toordinal() + 1) * 1_440
+        span_minutes = (
+            int((value.actual_to_ts - value.actual_from_ts).total_seconds() // 60) + 1
+        )
+        return (
+            type(value.outcome) is PublicationOutcome
+            and type(value.canonical_path) is str
+            and value.canonical_path == _relative_path(plan)
+            and type(value.checksum_sha256) is str
+            and len(value.checksum_sha256) == 64
+            and all(
+                character in "0123456789abcdef" for character in value.checksum_sha256
+            )
+            and type(value.candle_schema_version) is int
+            and value.candle_schema_version == CANDLE_SCHEMA_VERSION
+            and type(value.row_count) is int
+            and 0 < value.row_count <= max_rows
+            and value.row_count <= span_minutes
+            and type(value.actual_from_ts) is datetime
+            and type(value.actual_to_ts) is datetime
+            and value.actual_from_ts.tzinfo is UTC
+            and value.actual_to_ts.tzinfo is UTC
+            and value.actual_from_ts.second == value.actual_to_ts.second == 0
+            and value.actual_from_ts.microsecond == value.actual_to_ts.microsecond == 0
+            and value.actual_from_ts <= value.actual_to_ts
+            and plan.from_date
+            <= value.actual_from_ts.astimezone(_IST).date()
+            <= plan.to_date
+            and plan.from_date
+            <= value.actual_to_ts.astimezone(_IST).date()
+            <= plan.to_date
+            and type(value.source_version) is str
+            and bool(value.source_version)
+            and value.source_version == value.source_version.strip()
+            and type(value.byte_size) is int
+            and value.byte_size > 0
+        )
+    except Exception:
+        return False
