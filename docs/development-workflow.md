@@ -74,11 +74,14 @@ Linear project document or status update.
 
 ## Progress reporting
 
-Send a concise user update whenever an executable story or task reaches `Done`,
-becomes materially blocked, needs user input, or changes the sprint goal. Use the
-current Codex task and the configured Slack DM for completion/blocker updates so
-the user can follow progress away from the workstation. Do not send notifications
-for individual commands, ordinary red-green iterations, or unchanged status.
+For project/sprint/Slack notifications, send a concise user update whenever an
+executable story or task reaches `Done`, becomes materially blocked, needs user
+input, or changes the sprint goal. Use the current Codex task and the configured
+Slack DM for completion/blocker updates so the user can follow progress away from
+the workstation. Do not send those notifications for individual commands,
+ordinary red-green iterations, or unchanged status. Preserve concise in-session
+progress commentary during active work when it helps the user follow material
+progress.
 
 Every sprint update reports:
 
@@ -114,6 +117,37 @@ before starting the next child. A blocked issue moves to `Blocked` and does not
 authorize parallel implementation unless the main agent explicitly re-routes
 the work while preserving the one-issue limit. Prefer slow, steady, correct
 delivery over throughput, batching, or partially completed work.
+
+## Subscription-only efficiency policy
+
+This policy applies to Codex subscription work only. It reduces avoidable
+context and tool noise without weakening scope, TDD, routing, review, or
+market-data safeguards.
+
+- Start a fresh task only at an atomic fresh-task boundary. Carry forward the concise
+  [handoff template](templates/codex-subscription-handoff.md); never restart an
+  unresolved red-green-refactor cycle merely to reset context.
+- After mandatory instructions and approved specifications are fully read at their current revision, reuse known relevant files and sections. Use targeted rereads
+  with `rg` and necessary ranges; never replace required full reads or quality
+  gates, and run focused tests before broader checks.
+- Bound tool and log output to the evidence needed: retain the command, exit status and concise failure evidence, and omit repetitive output.
+- For project/sprint/Slack notifications, send concise updates only when a task
+  completes, materially blocks, needs an input, or changes a decision; preserve
+  concise in-session progress commentary. Handoffs state evidence and the exact
+  next action, not a transcript.
+- Delegate only independent, non-overlapping, materially useful responsibilities.
+  Parallel agents may not share a write target or replace mandatory routing and
+  independent-review gates; use one agent when coordination would cost more than
+  it saves. This does not prohibit intentionally independent mandatory verification or review.
+- Evaluate each accepted atomic outcome with a representative before/after sample,
+  a visible observation source, and invariant quality gates. Compare turns,
+  elapsed time, retries, rework, findings, acceptance, and user-visible quota.
+  No API billing or token telemetry is collected; do not infer cache or reasoning
+  telemetry either.
+
+Do not add ChatGPT/OpenAI API integration, API keys, API prompt caching, Batch,
+persisted-response tactics, quota resets, trials, or upgrades under this policy.
+Those are outside its scope and require separately approved work if ever needed.
 
 ## Routing and handoff
 
