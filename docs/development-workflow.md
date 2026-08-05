@@ -81,7 +81,8 @@ Slack DM for completion/blocker updates so the user can follow progress away fro
 the workstation. Do not send those notifications for individual commands,
 ordinary red-green iterations, or unchanged status. Preserve concise in-session
 progress commentary during active work when it helps the user follow material
-progress.
+progress. In-session commentary may continue; Slack, Linear, and other
+project-state writes are coordinator-only.
 
 Every sprint update reports:
 
@@ -102,7 +103,19 @@ Epics and parent issues are tracking containers only; do not implement them
 directly. Every executable child issue must deliver one observable behavior,
 have one primary reason to change, fit one red-green-refactor cycle, be
 independently verifiable, and be small enough for one focused commit. Its
-completion must be expressible in one sentence.
+completion must be expressible in one sentence. Before implementation, declare
+its completion predicate: Outcome, Constraints, Verification, Stop condition.
+Also declare a predeclared task-appropriate iteration budget
+(for example, maximum repair rounds, elapsed-time window, or turn budget). The
+predicate and budget must be recorded in Linear or active Goal/task state before
+the first implementation change. Preserve the original plus every amendment's
+reason, author, approver, and approval reference. Scope/predicate changes
+require project-owner approval. Budget extension/reset requires independent Sol
+approval, plus project-owner approval if it changes scope/predicate or needs new
+authority. A budget cannot be silently reset. It bounds investigation and repair
+without weakening the predicate or a gate. Budget exhaustion leaves the issue
+incomplete and triggers handoff or escalation; it cannot authorize a new writer
+or completion.
 
 Split an issue before implementation when it contains unrelated behaviors or
 changes across unrelated layers, cannot state `Done` in one sentence, uses a
@@ -117,6 +130,43 @@ before starting the next child. A blocked issue moves to `Blocked` and does not
 authorize parallel implementation unless the main agent explicitly re-routes
 the work while preserving the one-issue limit. Prefer slow, steady, correct
 delivery over throughput, batching, or partially completed work.
+
+## Root execution coordinator
+
+For each active project execution window, the project owner predesignates
+exactly one root coordinator: the heartbeat target thread or an active
+user-invoked Goal, never both. The coordinator owns one executable WIP,
+routing, integration, completion judgment, and all Linear/Slack mutations.
+Implementers, reviewers, and publishers return evidence via handoff and do not
+mutate Linear or Slack.
+
+Repository writes are serial. The coordinator may write its authorized scope or
+delegate one exact file/worktree scope to one implementer. While delegated, the
+coordinator and others are read-only in the repository. The implementer writes
+only that scope, preserves unrelated changes, and stops before handback with its
+revision and state. Reviewers are always read-only.
+
+Publish from a separate worktree only after the implementer has stopped and an
+explicit handoff names the publisher, source revision, target worktree/branch,
+and authorized operation. The publisher is the sole repository writer until it
+stops and hands back evidence.
+
+Coordinator transfer or recovery requires explicit project-owner approval and
+proof that the prior coordinator is stopped: its heartbeat is paused/stopped or
+its Goal/task is completed, canceled, interrupted, or terminated. It also
+requires proof that every delegated repository implementer and publisher from
+that execution window has stopped, completed, or been explicitly terminated.
+If the stop or termination of any coordinator or delegated repository writer
+cannot be proven, every repository actor remains read-only and the issue is
+blocked. Record the prior/new coordinator, approval reference, coordinator and
+delegated-writer stop/termination evidence, time, issue state, and repository
+revision in the recovery audit. There are no timeouts, inferred staleness,
+forced release, CAS, generations, fencing, or issue-level leases.
+
+Transfer changes ownership only. It cannot change scope, predicate, budget,
+acceptance criteria, gates, review, or completion. Existing approvals, TDD,
+verification, circuit-breaker, Sol review, and deterministic gates remain
+mandatory.
 
 ## Subscription-only efficiency policy
 
@@ -136,14 +186,19 @@ market-data safeguards.
   concise in-session progress commentary. Handoffs state evidence and the exact
   next action, not a transcript.
 - Delegate only independent, non-overlapping, materially useful responsibilities.
-  Parallel agents may not share a write target or replace mandatory routing and
-  independent-review gates; use one agent when coordination would cost more than
-  it saves. This does not prohibit intentionally independent mandatory verification or review.
+  Parallel agents are read-only whenever a repository writer is active. All
+  repository write scopes, including non-overlapping scopes, are serialized.
+  Parallel agents may not replace mandatory routing or independent-review gates;
+  use one agent when coordination would cost more than it saves. This does not
+  prohibit intentionally independent mandatory verification or review.
 - Evaluate each accepted atomic outcome with a representative before/after sample,
   a visible observation source, and invariant quality gates. Compare turns,
   elapsed time, retries, rework, findings, acceptance, and user-visible quota.
   No API billing or token telemetry is collected; do not infer cache or reasoning
   telemetry either.
+- Use Goal mode only for finite, well-specified outcomes. Use the heartbeat for
+  recovery and continuity, not completion judgment; use the predesignated root
+  coordinator above, never both concurrently.
 
 Do not add ChatGPT/OpenAI API integration, API keys, API prompt caching, Batch,
 persisted-response tactics, quota resets, trials, or upgrades under this policy.
@@ -151,7 +206,10 @@ Those are outside its scope and require separately approved work if ever needed.
 
 ## Routing and handoff
 
-The main agent owns issue state, scope, integration, and the final result.
+The main agent remains accountable for issue state, scope, integration, and the
+final result. That accountability is not concurrent mutation permission: when a
+different root coordinator or repository writer is active, the main agent is
+read-only on covered surfaces.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |

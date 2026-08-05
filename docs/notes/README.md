@@ -40,3 +40,5 @@ update those documents as well as the note.
 
 - [2026-08-04 — Data foundation and agent-tool boundary](2026-08-04-data-foundation-and-agent-tool-boundary.md)
 - [2026-08-05 — Token cost and usage optimization research](2026-08-05-token-cost-and-usage-optimization-research.md)
+- [2026-08-05 — Loop engineering workflow
+  assessment](2026-08-05-loop-engineering-workflow-assessment.md)
