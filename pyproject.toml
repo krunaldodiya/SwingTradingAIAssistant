@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "swing-trading-ai-assistant"
+version = "0.1.0"
+description = "Deterministic market-data and research foundations for Nifty 50 swing trading"
+requires-python = ">=3.11"
+dependencies = ["python-dotenv>=1.1"]
+
+[project.optional-dependencies]
+dev = [
+    "pyright>=1.1.400",
+    "pytest>=8.0",
+    "pytest-cov>=7.0",
+    "ruff>=0.15.0",
+    "vulture>=2.14",
+]
+
+[project.scripts]
+market-data = "swing_trading_ai_assistant.market_data.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swing_trading_ai_assistant"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["swing_trading_ai_assistant"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 87
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+extend-exclude = [".codex"]
+
+[tool.ruff.lint]
+select = [
+    "E4", # pycodestyle errors
+    "E7", # pycodestyle errors
+    "E9", # pycodestyle errors
+    "F", # Pyflakes
+    "I", # import order
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "SIM", # flake8-simplify
+    "PERF", # Perflint
+    "C90", # McCabe complexity
+    "PLC", # Pylint convention
+    "PLE", # Pylint errors
+    "PLW", # Pylint warnings
+    "S", # flake8-bandit security checks
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "none"

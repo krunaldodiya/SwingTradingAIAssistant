@@ -2,8 +2,16 @@
 
 ## Goal
 
-Build an AI Swing Trading Assistant that helps generate safe, consistent, and
+Build an agent-agnostic Swing Trading Research Tool that supplies trustworthy,
+structured evidence to AI assistants researching safe, consistent, and
 explainable swing-trading opportunities in Nifty 50 equity stocks.
+
+## Repository identity
+
+This repository implements the research-tool layer, not a particular AI agent.
+Any compatible agent harness may consume its contracts. AI reasoning happens
+outside the deterministic analysis core, which makes the tool testable,
+reusable, and independent of one model or agent framework.
 
 The primary objective is not maximum return. The system optimizes for:
 
@@ -25,7 +33,16 @@ conflicting, stale, or fails risk validation.
 - Generic equity research
 - Stocks outside the Nifty 50 universe
 
-## Project A: AI Swing Trading Assistant
+## Generalized data boundary
+
+The market-data ingestion foundation may catalog and persist factual candles for
+indices, futures, and options when their individual adapter specifications and
+entitlements are approved. This is a storage and provenance capability only.
+The v1 research universe, locked pipeline, and any decision-support facts remain
+limited to point-in-time Nifty 50 equities; stored F&O data must not silently
+enter v1 research, analysis, backtests, or recommendations.
+
+## External consumer: AI agent harness
 
 Responsibilities:
 
@@ -42,9 +59,9 @@ It must never:
 - perform deterministic market calculations; or
 - silently manufacture missing facts.
 
-It reasons only over versioned, structured facts supplied by Project B.
+It reasons only over versioned, structured facts supplied by this tool.
 
-## Project B: Swing Trading Research Tool
+## This repository: Swing Trading Research Tool
 
 Responsibilities:
 
@@ -56,7 +73,8 @@ Responsibilities:
 
 It must never:
 
-- make buy or sell decisions;
+- place or manage broker orders;
+- make autonomous buy or sell decisions;
 - generate opinions; or
 - perform LLM-style reasoning.
 
@@ -72,8 +90,13 @@ Nifty 50 universe
   -> Volume
   -> Relative strength
   -> Risk validation
+  -> Structured research facts
+
+External AI boundary:
+
+Structured research facts
   -> AI reasoning
-  -> Recommendation
+  -> Explainable recommendation or no-trade decision
 ```
 
 ## Locked modules
@@ -86,10 +109,13 @@ Nifty 50 universe
 6. Volume
 7. Relative Strength
 8. Risk Validation
-9. Trade Recommendation
+9. Trade Recommendation Support
 10. Portfolio Monitoring
 
 No module should be added without an explicit architecture decision.
+
+Trade Recommendation Support produces validated evidence, candidate plans, and
+risk facts. The external AI harness owns the contextual recommendation.
 
 ## Domain boundaries
 
@@ -123,3 +149,6 @@ Develop one module at a time. Before implementation, each module must define:
 
 A module advances only after its requirements and validation are complete.
 
+Prior repositories are non-authoritative references. Their concepts may be
+studied, but logic must be independently specified, tested, and validated for
+this project's equity-only scope before adoption.

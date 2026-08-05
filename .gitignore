@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -16,15 +17,31 @@ build/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+credentials/
+secrets/
 
 # Data, models, and generated artifacts
 data/
 artifacts/
 models/
 reports/
+*.parquet
+*.duckdb
+*.sqlite
+*.sqlite3
+*.db
+
+# Small synthetic fixtures are intentionally versioned; live credentials and
+# market data never belong in this exception.
+!tests/fixtures/
+!tests/fixtures/**
 
 # Editors and operating systems
 .DS_Store
 .idea/
 .vscode/
-

@@ -11,14 +11,19 @@
 - Select the implementation stack only after the data and research requirements
   are clear.
 
+Detailed execution plan:
+[Plan 01: Data Foundation and Upstox Ingestion](plans/01-data-foundation-and-upstox-ingestion.md).
+
 ## Phase 1: Research platform skeleton
 
-- Define versioned schemas for market data, module facts, validation errors, and
-  provenance.
+- Define versioned schemas for market data, module facts, validation errors,
+  evidence, confidence, freshness, and provenance.
 - Build reproducible data ingestion and quality checks.
 - Create a backtesting boundary that includes costs, slippage, liquidity,
   corporate actions, and point-in-time universes.
 - Establish unit, property, regression, and no-look-ahead tests.
+- Define an agent-neutral boundary without committing prematurely to API, CLI,
+  MCP, or another transport.
 
 ## Phase 2: First module — Market Regime
 
@@ -38,8 +43,8 @@ Implement and validate the module only after that specification is frozen.
 ## Later modules
 
 Proceed in locked pipeline order, integrating and validating one module at a
-time. Do not build the LLM recommendation layer until the deterministic fact
-contracts and their validation are dependable.
+time. Do not build an LLM implementation in this repository. External AI agents
+will consume the deterministic fact contracts after they are dependable.
 
 ## Release gates
 
@@ -52,4 +57,3 @@ Before any result can be treated as decision support, require:
 - explicit handling of stale or missing data;
 - traceable evidence for every recommendation; and
 - paper-trading observation before real-money use.
-

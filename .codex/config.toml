@@ -1,0 +1,12 @@
+# Project-scoped defaults. Codex loads this configuration after the repository
+# is trusted. A permission mode selected for the active parent session takes
+# precedence over these defaults for spawned agents.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"
+interrupt_message = true
