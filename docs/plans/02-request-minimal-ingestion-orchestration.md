@@ -1,7 +1,7 @@
 # Request-minimal one-minute ingestion orchestration
 
-Status: **Proposed for ARK-49 review**  
-Scope: Sprint 1 RELIANCE NSE equity one-minute vertical slice  
+Status: **Proposed after ARK-49 review repair**
+Scope: Sprint 1 RELIANCE NSE equity one-minute vertical slice
 Depends on: ARK-32, ARK-33, ARK-34, ARK-35, ARK-40, ARK-42, and ARK-43
 
 ## Purpose
@@ -29,6 +29,8 @@ ordered atomic children.
 - Instrument-master refresh or trading-calendar acquisition.
 - Customer login, TOTP, token persistence, or credential automation.
 - Higher-timeframe provider acquisition or higher-timeframe aggregation.
+- Acquisition of an open calendar month or an incrementally mutable partial
+  month. Sprint 1 persists only canonical, closed calendar months.
 - Catalog, manifest, canonical candle, or Parquet schema redesign.
 - DuckDB candle storage, mutable Parquet overwrite, or broker order placement.
 - Market-regime, indicator, strategy, backtesting, or trading-suggestion work.
@@ -101,6 +103,28 @@ class IngestionCommand:
     max_total_provider_attempts: int
 
 
+class IngestionRunOutcome(StrEnum):
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    ALREADY_RUNNING = "ALREADY_RUNNING"
+    REJECTED = "REJECTED"
+
+
+class RunFailureCode(StrEnum):
+    NONE = "NONE"
+    PARTITION_NOT_CLOSED = "PARTITION_NOT_CLOSED"
+    SCHEDULE_UNSUPPORTED = "SCHEDULE_UNSUPPORTED"
+    STORAGE_UNSAFE = "STORAGE_UNSAFE"
+    CATALOG_UNAVAILABLE = "CATALOG_UNAVAILABLE"
+    ATTEMPT_BUDGET_INSUFFICIENT = "ATTEMPT_BUDGET_INSUFFICIENT"
+    AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
+    AUTHORIZATION_FAILED = "AUTHORIZATION_FAILED"
+    LOCAL_REPAIR_BLOCKED = "LOCAL_REPAIR_BLOCKED"
+    CANCELLED = "CANCELLED"
+
+
 class PartitionOutcome(StrEnum):
     SKIPPED_VERIFIED = "SKIPPED_VERIFIED"
     RECOVERED_LOCALLY = "RECOVERED_LOCALLY"
@@ -124,6 +148,8 @@ class PartitionResult:
 
 @dataclass(frozen=True, slots=True)
 class IngestionReport:
+    outcome: IngestionRunOutcome
+    failure_code: RunFailureCode
     results: tuple[PartitionResult, ...]
     planned_count: int
     skipped_count: int
@@ -132,6 +158,7 @@ class IngestionReport:
     verified_count: int
     failed_count: int
     not_attempted_count: int
+    cancelled_count: int
     started_at: datetime
     completed_at: datetime
 ```
@@ -142,12 +169,59 @@ the existing master-catalog boundary; production code contains no RELIANCE
 instrument-key, ISIN, or symbol constant. The storage root must already be a
 protected real directory under the ARK-34/35 contract.
 
-Counts in `IngestionReport` must equal the ordered result tuple. Timestamps are
+The requested dates select desired data, not physical partition boundaries.
+After the existing planner identifies the touched months, the coordinator
+constructs one canonical acquisition plan per touched month whose dates are the
+first and last calendar day. Every plan must be a closed month: its last
+calendar day is strictly earlier than the injected current local date and the
+authoritative schedule covers the complete month. An open/current month is
+`REJECTED/PARTITION_NOT_CLOSED` before storage mutation, credentials, limiter,
+or HTTP. Expanding historical edge ranges is intentional: it uses the same one
+provider call while ensuring every later overlapping request has one reusable
+physical identity. Query consumers may select the originally requested dates
+from that canonical month.
+
+The command value is created through a validating constructor; malformed exact
+types never enter orchestration. For every valid command, expected operational
+conditions return a typed `IngestionReport` rather than an exception. Counts in
+the report must equal the ordered result tuple. `SUCCEEDED` means every result
+is skipped, locally recovered, or verified. `PARTIAL` means at least one result
+completed and later work did not. `FAILED` means execution began but no desired
+partition completed. `CANCELLED`, `ALREADY_RUNNING`, and `REJECTED` are exact
+zero-request run outcomes. Timestamps are
 injected UTC-aware clock values. `error_code` is a stable sanitized code, never
 an exception, SQL string, token, URL, response body, path, or instrument value.
 
+## Authoritative session schedule and validation identity
+
+`ExpectedSessionSchedule` is immutable and contains an exact schedule schema
+version, provider/source name, source release/version, UTC-aware `as_of`,
+`Asia/Kolkata` timezone identifier, the covered first and last calendar dates,
+and an ordered tuple of sessions. Each session contains its local trade date,
+UTC-aware open instant, UTC-aware exclusive close instant, and session kind.
+Normal NSE cash sessions and explicitly sourced special sessions are allowed;
+holidays are represented by absence. Sessions must be unique, strictly ordered,
+minute-aligned, inside the declared coverage, and wholly cover every canonical
+acquisition month. Future or open sessions are rejected.
+
+The schedule exposes a canonical SHA-256 digest over all fields and sessions.
+`validation_policy_version` is not a free label: the effective value persisted
+in the existing manifest is
+`<policy-name>@<policy-version>+sessions-sha256:<64-lower-hex>`. This binds every
+coverage decision to the exact point-in-time schedule without redesigning the
+manifest or catalog schema. Local recovery must reproduce that identity and
+fails closed on any mismatch. `source_version` continues to identify the
+Upstox adapter/request contract, not the trading calendar.
+
 ## Injected ports
 
+- `StorageRootLease.try_acquire(root) -> LeaseResult` owns one stable
+  `.ingestion.lock` regular file beneath the protected root. It opens with
+  no-follow/close-on-exec protections, verifies the descriptor identity and
+  restrictive ownership/mode, and takes a non-blocking exclusive OS advisory
+  lock held until the complete invocation closes. The file is never deleted.
+  Lock contention returns `ALREADY_RUNNING`; it never guesses whether another
+  process is stale.
 - `ProviderSessionFactory.open() -> ProviderSession` is owned by the range
   coordinator and obtains the environment token only after reconciliation
   proves a request is necessary. One invocation opens at most one session.
@@ -159,9 +233,10 @@ an exception, SQL string, token, URL, response body, path, or instrument value.
 - `EquityMonthValidationPolicy.validate(plan, candles, expected_sessions)`
   returns typed `ValidationEvidence` with policy version, actual UTC coverage,
   row count, `coverage_passed`, and `quality_passed`.
-- `ExpectedSessionSchedule` is authoritative point-in-time input. Calendar
-  acquisition is outside Sprint 1. Missing or inconsistent schedule evidence
-  fails closed and cannot produce `VERIFIED`.
+- `ExpectedSessionSchedule` is the authoritative point-in-time value defined
+  above. Calendar acquisition is outside Sprint 1. Missing, incomplete,
+  inconsistent, open-month, or digest-mismatched evidence fails closed and
+  cannot produce `VERIFIED`.
 - `UtcClock`, `CancellableSleeper`, `JitterSource`, `RunIdFactory`,
   `CancellationToken`, and a typed sanitized event sink make time, waiting,
   identity, cancellation, and diagnostics deterministic in tests.
@@ -173,31 +248,48 @@ The range coordinator executes these steps in order:
 1. Reconstruct and validate the complete command, retry policy, resolved
    instrument, expected session schedule, and resource limits.
 2. Reject any interval other than `"1m"` before credentials, limiter, or HTTP.
-3. Produce every desired month with `plan_upstox_equity_months`.
-4. Open the protected storage root and one DuckDB catalog connection.
-5. For every plan, invoke the local observer on only its derived canonical path,
+3. Produce the touched months with `plan_upstox_equity_months`, expand each to
+   its one canonical full-calendar-month acquisition plan, and reject the whole
+   invocation if any month is not closed or fully covered by the schedule.
+4. Acquire the protected root's exclusive lease. If it is already held, return
+   `ALREADY_RUNNING` with zero provider activity and no storage/catalog change.
+5. While holding the lease, open one DuckDB catalog connection. Catalog failure
+   returns `FAILED/CATALOG_UNAVAILABLE` before provider-session creation.
+6. For every plan, invoke the local observer on only its derived canonical path,
    using the command's authoritative expected-session evidence.
-6. The observer removes only exact regular abandoned publisher siblings matching
+7. The storage-maintenance port removes only exact regular abandoned publisher siblings matching
    `.publish-[0-9a-f]{32}.tmp`, without following links, then fsyncs the parent.
-7. A stale `IN_PROGRESS` row from the prior exclusive coordinator invocation is
-   terminally recorded as `FAILED/INTERRUPTED` before retry or recovery.
-8. Re-read any visible canonical file through the physical schema boundary and
+8. Because the exclusive lease is held before catalog inspection, any visible
+   `IN_PROGRESS` row belongs to a crashed earlier lease holder. Record it as
+   `FAILED/INTERRUPTED` before retry or recovery. No elapsed-time threshold,
+   process-ID test, hostname, or wall-clock staleness guess is permitted.
+9. Re-read any visible canonical file through the physical schema boundary and
    the current validation policy.
-9. If a final file is complete and valid but catalog verification is absent,
+10. If a final file is complete and valid but catalog verification is absent,
    create or retry a recovery run and persist `VERIFIED` locally. No request is
    made.
-10. Invalidate a `VERIFIED` manifest whose path, file, checksum, schema,
+11. Invalidate a `VERIFIED` manifest whose path, file, checksum, schema,
     coverage, or quality evidence disagrees, using the exact ARK-40 category.
-11. Move an invalid canonical final to a same-filesystem, no-follow, no-clobber
+12. Move an invalid canonical final to a same-filesystem, no-follow, no-clobber
     quarantine name and fsync both directory transitions. If durable quarantine
     cannot be proven, return a run-fatal local-repair error and make no request.
-12. Reload current manifests and physical evidence for every plan.
-13. Call `reconcile_partition_plans` once for the complete desired range.
-14. Build the ordered `REQUEST` tuple. If none exist, close local resources and
+13. Reload current manifests and physical evidence for every plan.
+14. Call `reconcile_partition_plans` once for the complete desired range.
+15. Build the ordered `REQUEST` tuple. If none exist, close local resources and
     return without resolving credentials or acquiring the limiter.
-15. Lazily open one provider session and pass it to the bounded fetch port for
+16. Before session creation, require the remaining total-attempt budget to admit
+    at least one attempt for every `REQUEST` plan. Otherwise return
+    `REJECTED/ATTEMPT_BUDGET_INSUFFICIENT` and make zero requests; this avoids a
+    predictably partial range caused solely by caller configuration.
+17. Lazily open one provider session and pass it to the bounded fetch port for
     requested partitions in plan order until complete, cancelled, a run-fatal
     error occurs, or the total provider-attempt budget is exhausted.
+
+The lease covers observation, cleanup, recovery, provider work, publication,
+and terminal catalog persistence. Crash releases it through the OS; restart
+then classifies earlier `IN_PROGRESS` and abandoned temporary files safely.
+Every package user and future adapter must enter persistent ingestion through
+this coordinator; bypassing the lease is unsupported.
 
 Budget exhaustion preserves completed work and marks every untouched plan
 `NOT_ATTEMPTED`. It never rolls back completed partitions and never causes the
@@ -252,9 +344,18 @@ local_delay = base / 2 + injected_uniform(0, base / 2)
 effective_delay = max(local_delay, valid_retry_after)
 ```
 
-`Retry-After` is case-insensitive and accepted only when exactly one value is a
-nonnegative decimal-seconds value or a strict IMF-fixdate. A past date means
-zero. Invalid or ambiguous values are ignored and recorded by stable code. A
+Child C first replaces the current lossy response-header mapping with an
+immutable bounded header collection that preserves arrival order and repeated
+field values. The transport admits at most 128 fields, a 256-byte field name,
+and a 4,096-byte value; excess or invalid header structure is a sanitized
+terminal provider response error. Existing callers receive case-insensitive
+lookup helpers rather than a flattened dictionary.
+
+`Retry-After` is case-insensitive and accepted only when the preserved header
+collection contains exactly one field value and that value is a nonnegative
+decimal-seconds value or a strict IMF-fixdate. Comma-joined or repeated values
+are ambiguous and ignored with a stable event code. A past date means zero.
+Invalid or ambiguous values are ignored and recorded by stable code. A
 valid delay greater than `max_retry_after` is published to the shared limiter,
 but this bounded invocation makes no further request for that partition. Total
 sleep cannot exceed `max_total_sleep`; exhaustion persists
@@ -269,6 +370,9 @@ partition when the run-fatal conditions do not apply.
 
 | Restart evidence | Deterministic outcome |
 | --- | --- |
+| Root lease held by another invocation | `ALREADY_RUNNING`; no mutation, credentials, limiter, or request. |
+| Desired range touches an open month | `REJECTED/PARTITION_NOT_CLOSED`; no mutation or provider activity. |
+| Historical request touches only part of a closed month | Expand to the canonical full month; one reusable physical identity and at most one partition request. |
 | No manifest, no final | Create `IN_PROGRESS`; request only this partition. |
 | No manifest, valid final | Create recovery run and verify locally; zero request. |
 | No manifest, invalid final | Quarantine durably, then request; quarantine failure is zero-request run-fatal. |
@@ -298,12 +402,28 @@ bounded by its transport timeout. Best effort records `FAILED/INTERRUPTED` after
 an `IN_PROGRESS` cancellation; when catalog persistence is unavailable, the row
 remains `IN_PROGRESS` for restart recovery.
 
+Cancellation before any plan enters `IN_PROGRESS` returns run outcome
+`CANCELLED` and marks every already-planned item `CANCELLED`, with no manifest.
+Cancellation after one plan enters `IN_PROGRESS` best-effort persists that
+attempt as `FAILED/INTERRUPTED`, returns that item as `CANCELLED`, and marks all
+later plans `NOT_ATTEMPTED`. Completed earlier results are retained, so the run
+outcome is `PARTIAL` when at least one of them completed and otherwise
+`CANCELLED`. Cancellation never becomes a provider retry.
+
 One partition failure never rolls back a completed partition. Every untouched
 plan remains explicit as `NOT_ATTEMPTED` rather than being falsely failed.
+
+Run-level mapping is exhaustive: validation, schedule, open-month, and budget
+rejections use `REJECTED`; lease contention uses `ALREADY_RUNNING`; cancellation
+uses the rules above; a fatal condition after one or more completed partitions
+uses `PARTIAL`; the same condition before any completion uses `FAILED`; and only
+an all-complete result tuple uses `SUCCEEDED`. `failure_code` is `NONE` only for
+`SUCCEEDED`; every other outcome uses its single immediate stop reason.
 
 ## Resource bounds
 
 - One coordinator and one active partition in Sprint 1.
+- One non-blocking root lease held by one process for the invocation.
 - One in-flight provider request and one active response body.
 - Zero background tasks, download queues, retry queues, or completed futures.
 - One DuckDB connection and one active Parquet reader or writer.
@@ -336,6 +456,9 @@ one-minute data and can never construct `HistoricalRequest` in this workflow.
 - Each manifest records source version, validation policy version, run ID,
   requested and actual coverage, row count, checksum, canonical path, and
   lifecycle timestamps through the existing domain contract.
+- The validation policy version includes the exact schedule SHA-256 identity
+  defined above. Reports/events may expose only that digest, schedule version,
+  and `as_of`, never an unbounded schedule payload.
 - Provider attempt events contain only run ID, attempt ordinal, stable category,
   sanitized status class, and clock time.
 - Hostile exception, header, token, payload, path, and instrument text must not
@@ -349,7 +472,8 @@ Live access is separate from deterministic tests and requires:
 2. explicit owner authorization at execution time;
 3. an environment-provided token;
 4. an isolated caller-created protected storage root;
-5. exactly one RELIANCE month;
+5. exactly one canonical closed RELIANCE calendar month with an authoritative
+   schedule identity;
 6. a total attempt budget of one and no retry; and
 7. sanitized output limited to category, row count, first/last timestamp,
    checksum, request count, and gate result.
@@ -373,8 +497,19 @@ Tests use injected fakes and temporary local storage. They must prove:
 - empty, malformed, and oversized response behavior;
 - normalization, validation, publication, and catalog failure mapping;
 - authoritative session coverage, holidays/special sessions supplied through
-  the schedule port, duplicate/missing/off-session bars, OHLC/volume quality,
+  the schedule port, missing/off-session bars, OHLC/volume quality,
   and unsupported schedule evidence;
+- exact raw duplicates follow the approved normalization contract: identical
+  rows are deduplicated and their count is reported in bounded validation/run
+  evidence, while conflicting canonical keys remain a terminal validation
+  failure; tests must not claim Child D can rediscover rows already removed by
+  normalization;
+- repeated, comma-joined, oversized, invalid, past, and single valid
+  `Retry-After` fields are exercised through the preserving header boundary;
+- root-lease contention, crash release, unsafe lock inode/mode, and the rule
+  that only a held lease can interrupt earlier `IN_PROGRESS` state;
+- arbitrary historical edge dates converge on one full closed monthly identity,
+  while an open month fails before mutation and provider activity;
 - abandoned temporary output never becomes valid evidence;
 - higher-timeframe input causes zero credential and provider activity;
 - stable sanitization under hostile external values; and
@@ -387,28 +522,45 @@ credentials, or cross-module orchestration. Do not add a duplicate Terra review.
 
 ## ARK-36 atomic decomposition
 
-ARK-36 is a tracking parent, not one red-green-refactor task. Five ordered tasks
-are the smallest honest decomposition because local repair, provider retry,
-market-session validation, one-partition lifecycle, and range coordination have
-different reasons to change and different failure surfaces.
+ARK-36 is a tracking parent, not one red-green-refactor task. Six ordered tasks
+are the smallest honest decomposition. Cross-process exclusion and filesystem
+mutation are separated from catalog recovery; provider response/retry policy,
+market-session validation, one-partition lifecycle, and range coordination each
+retain one independent reason to change.
 
-### Child A: observe, recover, invalidate, and quarantine one local partition
+### Child A: lease one storage root and perform safe local file maintenance
 
-Inputs are the protected root, one exact plan, current manifest or absence,
-expected schedule and validation-policy ports, and clock/run-ID dependencies
-only when a lifecycle recovery is required. The output is typed local evidence,
-recovered publication evidence when present, performed transition, abandoned
-temp count, and sanitized local result.
+Inputs are one protected root, an exact canonical partition path, cancellation,
+and injected OS operations. Outputs are an exclusive lease result and typed
+bounded cleanup/quarantine results.
 
-It owns bounded no-follow path inspection, checksum/schema/policy validation,
-exact abandoned-temp cleanup, no-clobber quarantine, interruption marking,
-local recovery, and verified invalidation. It never owns HTTP, credentials,
-provider retry, normalization, or range scheduling.
+It owns the stable no-follow lock inode, non-blocking exclusive lease lifetime,
+exact abandoned-temp discovery/removal, same-filesystem no-clobber quarantine,
+descriptor identity checks, and required directory fsyncs. It never opens
+DuckDB, interprets a manifest, validates candles, or calls a provider.
 
-Done: one physical month becomes trustworthy reconciliation evidence or a safe
-typed repair outcome without provider access.
+Done: one invocation either owns the root exclusively and can perform exact
+durable local maintenance, or changes nothing and reports a safe typed reason.
 
-### Child B: execute one bounded account-rate-limited historical request
+### Child B: observe, recover, and invalidate one catalogued partition
+
+Inputs are proof of the held Child A lease, one canonical full-month plan,
+current manifest or absence, exact local-file evidence/maintenance ports, the
+Child D validation port, expected schedule, and clock/run-ID dependencies only
+when recovery requires a lifecycle transition. The output is typed
+reconciliation evidence, recovered publication evidence when present,
+performed catalog transition, and a sanitized local outcome.
+
+It owns bounded physical re-read/checksum/schema/policy validation, safe
+classification of earlier `IN_PROGRESS`, local recovery, and verified
+invalidation. It delegates file mutation to Child A and cannot mark work
+interrupted without lease proof. It never owns HTTP, credentials, provider
+retry, normalization, or range scheduling.
+
+Done: while exclusivity is proven, one physical month becomes trustworthy
+reconciliation evidence or a safe typed repair outcome without provider access.
+
+### Child C: execute one bounded account-rate-limited historical request
 
 Inputs are one exact plan, the caller's already-open `ProviderSession`, shared
 account limiter, retry policy, remaining invocation budget,
@@ -417,32 +569,37 @@ retrieval time or a typed sanitized provider failure, with exact attempts and
 retry events.
 
 It owns exact Historical V3 request construction, retry classification,
-`Retry-After`, equal jitter, account deferral, budgets, and secret sanitization.
+the preserving bounded HTTP header contract, unambiguous `Retry-After`, equal
+jitter, account deferral, budgets, and secret sanitization.
 The range coordinator owns lazy session opening; this child never resolves a
 credential, opens the catalog or Parquet, normalizes, or mutates lifecycle state.
 
 Done: one planned month produces one bounded response or sanitized provider
 outcome without exceeding account or request budgets.
 
-### Child C: validate one canonical NSE equity month against supplied sessions
+### Child D: validate one canonical NSE equity month against supplied sessions
 
 Inputs are one exact plan, canonical candles, authoritative
-`ExpectedSessionSchedule`, and validation policy version. The output is immutable
+`ExpectedSessionSchedule`, raw and normalized row counts, and validation policy
+version. The output is immutable
 `ValidationEvidence` containing actual UTC range, row count, coverage and quality
-outcomes, and stable reason codes.
+outcomes, exact-raw-deduplication count, effective schedule-bound policy
+identity, and stable reason codes.
 
-It owns uniqueness, strict ordering, plan identity, requested-month containment,
-expected bar-open coverage, holidays/special-session input handling, duplicate,
-missing and off-session bars, OHLC envelope, nonnegative volume, and unsupported
-schedule behavior. It does not acquire calendars, call providers, publish files,
-or mutate manifests.
+It owns canonical-key uniqueness, strict ordering, plan identity, full-month
+containment, expected bar-open coverage, holidays/special-session input
+handling, missing and off-session bars, OHLC envelope, nonnegative volume, and
+unsupported schedule behavior. It accepts the raw/normalized count delta as
+bounded evidence of exact raw deduplication; conflicting canonical keys fail at
+the canonicalization boundary before validation. It does not acquire calendars,
+call providers, publish files, or mutate manifests.
 
 Done: one canonical equity month receives reproducible point-in-time coverage
 and quality evidence without provider, storage, or lifecycle side effects.
 
-### Child D: execute one partition ingestion lifecycle
+### Child E: execute one partition ingestion lifecycle
 
-Inputs are one plan/current manifest, Child B fetch port, Child C validation
+Inputs are one plan/current manifest, Child C fetch port, Child D validation
 port, publisher, catalog, clock, run-ID factory, and cancellation. The output is
 one `PartitionResult`.
 
@@ -454,22 +611,25 @@ publication uncertainty.
 Done: one requested month ends as traceable verified, failed, interrupted, or
 cancelled evidence with no duplicate provider or publication attempt.
 
-### Child E: coordinate a request-minimal RELIANCE date range
+### Child F: coordinate a request-minimal RELIANCE date range
 
-Inputs are one `IngestionCommand` plus Child A and Child D ports. The output is
-one immutable ordered `IngestionReport`.
+Inputs are one `IngestionCommand` plus Child A, Child B, and Child E ports. The
+output is one immutable ordered `IngestionReport`.
 
-It plans all months, completes local observation/recovery for every month,
-reconciles once, lazily enables provider work, enforces total budget, and
-executes requested partitions sequentially. It owns no queue, background task,
-or higher-timeframe provider path.
+It expands touched historical ranges to canonical full closed months, acquires
+and holds the one root lease, completes local observation/recovery for every
+month, reconciles once, lazily enables provider work, enforces total budget,
+and executes requested partitions sequentially. It owns exact run-level
+outcome/count mapping but no queue, background task, or higher-timeframe
+provider path.
 
 Done: a RELIANCE one-minute range is completely reconciled before credentials
 or HTTP and downloads only independently required months.
 
-Dependencies are `C -> A`, `A + B + C -> D`, and `D -> E -> ARK-37`. The
-implementation order is `C, A, B, D, E` under the one-item WIP limit. B is
-logically independent of C/A, but it does not execute in parallel. ARK-37
+Dependencies are `A + D -> B`, `B + C + D -> E`, and
+`A + B + E -> F -> ARK-37`. The implementation order is `D, A, B, C, E, F`
+under the one-item WIP limit. C is logically independent of A/B/D, but it does
+not execute in parallel. ARK-37
 remains the end-to-end crash and zero-request idempotency proof and must not
 duplicate implementation owned by these children.
 
@@ -480,7 +640,7 @@ ARK-49 is complete when:
 - one independent Sol High review approves this complete contract and
   decomposition;
 - the specification is linked from ARK-36;
-- ARK-36 is converted to a tracking parent with five ordered executable tasks;
+- ARK-36 is converted to a tracking parent with six ordered executable tasks;
 - every failure and edge above has a deterministic typed result;
 - zero-request paths prove token, limiter, and HTTP inactivity;
 - no path can promote unsupported coverage or quality evidence to `VERIFIED`;

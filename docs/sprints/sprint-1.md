@@ -44,6 +44,10 @@ steps without changing the sprint goal. ARK-44 remains deferred.
 - Higher intraday timeframes are derived locally; they do not cause Upstox
   historical requests.
 - Verified immutable instrument-month partitions are the resume unit.
+- Persistence uses one canonical full closed calendar month per physical
+  identity. Historical edge ranges expand to that month; an open/current month
+  is rejected before credentials or provider access until mutable live-update
+  behavior is separately specified.
 - `MAX(ts)` is not completeness proof.
 - A skip requires agreement between manifest status, file presence, checksum,
   schema version, coverage, and quality result.
@@ -103,7 +107,12 @@ ARK-44 is deferred.
 
 ARK-35 now provides the transactional DuckDB catalog for exact current and
 terminal lifecycle evidence. ARK-49 is the active specification gate for
-request-minimal ingestion orchestration. ARK-36 remains implementation-blocked
-until the proposed contract in
+request-minimal ingestion orchestration. Its first independent review exposed
+partial-month identity collisions, unsafe concurrent recovery assumptions,
+lossy repeated response headers, and missing run/session provenance. The repair
+now freezes canonical closed-month acquisition, an exclusive crash-released
+storage-root lease, preserved bounded headers, typed run outcomes, and six
+atomic implementation children. ARK-36 remains implementation-blocked until
+the repaired contract in
 [`02-request-minimal-ingestion-orchestration.md`](../plans/02-request-minimal-ingestion-orchestration.md)
 is independently approved and its atomic children are reconciled in Linear.
