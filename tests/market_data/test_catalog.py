@@ -159,6 +159,25 @@ def test_terminal_transition_is_atomic_and_exact_replay_is_a_no_op(tmp_path) -> 
         ).fetchone() == (1,)
 
 
+def test_terminal_replay_requires_the_exact_persisted_source_manifest(tmp_path) -> None:
+    initial = _in_progress()
+    verified = _verified(initial)
+    different_current = _in_progress(updated_at=_time(2))
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(initial)
+        catalog.transition_manifest(initial, verified)
+
+        with pytest.raises(CatalogConflictError):
+            catalog.transition_manifest(different_current, verified)
+
+        catalog.transition_manifest(initial, verified)
+        assert catalog.get_manifest(_plan()) == verified
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM ingestion_runs"
+        ).fetchone() == (1,)
+
+
 def test_identical_in_progress_create_and_save_replays_are_no_ops(tmp_path) -> None:
     initial = _in_progress()
 
@@ -296,6 +315,25 @@ def test_schema_metadata_rejects_nullability_and_default_drift(tmp_path) -> None
         connection.close()
         with pytest.raises(CatalogSchemaError):
             DuckDBCatalog(root).__enter__()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "CREATE TABLE extra.foreign_table(value INTEGER)",
+        "CREATE VIEW extra.foreign_view AS SELECT 1 AS value",
+    ),
+)
+def test_schema_rejects_foreign_schema_relations(tmp_path, statement: str) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    connection = duckdb.connect(str(tmp_path / "catalog.duckdb"))
+    connection.execute("CREATE SCHEMA extra")
+    connection.execute(statement)
+    connection.close()
+
+    with pytest.raises(CatalogSchemaError):
+        DuckDBCatalog(tmp_path).__enter__()
 
 
 def test_domain_admission_rejects_bypassed_and_hostile_manifests(tmp_path) -> None:

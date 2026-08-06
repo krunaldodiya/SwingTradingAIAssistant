@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -66,6 +67,7 @@ _PHYSICAL_KEY_COLUMNS: Final = (
     "month",
 )
 _EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
+_SOURCE_MANIFEST_IDENTITY_COLUMN: Final = "source_manifest_identity"
 
 _SCHEMA_SQL: Final = """
 CREATE TABLE schema_migrations (
@@ -102,6 +104,7 @@ CREATE TABLE partitions (
     attempt_started_at VARCHAR NOT NULL,
     updated_at VARCHAR NOT NULL,
     failure_category VARCHAR,
+    source_manifest_identity VARCHAR NOT NULL,
     PRIMARY KEY (provider, exchange, segment, instrument_type, security_id,
                  interval, year, month)
 );
@@ -240,7 +243,7 @@ class DuckDBCatalog:
             stored = self._fetch_manifest(current.plan)
             if stored is None:
                 raise CatalogConflictError("stale partition manifest")
-            if stored == target:
+            if self._is_exact_replay(stored, current, target):
                 return
             if stored != current:
                 raise CatalogConflictError("stale partition manifest")
@@ -259,6 +262,20 @@ class DuckDBCatalog:
             self._execute_update(target, current)
 
         self._transaction(operation)
+
+    def _is_exact_replay(
+        self,
+        stored: PartitionManifest,
+        current: PartitionManifest,
+        target: PartitionManifest,
+    ) -> bool:
+        if stored != target:
+            return False
+        if target == current:
+            return True
+        return self._fetch_source_manifest_identity(current.plan) == _manifest_identity(
+            current
+        )
 
     def save_manifest(
         self,
@@ -304,10 +321,11 @@ class DuckDBCatalog:
         connection = self.connection
         try:
             connection.execute("BEGIN")
-            tables: set[str] = {
-                str(row[0]) for row in connection.execute("SHOW TABLES").fetchall()
-            }
+            relations = self._user_relations()
+            tables = {name for kind, _, name in relations if kind == "table"}
             if not tables:
+                if relations:
+                    raise CatalogSchemaError("catalog schema is invalid")
                 for statement in _SCHEMA_SQL.split(";\n"):
                     connection.execute(statement)
                 connection.execute(
@@ -318,11 +336,7 @@ class DuckDBCatalog:
                         _SCHEMA_CHECKSUM,
                     ),
                 )
-            elif tables != {
-                "schema_migrations",
-                "partitions",
-                "ingestion_runs",
-            }:
+            elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
             else:
                 self._validate_schema()
@@ -332,6 +346,32 @@ class DuckDBCatalog:
             raise
         except Exception:
             self._rollback()
+            raise CatalogSchemaError("catalog schema is invalid") from None
+
+    def _user_relations(self) -> set[tuple[str, str, str]]:
+        try:
+            tables = {
+                ("table", str(schema), str(name))
+                for schema, name in self.connection.execute(
+                    """
+                    SELECT schema_name, table_name
+                    FROM duckdb_tables()
+                    WHERE NOT internal AND NOT temporary
+                    """
+                ).fetchall()
+            }
+            views = {
+                ("view", str(schema), str(name))
+                for schema, name in self.connection.execute(
+                    """
+                    SELECT schema_name, view_name
+                    FROM duckdb_views()
+                    WHERE NOT internal AND NOT temporary
+                    """
+                ).fetchall()
+            }
+            return tables | views
+        except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
     def _validate_schema(self) -> None:
@@ -453,15 +493,23 @@ class DuckDBCatalog:
             raise CatalogConflictError("ingestion run already exists")
 
     def _execute_insert(self, table: str, manifest: PartitionManifest) -> None:
-        placeholders = ", ".join("?" for _ in _MANIFEST_COLUMNS)
+        columns = (
+            _MANIFEST_COLUMNS + (_SOURCE_MANIFEST_IDENTITY_COLUMN,)
+            if table == "partitions"
+            else _MANIFEST_COLUMNS
+        )
+        values = _manifest_values(manifest)
+        if table == "partitions":
+            values += ("",)
+        placeholders = ", ".join("?" for _ in columns)
         try:
             query = (
-                f"INSERT INTO {_quote(table)} ({', '.join(_quote(name) for name in _MANIFEST_COLUMNS)}) "  # noqa: S608 - table is an internal constant and identifiers are quoted
+                f"INSERT INTO {_quote(table)} ({', '.join(_quote(name) for name in columns)}) "  # noqa: S608 - table is an internal constant and identifiers are quoted
                 f"VALUES ({placeholders})"
             )
             self.connection.execute(
                 query,
-                _manifest_values(manifest),
+                values,
             )
         except Exception:
             raise CatalogPersistenceError("catalog write failed") from None
@@ -471,7 +519,7 @@ class DuckDBCatalog:
     ) -> None:
         assignments = ", ".join(
             f"{_quote(name)} = ?"
-            for name in _MANIFEST_COLUMNS
+            for name in _MANIFEST_COLUMNS + (_SOURCE_MANIFEST_IDENTITY_COLUMN,)
             if name not in _PHYSICAL_KEY_COLUMNS
         )
         changed_values = tuple(
@@ -481,6 +529,7 @@ class DuckDBCatalog:
             )
             if name not in _PHYSICAL_KEY_COLUMNS
         )
+        changed_values += (_manifest_identity(current),)
         where = " AND ".join(f"{_quote(name)} = ?" for name in _PHYSICAL_KEY_COLUMNS)
         try:
             query = f"UPDATE {_quote('partitions')} SET {assignments} WHERE {where}"  # noqa: S608 - identifiers are fixed and quoted
@@ -490,6 +539,19 @@ class DuckDBCatalog:
             )
         except Exception:
             raise CatalogPersistenceError("catalog write failed") from None
+
+    def _fetch_source_manifest_identity(self, plan: PlannedInstrumentMonth) -> str:
+        where = " AND ".join(f"{_quote(name)} = ?" for name in _PHYSICAL_KEY_COLUMNS)
+        try:
+            row = self.connection.execute(
+                f"SELECT {_quote(_SOURCE_MANIFEST_IDENTITY_COLUMN)} FROM partitions WHERE {where}",  # noqa: S608 - identifiers are fixed and quoted
+                _identity_values(plan),
+            ).fetchone()
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+        if row is None or type(row[0]) is not str:
+            raise CatalogSchemaError("catalog row is invalid")
+        return row[0]
 
     def _validate_manifest(self, manifest: object) -> None:
         try:
@@ -551,7 +613,7 @@ def _expected_table_columns(
         primary_key = {"migration_id"}
         not_null = set(names)
     elif table == "partitions":
-        names = _MANIFEST_COLUMNS
+        names = _MANIFEST_COLUMNS + (_SOURCE_MANIFEST_IDENTITY_COLUMN,)
         primary_key = set(_PHYSICAL_KEY_COLUMNS)
         not_null = {
             name
@@ -681,6 +743,18 @@ def _manifest_values(manifest: PartitionManifest) -> tuple[object, ...]:
         _serialize_datetime(manifest.attempt_started_at),
         _serialize_datetime(manifest.updated_at),
         manifest.failure_category.value if manifest.failure_category else None,
+    )
+
+
+def _manifest_identity(manifest: PartitionManifest) -> str:
+    """Serialize one validated source manifest for exact replay comparison."""
+    return json.dumps(
+        tuple(
+            value.isoformat() if type(value) is date else value
+            for value in _manifest_values(manifest)
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 
