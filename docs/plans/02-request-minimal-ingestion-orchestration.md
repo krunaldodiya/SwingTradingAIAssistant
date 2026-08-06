@@ -1,6 +1,6 @@
 # Request-minimal one-minute ingestion orchestration
 
-Status: **Proposed after ARK-49 review repair**
+Status: **Accepted — ARK-49**
 Scope: Sprint 1 RELIANCE NSE equity one-minute vertical slice
 Depends on: ARK-32, ARK-33, ARK-34, ARK-35, ARK-40, ARK-42, and ARK-43
 
@@ -828,11 +828,10 @@ ARK-49 is complete when:
   and
 - repository and Linear sources of truth agree.
 
-The original specification review-repair budget is exhausted. The prior
-cancellation-only recheck found one stale verification bullet; the owner approved
-this exact wording correction and one last focused cancellation-only OS-enforced
-Sol High recheck of the corrected candidate. No further automatic repair round is
-authorized by this plan. Each child uses strict red-green-refactor TDD, unchanged
-deterministic gates, the approved single-writer routing, and the required
-independent high-risk review. No child implementation begins until this
-specification is accepted and its Linear issue is Ready.
+The original specification review-repair budget is exhausted. The authorized
+last focused cancellation-only OS-read-only Sol High recheck approved the
+corrected candidate. No further automatic repair round is authorized by this
+plan. Each child uses strict red-green-refactor TDD, unchanged deterministic
+gates, the approved single-writer routing, and the required independent
+high-risk review. No child implementation begins until this specification is
+accepted and its Linear issue is Ready.
