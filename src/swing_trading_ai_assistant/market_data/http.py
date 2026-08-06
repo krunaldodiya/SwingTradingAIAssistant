@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from http.client import HTTPMessage
-from types import MappingProxyType
 from typing import IO, Any, NoReturn, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import SplitResult, urlsplit
@@ -14,10 +13,122 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES = 1_000_000
 DEFAULT_USER_AGENT = "SwingTradingAIAssistant/0.1"
+MAX_RESPONSE_HEADER_FIELDS = 128
+MAX_RESPONSE_HEADER_NAME_BYTES = 256
+MAX_RESPONSE_HEADER_VALUE_BYTES = 4_096
+
+_HTTP_TOKEN_CHARS = frozenset(
+    "!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+)
 
 
-def _empty_headers() -> Mapping[str, str]:
-    return {}
+class HttpResponseHeadersInvalid(RuntimeError):
+    """A response contained an invalid or oversized header structure."""
+
+    def __init__(self) -> None:
+        super().__init__("market-data provider response contained invalid headers")
+
+
+@dataclass(frozen=True, slots=True)
+class HttpResponseHeader:
+    """One validated response field retained in its observed arrival position."""
+
+    name: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if not _valid_header_name(self.name) or not _valid_header_value(self.value):
+            raise HttpResponseHeadersInvalid
+
+
+@dataclass(frozen=True, slots=True)
+class HttpResponseHeaders:
+    """Immutable, bounded, arrival-ordered response header fields."""
+
+    fields: tuple[HttpResponseHeader, ...] = ()
+
+    def __post_init__(self) -> None:
+        fields = tuple(self.fields)
+        if len(fields) > MAX_RESPONSE_HEADER_FIELDS or any(
+            type(field) is not HttpResponseHeader for field in fields
+        ):
+            raise HttpResponseHeadersInvalid
+        object.__setattr__(self, "fields", fields)
+
+    @classmethod
+    def from_items(cls, items: Iterable[object]) -> HttpResponseHeaders:
+        fields: list[HttpResponseHeader] = []
+        for item in items:
+            if len(fields) >= MAX_RESPONSE_HEADER_FIELDS:
+                raise HttpResponseHeadersInvalid
+            if isinstance(item, HttpResponseHeader):
+                fields.append(item)
+                continue
+            if not isinstance(item, (tuple, list)):
+                raise HttpResponseHeadersInvalid
+            item_values = cast(tuple[object, ...] | list[object], item)
+            if (
+                len(item_values) != 2
+                or not isinstance(item_values[0], str)
+                or not isinstance(item_values[1], str)
+            ):
+                raise HttpResponseHeadersInvalid
+            fields.append(HttpResponseHeader(item_values[0], item_values[1]))
+        return cls(tuple(fields))
+
+    def __iter__(self) -> Iterator[HttpResponseHeader]:
+        return iter(self.fields)
+
+    def __len__(self) -> int:
+        return len(self.fields)
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> HttpResponseHeader | tuple[HttpResponseHeader, ...]:
+        return self.fields[index]
+
+    def items(self) -> tuple[tuple[str, str], ...]:
+        """Return all fields in arrival order, including duplicates."""
+        return tuple((field.name, field.value) for field in self.fields)
+
+    def get_all(self, name: str) -> tuple[str, ...]:
+        """Return every value for a field name using case-insensitive matching."""
+        folded_name = name.casefold()
+        return tuple(
+            field.value for field in self.fields if field.name.casefold() == folded_name
+        )
+
+    def get_single(self, name: str) -> str | None:
+        """Return one value only when the case-insensitive field occurs once."""
+        values = self.get_all(name)
+        return values[0] if len(values) == 1 else None
+
+
+def _empty_headers() -> HttpResponseHeaders:
+    return HttpResponseHeaders()
+
+
+def _valid_header_name(name: str) -> bool:
+    try:
+        name_bytes = name.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(name)
+        and len(name_bytes) <= MAX_RESPONSE_HEADER_NAME_BYTES
+        and all(character in _HTTP_TOKEN_CHARS for character in name)
+    )
+
+
+def _valid_header_value(value: str) -> bool:
+    try:
+        value_bytes = value.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return len(value_bytes) <= MAX_RESPONSE_HEADER_VALUE_BYTES and all(
+        (character == 0x09 or 0x20 <= character <= 0x7E or 0x80 <= character <= 0xFF)
+        for character in value_bytes
+    )
 
 
 class ProviderErrorCategory(StrEnum):
@@ -53,15 +164,14 @@ def provider_error_category(status_code: int) -> ProviderErrorCategory | None:
 class HttpResponse:
     status_code: int
     body: bytes
-    headers: Mapping[str, str] = field(default_factory=_empty_headers)
+    headers: HttpResponseHeaders = field(default_factory=_empty_headers)
     error_category: ProviderErrorCategory | None = None
 
     def __post_init__(self) -> None:
         if self.status_code < 100 or self.status_code > 599:
             raise ValueError("status_code must be an HTTP status code")
-        # Keep provider headers needed for retry and correlation, while preventing
-        # a caller from changing the observed response later.
-        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
+        if type(self.headers) is not HttpResponseHeaders:
+            raise TypeError("headers must be an HttpResponseHeaders collection")
         if self.error_category is None:
             object.__setattr__(
                 self, "error_category", provider_error_category(self.status_code)
@@ -87,6 +197,7 @@ class HttpResponseBodyTooLarge(RuntimeError):
 
 
 _BODY_TOO_LARGE = object()
+_INVALID_RESPONSE_HEADERS = object()
 
 
 class SameOriginAuthorizationRedirectHandler(HTTPRedirectHandler):
@@ -175,6 +286,9 @@ class UrllibHttpTransport:
         if outcome is _BODY_TOO_LARGE:
             del headers, request_headers, request, self
             _raise_body_too_large()
+        if outcome is _INVALID_RESPONSE_HEADERS:
+            del headers, request_headers, request, self, url
+            _raise_invalid_response_headers()
         return cast(HttpResponse, outcome)
 
 
@@ -190,19 +304,25 @@ def _perform_bounded_get(
             body = _read_bounded(response, max_body_bytes)
             if body is None:
                 return _BODY_TOO_LARGE
+            headers = _headers(response.headers)
+            if headers is _INVALID_RESPONSE_HEADERS:
+                return _INVALID_RESPONSE_HEADERS
             return HttpResponse(
                 status_code=response.status,
                 body=body,
-                headers=_headers(response.headers),
+                headers=cast(HttpResponseHeaders, headers),
             )
     except HTTPError as exc:
         body = _read_bounded(exc, max_body_bytes)
         if body is None:
             return _BODY_TOO_LARGE
+        headers = _headers(exc.headers)
+        if headers is _INVALID_RESPONSE_HEADERS:
+            return _INVALID_RESPONSE_HEADERS
         return HttpResponse(
             status_code=exc.code,
             body=body,
-            headers=_headers(exc.headers),
+            headers=cast(HttpResponseHeaders, headers),
         )
     except TimeoutError as exc:
         raise HttpTransportError(ProviderErrorCategory.TIMEOUT) from exc
@@ -228,9 +348,15 @@ def _raise_body_too_large() -> NoReturn:
     ) from None
 
 
-def _headers(headers: Any) -> Mapping[str, str]:
-    items = getattr(headers, "items", None)
-    if not callable(items):
-        return {}
-    header_items = cast(Iterable[tuple[object, object]], items())
-    return {str(name): str(value) for name, value in header_items}
+def _raise_invalid_response_headers() -> NoReturn:
+    raise HttpResponseHeadersInvalid from None
+
+
+def _headers(headers: Any) -> HttpResponseHeaders | object:
+    try:
+        items = getattr(headers, "items", None)
+        if not callable(items):
+            return _INVALID_RESPONSE_HEADERS
+        return HttpResponseHeaders.from_items(cast(Iterable[object], items()))
+    except Exception:
+        return _INVALID_RESPONSE_HEADERS

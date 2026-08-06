@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
 from typing import cast
 
-from .http import HttpTransport, ProviderErrorCategory
+from .http import HttpResponseHeaders, HttpTransport, ProviderErrorCategory
 
 UPSTOX_NSE_INSTRUMENTS_URL = (
     "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
@@ -37,7 +36,7 @@ class InstrumentCatalogRequestError(RuntimeError):
         self,
         *,
         status_code: int,
-        headers: Mapping[str, str],
+        headers: HttpResponseHeaders,
         error_category: ProviderErrorCategory | None,
     ) -> None:
         self.status_code = status_code

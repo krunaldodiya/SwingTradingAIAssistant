@@ -8,6 +8,7 @@ import pytest
 
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
+    HttpResponseHeaders,
     ProviderErrorCategory,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
@@ -100,7 +101,9 @@ def test_catalog_client_preserves_retry_metadata_on_a_non_200_response() -> None
             HttpResponse(
                 status_code=429,
                 body=b"{}",
-                headers={"Retry-After": "12", "X-Request-Id": "request-123"},
+                headers=HttpResponseHeaders.from_items(
+                    (("Retry-After", "12"), ("X-Request-Id", "request-123"))
+                ),
             )
         )
     )
@@ -109,10 +112,10 @@ def test_catalog_client_preserves_retry_metadata_on_a_non_200_response() -> None
         client.fetch_nse_catalog()
 
     assert exc_info.value.error_category is ProviderErrorCategory.RATE_LIMITED
-    assert exc_info.value.headers == {
-        "Retry-After": "12",
-        "X-Request-Id": "request-123",
-    }
+    assert exc_info.value.headers.items() == (
+        ("Retry-After", "12"),
+        ("X-Request-Id", "request-123"),
+    )
 
 
 def test_catalog_resolves_non_equity_instruments_from_explicit_metadata() -> None:

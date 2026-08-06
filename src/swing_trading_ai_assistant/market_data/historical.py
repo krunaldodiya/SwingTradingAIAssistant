@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import NoReturn, cast
@@ -13,6 +12,8 @@ from .credentials import AccessToken
 from .http import (
     HttpResponse,
     HttpResponseBodyTooLarge,
+    HttpResponseHeaders,
+    HttpResponseHeadersInvalid,
     HttpTransport,
     ProviderErrorCategory,
 )
@@ -28,8 +29,8 @@ _V3_INTERVAL_LIMITS = {
 }
 
 
-def _empty_headers() -> Mapping[str, str]:
-    return {}
+def _empty_headers() -> HttpResponseHeaders:
+    return HttpResponseHeaders()
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class HistoricalRequest:
 class HistoricalResponse:
     status_code: int
     candles: list[list[object]]
-    headers: Mapping[str, str] = field(default_factory=_empty_headers)
+    headers: HttpResponseHeaders = field(default_factory=_empty_headers)
     error_category: ProviderErrorCategory | None = None
 
 
@@ -85,6 +86,7 @@ class UpstoxV3HistoricalClient:
             f"{request.from_date.isoformat()}"
         )
         oversized = False
+        invalid_headers = False
         response: HttpResponse | None = None
         try:
             response = self._transport.get(
@@ -96,9 +98,14 @@ class UpstoxV3HistoricalClient:
             )
         except HttpResponseBodyTooLarge:
             oversized = True
+        except HttpResponseHeadersInvalid:
+            invalid_headers = True
         if oversized:
-            del instrument_key, request, self, token, url
+            del instrument_key, request, self, token, url, response
             _raise_body_too_large()
+        if invalid_headers:
+            del instrument_key, request, self, token, url, response
+            _raise_invalid_response_headers()
         response = cast(HttpResponse, response)
         if response.status_code < 200 or response.status_code >= 300:
             return HistoricalResponse(
@@ -135,3 +142,7 @@ def _raise_body_too_large() -> NoReturn:
     raise HttpResponseBodyTooLarge(
         "market-data provider response exceeded limit"
     ) from None
+
+
+def _raise_invalid_response_headers() -> NoReturn:
+    raise HttpResponseHeadersInvalid from None
