@@ -121,17 +121,23 @@ The main agent owns issue state, scope, integration, and the final result.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |
-| Default worker | Terra, medium | Workspace write | Bounded implementation work. |
-| Implementer | Terra, medium | Workspace write | Strict TDD implementation and evidence handoff. |
+| Default worker | Luna, high | Workspace write | One bounded, approved implementation task during the ARK-47 pilot. |
+| Implementer | Luna, high | Workspace write | Sole task writer; strict TDD implementation, remediation, and evidence handoff. |
+| Fallback implementer | Terra, medium | Workspace write | Direct routing for unsuitable Luna work or takeover after the Luna repair budget is exhausted. |
 | Verifier | Terra, high | Read-only | Independent focused checks. |
 | Lead architect/team lead | Sol, high | Read-only | Decomposition, architecture, risk routing, and escalation. |
-| High-risk reviewer | Sol, high | Read-only | Independent final review of high-risk or cross-cutting work. |
+| High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
 | Documentation/inventory helper | Luna, low | Read-only | Explicit low-risk, repeatable factual support only. |
 
 Each implementation handoff must state the issue and acceptance criteria,
 files changed, tests added first, commands and results, residual risks, and
 the exact decision needed next. A reviewer must not review its own change; a
-failed review returns to a separate implementer through the main agent.
+failed review returns through the main agent to the same task implementer while
+its two-round review-repair budget remains. Reviewer independence comes from
+read-only separation, not from replacing the writer. After that budget is
+exhausted, automatic Luna work stops and the main agent routes the preserved
+state to Terra or requests owner direction. No remediation restarts completed
+work or waives an acceptance criterion or gate.
 
 Project configuration provides these defaults, but an active Codex session's
 permission selection is inherited by subagents and can override a custom
@@ -164,6 +170,10 @@ data contracts, provenance, corporate actions, calendars, or bias controls are
 affected; security or credentials are involved; representative performance
 regresses; or a Terra verification cannot resolve a material finding. Sol's
 high-risk review is independent and is required before closing any such issue.
+For high-risk work, that single Sol pass also satisfies independent verification;
+do not add a duplicate Terra verification pass to the same exact candidate.
+For normal work, use one Terra High verifier and no Sol reviewer unless an
+escalation condition is present.
 
 ## Deterministic Python quality gate
 
@@ -182,9 +192,32 @@ formatters, import sorters, linters, or complexity tools without a demonstrated
 gap. The formatter may be run without `--check` only as a mechanical change;
 inspect its diff and run the full gate afterwards.
 
-## Current Luna limitation
+## ARK-47 Luna implementation pilot
 
-Luna is not an implementation, architecture, verification, or final-review
-role in this workflow. Use it only when the main agent explicitly delegates a
-clear, repeatable, read-only documentation or inventory task. If the task
-requires judgment, changes, or a quality decision, route it to Terra or Sol.
+For the remaining Sprint 1 executable tasks ARK-35, ARK-36, and ARK-37, use one
+persistent Luna High implementation subagent when the task has an approved,
+bounded specification. Model cost never changes the completion standard:
+strict TDD, the deterministic quality gate, acceptance evidence, independent
+review, security and provenance controls, and the Definition of Done remain
+mandatory.
+
+The root coordinator owns planning, scope, integration, Linear, and completion
+judgment. A task has exactly one repository-writing implementation subagent;
+the same Luna agent performs at most two review-repair rounds. Terra takes over
+the preserved state when Luna cannot clear those rounds, when the task is not
+clear and bounded, or when the coordinator determines that stronger production
+judgment is required. Terra takeover resolves correctness or design findings;
+it is not a cosmetic final-refactoring stage.
+
+Research and analysis use one subagent by default and never more than two.
+Review occurs only after the coordinator confirms a stable candidate and the
+required deterministic gate. Normal tasks use one Terra High verifier.
+High-risk tasks use one Sol High reviewer that combines independent verification
+and high-risk review. Rechecks go to the same reviewer and cover the changed
+state and prior findings; do not spawn parallel verifier, anti-pattern, and Sol
+agents for one candidate.
+
+At Sprint 1 close, compare visible quota consumption, gate results, reviewer
+findings, repair rounds, elapsed time, and quality outcomes for ARK-35 through
+ARK-37. Keep, revise, or supersede this pilot only through an explicit recorded
+decision.
