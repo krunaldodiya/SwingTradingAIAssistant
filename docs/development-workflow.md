@@ -159,6 +159,21 @@ and effective sandbox evidence. Before a read-only reviewer accepts a candidate,
 it must record a pre/post identical tree and clean scoped status. A reviewer
 rejects unexplained mutation or unverifiable read-only isolation.
 
+### High-risk specification compatibility matrix
+
+For a high-risk or broad specification, the coordinator completes a deterministic
+contract-compatibility matrix against the exact candidate commit before the one
+formal Sol High review. It verifies every touched frozen contract, physical
+identity, lifecycle transition, exhaustive typed outcome, provenance retention,
+bounded resource/wait rule, crash/concurrency ownership, and atomic child
+boundary. Each row cites the governing and candidate locations and records a
+compatible/incompatible result; an incompatibility returns to the sole writer.
+
+This is coordinator-owned preparation, not a subagent, second review, model
+pass, or weakened gate. It replaces avoidable review-repair discovery without
+changing the one-writer limit, the single final OS-enforced Sol High reviewer,
+or the required deterministic quality gate.
+
 ## Strict TDD
 
 For every behavior change, use red-green-refactor:

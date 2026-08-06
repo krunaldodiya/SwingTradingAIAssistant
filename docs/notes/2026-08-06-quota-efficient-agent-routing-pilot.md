@@ -93,3 +93,22 @@ improvement. Revise when quality holds but efficiency evidence is unknown or
 inconclusive, or takeover/repair behavior shows adjustment is needed. Supersede
 if any quality gate is weakened or waived, a blocking finding remains, or a
 linked high-severity escaped defect is confirmed.
+
+## Accepted adjustment: deterministic specification compatibility matrix
+
+Status: **accepted**
+
+ARK-49 showed that a broad, high-risk specification can consume repair rounds
+when a formal reviewer finds contract mismatches that a deterministic comparison
+could have found before review. Before the one formal Sol High review of such a
+specification, the coordinator now completes a matrix against the exact
+candidate commit. It checks each touched frozen contract, physical identity,
+lifecycle transition, exhaustive typed outcome, provenance retention, bounded
+resource/wait rule, crash/concurrency ownership, and atomic child boundary.
+
+This adds no subagent, reviewer, or model pass. It is coordinator preparation
+only: incompatible rows return to the one writer before review. The sole writer,
+strict TDD, deterministic gate, one final OS-enforced Sol High review, and all
+quality standards remain unchanged. This adjustment follows the practical
+guidance behind the pilot: use the lowest sufficient routing and avoid parallel
+write/review coordination cost without accepting weaker evidence.

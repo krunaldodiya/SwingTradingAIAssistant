@@ -109,10 +109,14 @@ ARK-35 now provides the transactional DuckDB catalog for exact current and
 terminal lifecycle evidence. ARK-49 is the active specification gate for
 request-minimal ingestion orchestration. Its first independent review exposed
 partial-month identity collisions, unsafe concurrent recovery assumptions,
-lossy repeated response headers, and missing run/session provenance. The repair
-now freezes canonical closed-month acquisition, an exclusive crash-released
-storage-root lease, preserved bounded headers, typed run outcomes, and six
-atomic implementation children. ARK-36 remains implementation-blocked until
-the repaired contract in
+lossy repeated response headers, and missing run/session provenance. The
+owner-approved exceptional repair now freezes an exhaustive run outcome table,
+fresh-validation versus verified-invalidation category mapping, versioned
+content-addressed schedule evidence, one invocation-wide retry/limiter wait
+budget, stable physical `security_id` versus mutable Upstox aliases, and nine
+ordered atomic implementation children. A coordinator-owned deterministic
+contract-compatibility matrix now precedes the one final OS-enforced Sol High
+review; it is preparation, not an additional reviewer or a weakened gate.
+ARK-36 remains implementation-blocked until the repaired contract in
 [`02-request-minimal-ingestion-orchestration.md`](../plans/02-request-minimal-ingestion-orchestration.md)
 is independently approved and its atomic children are reconciled in Linear.
