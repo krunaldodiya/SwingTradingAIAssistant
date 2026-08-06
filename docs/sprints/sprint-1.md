@@ -116,7 +116,10 @@ content-addressed schedule evidence, one invocation-wide retry/limiter wait
 budget, stable physical `security_id` versus mutable Upstox aliases, and nine
 ordered atomic implementation children. A coordinator-owned deterministic
 contract-compatibility matrix now precedes the one final OS-enforced Sol High
-review; it is preparation, not an additional reviewer or a weakened gate.
+review; it is preparation, not an additional reviewer or a weakened gate. The
+owner-approved focused correction additionally freezes before/during/between/
+after cancellation outcomes and identical-byte schedule restoration, followed
+by one Sol High recheck of that exact candidate.
 ARK-36 remains implementation-blocked until the repaired contract in
 [`02-request-minimal-ingestion-orchestration.md`](../plans/02-request-minimal-ingestion-orchestration.md)
 is independently approved and its atomic children are reconciled in Linear.

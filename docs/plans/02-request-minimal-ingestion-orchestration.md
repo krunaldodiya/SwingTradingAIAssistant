@@ -211,6 +211,8 @@ reason except that ordinary partition failures use `PARTITION_FAILURE`.
 | Cancellation before any partition enters `IN_PROGRESS` | all planned results `CANCELLED`; no manifest | `CANCELLED` / `CANCELLED` | 0 |
 | Cancellation after a partition entered `IN_PROGRESS`, with no earlier completed result | current `CANCELLED`, earlier failures retained, later `NOT_ATTEMPTED`; best-effort current manifest `FAILED/INTERRUPTED` | `CANCELLED` / `CANCELLED` | 0 or more |
 | Same in-flight cancellation with one or more earlier completed results | completed results retained, current `CANCELLED`, later `NOT_ATTEMPTED` | `PARTIAL` / `CANCELLED` | 0 or more |
+| Cancellation between partitions after one or more terminal results but before the next `IN_PROGRESS` | all earlier completed/failed results retained; every remaining unstarted plan `CANCELLED` with no manifest | `PARTIAL` / `CANCELLED` if any earlier result completed, otherwise `CANCELLED` / `CANCELLED` | bounded attempts already made; no new request |
+| Cancellation after every planned result is terminal | no result, count, manifest, or request changes | normal all-result precedence (`SUCCEEDED`, `PARTIAL`, or `FAILED`) | unchanged |
 | Run-fatal authentication, authorization, catalog, unsafe-local-repair, mapping migration, retry-wait-bound, or runtime total-attempt-budget exhaustion before a completed result | affected failure retained, later `NOT_ATTEMPTED` | `FAILED` / exact fatal code, including `ATTEMPT_BUDGET_EXHAUSTED` | 0 or bounded attempts already made; no later request |
 | Same run-fatal condition after one or more completed results | completed and failed results retained, later `NOT_ATTEMPTED` | `PARTIAL` / exact fatal code | bounded attempts already made; no later request |
 | All desired partitions were attempted and failed ordinarily, with no completed result or run-fatal stop | every result `FAILED` | `FAILED` / `PARTITION_FAILURE` | bounded attempts |
@@ -219,8 +221,11 @@ reason except that ordinary partition failures use `PARTITION_FAILURE`.
 
 Only cancellation before the first `IN_PROGRESS` transition is zero-request. An
 in-flight cancellation may follow a sent request, publication, or local recovery
-work. `NOT_ATTEMPTED` never means failure, and no row permits a later provider
-request after a run-fatal stop. `NONE` is exclusive to `SUCCEEDED`.
+work. Between-partition cancellation changes every unstarted result to
+`CANCELLED`, not `NOT_ATTEMPTED`; after-terminal cancellation is observationally
+irrelevant. Counts always equal the final result tuple. `NOT_ATTEMPTED` never
+means failure, and no row permits a later provider request after a run-fatal
+stop. `NONE` is exclusive to `SUCCEEDED`.
 
 ## Authoritative session schedule and validation identity
 
@@ -249,16 +254,21 @@ precisely those bytes.
 `ScheduleEvidenceStore` retains the bytes at protected-root relative
 `calendar-schedules/sha256/<digest>.json`. It is content-addressed, no-follow,
 no-clobber, atomically published, and never overwritten or deleted here. Before
-any `IN_PROGRESS`, the coordinator validates the command schedule and proves
-that retained bytes equal it or, when this command-supplied digest has no object
-and no current **or terminal-history** manifest policy value references that
-digest, publishes those exact bytes once. That is the only first-use case. Reads verify
+any `IN_PROGRESS`, the coordinator validates the supplied command schedule and
+proves that retained bytes equal it. If an object is missing, Child D may
+first-publish or restore it only from supplied canonical `schedule-digest-v1`
+bytes whose lowercase SHA-256 exactly equals the referenced command or manifest
+policy digest. Reads verify
 path shape, regular-file identity, byte ceiling, digest, and `schedule-digest-v1`
-parsing. The exact retained-byte ceiling is 1,000,000 bytes. Missing, unreadable, corrupt, or unequal retained content is
-`REJECTED/SCHEDULE_UNSUPPORTED` before provider activity only when it is not the
-first-use publication case. A missing, unreadable, corrupt, or unequal object
-for a digest extracted from an existing manifest is historical evidence: it is
-never reconstructed or substituted from the current command schedule.
+parsing. The exact retained-byte ceiling is 1,000,000 bytes. A missing command
+object without matching supplied bytes, and every present unreadable, corrupt,
+unequal, or digest-mismatched command object, is
+`REJECTED/SCHEDULE_UNSUPPORTED` before provider activity. A missing or bad
+manifest-bound object fails closed under the lifecycle mapping below. Present bad
+evidence is never overwritten or replaced. A manifest-bound object is never
+substituted from a current schedule: restoration is permitted only from
+identical supplied canonical bytes for that manifest digest. No catalog or
+history inspection decides this behavior.
 
 `validation_policy_version` is not a free label: the existing manifest persists
 `<policy-name>@<policy-version>+sessions-sha256:<64-lower-hex>`. Recovery extracts
@@ -350,8 +360,10 @@ The range coordinator executes these steps in order:
    invocation if any month is not closed or fully covered by the schedule.
 4. Acquire the protected root's exclusive lease. If it is already held, return
    `ALREADY_RUNNING` with zero provider activity and no storage/catalog change.
-5. While holding the lease, retain or re-read the exact schedule-digest bytes.
-   Retention failure returns `REJECTED/SCHEDULE_UNSUPPORTED` before catalog,
+5. While holding the lease, Child D retains or re-reads exact supplied
+   schedule-digest bytes. It may create a missing object only when those exact
+   canonical bytes hash to the referenced digest; it never replaces present bad
+   evidence. Failure returns `REJECTED/SCHEDULE_UNSUPPORTED` before catalog,
    credentials, limiter, or HTTP.
 6. Open one DuckDB catalog connection. Catalog failure returns
    `FAILED/CATALOG_UNAVAILABLE` before provider-session creation.
@@ -491,8 +503,9 @@ partition when the run-fatal conditions do not apply.
 | --- | --- |
 | Root lease held by another invocation | `ALREADY_RUNNING`; no mutation, credentials, limiter, or request. |
 | Desired range touches an open month | `REJECTED/PARTITION_NOT_CLOSED`; no mutation or provider activity. |
-| Command-supplied digest has no object and no current/terminal manifest policy references it | First use: publish its exact validated bytes once, then continue; no provider request is caused by retention alone. |
-| Command-supplied schedule object is corrupt/unequal, or a manifest-bound retained schedule is absent/corrupt/mismatched | Command evidence rejects before work; a verified manifest is invalidated `COVERAGE_NOT_PASSED`; a fresh in-progress validation failure is `VALIDATION_FAILED` with a stable schedule reason; no calendar substitution. |
+| Referenced schedule object is missing and supplied canonical bytes hash exactly to that command or manifest digest | First-publish or restore those exact bytes once, then continue; no provider request is caused by retention alone. |
+| Command-referenced schedule object is missing without matching supplied bytes, or is present unreadable/corrupt/unequal/digest-mismatched | `REJECTED/SCHEDULE_UNSUPPORTED` before work; present bad evidence is never replaced. |
+| Manifest-bound schedule object is missing without matching supplied bytes, or is present unreadable/corrupt/unequal/digest-mismatched | Fail closed with no current-calendar substitution; a verified manifest is invalidated `COVERAGE_NOT_PASSED`, and a fresh in-progress validation failure is `VALIDATION_FAILED` with a stable schedule reason. Present bad evidence is never replaced. |
 | Historical request touches only part of a closed month | Expand to the canonical full month; one reusable physical identity and at most one partition request. |
 | No manifest, no final | Create `IN_PROGRESS`; request only this partition. |
 | No manifest, valid final | Create recovery run and verify locally; zero request. |
@@ -533,6 +546,14 @@ attempt as `FAILED/INTERRUPTED`, returns that item as `CANCELLED`, and marks all
 later plans `NOT_ATTEMPTED`. It is `PARTIAL/CANCELLED` only if an earlier result
 completed; otherwise it is `CANCELLED/CANCELLED`. The current request count may
 already be nonzero. Cancellation never becomes a provider retry.
+
+Cancellation observed between partitions retains every earlier completed or
+failed result and marks every remaining unstarted plan `CANCELLED` without a
+manifest. It is `PARTIAL/CANCELLED` if any retained earlier result completed and
+otherwise `CANCELLED/CANCELLED`; `cancelled_count` equals those remaining plans
+and provider attempts remain the bounded attempts already recorded. Cancellation
+after every plan has a terminal result changes nothing: normal all-result
+precedence determines `SUCCEEDED`, `PARTIAL`, or `FAILED`.
 
 One partition failure never rolls back a completed partition. Every untouched
 plan remains explicit as `NOT_ATTEMPTED` rather than being falsely failed.
@@ -617,7 +638,9 @@ Tests use injected fakes and temporary local storage. They must prove:
   `Retry-After`, shared limiter deferral, both attempt budgets, the one global
   wait ledger, fail-before-wait behavior, and no later request after a
   retry-wait bound failure;
-- cancellation at every defined boundary;
+- cancellation before the first `IN_PROGRESS`, during every in-progress
+  boundary, between partitions after both completed and failed results, and
+  after all terminal results, including exact result counts and request counts;
 - authentication, catalog, and unsafe-repair run-fatal behavior;
 - empty, malformed, and oversized response behavior;
 - normalization, validation, publication, and catalog failure mapping;
@@ -633,9 +656,10 @@ Tests use injected fakes and temporary local storage. They must prove:
   `Retry-After` fields are exercised through the preserving header boundary;
 - root-lease contention, crash release, unsafe lock inode/mode, and the rule
   that only a held lease can interrupt earlier `IN_PROGRESS` state;
-- exact `schedule-digest-v1` bytes, content-addressed no-clobber retention,
-  retained-byte mismatch, and manifest-bound recovery without current-calendar
-  substitution;
+- exact `schedule-digest-v1` bytes, content-addressed no-clobber first publish
+  or identical-byte restore, retained-byte mismatch, refusal to replace present
+  bad evidence, and manifest-bound recovery without current-calendar
+  substitution or catalog/history query;
 - stable `security_id` recovery with mutable alias drift, including verified
   skip, manifest-absent stored-mapping recovery, and zero-request
   `MAPPING_MIGRATION_REQUIRED` for failed/invalidated old mappings;
@@ -691,8 +715,11 @@ or returns one sanitized structural transport error.
 ### Child D: retain and resolve one content-addressed session schedule
 
 With Child A lease proof, it owns `schedule-digest-v1` serialization, digest
-calculation, no-clobber content-addressed schedule retention, and verified
-lookup by manifest policy digest. It does not obtain calendars, judge candles,
+calculation, no-clobber content-addressed schedule retention/identical-byte
+restore, and verified lookup by manifest policy digest. A missing object may be
+written only from supplied canonical bytes whose lowercase SHA-256 equals that
+digest; a present unreadable, corrupt, unequal, or mismatched object is never
+replaced. It does not obtain calendars, inspect catalog/history, judge candles,
 or change manifests/catalog rows.
 
 Done: one valid schedule is immutably retrievable by its exact digest or fails
@@ -773,10 +800,12 @@ result, and any required repair; an incompatible row blocks formal review.
 | Frozen typed contracts | Every touched planner, reconciliation, lifecycle, publication, catalog, HTTP, historical, normalization, canonical, and Parquet contract is named; no required field, type, ownership, or transition is invented. |
 | Physical identity | Full-month identity is exactly provider/exchange/segment/instrument type/security ID/interval/year/month; edge dates and mutable aliases do not create a second identity. |
 | Lifecycle transition | Every fresh, retry, recovery, invalidation, interruption, and cancellation maps to an existing ARK-40 transition/category or a report-only run code; no manifest/catalog schema change is implied. |
-| Exhaustive typed outcome | The run table covers pre-start and in-flight cancellation, zero/mixed/all failure results, precedence, counts, and request cardinality. |
+| Exhaustive typed outcome | The run table covers zero/mixed/all failure results, precedence, counts, and request cardinality for every valid command. |
+| Boundary-state exhaustiveness | Cancellation and every other stateful outcome enumerate before, during, between, and after terminal boundary states, with precedence, result counts, manifest effect, and request cardinality. |
 | Provenance retention | Schedule bytes, digest serialization/version, policy binding, immutable lookup, and recovery behavior are exact and bounded. |
 | Bounded resource and wait | Request, response, plan, file, connection, retry, limiter, and all wait cardinalities are bounded; every over-bound wait fails before waiting. |
 | Crash/concurrency ownership | Lease acquisition precedes mutable observation; only lease ownership permits stale interruption, cleanup, quarantine, recovery, or retention mutation. |
+| Callable dependency proof | Every required read, write, or query occurs only after its dependency is available and maps to an existing callable contract, or is isolated as an approved atomic child; prose does not assume an unstated API. |
 | Atomic children | Each child has one observable behavior, one reason to change, a one-sentence Done condition, and explicit dependencies/order with no stale count or label. |
 
 ## Acceptance criteria and completion
@@ -795,10 +824,10 @@ ARK-49 is complete when:
   and
 - repository and Linear sources of truth agree.
 
-The original specification review-repair budget is exhausted. The owner approved
-this one exceptional complete repair and exactly one final OS-enforced Sol High
-review of it; no further automatic repair round is authorized by this plan. Each
-child uses strict red-green-refactor TDD, unchanged deterministic gates, the
-approved single-writer routing, and the required independent high-risk review.
-No child implementation begins until this specification is accepted and its
-Linear issue is Ready.
+The original specification review-repair budget is exhausted. After the
+exceptional complete repair, the owner approved this focused correction and one
+OS-enforced Sol High recheck of the exact corrected candidate; no further
+automatic repair round is authorized by this plan. Each child uses strict
+red-green-refactor TDD, unchanged deterministic gates, the approved single-writer
+routing, and the required independent high-risk review. No child implementation
+begins until this specification is accepted and its Linear issue is Ready.

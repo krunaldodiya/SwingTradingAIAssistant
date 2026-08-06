@@ -166,8 +166,12 @@ contract-compatibility matrix against the exact candidate commit before the one
 formal Sol High review. It verifies every touched frozen contract, physical
 identity, lifecycle transition, exhaustive typed outcome, provenance retention,
 bounded resource/wait rule, crash/concurrency ownership, and atomic child
-boundary. Each row cites the governing and candidate locations and records a
-compatible/incompatible result; an incompatibility returns to the sole writer.
+boundary. It additionally enumerates before/during/between/after cancellation
+and other stateful boundaries, and proves every necessary read/write/query
+occurs after its dependency is available and maps to an existing callable
+contract or an approved atomic child. Each row cites the governing and candidate
+locations and records a compatible/incompatible result; an incompatibility
+returns to the sole writer.
 
 This is coordinator-owned preparation, not a subagent, second review, model
 pass, or weakened gate. It replaces avoidable review-repair discovery without

@@ -104,7 +104,10 @@ could have found before review. Before the one formal Sol High review of such a
 specification, the coordinator now completes a matrix against the exact
 candidate commit. It checks each touched frozen contract, physical identity,
 lifecycle transition, exhaustive typed outcome, provenance retention, bounded
-resource/wait rule, crash/concurrency ownership, and atomic child boundary.
+resource/wait rule, crash/concurrency ownership, and atomic child boundary. It
+also enumerates before/during/between/after cancellation and other stateful
+boundaries, and proves each required read/write/query has an available existing
+callable contract or is isolated as an approved atomic child.
 
 This adds no subagent, reviewer, or model pass. It is coordinator preparation
 only: incompatible rows return to the one writer before review. The sole writer,
@@ -112,3 +115,8 @@ strict TDD, deterministic gate, one final OS-enforced Sol High review, and all
 quality standards remain unchanged. This adjustment follows the practical
 guidance behind the pilot: use the lowest sufficient routing and avoid parallel
 write/review coordination cost without accepting weaker evidence.
+
+The owner later approved one narrow ARK-49 correction for boundary-state and
+identical-schedule-evidence precision, followed by one OS-enforced Sol High
+recheck of that exact corrected candidate. It does not reopen automatic repair
+rounds or add a reviewer/model pass.
