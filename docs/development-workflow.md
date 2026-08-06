@@ -121,9 +121,9 @@ The main agent owns issue state, scope, integration, and the final result.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |
-| Default worker | Luna, high | Workspace write | One bounded, approved implementation task during the ARK-47 pilot. |
-| Implementer | Luna, high | Workspace write | Sole task writer; strict TDD implementation, remediation, and evidence handoff. |
-| Fallback implementer | Terra, medium | Workspace write | Direct routing for unsuitable Luna work or takeover after the Luna repair budget is exhausted. |
+| Default worker | Terra, medium | Workspace write | Unspecified delegated work; not a pilot implementation selection. |
+| Pilot implementer | Luna, high | Workspace write | Only for explicit, approved, bounded pilot implementation; sole task writer with strict TDD, remediation, and evidence handoff. |
+| Fallback/takeover implementer | Terra, high | Workspace write | Direct routing for unsuitable Luna work or takeover after the Luna repair budget is exhausted. |
 | Verifier | Terra, high | Read-only | Independent focused checks. |
 | Lead architect/team lead | Sol, high | Read-only | Decomposition, architecture, risk routing, and escalation. |
 | High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
@@ -142,6 +142,22 @@ work or waives an acceptance criterion or gate.
 Project configuration provides these defaults, but an active Codex session's
 permission selection is inherited by subagents and can override a custom
 agent's sandbox setting.
+
+### ARK-48 routing evidence correction
+
+For the quota-efficient pilot, use exact role selection from the approved
+task; do not treat the default as an implementation-pilot selection. Unspecified
+subagents use Terra Medium and the configured session concurrency remains two.
+Only the explicit `luna_implementer` role may use Luna High, and only for an
+approved, bounded pilot task. Terra takeover uses Terra High. If there is
+withheld approval or unclear authority, route the question through the parent; no
+subagent may infer approval.
+
+The parent maintains an evidence ledger for each candidate: writer identity,
+reviewer identity, candidate commit, `HEAD^{tree}`, repair round, gate evidence,
+and effective sandbox evidence. Before a read-only reviewer accepts a candidate,
+it must record a pre/post identical tree and clean scoped status. A reviewer
+rejects unexplained mutation or unverifiable read-only isolation.
 
 ## Strict TDD
 
@@ -221,3 +237,7 @@ At Sprint 1 close, compare visible quota consumption, gate results, reviewer
 findings, repair rounds, elapsed time, and quality outcomes for ARK-35 through
 ARK-37. Keep, revise, or supersede this pilot only through an explicit recorded
 decision.
+
+ARK-48 corrects the routing mechanics and scorecard record for this pilot; its
+accepted correction is appended to the pilot decision note without altering the
+historical ARK-47 text above.
