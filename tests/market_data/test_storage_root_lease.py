@@ -251,3 +251,163 @@ def test_operational_errors_are_sanitized_typed_failures(
     assert result.outcome is LeaseOutcome.FAILED
     assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
     assert "secret/path/token" not in repr(result)
+
+
+def test_held_lease_exposes_a_verified_root_operation_context(
+    tmp_path: Path,
+) -> None:
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+
+    with result.lease.root_operation(tmp_path) as operation:
+        assert os.fstat(operation.descriptor).st_ino == tmp_path.stat().st_ino
+
+    result.lease.close()
+
+
+def test_root_operation_rejects_closed_wrong_and_substituted_roots(
+    tmp_path: Path,
+) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+
+    with pytest.raises(RuntimeError, match="storage lease authority unavailable"):
+        result.lease.root_operation(other).__enter__()
+
+    result.lease.close()
+    with pytest.raises(RuntimeError, match="storage lease authority unavailable"):
+        result.lease.root_operation(tmp_path).__enter__()
+
+    substituted = tmp_path / "substituted"
+    original = tmp_path / "original"
+    substituted.mkdir()
+    result = StorageRootLease.try_acquire(substituted)
+    assert result.lease is not None
+    substituted.rename(original)
+    substituted.mkdir()
+    with pytest.raises(RuntimeError, match="storage lease authority unavailable"):
+        result.lease.root_operation(substituted).__enter__()
+    result.lease.close()
+
+
+def test_root_operation_reentry_is_rejected_without_overwriting_descriptor(
+    tmp_path: Path,
+) -> None:
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+    operation = result.lease.root_operation(tmp_path)
+    operation.__enter__()
+    first_descriptor = operation.descriptor
+    with pytest.raises(RuntimeError, match="storage operation already entered"):
+        operation.__enter__()
+    assert operation.descriptor == first_descriptor
+    operation.__exit__(None, None, None)
+    result.lease.close()
+
+
+def test_root_operation_fstat_verification_failure_closes_new_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+    original_open = lease_module.os.open
+    original_fstat = lease_module.os.fstat
+    original_close = lease_module.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    fstat_calls = 0
+
+    def capture_open(*args: object, **kwargs: object) -> int:
+        descriptor = original_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_verification(descriptor: int) -> object:
+        nonlocal fstat_calls
+        fstat_calls += 1
+        if fstat_calls == 2:
+            raise OSError("verification failure")
+        return original_fstat(descriptor)
+
+    def capture_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        original_close(descriptor)
+
+    monkeypatch.setattr(lease_module.os, "open", capture_open)
+    monkeypatch.setattr(lease_module.os, "fstat", fail_verification)
+    monkeypatch.setattr(lease_module.os, "close", capture_close)
+    with pytest.raises(RuntimeError, match="storage lease authority unavailable"):
+        result.lease.root_operation(tmp_path).__enter__()
+    assert len(opened) == 1
+    assert opened[0] in closed
+    result.lease.close()
+
+
+def test_root_operation_close_failure_is_not_silently_successful(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+    original_close = lease_module.os.close
+    operation = result.lease.root_operation(tmp_path)
+    operation.__enter__()
+    descriptor = operation.descriptor
+
+    def fail_operation_close(value: int) -> None:
+        if value == descriptor:
+            raise OSError("close failure")
+        original_close(value)
+
+    monkeypatch.setattr(lease_module.os, "close", fail_operation_close)
+    with pytest.raises(RuntimeError, match="descriptor cleanup failed"):
+        operation.__exit__(None, None, None)
+    original_close(descriptor)
+    result.lease.close()
+
+
+def test_lease_close_propagates_a_sanitized_descriptor_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = StorageRootLease.try_acquire(tmp_path)
+    assert result.lease is not None
+    descriptor = result.lease._descriptor  # pyright: ignore[reportPrivateUsage]
+    assert descriptor is not None
+    original_close = lease_module.os.close
+
+    def close_then_fail(value: int) -> None:
+        original_close(value)
+        if value == descriptor:
+            raise OSError("close failure")
+
+    monkeypatch.setattr(lease_module.os, "close", close_then_fail)
+
+    with pytest.raises(RuntimeError, match="descriptor cleanup failed"):
+        result.lease.close()
+    result.lease.close()
+
+
+def test_acquisition_attempts_root_and_lock_cleanup_when_both_close_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_close = lease_module.os.close
+    closed: list[int] = []
+
+    def close_then_fail(descriptor: int) -> None:
+        closed.append(descriptor)
+        original_close(descriptor)
+        raise OSError("close failure")
+
+    monkeypatch.setattr(lease_module.os, "close", close_then_fail)
+    monkeypatch.setattr(
+        lease_module.fcntl,
+        "flock",
+        lambda *_args: (_ for _ in ()).throw(OSError("lock failure")),
+    )
+
+    result = StorageRootLease.try_acquire(tmp_path)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    assert len(closed) == 2

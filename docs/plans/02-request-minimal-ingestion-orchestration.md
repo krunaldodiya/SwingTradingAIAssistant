@@ -693,6 +693,12 @@ It owns only creation/verification of the stable no-follow lock inode and one
 non-blocking advisory-lock lifetime. It returns `LeaseResult` and never scans,
 removes, quarantines, opens DuckDB, validates data, or calls a provider.
 
+ARK-51 correction: an acquired `StorageRootLease` retains the protected root's
+verified `(st_dev, st_ino)` identity. Its narrow root-operation context proves
+that the lease remains open and that the supplied root path still identifies
+that same real directory before a child performs mutation. A closed lease,
+wrong supplied root, or substituted root fails closed.
+
 Done: one caller either holds the verified protected-root lease or observes
 `ALREADY_RUNNING` without changing any other storage state.
 
@@ -702,6 +708,32 @@ With Child A lease proof and one exact canonical path, it owns only bounded
 exact-temp removal, same-filesystem no-clobber quarantine, descriptor checks,
 and required directory fsyncs. It neither interprets manifests nor acquires a
 lease, validates candles, or accesses a provider.
+
+ARK-51 correction: Child B receives the held lease and one exact canonical
+target. The target path must have the approved publication shape
+`candles/provider=.../exchange=.../segment=.../instrument_type=.../security_id=.../interval=.../year=YYYY/month=MM/bars.parquet`; relative, outside, dot-component,
+arbitrary-contained, reordered, hidden/control, and reserved `.ingestion.lock`
+paths are rejected. It may remove only an exact abandoned publisher sibling
+regular file whose name matches `.publish-[0-9a-f]{32}.tmp`, without following
+symlinks, and must fsync its verified parent directory. A missing exact temp is
+idempotent typed `NOT_FOUND`. For one unsafe canonical regular file, quarantine
+uses a bounded hidden sibling in the same verified parent, no-follow/no-clobber
+creation, the same filesystem, and durable fsyncs for both directory
+transitions. It returns the exact quarantine path on `QUARANTINED`; a
+`FAILED/LOCAL_REPAIR_BLOCKED` result may also carry the exact retained or
+durability-ambiguous quarantine path. A missing quarantine source is
+`FAILED/LOCAL_REPAIR_BLOCKED` because prior quarantine cannot be proven.
+Outcomes are exactly `REMOVED`, `QUARANTINED`, `NOT_FOUND`, and `FAILED`;
+successful outcomes use `NONE`, while unsafe local failures use
+`LOCAL_REPAIR_BLOCKED`. Quarantine-name generation uses at most 32 attempts and
+an injectable source of cryptographic 32-character lowercase hex tokens.
+Canonical containment and every relevant path/descriptor identity and type are
+validated without following symlinks; wrong types, collisions, link/unlink,
+fsync, cleanup, and lease-authority failures fail closed. The portable
+descriptor-relative check-then-unlink residual is accepted inside the private
+application-owned sole-writer boundary only; this specification does not claim
+protection against a hostile same-directory writer replacing a pathname between
+the final identity check and unlink.
 
 Done: one lease holder can remove or quarantine only its exact safe local target
 and otherwise returns a typed no-provider failure.
