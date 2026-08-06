@@ -100,3 +100,10 @@ descriptor-anchored read-back evidence, without catalog mutation. Its durable
 root is caller-created and all derived directories are no-follow and fsynced;
 no-lock writers converge via no-clobber link and exact temporary cleanup.
 ARK-44 is deferred.
+
+ARK-35 now provides the transactional DuckDB catalog for exact current and
+terminal lifecycle evidence. ARK-49 is the active specification gate for
+request-minimal ingestion orchestration. ARK-36 remains implementation-blocked
+until the proposed contract in
+[`02-request-minimal-ingestion-orchestration.md`](../plans/02-request-minimal-ingestion-orchestration.md)
+is independently approved and its atomic children are reconciled in Linear.
