@@ -129,6 +129,43 @@ The main agent owns issue state, scope, integration, and the final result.
 | High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
 | Documentation/inventory helper | Luna, low | Read-only | Explicit low-risk, repeatable factual support only. |
 
+The following diagram is a visual summary of the same routing rules. It does
+not add roles, review passes, or exceptions to the table and prose below.
+
+```mermaid
+flowchart TD
+    root["Root coordinator<br/>scope, Linear, integration, publishing"]
+    ready{"Approved and bounded task?"}
+    luna["One Luna High pilot implementer<br/>sole writer, strict TDD"]
+    terra["Terra High takeover implementer<br/>unsuitable Luna task or exhausted repair budget"]
+    gate["Complete deterministic quality gate"]
+    risk{"Normal or high-risk?"}
+    verify["One Terra High verifier<br/>normal task"]
+    review["One Sol High reviewer<br/>high-risk task; no duplicate Terra pass"]
+    verdict{"Approved?"}
+    publish["Atomic publish and Done evidence"]
+
+    root --> ready
+    ready -- "Approved bounded pilot" --> luna
+    ready -- "Needs stronger implementation judgment" --> terra
+    luna --> gate
+    terra --> gate
+    gate --> risk
+    risk -- "Normal" --> verify
+    risk -- "High-risk" --> review
+    verify --> verdict
+    review --> verdict
+    verdict -- "Yes" --> publish
+    verdict -- "Repair budget remains" --> luna
+    verdict -- "Luna unsuitable or repair budget exhausted" --> terra
+```
+
+Only one repository writer may be active. Research and analysis use one
+subagent by default and never more than two; they do not create a second
+implementation writer. A normal candidate receives one Terra High verification.
+A high-risk candidate receives one Sol High review that also supplies independent
+verification, never an additional Terra review of the same exact candidate.
+
 Each implementation handoff must state the issue and acceptance criteria,
 files changed, tests added first, commands and results, residual risks, and
 the exact decision needed next. A reviewer must not review its own change; a
