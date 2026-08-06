@@ -61,6 +61,13 @@ It must never:
 
 It reasons only over versioned, structured facts supplied by this tool.
 
+For historical validation of AI reasoning, the harness may consume a sealed,
+point-in-time research packet and emit a versioned structured decision before
+future data is revealed. The deterministic simulator then scores that decision
+using the approved execution and risk rules. This replay workflow validates the
+consumer boundary; it does not move LLM reasoning into the deterministic core,
+and it must document model-version, contamination, and out-of-sample limits.
+
 ## This repository: Swing Trading Research Tool
 
 Responsibilities:
@@ -116,6 +123,12 @@ No module should be added without an explicit architecture decision.
 
 Trade Recommendation Support produces validated evidence, candidate plans, and
 risk facts. The external AI harness owns the contextual recommendation.
+
+Portfolio and arbitrary-security analysis remain deliberately bounded in v1:
+the tool may expose reusable contracts that can later support read-only
+portfolio snapshots and additional supported securities, but the approved
+research universe remains point-in-time Nifty 50 equities. Such expansions need
+an explicit scope decision and specification before implementation.
 
 ## Domain boundaries
 

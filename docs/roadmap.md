@@ -52,6 +52,11 @@ Before any result can be treated as decision support, require:
 
 - no known look-ahead or survivorship bias;
 - reproducible backtests;
+- at least five years of point-in-time historical data for strategy validation,
+  covering materially different market regimes; if that evidence cannot be
+  reconstructed, strategy acceptance requires an explicit documented exception;
+- a deterministic full-history baseline plus separately identified, sampled
+  point-in-time AI-reasoning replay;
 - realistic costs and slippage;
 - out-of-sample and walk-forward validation;
 - explicit handling of stale or missing data;

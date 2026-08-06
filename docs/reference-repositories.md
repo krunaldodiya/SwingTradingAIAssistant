@@ -8,6 +8,8 @@ references only—not dependencies, specifications, or sources to copy wholesale
 
 - Treat every implementation and trading claim as unverified until reproduced.
 - Extract concepts and lessons, not entire architectures.
+- Assume reference code may be incomplete or incorrect; independently choose to
+  reuse an idea, adapt it, rewrite it, or reject it based on evidence.
 - Write this project's business rules and contracts before adapting code.
 - Revalidate all logic for point-in-time Nifty 50 equities and swing horizons.
 - Reject look-ahead bias, survivorship bias, repainting, and same-bar fills.
