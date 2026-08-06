@@ -208,7 +208,7 @@ reason except that ordinary partition failures use `PARTITION_FAILURE`.
 | --- | --- | --- | --- |
 | Preflight rejects interval, closed-month, schedule, protected root, or minimum attempt budget before any `IN_PROGRESS` | all planned results `NOT_ATTEMPTED` | `REJECTED` / exact code (`UNSUPPORTED_INTERVAL`, `PARTITION_NOT_CLOSED`, `SCHEDULE_UNSUPPORTED`, `STORAGE_UNSAFE`, or `ATTEMPT_BUDGET_INSUFFICIENT`) | 0 |
 | Root lease is held | all planned results `NOT_ATTEMPTED` | `ALREADY_RUNNING` / `ALREADY_RUNNING` | 0 |
-| Cancellation before any partition enters `IN_PROGRESS` | all planned results `CANCELLED`; no manifest | `CANCELLED` / `CANCELLED` | 0 |
+| Cancellation before any result becomes terminal or any partition enters `IN_PROGRESS` | all planned results `CANCELLED`; no manifest | `CANCELLED` / `CANCELLED` | 0 |
 | Cancellation after a partition entered `IN_PROGRESS`, with no earlier completed result | current `CANCELLED`, earlier failures retained, later `NOT_ATTEMPTED`; best-effort current manifest `FAILED/INTERRUPTED` | `CANCELLED` / `CANCELLED` | 0 or more |
 | Same in-flight cancellation with one or more earlier completed results | completed results retained, current `CANCELLED`, later `NOT_ATTEMPTED` | `PARTIAL` / `CANCELLED` | 0 or more |
 | Cancellation between partitions after one or more terminal results but before the next `IN_PROGRESS` | all earlier completed/failed results retained; every remaining unstarted plan `CANCELLED` with no manifest | `PARTIAL` / `CANCELLED` if any earlier result completed, otherwise `CANCELLED` / `CANCELLED` | bounded attempts already made; no new request |
@@ -219,9 +219,11 @@ reason except that ordinary partition failures use `PARTITION_FAILURE`.
 | One or more ordinary terminal failures and one or more completed results, with no run-fatal stop | every plan has its actual completed or failed result | `PARTIAL` / `PARTITION_FAILURE` | bounded attempts |
 | Every desired partition completes locally or by verified acquisition | every result completed | `SUCCEEDED` / `NONE` | 0 or more |
 
-Only cancellation before the first `IN_PROGRESS` transition is zero-request. An
-in-flight cancellation may follow a sent request, publication, or local recovery
-work. Between-partition cancellation changes every unstarted result to
+Only cancellation before any terminal result or the first `IN_PROGRESS`
+transition is zero-request. An in-flight cancellation may follow a sent request,
+publication, or local recovery work. A local `SKIPPED_VERIFIED` result is
+terminal, so later cancellation follows the between-partition row and preserves
+that skip. Between-partition cancellation changes every unstarted result to
 `CANCELLED`, not `NOT_ATTEMPTED`; after-terminal cancellation is observationally
 irrelevant. Counts always equal the final result tuple. `NOT_ATTEMPTED` never
 means failure, and no row permits a later provider request after a run-fatal
@@ -539,8 +541,10 @@ bounded by its transport timeout. Best effort records `FAILED/INTERRUPTED` after
 an `IN_PROGRESS` cancellation; when catalog persistence is unavailable, the row
 remains `IN_PROGRESS` for restart recovery.
 
-Cancellation before any plan enters `IN_PROGRESS` returns `CANCELLED/CANCELLED`,
-marks every planned item `CANCELLED`, and makes no manifest or request.
+Cancellation before any plan has a terminal result or enters `IN_PROGRESS`
+returns `CANCELLED/CANCELLED`, marks every planned item `CANCELLED`, and makes
+no manifest or request. A local `SKIPPED_VERIFIED` result is terminal; later
+cancellation therefore preserves it and uses the between-partition rule.
 Cancellation after one plan enters `IN_PROGRESS` best-effort persists that
 attempt as `FAILED/INTERRUPTED`, returns that item as `CANCELLED`, and marks all
 later plans `NOT_ATTEMPTED`. It is `PARTIAL/CANCELLED` only if an earlier result
@@ -825,9 +829,10 @@ ARK-49 is complete when:
 - repository and Linear sources of truth agree.
 
 The original specification review-repair budget is exhausted. After the
-exceptional complete repair, the owner approved this focused correction and one
-OS-enforced Sol High recheck of the exact corrected candidate; no further
-automatic repair round is authorized by this plan. Each child uses strict
-red-green-refactor TDD, unchanged deterministic gates, the approved single-writer
-routing, and the required independent high-risk review. No child implementation
-begins until this specification is accepted and its Linear issue is Ready.
+exceptional complete repair and focused correction, the owner approved exactly
+one final cancellation mutual-exclusivity correction and one cancellation-only
+OS-enforced Sol High recheck of that exact candidate; no further automatic repair
+round is authorized by this plan. Each child uses strict red-green-refactor TDD,
+unchanged deterministic gates, the approved single-writer routing, and the
+required independent high-risk review. No child implementation begins until this
+specification is accepted and its Linear issue is Ready.
