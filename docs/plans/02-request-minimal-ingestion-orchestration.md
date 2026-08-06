@@ -642,7 +642,7 @@ Tests use injected fakes and temporary local storage. They must prove:
   `Retry-After`, shared limiter deferral, both attempt budgets, the one global
   wait ledger, fail-before-wait behavior, and no later request after a
   retry-wait bound failure;
-- cancellation before the first `IN_PROGRESS`, during every in-progress
+- cancellation before any terminal result or the first `IN_PROGRESS`, during every in-progress
   boundary, between partitions after both completed and failed results, and
   after all terminal results, including exact result counts and request counts;
 - authentication, catalog, and unsafe-repair run-fatal behavior;
@@ -828,11 +828,11 @@ ARK-49 is complete when:
   and
 - repository and Linear sources of truth agree.
 
-The original specification review-repair budget is exhausted. After the
-exceptional complete repair and focused correction, the owner approved exactly
-one final cancellation mutual-exclusivity correction and one cancellation-only
-OS-enforced Sol High recheck of that exact candidate; no further automatic repair
-round is authorized by this plan. Each child uses strict red-green-refactor TDD,
-unchanged deterministic gates, the approved single-writer routing, and the
-required independent high-risk review. No child implementation begins until this
+The original specification review-repair budget is exhausted. The prior
+cancellation-only recheck found one stale verification bullet; the owner approved
+this exact wording correction and one last focused cancellation-only OS-enforced
+Sol High recheck of the corrected candidate. No further automatic repair round is
+authorized by this plan. Each child uses strict red-green-refactor TDD, unchanged
+deterministic gates, the approved single-writer routing, and the required
+independent high-risk review. No child implementation begins until this
 specification is accepted and its Linear issue is Ready.
