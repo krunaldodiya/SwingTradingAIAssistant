@@ -306,13 +306,13 @@ name = "swing-trading-ai-assistant"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "duckdb" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
 ]
 
 [package.optional-dependencies]
 dev = [
-    { name = "duckdb" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -322,7 +322,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duckdb", marker = "extra == 'dev'", specifier = ">=1.5.5,<1.6" },
+    { name = "duckdb", specifier = ">=1.5.5,<1.6" },
     { name = "pyarrow", specifier = ">=25,<26" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
