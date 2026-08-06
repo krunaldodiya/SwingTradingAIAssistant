@@ -148,6 +148,11 @@ def test_terminal_transition_is_atomic_and_exact_replay_is_a_no_op(tmp_path) -> 
             "SELECT count(*) FROM ingestion_runs"
         ).fetchone() == (1,)
 
+        catalog.transition_manifest(initial, verified)
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM ingestion_runs"
+        ).fetchone() == (1,)
+
         catalog.transition_manifest(verified, verified)
         assert catalog.connection.execute(
             "SELECT count(*) FROM ingestion_runs"
@@ -223,8 +228,9 @@ def test_conflicts_and_faults_roll_back_both_current_and_history(tmp_path) -> No
             catalog.create_manifest(_in_progress(updated_at=_time(2)))
 
         catalog.transition_manifest(initial, verified)
+        divergent_verified = _verified(initial, updated_minute=3)
         with pytest.raises(CatalogConflictError):
-            catalog.transition_manifest(initial, verified)
+            catalog.transition_manifest(initial, divergent_verified)
 
         replacement = _in_progress(ingestion_run_id="run-2")
         with pytest.raises(CatalogConflictError):
@@ -268,6 +274,55 @@ def test_schema_is_fail_closed_and_storage_errors_are_sanitized(tmp_path) -> Non
     connection.close()
     with pytest.raises(CatalogSchemaError), DuckDBCatalog(valid_root):
         pass
+
+
+def test_schema_metadata_rejects_nullability_and_default_drift(tmp_path) -> None:
+    for name, statement in (
+        (
+            "nullable-version",
+            "ALTER TABLE schema_migrations ALTER COLUMN version DROP NOT NULL",
+        ),
+        (
+            "default-month",
+            "ALTER TABLE partitions ALTER COLUMN month SET DEFAULT 1",
+        ),
+    ):
+        root = tmp_path / name
+        root.mkdir()
+        with DuckDBCatalog(root):
+            pass
+        connection = duckdb.connect(str(root / "catalog.duckdb"))
+        connection.execute(statement)
+        connection.close()
+        with pytest.raises(CatalogSchemaError):
+            DuckDBCatalog(root).__enter__()
+
+
+def test_domain_admission_rejects_bypassed_and_hostile_manifests(tmp_path) -> None:
+    mutated = _in_progress()
+    object.__setattr__(mutated, "row_count", 0)
+    uninitialized = object.__new__(PartitionManifest)
+
+    class Explosive:
+        __hash__ = None
+
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("secret equality payload")
+
+    hostile_plan = object.__new__(PlannedInstrumentMonth)
+    valid_plan = _plan()
+    for name in PlannedInstrumentMonth.__dataclass_fields__:
+        object.__setattr__(hostile_plan, name, getattr(valid_plan, name))
+    object.__setattr__(hostile_plan, "instrument_key", Explosive())
+    hostile = _in_progress()
+    object.__setattr__(hostile, "plan", hostile_plan)
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        for manifest in (mutated, uninitialized, hostile):
+            with pytest.raises(CatalogConflictError) as error:
+                catalog.create_manifest(manifest)
+            assert str(error.value) == "invalid partition manifest"
+            assert "secret" not in str(error.value)
 
 
 def test_closed_catalog_and_illegal_lifecycle_inputs_fail_closed(tmp_path) -> None:

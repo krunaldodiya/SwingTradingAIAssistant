@@ -238,7 +238,11 @@ class DuckDBCatalog:
 
         def operation() -> None:
             stored = self._fetch_manifest(current.plan)
-            if stored is None or stored != current:
+            if stored is None:
+                raise CatalogConflictError("stale partition manifest")
+            if stored == target:
+                return
+            if stored != current:
                 raise CatalogConflictError("stale partition manifest")
             if target == current:
                 return
@@ -246,16 +250,10 @@ class DuckDBCatalog:
                 self._execute_update(target, current)
                 return
             if target.state is ManifestState.IN_PROGRESS:
-                if self._run_exists(
-                    target.ingestion_run_id
-                ) or self._current_run_exists(target.ingestion_run_id, current.plan):
-                    raise CatalogConflictError("ingestion run already exists")
+                self._ensure_run_id_available(target.ingestion_run_id, current.plan)
                 self._execute_update(target, current)
                 return
-            if self._run_exists(target.ingestion_run_id) or self._current_run_exists(
-                target.ingestion_run_id, current.plan
-            ):
-                raise CatalogConflictError("ingestion run already exists")
+            self._ensure_run_id_available(target.ingestion_run_id, current.plan)
             self._execute_insert("ingestion_runs", target)
             self._after_history_insert()
             self._execute_update(target, current)
@@ -337,31 +335,36 @@ class DuckDBCatalog:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
     def _validate_schema(self) -> None:
-        expected = {
-            "schema_migrations": (
-                (
-                    ("migration_id", "VARCHAR"),
-                    ("version", "INTEGER"),
-                    ("checksum_sha256", "VARCHAR"),
-                ),
-                {"migration_id"},
-            ),
-            "partitions": (
-                tuple((name, _column_type(name)) for name in _MANIFEST_COLUMNS),
-                set(_PHYSICAL_KEY_COLUMNS),
-            ),
-            "ingestion_runs": (
-                tuple((name, _column_type(name)) for name in _MANIFEST_COLUMNS),
-                {"ingestion_run_id"},
-            ),
-        }
-        for table, (columns, primary_key) in expected.items():
+        for table in _EXPECTED_TABLES:
             actual_rows = self.connection.execute(
                 f"PRAGMA table_info('{table}')"
             ).fetchall()
-            actual = tuple((str(row[1]), str(row[2]).upper()) for row in actual_rows)
-            actual_primary_key = {str(row[1]) for row in actual_rows if row[5]}
-            if actual != columns or actual_primary_key != primary_key:
+            actual_columns = tuple(
+                (
+                    str(row[1]),
+                    str(row[2]).upper(),
+                    bool(row[3]),
+                    row[4],
+                    bool(row[5]),
+                )
+                for row in actual_rows
+            )
+            if actual_columns != _expected_table_columns(table):
+                raise CatalogSchemaError("catalog schema is invalid")
+            actual_constraints = tuple(
+                _constraint_signature(row)
+                for row in self.connection.execute(
+                    """
+                    SELECT constraint_type, expression,
+                           constraint_column_indexes, constraint_column_names,
+                           referenced_table, referenced_column_names
+                    FROM duckdb_constraints()
+                    WHERE schema_name = 'main' AND table_name = ?
+                    """,
+                    (table,),
+                ).fetchall()
+            )
+            if frozenset(actual_constraints) != frozenset(_expected_constraints(table)):
                 raise CatalogSchemaError("catalog schema is invalid")
 
         migration = self.connection.execute(
@@ -441,6 +444,14 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogPersistenceError("catalog read failed") from None
 
+    def _ensure_run_id_available(
+        self, ingestion_run_id: str, exclude_plan: PlannedInstrumentMonth
+    ) -> None:
+        if self._run_exists(ingestion_run_id) or self._current_run_exists(
+            ingestion_run_id, exclude_plan
+        ):
+            raise CatalogConflictError("ingestion run already exists")
+
     def _execute_insert(self, table: str, manifest: PartitionManifest) -> None:
         placeholders = ", ".join("?" for _ in _MANIFEST_COLUMNS)
         try:
@@ -481,27 +492,162 @@ class DuckDBCatalog:
             raise CatalogPersistenceError("catalog write failed") from None
 
     def _validate_manifest(self, manifest: object) -> None:
-        if type(manifest) is not PartitionManifest:
-            raise CatalogConflictError("invalid partition manifest")
-        self._validate_plan(manifest.plan)
+        try:
+            if type(manifest) is not PartitionManifest:
+                raise ValueError
+            values = tuple(
+                getattr(manifest, name)
+                for name in PartitionManifest.__dataclass_fields__
+            )
+            reconstructed = PartitionManifest(*values)
+            if reconstructed != manifest:
+                raise ValueError
+            self._validate_plan(reconstructed.plan)
+        except CatalogConflictError:
+            raise
+        except Exception:
+            raise CatalogConflictError("invalid partition manifest") from None
 
     @staticmethod
     def _validate_plan(plan: object) -> None:
-        if type(plan) is not PlannedInstrumentMonth:
-            raise CatalogConflictError("invalid partition plan")
+        try:
+            if type(plan) is not PlannedInstrumentMonth:
+                raise ValueError
+            values = tuple(
+                getattr(plan, name)
+                for name in PlannedInstrumentMonth.__dataclass_fields__
+            )
+            reconstructed = PlannedInstrumentMonth(*values)
+            if reconstructed != plan:
+                raise ValueError
+        except Exception:
+            raise CatalogConflictError("invalid partition plan") from None
 
 
 DuckDbCatalog = DuckDBCatalog
 
 
 def _column_type(name: str) -> str:
-    if name in {"manifest_schema_version", "year", "month", "candle_schema_version"}:
+    if name in {
+        "manifest_schema_version",
+        "version",
+        "year",
+        "month",
+        "candle_schema_version",
+    }:
         return "INTEGER"
     if name == "row_count":
         return "BIGINT"
     if name in {"from_date", "to_date"}:
         return "DATE"
     return "VARCHAR"
+
+
+def _expected_table_columns(
+    table: str,
+) -> tuple[tuple[str, str, bool, object | None, bool], ...]:
+    if table == "schema_migrations":
+        names = ("migration_id", "version", "checksum_sha256")
+        primary_key = {"migration_id"}
+        not_null = set(names)
+    elif table == "partitions":
+        names = _MANIFEST_COLUMNS
+        primary_key = set(_PHYSICAL_KEY_COLUMNS)
+        not_null = {
+            name
+            for name in names
+            if name
+            not in {
+                "candle_schema_version",
+                "actual_from_ts",
+                "actual_to_ts",
+                "row_count",
+                "checksum_sha256",
+                "canonical_path",
+                "failure_category",
+            }
+        }
+    elif table == "ingestion_runs":
+        names = _MANIFEST_COLUMNS
+        primary_key = {"ingestion_run_id"}
+        not_null = {
+            name
+            for name in names
+            if name
+            not in {
+                "candle_schema_version",
+                "actual_from_ts",
+                "actual_to_ts",
+                "row_count",
+                "checksum_sha256",
+                "canonical_path",
+                "failure_category",
+            }
+        }
+    else:
+        raise CatalogSchemaError("catalog schema is invalid")
+    return tuple(
+        (name, _column_type(name), name in not_null, None, name in primary_key)
+        for name in names
+    )
+
+
+def _expected_constraints(
+    table: str,
+) -> tuple[
+    tuple[
+        str,
+        object | None,
+        tuple[int, ...],
+        tuple[str, ...],
+        object | None,
+        tuple[str, ...],
+    ],
+    ...,
+]:
+    columns = _expected_table_columns(table)
+    signatures: list[
+        tuple[
+            str,
+            object | None,
+            tuple[int, ...],
+            tuple[str, ...],
+            object | None,
+            tuple[str, ...],
+        ]
+    ] = [
+        ("NOT NULL", None, (index,), (column[0],), None, ())
+        for index, column in enumerate(columns)
+        if column[2]
+    ]
+    primary_key = (
+        _PHYSICAL_KEY_COLUMNS
+        if table == "partitions"
+        else ("migration_id",)
+        if table == "schema_migrations"
+        else ("ingestion_run_id",)
+    )
+    indexes = tuple(
+        next(index for index, column in enumerate(columns) if column[0] == name)
+        for name in primary_key
+    )
+    signatures.append(("PRIMARY KEY", None, indexes, tuple(primary_key), None, ()))
+    return tuple(signatures)
+
+
+def _constraint_signature(
+    row: tuple[Any, ...],
+) -> tuple[
+    str, object | None, tuple[int, ...], tuple[str, ...], object | None, tuple[str, ...]
+]:
+    return (
+        str(row[0]).upper(),
+        row[1],
+        tuple(int(index) for index in (row[2] or ())),
+        tuple(str(name) for name in (row[3] or ())),
+        row[4],
+        tuple(str(name) for name in (row[5] or ())),
+    )
 
 
 def _manifest_values(manifest: PartitionManifest) -> tuple[object, ...]:
