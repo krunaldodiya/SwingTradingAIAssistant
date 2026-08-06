@@ -7,11 +7,45 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS = ROOT / ".codex" / "agents"
+REVIEWER_REQUIREMENTS = (
+    "candidate commit",
+    "head^{tree}",
+    "effective sandbox",
+    "pre/post identical tree",
+    "clean scoped status",
+    "reject unexplained mutation",
+    "unverifiable read-only isolation",
+)
 
 
 def read_toml(path: Path) -> dict[str, object]:
     with path.open("rb") as file:
         return tomllib.load(file)
+
+
+def missing_reviewer_requirements(instructions: str) -> set[str]:
+    normalized_instructions = " ".join(instructions.lower().split())
+    return {
+        requirement
+        for requirement in REVIEWER_REQUIREMENTS
+        if requirement not in normalized_instructions
+    }
+
+
+def test_reviewer_contract_checker_rejects_missing_safeguards() -> None:
+    incomplete_reviewer = "candidate commit; HEAD^{tree}; effective sandbox"
+    assert missing_reviewer_requirements(incomplete_reviewer) == {
+        "pre/post identical tree",
+        "clean scoped status",
+        "reject unexplained mutation",
+        "unverifiable read-only isolation",
+    }
+
+
+def test_each_reviewer_independently_enforces_read_only_safeguards() -> None:
+    for filename in ("terra-verifier.toml", "high-risk-reviewer.toml"):
+        instructions = str(read_toml(AGENTS / filename)["developer_instructions"])
+        assert missing_reviewer_requirements(instructions) == set()
 
 
 def test_ark_48_routes_default_and_pilot_writers_deterministically() -> None:
@@ -65,18 +99,8 @@ def test_ark_48_handoffs_are_traceable_and_read_only_reviews_are_enforced() -> N
         "head^{tree}",
         "repair round",
         "gate evidence",
-        "effective sandbox",
-        "pre/post identical tree",
-        "clean scoped status",
     ):
         assert required in role_text
-
-    reviewer_text = "\n".join(
-        str(read_toml(AGENTS / name)["developer_instructions"])
-        for name in ("terra-verifier.toml", "high-risk-reviewer.toml")
-    ).lower()
-    assert "reject unexplained mutation" in reviewer_text
-    assert "unverifiable read-only isolation" in reviewer_text
 
     high_risk_reviewer = " ".join(
         str(read_toml(AGENTS / "high-risk-reviewer.toml")["developer_instructions"])
