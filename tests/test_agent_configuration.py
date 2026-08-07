@@ -1,4 +1,4 @@
-"""Contract checks for the ARK-48 agent-routing pilot configuration."""
+"""Contract checks for the active quality-first agent configuration."""
 
 from __future__ import annotations
 
@@ -48,24 +48,25 @@ def test_each_reviewer_independently_enforces_read_only_safeguards() -> None:
         assert missing_reviewer_requirements(instructions) == set()
 
 
-def test_ark_48_routes_default_and_pilot_writers_deterministically() -> None:
+def test_ark_63_routes_terra_as_the_only_implementation_writer() -> None:
     config = read_toml(ROOT / ".codex" / "config.toml")
     agents = config["agents"]
     assert isinstance(agents, dict)
     assert agents["max_concurrent_threads_per_session"] == 2
     assert agents["default_subagent_model"] == "gpt-5.6-terra"
-    assert agents["default_subagent_reasoning_effort"] == "medium"
-
-    luna = read_toml(AGENTS / "luna-implementer.toml")
-    assert luna["model"] == "gpt-5.6-luna"
-    assert luna["model_reasoning_effort"] == "high"
-    assert luna["sandbox_mode"] == "workspace-write"
-    assert "approved, bounded pilot task" in luna["description"]
+    assert agents["default_subagent_reasoning_effort"] == "high"
+    assert not (AGENTS / "luna-implementer.toml").exists()
 
     terra = read_toml(AGENTS / "terra-implementer.toml")
     assert terra["model"] == "gpt-5.6-terra"
     assert terra["model_reasoning_effort"] == "high"
     assert terra["sandbox_mode"] == "workspace-write"
+    assert "sole implementation and repair worker" in terra["description"]
+
+    luna = read_toml(AGENTS / "luna-docs-inventory.toml")
+    assert luna["model"] == "gpt-5.6-luna"
+    assert luna["model_reasoning_effort"] == "low"
+    assert luna["sandbox_mode"] == "read-only"
 
 
 def test_ark_48_reviewer_roles_have_read_only_sandbox_contracts() -> None:
@@ -86,7 +87,6 @@ def test_ark_48_handoffs_are_traceable_and_read_only_reviews_are_enforced() -> N
         str(read_toml(AGENTS / name)["developer_instructions"])
         for name in (
             "lead-architect.toml",
-            "luna-implementer.toml",
             "terra-implementer.toml",
             "terra-verifier.toml",
             "high-risk-reviewer.toml",
@@ -110,20 +110,20 @@ def test_ark_48_handoffs_are_traceable_and_read_only_reviews_are_enforced() -> N
     assert "whenever approval is withheld, return findings to the parent" in (
         high_risk_reviewer
     )
-    assert "only the parent routes remediation or takeover" in high_risk_reviewer
+    assert "only the parent routes remediation to the same terra task implementer" in (
+        high_risk_reviewer
+    )
     assert "otherwise route" not in high_risk_reviewer
 
 
-def test_ark_48_workflow_and_scorecard_preserve_evidence_limits() -> None:
+def test_ark_63_workflow_supersedes_the_luna_implementation_pilot() -> None:
     workflow = (ROOT / "docs" / "development-workflow.md").read_text().lower()
-    assert "exact role selection" in workflow
     assert "evidence ledger" in workflow
-    assert "withheld approval" in workflow
+    assert "approval is withheld" in workflow
     assert "through the parent" in workflow
-    assert "| default worker | terra, medium" in workflow
-    assert "| pilot implementer | luna, high" in workflow
-    assert "explicit, approved, bounded pilot implementation" in workflow
-    assert "| fallback/takeover implementer | terra, high" in workflow
+    assert "| default worker | terra, high" in workflow
+    assert "terra high is the sole implementation and repair writer" in workflow
+    assert "luna is limited to explicitly delegated, low-risk, read-only" in workflow
 
     note = " ".join(
         (ROOT / "docs" / "notes" / "2026-08-06-quota-efficient-agent-routing-pilot.md")
@@ -132,31 +132,9 @@ def test_ark_48_workflow_and_scorecard_preserve_evidence_limits() -> None:
         .split()
     )
     for required in (
-        "ark-34",
-        "available-artifact baseline",
-        "unknown",
-        "writer identity",
-        "reviewer identity",
-        "model-effort",
-        "tree",
-        "round",
-        "takeover",
-        "gate",
-        "finding",
-        "linear elapsed time",
-        "linked defect",
-        "7-calendar-day post-merge window",
-        "does not infer token/quota telemetry",
-        "root coordinator records one scorecard comment on each ark-35, ark-36, and ark-37 linear issue",
-        "aggregate the scorecards at sprint 1 close",
-        "spawned-agent count",
-        "keep only when all gates are unwaived",
-        "no unresolved blocking review finding",
-        "no confirmed linked high-severity defect",
-        "usable evidence of cost improvement",
-        "revise when quality holds but efficiency evidence is unknown or inconclusive",
-        "supersede if any quality gate is weakened or waived",
-        "a blocking finding remains",
-        "linked high-severity escaped defect is confirmed",
+        "superseded by ark-63 quality-first routing",
+        "historical pilot evidence only",
+        "terra high as the sole implementation and repair writer",
+        "luna is limited to explicitly delegated low-risk, read-only",
     ):
         assert required in note
