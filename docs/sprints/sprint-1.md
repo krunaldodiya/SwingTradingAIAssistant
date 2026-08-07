@@ -91,31 +91,69 @@ resource behavior, and a concise Linear handoff. Storage, crash recovery,
 credentials, concurrency, and provider retry changes additionally require Sol
 high-risk review.
 
-## Status
+## Final status
 
-Planning started on 2026-08-05. ARK-31 froze the logical canonical schema and
-ARK-42 implements its physical Parquet mapping. The approved Linear ARK-43
-adapter maps normalized Upstox NSE equity candles into that logical contract
-before ARK-34. ARK-33 and ARK-40 remain ordered implementation children for
-physical reconciliation and manifest lifecycle respectively. The approved Linear
-ARK-32 planner decomposes one-minute NSE equity date ranges into contiguous
-calendar-month requests before physical reconciliation. The approved Linear
-ARK-33 reconciliation boundary now decides deterministic `SKIP` or `REQUEST`
-outcomes from supplied manifest and physical evidence before any provider
-request. The approved Linear ARK-40 lifecycle now manages immutable pure
-manifest transitions and retry/invalidation evidence separately. The approved
-Linear ARK-34 publisher now owns atomic, no-clobber Parquet publication and
-descriptor-anchored read-back evidence, without catalog mutation. Its durable
-root is caller-created and all derived directories are no-follow and fsynced;
-no-lock writers converge via no-clobber link and exact temporary cleanup.
-ARK-44 is canceled and superseded by the equity-only downloader-v1 boundary.
+Sprint 1 closed on 2026-08-07 with **21 of 21 executable Story/Task items
+complete (100%)**. Tracking parents, canceled work, and deferred work are not
+part of that denominator. No Sprint 2 work has started.
 
-The ARK-49 request-minimal ingestion contract was independently approved and
-decomposed into ordered atomic children. ARK-56 now executes one requested
-partition lifecycle with independently approved attempt provenance, exact
-manifest recovery, sanitized hostile boundaries, request-minimal verified skip,
-publication evidence, cancellation handling, and terminal catalog evidence.
-Its final gate passed 823 tests at 87.37% coverage with no Upstox request during
-verification. Linear remains authoritative for the remaining ordered children:
-leased-partition recovery, bounded RELIANCE range coordination, and the final
-interruption/zero-request proof.
+The completed increment includes the canonical logical and physical candle
+contracts, Upstox NSE equity normalization, calendar-month planning, physical
+and manifest reconciliation, atomic Parquet publication, DuckDB catalog
+evidence, protected storage ownership, retained session schedules, validated
+equity-month coverage, bounded provider requests, requested-partition
+lifecycle, leased local recovery, request-minimal range coordination, and the
+interruption/repeated-run zero-request proof.
+
+Closure evidence:
+
+- PR 23 merged the final Sprint 1 integration into `main` as commit
+  `314587e9dae9c1d96b180a7b254d94ef86295259`.
+- The exact final candidate passed Ruff format and lint, strict Pyright,
+  Vulture, and **949 tests with 87.79% branch coverage**.
+- The required GitHub **Quality and build** and **GitGuardian Security Checks**
+  completed successfully before merge.
+- The review/demo and retrospective are complete.
+
+Scope disposition at close:
+
+- ARK-64 is deferred and excluded from the 21-item denominator. It requires
+  future approved planning before work may begin.
+- ARK-65 was canceled without code and is excluded from the denominator. Its
+  useful schedule-completeness requirement remains inside completed ARK-58.
+- ARK-44 remains canceled and replaced by the equity-only downloader-v1
+  boundary.
+- The broader Nifty 50 downloader/data phase is not complete. Package release,
+  multi-instrument concurrency, higher-timeframe aggregation, the point-in-time
+  Nifty 50 universe, and research modules remain later approved work.
+
+## Retrospective
+
+What worked:
+
+- atomic TDD delivery, one repository writer, deterministic quality gates, and
+  independent review kept the storage and recovery contracts testable;
+- immutable monthly evidence and request-minimal reconciliation protected the
+  Upstox request budget and made interruption recovery explicit; and
+- final integration preserved the equity-only architecture and restored the
+  required CI/security checks.
+
+What did not work:
+
+- the sprint record remained on an intermediate 823-test checkpoint after the
+  implementation and review work had finished;
+- task and approval state was not always surfaced immediately, which caused
+  avoidable idle time and repeated status checks; and
+- PR 24 was opened against the already-merged integration branch instead of
+  current `main`, creating an avoidable branch-base reconciliation.
+
+Corrective actions:
+
+- close every sprint with one source-of-truth update containing the denominator,
+  merge commit, exact final gate, checks, deferred/canceled work, and
+  retrospective;
+- use event-first handoffs and durable graph-lite checkpoints, with heartbeat
+  only as recovery, while retaining the same one-writer and review rules; and
+- create post-sprint work from current `origin/main` and verify the PR base
+  before requesting review. Graph-lite remains subject to a measured future
+  pilot; this retrospective does not claim that the pilot is already proven.

@@ -31,7 +31,7 @@ Sources:
 - <https://learn.chatgpt.com/docs/models>
 - <https://learn.chatgpt.com/docs/pricing>
 
-## Decision
+## Historical pilot decision
 
 Pilot one persistent Luna High implementation subagent per approved Sprint 1
 task. Preserve one repository writer, strict TDD, the full deterministic gate,
@@ -56,12 +56,21 @@ direction. Terra is a correctness/design fallback, not a cosmetic refactorer.
   still requires Sol approval.
 - Failed work remains incomplete; quota pressure cannot authorize acceptance.
 
-## Evaluation
+## Historical evaluation plan
 
-Apply the pilot to ARK-35, ARK-36, and ARK-37. At Sprint 1 close, compare
-visible subscription usage, reviewer findings, repair rounds, quality-gate
-results, elapsed time, and unresolved defects. Record a new decision before
-making the routing permanent.
+The pilot intended to cover ARK-35, ARK-36, and ARK-37 and to compare visible
+subscription usage, reviewer findings, repair rounds, quality-gate results,
+elapsed time, and unresolved defects at Sprint 1 close. This paragraph records
+the historical evaluation plan; it does not select current routing.
+
+## Closure outcome
+
+Sprint 1 closed at 21/21 executable items. Reliable token or cache telemetry
+was unavailable, so the project does not claim a measured token saving from the
+Luna implementation pilot. ARK-63 replaced the pilot with the quality-first
+Terra/Sol routing recorded in the authoritative development workflow. No open
+scorecard or future-tense Sprint 1 close action from this historical note can
+reopen the sprint or select an implementation model.
 
 ## Accepted correction: ARK-48 routing and scorecard
 
@@ -89,19 +98,18 @@ takeover, gates, findings, Linear elapsed time, and linked defects. The
 scorecard does not infer token/quota telemetry from routing, model choice, or
 elapsed time.
 
-The root coordinator records one scorecard comment on each ARK-35, ARK-36, and
-ARK-37 Linear issue. Each comment is the evidence location and includes the
-available-artifact baseline, unknowns, spawned-agent count, and the fields
-above. Aggregate the scorecards at Sprint 1 close; no token or quota data is
-invented when it is unavailable.
+The historical plan asked the root coordinator to record one scorecard comment
+on each ARK-35, ARK-36, and ARK-37 Linear issue, including available evidence,
+unknowns, spawned-agent count, and the fields above. The sprint-close outcome is
+the supersession recorded above; no token or quota data is invented where it is
+unavailable.
 
-Keep only when all gates are unwaived, there is no unresolved blocking review
-finding, there is no confirmed linked high-severity defect in each
-7-calendar-day post-merge window, and there is usable evidence of cost
-improvement. Revise when quality holds but efficiency evidence is unknown or
-inconclusive, or takeover/repair behavior shows adjustment is needed. Supersede
-if any quality gate is weakened or waived, a blocking finding remains, or a
-linked high-severity escaped defect is confirmed.
+The historical decision rule was to keep the pilot only when all gates remained
+unwaived, no blocking review finding or confirmed linked high-severity defect
+remained, and usable cost-improvement evidence existed. Unknown efficiency or
+extra takeover/repair would require revision; a weakened gate, unresolved
+finding, or escaped high-severity defect would require supersession. ARK-63 has
+already supplied that supersession.
 
 ## Accepted adjustment: deterministic specification compatibility matrix
 
