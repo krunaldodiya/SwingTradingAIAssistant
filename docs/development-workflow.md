@@ -267,6 +267,110 @@ pass, or weakened gate. It replaces avoidable review-repair discovery without
 changing the one-writer limit, the single final OS-enforced Sol High reviewer,
 or the required deterministic quality gate.
 
+## Graph-lite execution control
+
+Treat the delivery workflow as an explicit state graph while keeping each
+agent's bounded plan-act-verify loop inside its assigned node. This is a
+coordination rule, not a new runtime, dependency, agent role, or permission to
+increase parallel work. Linear, the active Goal/task state, Git, and agent
+completion messages remain the implementation substrate.
+
+```mermaid
+flowchart TD
+    ready["Ready task"] --> bounded{"Approved specification and bounded predicate?"}
+    bounded -- "No" --> owner["Owner or Sol decision"]
+    owner --> paused["Blocked checkpoint; no active agent"]
+    paused -- "Decision received" --> resume["Validate checkpoint and load saved next action"]
+    resume -. "dynamic terminal jump" .-> saved_action["Checkpoint's saved authorized next action"]
+    bounded -- "Yes" --> risk{"Architecture or high risk?"}
+    risk -- "Yes" --> plan["Sol High planning"]
+    risk -- "No" --> implement["Terra High implementation loop"]
+    plan --> implement
+    implement --> gate["Deterministic quality gate"]
+    gate -- "Fail" --> remediation["Record rejection and prior remediation evidence"]
+    remediation --> breaker_check{"Circuit breaker open?"}
+    breaker_check -- "Yes: two materially identical rejections or same-gate failures after repair" --> breaker["Circuit breaker and Sol escalation"]
+    breaker_check -- "No" --> budget{"Approved repair budget remains?"}
+    budget -- "Yes" --> implement
+    budget -- "No" --> breaker
+    breaker --> paused
+    gate -- "Pass, normal risk" --> verify["Terra High verification"]
+    gate -- "Pass, high risk" --> review["Sol High combined verification and review"]
+    verify --> verdict{"Approved?"}
+    review --> verdict
+    verdict -- "Repair required" --> remediation
+    verdict -- "Yes" --> publish["Atomic publish"]
+    publish --> done["Done with evidence"]
+```
+
+The coordinator records a checkpoint at every material edge crossing and before
+yielding. Use a concise typed record with these fields; a Linear comment or the
+active Goal/task state is sufficient until evidence proves that a dedicated
+store is needed:
+
+| Field | Required content |
+| --- | --- |
+| `schema_version` | Checkpoint contract version. Start with `1`. |
+| `issue` | Active atomic Story or Task identifier. |
+| `specification_revision` | Approved specification path and revision. |
+| `phase` | `ready`, `planning`, `implementing`, `quality_gate`, `verifying`, `reviewing`, `publishing`, `blocked`, `escalated`, or `done`. |
+| `repository_state` | Branch, worktree, candidate commit or tree, and scoped status. |
+| `active_actor` | Named coordinator, Sol planner, project-owner decision actor, implementer, verifier, reviewer, publisher, or `none`; it is `none` while `phase` is `blocked`. |
+| `decision_actor` | Named Sol planner or project owner who supplied the latest planning, routing, or approval decision, or `none`. |
+| `approved_risk_classification` | Approved `normal` or `high-risk` classification, the approving actor, and the evidence reference. |
+| `completed_phase` | Last completed graph node and its evidence reference. |
+| `last_verification` | Command/gate, candidate revision, outcome, and time. |
+| `iteration_budget` | Approved limit, used repair rounds, and remaining rounds; no inferred token telemetry. |
+| `next_action` | One exact authorized node or observation to perform next. |
+| `blocker` | Precise missing decision, permission, credential, dependency, or `none`. |
+| `updated_at` | Timestamp with timezone. |
+
+Edges are deterministic whenever repository state, a gate result, the approved
+risk classification, or an explicit owner decision can select the next node.
+Use model judgment only for planning, implementation, research, review, or a
+genuinely ambiguous routing decision. A completion message activates the next
+authorized node immediately; no model call is needed merely to discover that a
+known command passed or that a named agent completed.
+
+Resume from the last valid checkpoint. The diagram's terminal dynamic jump means
+the coordinator invokes the saved authorized `next_action` directly; it does
+not re-enter readiness, risk classification, or Sol planning merely because it
+resumed. Do not repeat a completed agent node,
+quality gate, review, download, or build when its evidence belongs to the exact
+unchanged source revision and remains valid. If the revision changed or the
+evidence is missing, partial, expired, or contract-incompatible, run the
+required node again. Waiting for an owner or external event leaves
+`active_actor: none`; it must not keep a standing agent or polling loop alive.
+After a decision, validate the checkpoint prerequisites required by its saved
+`next_action`, then continue with that action; do not restart the task.
+
+Graph cost controls are mandatory:
+
+- keep one executable WIP and one repository writer;
+- do not fan out coding work or create an agent only to relay status;
+- use parallel read-only agents only for independent questions whose expected
+  value exceeds their coordination and subscription cost;
+- run cheap deterministic checks before model-based review when ordering does
+  not weaken TDD or an approved gate;
+- pass artifact references and concise evidence across edges instead of copying
+  large transcripts;
+- enforce both the approved iteration budget and the circuit breaker at every
+  repair edge. After two materially identical verifier rejections or failures
+  of the same gate after repair, route to Sol even if budget remains; a larger
+  or extended budget cannot bypass that mandatory escalation; and
+- keep the heartbeat as low-frequency crash recovery only, never as the normal
+  graph scheduler.
+
+Pilot this graph-lite control on the first suitable approved atomic task after
+this workflow change. Compare it with recent work using observable evidence:
+elapsed time, idle time between handoffs, agent turns, retries, repair rounds,
+repeated gates on an unchanged revision, missed handoffs, owner-wait time, final
+acceptance, and user-visible subscription quota. Do not estimate unavailable
+token or cache telemetry. Retain graph-lite only if it reduces avoidable delay
+or rework without weakening quality, scope control, or reviewer independence.
+Adopting a graph framework or persistent workflow service requires a separate
+evidence-based owner decision.
+
 ## Strict TDD
 
 For every behavior change, use red-green-refactor:
