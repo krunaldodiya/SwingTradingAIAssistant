@@ -33,3 +33,17 @@ Luna implementation pilot, so it could not be merged wholesale.
 The current dependency lock and all later market-data changes remain untouched.
 The prior pilot record is historical and superseded; it is not active routing.
 External engineering guidance remains a reference, not a copied policy suite.
+
+## Closure evidence
+
+Sprint 1 closed at 21/21 executable items without changing its denominator.
+PR 23 merged the final integration to `main` as
+`314587e9dae9c1d96b180a7b254d94ef86295259` after the required **Quality and
+build** and **GitGuardian Security Checks** passed. The exact final candidate
+passed 949 tests with 87.79% branch coverage, plus Ruff, strict Pyright, and
+Vulture. ARK-64 is deferred, ARK-65 is canceled, and neither is included in the
+completed count. No Sprint 2 implementation started during reconciliation.
+
+The accepted [graph-lite execution control](2026-08-07-graph-engineering-workflow-assessment.md)
+is a post-Sprint-1 workflow improvement. It does not reopen Sprint 1, alter its
+count, or authorize Sprint 2 work.

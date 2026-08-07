@@ -11,4 +11,8 @@ increment and future process decisions.
 ## Index
 
 - [Sprint 0 — Foundation](sprint-0.md)
-- [Sprint 1 — Resumable one-minute storage](sprint-1.md)
+- [Sprint 1 — Resumable one-minute storage](sprint-1.md) — closed at 21/21;
+  merged to `main` as `314587e`.
+
+Sprint 2 has not started. Add its record only after its goal, scope, acceptance
+criteria, ordering, and capacity are approved.
