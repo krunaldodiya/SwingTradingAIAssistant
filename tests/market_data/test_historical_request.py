@@ -180,6 +180,8 @@ def test_executor_retries_only_retryable_failures_and_uses_bounded_retry_after()
     ).fetch(_plan(), remaining_attempts=3)
 
     assert result.response is not None
+    assert result.attempts == 3
+    assert result.retrieved_at == FakeClock().now_value
     assert len(session.requests) == 3
     assert sleeper.delays == [timedelta(seconds=1)]
     assert limiter.deferrals == [(timedelta(seconds=2), timedelta(seconds=9))]
@@ -188,6 +190,29 @@ def test_executor_retries_only_retryable_failures_and_uses_bounded_retry_after()
         "provider_retryable",
         "provider_success",
     ]
+
+
+def test_success_attempts_are_available_for_the_callers_remaining_budget() -> None:
+    session = FakeSession(
+        [
+            HistoricalResponse(
+                status_code=503,
+                candles=[],
+                error_category=ProviderErrorCategory.SERVER,
+            ),
+            _success(),
+        ]
+    )
+
+    result = _executor(
+        session,
+        FakeLimiter(),
+        policy=RetryPolicy(max_attempts_per_partition=3),
+    ).fetch(_plan(), remaining_attempts=3)
+
+    assert result.response is not None
+    assert result.attempts == 2
+    assert 3 - result.attempts == 1
 
 
 def test_executor_stops_on_non_retryable_provider_status() -> None:
@@ -618,11 +643,16 @@ def test_public_provider_contract_dataclasses_enforce_sanitized_invariants() -> 
     valid_time = datetime(2026, 8, 7, 10, 0, tzinfo=UTC)
     ProviderEvent("run-1", 1, "provider_success", "2xx", valid_time)
     HistoricalFetchFailure(HistoricalFetchCode.CANCELLED, 0)
-    HistoricalFetchResult(response=_success())
+    HistoricalFetchResult(
+        response=_success(),
+        attempts=1,
+        retrieved_at=valid_time,
+    )
     HistoricalFetchResult(
         response=None,
         failure=HistoricalFetchFailure(HistoricalFetchCode.PROVIDER_CLIENT, 1, "4xx"),
         wait_consumed=timedelta(seconds=1),
+        attempts=1,
     )
 
     invalid_events = [
@@ -646,15 +676,18 @@ def test_public_provider_contract_dataclasses_enforce_sanitized_invariants() -> 
             HistoricalFetchFailure(*fields)  # type: ignore[arg-type]
 
     invalid_result_builders = [
-        lambda: HistoricalFetchResult(response=None, failure=None),
+        lambda: HistoricalFetchResult(response=None, failure=None, attempts=0),
         lambda: HistoricalFetchResult(
             response=_success(),
             failure=HistoricalFetchFailure(HistoricalFetchCode.PROVIDER_CLIENT, 1),
+            attempts=1,
+            retrieved_at=valid_time,
         ),
         lambda: HistoricalFetchResult(
             response=None,
             failure=HistoricalFetchFailure(HistoricalFetchCode.PROVIDER_CLIENT, 1),
             wait_consumed=timedelta(seconds=-1),
+            attempts=1,
         ),
     ]
     for build_result in invalid_result_builders:
@@ -671,13 +704,70 @@ def test_public_evidence_rejects_contradictory_status_and_code_values() -> None:
         lambda: HistoricalFetchFailure(HistoricalFetchCode.PROVIDER_CLIENT, 1, "2xx"),
         lambda: HistoricalFetchFailure("CANCELLED", 1),  # type: ignore[arg-type]
         lambda: HistoricalFetchResult(
-            response=HistoricalResponse(status_code=500, candles=[])
+            response=HistoricalResponse(status_code=500, candles=[]),
+            attempts=1,
         ),
     ]
 
     for build in invalid_builders:
         with pytest.raises(ValueError):
             build()
+
+
+@pytest.mark.parametrize(
+    ("attempts", "failure_attempts"),
+    [(0, 1), (1, 0), (1, 2)],
+)
+def test_historical_fetch_result_rejects_mismatched_failure_attempt_counts(
+    attempts: int, failure_attempts: int
+) -> None:
+    with pytest.raises(ValueError):
+        HistoricalFetchResult(
+            response=None,
+            attempts=attempts,
+            failure=HistoricalFetchFailure(
+                HistoricalFetchCode.PROVIDER_CONTRACT,
+                failure_attempts,
+                "4xx",
+            ),
+        )
+
+
+@pytest.mark.parametrize("hostile", ("object", "subclass"))
+def test_historical_fetch_result_rejects_hostile_failure_before_attribute_access(
+    hostile: str,
+) -> None:
+    class HostileFailure:
+        def __getattribute__(self, _: str) -> object:
+            raise RuntimeError("failure metadata secret")
+
+    class HostileFailureSubclass(HistoricalFetchFailure):
+        def __getattribute__(self, _: str) -> object:
+            raise RuntimeError("failure subclass secret")
+
+    failure: object
+    if hostile == "object":
+        failure = HostileFailure()
+    else:
+        failure = object.__new__(HostileFailureSubclass)
+
+    with pytest.raises(ValueError) as error:
+        HistoricalFetchResult(response=None, attempts=1, failure=failure)  # type: ignore[arg-type]
+
+    assert str(error.value) == "historical fetch result contains an invalid failure"
+    assert error.value.__cause__ is None
+    assert "secret" not in str(error.value)
+
+
+def test_historical_fetch_result_rejects_zero_attempt_mismatch_without_payload() -> (
+    None
+):
+    with pytest.raises(ValueError):
+        HistoricalFetchResult(
+            response=HistoricalResponse(status_code=200, candles=[]),
+            attempts=0,
+            failure=HistoricalFetchFailure(HistoricalFetchCode.PROVIDER_CLIENT, 0),
+        )
 
 
 def test_executor_cancellation_before_admission_makes_no_provider_or_limiter_call() -> (

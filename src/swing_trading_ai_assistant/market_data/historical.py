@@ -376,22 +376,47 @@ class HistoricalFetchFailure:
 
 @dataclass(frozen=True, slots=True)
 class HistoricalFetchResult:
+    """One bounded fetch outcome with complete attempt and retrieval evidence."""
+
     response: HistoricalResponse | None
+    attempts: int
     failure: HistoricalFetchFailure | None = None
     wait_consumed: timedelta = timedelta(0)
+    retrieved_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        if (self.response is None) == (self.failure is None):
+        failure = self.failure
+        if failure is not None and type(failure) is not HistoricalFetchFailure:
+            raise ValueError(
+                "historical fetch result contains an invalid failure"
+            ) from None
+        if (self.response is None) == (failure is None):
             raise ValueError("historical fetch result must contain one outcome")
+        if (
+            type(self.attempts) is not int
+            or not 0 <= self.attempts <= _MAX_PUBLIC_ATTEMPTS
+            or (self.response is not None and self.attempts < 1)
+        ):
+            raise ValueError("historical fetch result contains invalid attempts")
+        if failure is not None and failure.attempts != self.attempts:
+            raise ValueError(
+                "historical fetch result contains invalid failure attempts"
+            )
         if self.response is not None and not _valid_success_response_payload(
             self.response
         ):
             raise ValueError("historical fetch result contains an invalid response")
-        if (
-            self.failure is not None
-            and type(self.failure) is not HistoricalFetchFailure
-        ):
-            raise ValueError("historical fetch result contains an invalid failure")
+        if self.response is not None:
+            try:
+                object.__setattr__(
+                    self, "retrieved_at", _utc_datetime(self.retrieved_at)
+                )
+            except Exception:
+                raise ValueError(
+                    "historical fetch result contains an invalid retrieval timestamp"
+                ) from None
+        elif self.retrieved_at is not None:
+            raise ValueError("failed fetch cannot contain a retrieval timestamp")
         if type(self.wait_consumed) is not timedelta or self.wait_consumed < timedelta(
             0
         ):
@@ -492,6 +517,7 @@ class HistoricalRequestExecutor:
         if type(remaining_attempts) is not int or remaining_attempts < 1:
             return HistoricalFetchResult(
                 response=None,
+                attempts=0,
                 failure=HistoricalFetchFailure(
                     HistoricalFetchCode.ATTEMPT_BUDGET_EXHAUSTED, 0
                 ),
@@ -535,13 +561,14 @@ class HistoricalRequestExecutor:
             if self._is_cancelled():
                 return self._cancelled(attempt - 1)
             response, transport_category, contract_failure = self._send(request)
+            retrieved_at = self._clock_now()
             if self._is_cancelled():
                 return self._cancelled(attempt)
             response, category, response_failure = self._classify_response(
                 response, transport_category, contract_failure, attempt
             )
             attempt_result, category, status_class = self._handle_response(
-                response, category, response_failure, attempt
+                response, category, response_failure, attempt, retrieved_at
             )
             if attempt_result is not None:
                 return attempt_result
@@ -595,6 +622,7 @@ class HistoricalRequestExecutor:
         category: ProviderErrorCategory | None,
         response_failure: HistoricalFetchResult | None,
         attempt: int,
+        retrieved_at: datetime | None,
     ) -> tuple[
         HistoricalFetchResult | None,
         ProviderErrorCategory | None,
@@ -607,10 +635,18 @@ class HistoricalRequestExecutor:
             event_failure = self._emit(attempt, "provider_success", status_class)
             if event_failure is not None:
                 return event_failure, None, status_class
+            if retrieved_at is None:
+                return (
+                    self._failure(HistoricalFetchCode.PROVIDER_CONTRACT, attempt),
+                    None,
+                    status_class,
+                )
             return (
                 HistoricalFetchResult(
                     response=cast(HistoricalResponse, response),
+                    attempts=attempt,
                     wait_consumed=self._consumed_wait,
+                    retrieved_at=retrieved_at,
                 ),
                 None,
                 status_class,
@@ -913,6 +949,7 @@ class HistoricalRequestExecutor:
     ) -> HistoricalFetchResult:
         return HistoricalFetchResult(
             response=None,
+            attempts=attempts,
             failure=HistoricalFetchFailure(code, attempts, status_class),
             wait_consumed=self._consumed_wait,
         )
