@@ -5,8 +5,8 @@
 - Freeze product scope and terminology.
 - Define measurable success and risk criteria.
 - Decide supported trading horizon and data frequency.
-- Evaluate market-data sources for adjusted OHLCV, corporate actions, Nifty 50
-  membership history, index data, and sector classification.
+- Evaluate market-data sources for adjusted equity OHLCV, corporate actions,
+  Nifty 50 membership history, and sector classification.
 - Define point-in-time data rules to prevent look-ahead and survivorship bias.
 - Select the implementation stack only after the data and research requirements
   are clear.
@@ -18,9 +18,14 @@ Detailed execution plan:
 
 - Define versioned schemas for market data, module facts, validation errors,
   evidence, confidence, freshness, and provenance.
+- Separate genuinely reusable point-in-time, validation, backtesting, risk, and
+  application-contract primitives from explicit Nifty 50 equity modules. Do not
+  implement another instrument or speculative generic abstractions.
 - Build reproducible data ingestion and quality checks.
 - Create a backtesting boundary that includes costs, slippage, liquidity,
   corporate actions, and point-in-time universes.
+- Establish a deterministic full-history baseline and a separate sampled,
+  sealed point-in-time replay boundary for evaluating external AI reasoning.
 - Establish unit, property, regression, and no-look-ahead tests.
 - Define an agent-neutral boundary without committing prematurely to API, CLI,
   MCP, or another transport.
@@ -52,6 +57,11 @@ Before any result can be treated as decision support, require:
 
 - no known look-ahead or survivorship bias;
 - reproducible backtests;
+- strategy-specific historical coverage long enough to include materially
+  different market regimes; five years is an example, not a universal literal
+  minimum, and any selected duration and limitations must be documented;
+- a deterministic full-history baseline plus separately identified, sampled
+  point-in-time AI-reasoning replay when the AI decision layer is evaluated;
 - realistic costs and slippage;
 - out-of-sample and walk-forward validation;
 - explicit handling of stale or missing data;

@@ -29,18 +29,33 @@ conflicting, stale, or fails risk validation.
 - Algo or automated order execution
 - Intraday trading
 - Futures and options
+- Forex and crypto
 - Long-term investing or portfolio advisory
 - Generic equity research
 - Stocks outside the Nifty 50 universe
 
-## Generalized data boundary
+These are v1 implementation and research exclusions. They do not require shared
+infrastructure to encode equity assumptions unnecessarily.
 
-The market-data ingestion foundation may catalog and persist factual candles for
-indices, futures, and options when their individual adapter specifications and
-entitlements are approved. This is a storage and provenance capability only.
-The v1 research universe, locked pipeline, and any decision-support facts remain
-limited to point-in-time Nifty 50 equities; stored F&O data must not silently
-enter v1 research, analysis, backtests, or recommendations.
+## Instrument extensibility boundary
+
+The architecture is extensible, while the product implementation is narrow.
+Shared point-in-time data, provenance, validation, orchestration, backtesting,
+risk-evidence, and application-contract primitives should avoid unnecessary
+coupling to one broker, AI harness, or equity symbol convention when a current
+equity requirement demonstrates the abstraction.
+
+All v1 provider adapters, persisted datasets, market facts, validation,
+research modules, backtests, and decision support remain limited to point-in-time
+Nifty 50 equities. Equity fundamentals, corporate actions, promoter/shareholding
+evidence, and exchange disclosures stay in explicit equity modules rather than
+being presented as universal research concepts.
+
+Supporting another instrument is a future architecture extension, not an
+existing capability. It requires a separately approved scope decision,
+instrument-specific data and risk contracts, point-in-time validation, and
+atomic implementation work. Do not build speculative adapters or abstractions
+for futures, options, forex, crypto, or other instruments in v1.
 
 ## External consumer: AI agent harness
 
@@ -48,6 +63,9 @@ Responsibilities:
 
 - research and contextual reasoning;
 - explainable recommendations;
+- researching any requested security inside the supported point-in-time Nifty
+  50 universe;
+- reviewing supported Nifty 50 holdings through a read-only portfolio snapshot;
 - monitoring existing swing trades; and
 - reviewing completed swing trades.
 
@@ -60,6 +78,15 @@ It must never:
 - silently manufacture missing facts.
 
 It reasons only over versioned, structured facts supplied by this tool.
+
+For historical validation of AI reasoning, the harness may consume a sealed,
+point-in-time research packet and emit a versioned structured decision before
+future data is revealed. The deterministic simulator then reveals and scores
+the later outcome under approved execution, cost, and risk rules. This sampled
+replay evaluates the consumer boundary; it does not move LLM reasoning into the
+deterministic core or replace reproducible full-history baselines. Model version,
+prompt/contract version, contamination risk, and out-of-sample status remain
+part of the evidence.
 
 ## This repository: Swing Trading Research Tool
 
@@ -113,6 +140,21 @@ Structured research facts
 10. Portfolio Monitoring
 
 No module should be added without an explicit architecture decision.
+
+## Risk-first decision support
+
+Capital preservation, position risk, aggregate portfolio exposure, drawdown,
+liquidity, gaps, costs, slippage, invalidation, and insufficient evidence are
+first-class facts. The deterministic tool owns their calculations and policy
+versions; the external AI may explain them but cannot override a hard risk
+failure or manufacture a position size. Exact risk limits, holding horizon, and
+bar frequency must be approved in the relevant module specification rather than
+being inferred from conversation.
+
+Portfolio analysis is read-only and limited to supported Nifty 50 equity
+holdings in v1. It may assess evidence, concentration, risk, performance, and
+candidate hold/exit conditions, but it does not place or manage broker orders
+and is not long-term portfolio advisory.
 
 ## Indicator minimization policy
 

@@ -1,36 +1,36 @@
-# Plan 01: Generalized Upstox Market-Data Tool
+# Plan 01: Nifty 50 Equity Upstox Market-Data Tool
 
 ## Outcome
 
-Build one reliable, instrument-agnostic tool that downloads, validates, stores,
-resumes, and queries historical Upstox candles. The core must support equities,
-indices, futures, and options without encoding assumptions from any one family.
-Prove it end to end with one-minute RELIANCE equity data, then enable the other
-families through explicit instrument adapters and collection policies.
+Build one reliable, installable Python tool that downloads, validates, stores,
+resumes, and queries historical one-minute Upstox candles for point-in-time
+Nifty 50 equities. Prove the vertical slice with RELIANCE, expand through an
+explicit equity universe, and derive supported higher intraday timeframes
+locally rather than sending duplicate provider requests.
 
-This generalized ingestion capability does not expand v1 research scope: the
-locked research pipeline remains point-in-time Nifty 50 equities only. Index or
-F&O records may be stored only as separately specified market-data artifacts and
-cannot be consumed as v1 equity research facts by implication.
+Shared data, provenance, validation, storage, and application contracts should
+avoid unnecessary provider or equity-symbol coupling. That extensibility does
+not authorize index, derivative, forex, crypto, or other instrument adapters,
+datasets, or research in this plan. A future instrument needs a separate
+approved module and cannot enter the equity research pipeline by implication.
 
 This plan covers market data only. Indicators, swing strategies, market regime,
 SMC, screening, backtesting, agent integration, and trade reasoning are out of
 scope until the data layer is proven.
 
-## Decision: do not use ExpiryTrack as the generalized store
+## Decision: do not use ExpiryTrack as the canonical equity store
 
-ExpiryTrack remains useful as a reference and its existing DuckDB can later be
-opened read-only for Nifty 50 and India VIX context. It cannot replace this
-market-data tool because its local database contains no Nifty 50 constituent
-equity candles and its schema requires derivative concepts even for spot data.
-It also separates active and expired collection through interfaces that do not
-form a clean generalized instrument contract.
+ExpiryTrack remains a read-only reference. It cannot replace this market-data
+tool because its local database contains no Nifty 50 constituent equity candles
+and its legacy schema is derivative-oriented. The previously proposed
+NIFTY/India VIX migration is superseded by the equity-only downloader-v1
+boundary.
 
-We will build a small instrument-agnostic data package in this repository. We may
-reuse validated architectural lessons from ExpiryTrack—rate limiting, chunking,
-vectorized loading, and resumability—but will not copy its AGPL implementation.
-The new client must use the current Upstox Historical Candle Data V3 contract;
-ExpiryTrack's generic active-instrument method still uses a V2-style path.
+We will build a small equity data package in this repository. Shared internals
+may reuse independently validated architectural lessons from ExpiryTrack—rate
+limiting, chunking, vectorized loading, and resumability—but will not copy its
+AGPL implementation. The client must use the current Upstox Historical Candle
+Data V3 contract.
 
 ## Storage decision
 
@@ -53,8 +53,8 @@ mapping must faithfully represent the ARK-31 model and cannot redefine it.
 
 For one-minute data, write one immutable file per instrument and calendar month.
 Download workers may prepare separate partitions concurrently; one coordinator
-updates the DuckDB catalog. Files become visible only after validation and an
-atomic temporary-file rename.
+updates the DuckDB catalog. Files become visible only after validation and
+same-filesystem hard-link no-clobber publication.
 
 Suggested layout:
 
@@ -65,7 +65,7 @@ data/
     provider=upstox/
       exchange=NSE/
         segment=NSE_EQ/
-          instrument_type=EQUITY/
+          instrument_type=EQ/
             security_id=INE002A01018/
               interval=1m/
                 year=2022/
@@ -73,26 +73,22 @@ data/
                     bars.parquet
 ```
 
-Use ISIN as the stable equity `security_id`. For indices and derivatives, use a
-canonical internal identifier derived from normalized contract metadata rather
-than a mutable provider token. Keep Upstox instrument keys and symbols as
-versioned mappings because symbols, tokens, and active/expired keys may change.
+Use ISIN as the stable equity `security_id`. Keep Upstox instrument keys and
+symbols as versioned mappings because symbols and provider tokens may change.
+The shared identity contract may be extended by a future approved instrument
+module; this plan does not define that module's identifier.
 
-## Instrument-family support
+## Supported instrument family
 
 | Family | First implementation | Required selection policy |
 |---|---|---|
-| NSE equities | Full historical and intraday candles | Explicit symbols or named universe |
-| NSE/BSE indices | Full historical and intraday candles | Explicit index list |
-| Active futures | Historical and intraday candles | Underlying plus expiry range |
-| Active options | Historical and intraday candles | Underlying, expiry, call/put, and strike window |
-| Expired futures/options | Separate Upstox expired-instrument adapter | Same filters; Upstox Plus entitlement required |
+| NSE equities | Historical one-minute candles | Explicit symbols or named universe |
 
 The downloader core—request planning, rate limiting, retries, validation,
-partition writing, manifests, and querying—is shared. Provider endpoints,
-instrument discovery, identifiers, expected fields, and collection filters are
-family-specific adapters. Do not disguise an index or equity as a derivative,
-and do not assume an expired instrument uses the active-instrument API.
+partition writing, manifests, and querying—is reusable. V1 has one explicit NSE
+equity adapter and rejects contradictory non-equity metadata before catalog or
+provider access. Future instrument support requires a new adapter specification,
+data and risk contracts, validation plan, and approved roadmap work.
 
 ## Upstox constraints
 
@@ -105,8 +101,7 @@ GET /v3/historical-candle/{instrument_key}/minutes/1/{to_date}/{from_date}
 Upstox documents minute history from January 2022 and permits at most one month
 per request for 1–15 minute intervals. Use the daily BOD JSON instrument master
 and provider `instrument_key`; do not use the deprecated CSV master or treat
-`exchange_token` as stable identity. Expired futures and options use separate
-expired-instrument endpoints and may require Upstox Plus.
+`exchange_token` as stable identity.
 
 References:
 
@@ -152,12 +147,11 @@ OHLC values must be nonnegative and satisfy the envelope
 `high >= max(open, close, low)` and `low <= min(open, close, high)`.
 
 Schema metadata records version `v1`. Uniqueness is
-`(provider, instrument_key, interval, ts)`. Derivative columns are nullable for
-equities and indices; no dummy expiry, strike, or contract type is permitted.
-The common scalar types and nullability are shared only where every supported
-instrument family has coherent semantics; family adapters own interpretation
-and validation of their fields. The RELIANCE equity adapter emits every
-derivative field as `None`.
+`(provider, instrument_key, interval, ts)`. Optional contract-identity columns
+remain nullable in the frozen schema, but the v1 equity adapter must emit
+`underlying_id`, `expiry`, `strike`, and `option_type` as `None`; contradictory
+metadata is rejected before catalog or provider access. Their presence in the
+versioned physical schema is not a claim of non-equity adapter support.
 
 ### ARK-42 physical Parquet mapping
 
@@ -422,9 +416,8 @@ specification before those derived bars are exposed as research facts.
   adapters or workers are active.
 - Keep the catalog small: store metadata and partition statistics in DuckDB, not
   a duplicate row for every candle.
-- Ensure the design works for one RELIANCE partition, the full Nifty 50 equity
-  history, and explicitly bounded derivative collections without code-path
-  forks for each scale.
+- Ensure the design works for one RELIANCE partition and the full Nifty 50
+  equity history without separate code paths for each scale.
 
 ### Maintainability
 
@@ -499,13 +492,15 @@ The workflow must:
 - obey Upstox rate limits and retry retryable failures with bounded backoff;
 - normalize timestamps consistently while preserving exchange-session meaning;
 - sort, deduplicate, and validate each monthly partition;
-- write Parquet through a temporary file and atomic rename;
+- write Parquet through a temporary file and same-filesystem hard-link
+  no-clobber publication;
 - record the partition checksum and coverage in DuckDB; and
 - resume without downloading already verified partitions.
 
 Implementation order within the storage path is **ARK-31**, then **ARK-43**
 (the normalized-to-canonical provider adapter), before **ARK-34**. **ARK-44**
-is deferred; it is not an implied part of ARK-31, ARK-43, or ARK-34.
+was canceled and superseded by the equity-only downloader-v1 boundary; it is not
+an implied part of ARK-31, ARK-43, or ARK-34.
 
 Initial query proof:
 
@@ -554,24 +549,24 @@ Approximately 50 current equities across about 55 monthly windows requires
 roughly 2,750 requests before retries and should yield approximately 20–25
 million one-minute rows. That scale is modest for Parquet plus DuckDB.
 
-## Milestone 4: index and derivative adapters
+## Milestone 4: packaged Nifty 50 downloader v1
 
-Enable and test families sequentially without changing the storage core:
+Complete the equity downloader as a reusable installable Python package:
 
-1. Nifty 50 and India VIX indices;
-2. one active Nifty future;
-3. one explicitly selected active Nifty option;
-4. an expired future and option when the account entitlement permits; and
-5. selected stock futures/options using the same explicit filtering model.
+1. expose versioned Python download, coverage, and query interfaces over the
+   same application contracts used by the CLI;
+2. support an explicit point-in-time Nifty 50 universe and bounded date ranges;
+3. keep the canonical storage root configurable outside one project checkout so
+   authorized related tools can reuse verified partitions;
+4. derive approved higher intraday timeframes locally from canonical one-minute
+   data with exchange-session-aware aggregation and no duplicate provider call;
+5. document installation, credentials, storage ownership, interruption resume,
+   coverage inspection, and safe query examples; and
+6. prove clean-build, package-install, compatibility, performance, and release
+   readiness gates.
 
-Each adapter must define its instrument discovery source, canonical identity,
-endpoint, response validation, and coverage expectations. Open interest remains
-nullable because it is not meaningful or available for every family.
-
-Options collection must never mean "all options." Every options job must require
-an underlying, expiry range, option type or both sides, and a bounded strike
-selection policy. The planner must estimate requests and storage before starting
-a large job and require an explicit override above a configured safety limit.
+This milestone does not add index, derivative, forex, crypto, or other
+instrument adapters. Those require a future approved module and release plan.
 
 ## Acceptance gate
 
@@ -585,17 +580,20 @@ The data phase is complete only when:
 - a bounded multi-stock download succeeds without violating provider limits;
 - data source, ingestion time, raw/adjusted state, and checksums are traceable;
 - no credential or private dataset is tracked by Git;
-- index, future, and option adapters pass a small authenticated vertical slice;
-- large option jobs cannot start without bounded selection and size estimation;
+- the package can be installed and its Python and CLI contracts query the same
+  verified equity data;
+- higher intraday timeframes are derived locally from verified one-minute data
+  without an additional historical provider request;
+- an explicitly configured shared storage root can be reused without weakening
+  ownership, integrity, or credential boundaries;
 - measured performance and memory usage satisfy the recorded benchmark budgets;
 - provider, storage, validation, and orchestration components can be tested and
   changed independently;
 - no trading, indicator, backtest, or AI-agent feature has entered this phase.
 
-## Immediate next action
+## Execution source of truth
 
-Implement Milestone 0 only: the credential-safe RELIANCE capability probe. Use
-its real response to freeze the shared downloader interfaces and fixtures. The
-interfaces must contain no equity-only assumptions, but implementation of other
-instrument adapters waits until the RELIANCE storage path passes its correctness
-gates.
+Linear and the current sprint document determine the next approved atomic task;
+this plan does not authorize work merely because it appears in a later
+milestone. Preserve the single executable-item WIP limit and complete the equity
+downloader-v1 milestone before starting research-module implementation.

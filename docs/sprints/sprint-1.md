@@ -36,7 +36,8 @@ Only Ready children explicitly labeled `Sprint 1` are sprint commitments. Later
 items remain backlog rather than silently expanding the sprint. This is an
 explicit scope exchange: ARK-42 and ARK-43 are prerequisite contract work for
 the persistence path, so they precede the physical reconciliation and write
-steps without changing the sprint goal. ARK-44 remains deferred.
+steps without changing the sprint goal. ARK-44 is canceled and superseded by
+the equity-only downloader-v1 boundary.
 
 ## Accepted behavioral rules
 
@@ -64,18 +65,22 @@ steps without changing the sprint goal. ARK-44 remains deferred.
   microseconds; adapters verify and translate provider timestamp conventions.
   `ingested_at` is UTC-aware and need not be minute-aligned, while session
   calendar validation is outside the canonical-model constructor.
-- Shared scalar types and nullability apply only to fields coherent across
-  instrument families; adapters retain family-specific interpretation. The
-  RELIANCE equity adapter emits derivative fields as `None`.
+- Optional contract-identity fields remain nullable in the frozen shared schema,
+  but the v1 equity adapter emits them as `None` and rejects contradictory
+  non-equity metadata before catalog or provider access. This does not claim
+  support for another instrument family.
 
 ## Explicitly deferred
 
 - Higher-timeframe aggregation implementation until its NSE session-bucketing,
   partial-bucket, and adjustment-version specification is approved.
 - Multi-instrument concurrency (ARK-12).
-- Index and derivatives adapters (ARK-13).
-- ARK-44.
-- ExpiryTrack NIFTY/India VIX migration, which remains proposed.
+- Package/release completion work beyond this sprint, including the rebaselined
+  equity-only ARK-13 milestone.
+- Index, derivative, forex, crypto, and other instrument adapters; ARK-44 was
+  canceled and superseded rather than deferred.
+- ExpiryTrack NIFTY/India VIX migration, which is superseded as an active roadmap
+  item and retained only as a reference audit.
 - Market-regime, indicator, strategy, backtesting, and agent-facing features.
 
 ## Definition of Done
@@ -103,23 +108,14 @@ Linear ARK-34 publisher now owns atomic, no-clobber Parquet publication and
 descriptor-anchored read-back evidence, without catalog mutation. Its durable
 root is caller-created and all derived directories are no-follow and fsynced;
 no-lock writers converge via no-clobber link and exact temporary cleanup.
-ARK-44 is deferred.
+ARK-44 is canceled and superseded by the equity-only downloader-v1 boundary.
 
-ARK-35 now provides the transactional DuckDB catalog for exact current and
-terminal lifecycle evidence. ARK-49 is the active specification gate for
-request-minimal ingestion orchestration. Its first independent review exposed
-partial-month identity collisions, unsafe concurrent recovery assumptions,
-lossy repeated response headers, and missing run/session provenance. The
-owner-approved exceptional repair now freezes an exhaustive run outcome table,
-fresh-validation versus verified-invalidation category mapping, versioned
-content-addressed schedule evidence, one invocation-wide retry/limiter wait
-budget, stable physical `security_id` versus mutable Upstox aliases, and nine
-ordered atomic implementation children. A coordinator-owned deterministic
-contract-compatibility matrix now precedes the one final OS-enforced Sol High
-review; it is preparation, not an additional reviewer or a weakened gate. The
-owner-approved focused correction additionally freezes before/during/between/
-after cancellation outcomes and identical-byte schedule restoration, followed
-by one Sol High recheck of that exact candidate.
-ARK-36 remains implementation-blocked until the repaired contract in
-[`02-request-minimal-ingestion-orchestration.md`](../plans/02-request-minimal-ingestion-orchestration.md)
-is independently approved and its atomic children are reconciled in Linear.
+The ARK-49 request-minimal ingestion contract was independently approved and
+decomposed into ordered atomic children. ARK-56 now executes one requested
+partition lifecycle with independently approved attempt provenance, exact
+manifest recovery, sanitized hostile boundaries, request-minimal verified skip,
+publication evidence, cancellation handling, and terminal catalog evidence.
+Its final gate passed 823 tests at 87.37% coverage with no Upstox request during
+verification. Linear remains authoritative for the remaining ordered children:
+leased-partition recovery, bounded RELIANCE range coordination, and the final
+interruption/zero-request proof.
