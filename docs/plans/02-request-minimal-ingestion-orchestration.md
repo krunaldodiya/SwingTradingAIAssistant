@@ -1,6 +1,6 @@
 # Request-minimal one-minute ingestion orchestration
 
-Status: **Accepted — ARK-49**
+Status: **Accepted — ARK-49, with owner-approved ARK-58 completeness update**
 Scope: Sprint 1 RELIANCE NSE equity one-minute vertical slice
 Depends on: ARK-32, ARK-33, ARK-34, ARK-35, ARK-40, ARK-42, and ARK-43
 
@@ -215,6 +215,7 @@ reason except that ordinary partition failures use `PARTITION_FAILURE`.
 | Cancellation after every planned result is terminal | no result, count, manifest, or request changes | normal all-result precedence (`SUCCEEDED`, `PARTIAL`, or `FAILED`) | unchanged |
 | Run-fatal authentication, authorization, catalog, unsafe-local-repair, mapping migration, retry-wait-bound, or runtime total-attempt-budget exhaustion before a completed result | affected failure retained, later `NOT_ATTEMPTED` | `FAILED` / exact fatal code, including `ATTEMPT_BUDGET_EXHAUSTED` | 0 or bounded attempts already made; no later request |
 | Same run-fatal condition after one or more completed results | completed and failed results retained, later `NOT_ATTEMPTED` | `PARTIAL` / exact fatal code | bounded attempts already made; no later request |
+| After one or more provider attempts, Child H escapes a non-catalog clock, lifecycle-contract, malformed-return, or generic exception before safe terminal persistence | affected result `FAILED` with `PARTITION_FAILURE`, exact current-invocation run ID, exact provider-attempt delta, and the safely readable current-run manifest even when it remains `IN_PROGRESS`; earlier results retained and later plans `NOT_ATTEMPTED` | `FAILED` / `PARTITION_FAILURE`, or `PARTIAL` / `PARTITION_FAILURE` when an earlier result completed | bounded attempts already made; charged wait ledger retained; no later request |
 | All desired partitions were attempted and failed ordinarily, with no completed result or run-fatal stop | every result `FAILED` | `FAILED` / `PARTITION_FAILURE` | bounded attempts |
 | One or more ordinary terminal failures and one or more completed results, with no run-fatal stop | every plan has its actual completed or failed result | `PARTIAL` / `PARTITION_FAILURE` | bounded attempts |
 | Every desired partition completes locally or by verified acquisition | every result completed | `SUCCEEDED` / `NONE` | 0 or more |
@@ -229,24 +230,44 @@ irrelevant. Counts always equal the final result tuple. `NOT_ATTEMPTED` never
 means failure, and no row permits a later provider request after a run-fatal
 stop. `NONE` is exclusive to `SUCCEEDED`.
 
+The post-attempt Child H exception row is a run stop, not an ordinary isolated
+terminal failure. It never fabricates a terminal manifest or failure category.
+The result mirrors a manifest failure category only when safely read terminal
+evidence proves one; an exact current-run `IN_PROGRESS` manifest remains valid
+failure provenance for this row. Provider attempts are the delta charged during
+the current Child H call and are never synthesized as zero after a request. The
+single invocation wait ledger remains charged internally; this contract does
+not add a public wait field.
+
 ## Authoritative session schedule and validation identity
 
 `ExpectedSessionSchedule` is immutable and contains an exact schedule schema
 version, provider/source name, source release/version, UTC-aware `as_of`,
 `Asia/Kolkata` timezone identifier, the covered first and last calendar dates,
-and an ordered tuple of sessions. Each session contains its local trade date,
-UTC-aware open instant, UTC-aware exclusive close instant, and session kind.
-Normal NSE cash sessions and explicitly sourced special sessions are allowed;
-holidays are represented by absence. Sessions must be unique, strictly ordered,
-minute-aligned, inside the declared coverage, and wholly cover every canonical
-acquisition month. Future or open sessions are rejected.
+and ordered session and closure evidence. Each session contains its local trade
+date, UTC-aware open instant, UTC-aware exclusive close instant, and session
+kind. Each closure contains its local date and a nonempty source reason.
 
-Schedule digest schema `schedule-digest-v1` is frozen as UTF-8 encoding of
+The frozen v1 schedule remains readable for existing evidence, but it represents
+holidays only by absence and therefore cannot prove that a trading session was
+not accidentally omitted. New ARK-58 commands require `schedule-digest-v2`.
+For every calendar date in every requested full closed month, v2 contains
+exactly one matching session or one sourced closure. Sessions and closures are
+unique, strictly ordered, inside the declared coverage, and cannot overlap.
+Sessions remain minute-aligned. Missing dates, duplicate dates, a session and
+closure on the same date, empty closure reasons, future evidence, open months,
+or incomplete first-to-last-day coverage fail with `SCHEDULE_UNSUPPORTED`
+before lease acquisition, storage/catalog mutation, credentials, limiter use,
+or HTTP. The tool never guesses weekends, holidays, or special sessions.
+
+Schedule digest schemas use UTF-8 encoding of
 `json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))`.
-`value` has only `schema_version`, `source`, `source_release`, `as_of`,
+The frozen v1 `value` has only `schema_version`, `source`, `source_release`, `as_of`,
 `timezone`, `covered_from`, `covered_to`, and `sessions`; each session has only
 `trade_date`, `open_at`, `close_at`, and `kind`. `schema_version` is the JSON
-integer `1`; `source`, `source_release`, `timezone`, and `kind` are nonempty
+integer `1`. The v2 `value` adds only `closures`; each closure has only
+`trade_date` and `reason`, and `schema_version` is the JSON integer `2`.
+`source`, `source_release`, `timezone`, `kind`, and v2 closure reasons are nonempty
 ASCII strings, and `timezone` is exactly `Asia/Kolkata`. Instants are UTC RFC
 3339 with a literal `Z` and exactly six fractional digits; dates are `YYYY-MM-DD`. No
 whitespace, omitted field, alternate timestamp spelling, map insertion order,
@@ -258,10 +279,10 @@ precisely those bytes.
 no-clobber, atomically published, and never overwritten or deleted here. Before
 any `IN_PROGRESS`, the coordinator validates the supplied command schedule and
 proves that retained bytes equal it. If an object is missing, Child D may
-first-publish or restore it only from supplied canonical `schedule-digest-v1`
+first-publish or restore it only from supplied canonical versioned schedule-digest
 bytes whose lowercase SHA-256 exactly equals the referenced command or manifest
 policy digest. Reads verify
-path shape, regular-file identity, byte ceiling, digest, and `schedule-digest-v1`
+path shape, regular-file identity, byte ceiling, digest, and versioned schedule-digest
 parsing. The exact retained-byte ceiling is 1,000,000 bytes. A missing command
 object without matching supplied bytes, and every present unreadable, corrupt,
 unequal, or digest-mismatched command object, is
@@ -359,7 +380,9 @@ The range coordinator executes these steps in order:
 2. Reject any interval other than `"1m"` before credentials, limiter, or HTTP.
 3. Produce the touched months with `plan_upstox_equity_months`, expand each to
    its one canonical full-calendar-month acquisition plan, and reject the whole
-   invocation if any month is not closed or fully covered by the schedule.
+   invocation if any month is not closed or its v2 schedule does not explicitly
+   classify every first-to-last calendar date as one session or sourced closure.
+   This proof occurs before lease acquisition and all storage/provider activity.
 4. Acquire the protected root's exclusive lease. If it is already held, return
    `ALREADY_RUNNING` with zero provider activity and no storage/catalog change.
 5. While holding the lease, Child D retains or re-reads exact supplied
@@ -545,6 +568,10 @@ Cancellation before any plan has a terminal result or enters `IN_PROGRESS`
 returns `CANCELLED/CANCELLED`, marks every planned item `CANCELLED`, and makes
 no manifest or request. A local `SKIPPED_VERIFIED` result is terminal; later
 cancellation therefore preserves it and uses the between-partition rule.
+Whether the current invocation entered `IN_PROGRESS` is determined by the
+current invocation's issued run ID, never by the mere presence of a historical
+`FAILED` or `VERIFIED` manifest. A historical manifest returned when cancellation
+prevents a new transition does not create an in-flight classification.
 Cancellation after one plan enters `IN_PROGRESS` best-effort persists that
 attempt as `FAILED/INTERRUPTED`, returns that item as `CANCELLED`, and marks all
 later plans `NOT_ATTEMPTED`. It is `PARTIAL/CANCELLED` only if an earlier result
@@ -649,7 +676,8 @@ Tests use injected fakes and temporary local storage. They must prove:
 - empty, malformed, and oversized response behavior;
 - normalization, validation, publication, and catalog failure mapping;
 - authoritative session coverage, holidays/special sessions supplied through
-  the schedule port, missing/off-session bars, OHLC/volume quality,
+  the schedule port, explicit v2 closure evidence for every non-session date,
+  missing/off-session bars, OHLC/volume quality,
   and unsupported schedule evidence;
 - exact raw duplicates follow the approved normalization contract: identical
   rows are deduplicated and their count is reported in bounded validation/run
@@ -660,7 +688,8 @@ Tests use injected fakes and temporary local storage. They must prove:
   `Retry-After` fields are exercised through the preserving header boundary;
 - root-lease contention, crash release, unsafe lock inode/mode, and the rule
   that only a held lease can interrupt earlier `IN_PROGRESS` state;
-- exact `schedule-digest-v1` bytes, content-addressed no-clobber first publish
+- frozen exact `schedule-digest-v1` regression bytes, plus exact
+  `schedule-digest-v2` bytes with explicit closures, content-addressed no-clobber first publish
   or identical-byte restore, retained-byte mismatch, refusal to replace present
   bad evidence, and manifest-bound recovery without current-calendar
   substitution or catalog/history query;
@@ -750,13 +779,15 @@ or returns one sanitized structural transport error.
 
 ### Child D: retain and resolve one content-addressed session schedule
 
-With Child A lease proof, it owns `schedule-digest-v1` serialization, digest
+With Child A lease proof, it owns versioned schedule-digest serialization, digest
 calculation, no-clobber content-addressed schedule retention/identical-byte
-restore, and verified lookup by manifest policy digest. A missing object may be
-written only from supplied canonical bytes whose lowercase SHA-256 equals that
-digest; a present unreadable, corrupt, unequal, or mismatched object is never
-replaced. It does not obtain calendars, inspect catalog/history, judge candles,
-or change manifests/catalog rows.
+restore, and verified lookup by manifest policy digest. Frozen v1 evidence
+remains readable for historical manifests, but every new ARK-58 command requires
+v2 with an explicit session or sourced closure for every date in each requested
+closed month. A missing object may be written only from supplied canonical bytes
+whose lowercase SHA-256 equals that digest; a present unreadable, corrupt,
+unequal, or mismatched object is never replaced. It does not obtain calendars,
+inspect catalog/history, judge candles, or change manifests/catalog rows.
 
 Done: one valid schedule is immutably retrievable by its exact digest or fails
 closed with `SCHEDULE_UNSUPPORTED`.
@@ -811,6 +842,11 @@ planning, run-level table/count mapping, sequential ordering, lazy session
 opening, and the rule that complete local reconciliation precedes credentials
 and provider use; it owns no transport, filesystem primitive, validation rule,
 or lifecycle transition.
+
+If Child H escapes after consuming a provider attempt, Child I snapshots the
+current invocation's attempt delta and safely readable current-run manifest,
+applies the approved post-attempt exception row, and stops. It never converts
+that work into zero attempts or forces a terminal lifecycle transition.
 
 Done: one RELIANCE one-minute range emits the exhaustive ordered report and
 requests only independently required full months.

@@ -18,7 +18,9 @@ from typing import Final, cast
 
 from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
 
-SCHEDULE_SCHEMA_VERSION: Final = 1
+SCHEDULE_SCHEMA_VERSION_V1: Final = 1
+SCHEDULE_SCHEMA_VERSION_V2: Final = 2
+SCHEDULE_SCHEMA_VERSION: Final = SCHEDULE_SCHEMA_VERSION_V1
 MAX_SCHEDULE_BYTES: Final = 1_000_000
 _TIMEZONE_NAME: Final = "Asia/Kolkata"
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
@@ -86,6 +88,21 @@ class ScheduleSession:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduleClosure:
+    """One sourced non-session calendar date in schedule-digest-v2."""
+
+    trade_date: date
+    reason: str
+
+    def __init_subclass__(cls) -> None:
+        raise TypeError("ScheduleClosure cannot be subclassed")
+
+    def __post_init__(self) -> None:
+        if type(self.trade_date) is not date or not _is_nonempty_ascii(self.reason):
+            raise ValueError("invalid schedule closure")
+
+
+@dataclass(frozen=True, slots=True)
 class ExpectedSessionSchedule:
     """Point-in-time authoritative session schedule used by validation."""
 
@@ -97,6 +114,7 @@ class ExpectedSessionSchedule:
     covered_from: date
     covered_to: date
     sessions: tuple[ScheduleSession, ...]
+    closures: tuple[ScheduleClosure, ...] = ()
 
     def __init_subclass__(cls) -> None:
         raise TypeError("ExpectedSessionSchedule cannot be subclassed")
@@ -104,7 +122,8 @@ class ExpectedSessionSchedule:
     def __post_init__(self) -> None:
         if (
             type(self.schema_version) is not int
-            or self.schema_version != SCHEDULE_SCHEMA_VERSION
+            or self.schema_version
+            not in {SCHEDULE_SCHEMA_VERSION_V1, SCHEDULE_SCHEMA_VERSION_V2}
             or not _is_nonempty_ascii(self.source)
             or not _is_nonempty_ascii(self.source_release)
             or type(self.as_of) is not datetime
@@ -114,8 +133,15 @@ class ExpectedSessionSchedule:
             or type(self.covered_to) is not date
             or self.covered_from > self.covered_to
             or type(self.sessions) is not tuple
-            or not self.sessions
             or not all(type(session) is ScheduleSession for session in self.sessions)
+            or type(self.closures) is not tuple
+            or not all(type(closure) is ScheduleClosure for closure in self.closures)
+            or (self.schema_version == SCHEDULE_SCHEMA_VERSION_V1 and self.closures)
+            or (self.schema_version == SCHEDULE_SCHEMA_VERSION_V1 and not self.sessions)
+            or (
+                self.schema_version == SCHEDULE_SCHEMA_VERSION_V2
+                and not (self.sessions or self.closures)
+            )
         ):
             raise ValueError("invalid expected session schedule")
         as_of = _as_utc(self.as_of, "as_of")
@@ -138,8 +164,22 @@ class ExpectedSessionSchedule:
                 raise ValueError("invalid expected session schedule")
             seen_dates.add(session.trade_date)
             previous = session
+        previous_closure: ScheduleClosure | None = None
+        for closure in self.closures:
+            if (
+                not self.covered_from <= closure.trade_date <= self.covered_to
+                or closure.trade_date in seen_dates
+                or (
+                    previous_closure is not None
+                    and closure.trade_date <= previous_closure.trade_date
+                )
+            ):
+                raise ValueError("invalid expected session schedule")
+            seen_dates.add(closure.trade_date)
+            previous_closure = closure
         object.__setattr__(self, "as_of", as_of)
         object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "closures", tuple(self.closures))
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,11 +329,11 @@ def _resolve_in_parent(
 
 
 def canonical_schedule_bytes(schedule: ExpectedSessionSchedule) -> bytes:
-    """Serialize exactly the frozen ``schedule-digest-v1`` representation."""
+    """Serialize the exact versioned schedule-digest representation."""
     if type(schedule) is not ExpectedSessionSchedule:
         raise ValueError("invalid expected session schedule")
     schedule = _validated_schedule(schedule)
-    value = {
+    value: dict[str, object] = {
         "schema_version": schedule.schema_version,
         "source": schedule.source,
         "source_release": schedule.source_release,
@@ -311,6 +351,14 @@ def canonical_schedule_bytes(schedule: ExpectedSessionSchedule) -> bytes:
             for session in schedule.sessions
         ],
     }
+    if schedule.schema_version == SCHEDULE_SCHEMA_VERSION_V2:
+        value["closures"] = [
+            {
+                "trade_date": _format_date(closure.trade_date),
+                "reason": closure.reason,
+            }
+            for closure in schedule.closures
+        ]
     encoded = json.dumps(
         value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -320,6 +368,34 @@ def canonical_schedule_bytes(schedule: ExpectedSessionSchedule) -> bytes:
 def schedule_digest(schedule: ExpectedSessionSchedule) -> str:
     """Return the lowercase SHA-256 of exact canonical schedule bytes."""
     return _digest_bytes(canonical_schedule_bytes(schedule))
+
+
+def schedule_covers_full_calendar_range(
+    schedule: object, covered_from: object, covered_to: object
+) -> bool:
+    """Prove schedule-digest-v2 explicitly classifies each requested date."""
+    try:
+        if (
+            type(schedule) is not ExpectedSessionSchedule
+            or schedule.schema_version != SCHEDULE_SCHEMA_VERSION_V2
+            or type(covered_from) is not date
+            or type(covered_to) is not date
+            or covered_from > covered_to
+            or covered_from < schedule.covered_from
+            or covered_to > schedule.covered_to
+        ):
+            return False
+        classified = {session.trade_date for session in schedule.sessions} | {
+            closure.trade_date for closure in schedule.closures
+        }
+        current = covered_from
+        while current <= covered_to:
+            if current not in classified:
+                return False
+            current += timedelta(days=1)
+        return True
+    except Exception:
+        return False
 
 
 def _parse_canonical_bytes(value: object) -> ExpectedSessionSchedule:
@@ -337,40 +413,97 @@ def _parse_canonical_bytes(value: object) -> ExpectedSessionSchedule:
     if type(parsed) is not dict:
         raise ValueError
     try:
-        parsed_value = cast(dict[str, object], parsed)
-        raw_sessions = parsed_value["sessions"]
-        if type(raw_sessions) is not list:
-            raise ValueError
-        sessions_value = cast(list[object], raw_sessions)
-        sessions_list: list[ScheduleSession] = []
-        for raw_item in sessions_value:
-            if type(raw_item) is not dict:
-                raise ValueError
-            item = cast(dict[str, object], raw_item)
-            sessions_list.append(
-                ScheduleSession(
-                    trade_date=_parse_date(item["trade_date"]),
-                    open_at=_parse_instant(item["open_at"]),
-                    close_at=_parse_instant(item["close_at"]),
-                    kind=cast(str, item["kind"]),
-                )
-            )
-        sessions = tuple(sessions_list)
-        schedule = ExpectedSessionSchedule(
-            schema_version=cast(int, parsed_value["schema_version"]),
-            source=cast(str, parsed_value["source"]),
-            source_release=cast(str, parsed_value["source_release"]),
-            as_of=_parse_instant(parsed_value["as_of"]),
-            timezone=cast(str, parsed_value["timezone"]),
-            covered_from=_parse_date(parsed_value["covered_from"]),
-            covered_to=_parse_date(parsed_value["covered_to"]),
-            sessions=sessions,
-        )
+        schedule = _schedule_from_json(cast(dict[str, object], parsed))
     except Exception:
         raise ValueError from None
     if canonical_schedule_bytes(schedule) != value:
         raise ValueError
     return schedule
+
+
+def _schedule_from_json(value: dict[str, object]) -> ExpectedSessionSchedule:
+    schema_version = _validated_schema_version(value)
+    return ExpectedSessionSchedule(
+        schema_version=schema_version,
+        source=cast(str, value["source"]),
+        source_release=cast(str, value["source_release"]),
+        as_of=_parse_instant(value["as_of"]),
+        timezone=cast(str, value["timezone"]),
+        covered_from=_parse_date(value["covered_from"]),
+        covered_to=_parse_date(value["covered_to"]),
+        sessions=_sessions_from_json(value["sessions"]),
+        closures=_closures_from_json(value.get("closures"), schema_version),
+    )
+
+
+def _validated_schema_version(value: dict[str, object]) -> int:
+    schema_version = value.get("schema_version")
+    required = {
+        "schema_version",
+        "source",
+        "source_release",
+        "as_of",
+        "timezone",
+        "covered_from",
+        "covered_to",
+        "sessions",
+    }
+    if schema_version == SCHEDULE_SCHEMA_VERSION_V2:
+        required.add("closures")
+    if (
+        type(schema_version) is not int
+        or schema_version
+        not in {SCHEDULE_SCHEMA_VERSION_V1, SCHEDULE_SCHEMA_VERSION_V2}
+        or set(value) != required
+    ):
+        raise ValueError
+    return schema_version
+
+
+def _sessions_from_json(value: object) -> tuple[ScheduleSession, ...]:
+    if type(value) is not list:
+        raise ValueError
+    sessions: list[ScheduleSession] = []
+    for raw_item in cast(list[object], value):
+        if type(raw_item) is not dict:
+            raise ValueError
+        item = cast(dict[str, object], raw_item)
+        if set(item) != {"trade_date", "open_at", "close_at", "kind"}:
+            raise ValueError
+        sessions.append(
+            ScheduleSession(
+                trade_date=_parse_date(item["trade_date"]),
+                open_at=_parse_instant(item["open_at"]),
+                close_at=_parse_instant(item["close_at"]),
+                kind=cast(str, item["kind"]),
+            )
+        )
+    return tuple(sessions)
+
+
+def _closures_from_json(
+    value: object | None, schema_version: int
+) -> tuple[ScheduleClosure, ...]:
+    if schema_version == SCHEDULE_SCHEMA_VERSION_V1:
+        if value is not None:
+            raise ValueError
+        return ()
+    if type(value) is not list:
+        raise ValueError
+    closures: list[ScheduleClosure] = []
+    for raw_item in cast(list[object], value):
+        if type(raw_item) is not dict:
+            raise ValueError
+        item = cast(dict[str, object], raw_item)
+        if set(item) != {"trade_date", "reason"}:
+            raise ValueError
+        closures.append(
+            ScheduleClosure(
+                trade_date=_parse_date(item["trade_date"]),
+                reason=cast(str, item["reason"]),
+            )
+        )
+    return tuple(closures)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -548,6 +681,7 @@ def _validated_schedule(schedule: ExpectedSessionSchedule) -> ExpectedSessionSch
             schedule.covered_from,
             schedule.covered_to,
             schedule.sessions,
+            schedule.closures,
         )
     except Exception:
         raise ValueError("invalid expected session schedule") from None
