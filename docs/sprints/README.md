@@ -13,6 +13,9 @@ increment and future process decisions.
 - [Sprint 0 — Foundation](sprint-0.md)
 - [Sprint 1 — Resumable one-minute storage](sprint-1.md) — closed at 21/21;
   merged to `main` as `314587e`.
+- [Sprint 2 — RELIANCE operational proof](sprint-2.md) — goal approved;
+  formal commitment pending ARK-67.
 
-Sprint 2 has not started. Add its record only after its goal, scope, acceptance
-criteria, ordering, and capacity are approved.
+Sprint 2 execution starts only after ARK-67 freezes the specification and the
+selected implementation tasks enter operational `Ready` (`Todo` in the current
+Linear team).
