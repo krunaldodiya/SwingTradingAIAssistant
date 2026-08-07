@@ -114,6 +114,20 @@ Structured research facts
 
 No module should be added without an explicit architecture decision.
 
+## Indicator minimization policy
+
+Indicators are not default research inputs. Prefer directly observable,
+explainable price action, market structure, liquidity, volume, relative
+strength, event, and risk facts when they answer the research question.
+
+An indicator may be introduced only when an approved module specification
+demonstrates that it is mandatory for a defined decision, documents its exact
+formula and version, identifies its point-in-time inputs, and includes a
+validation reason that simpler facts cannot satisfy the requirement. Indicator
+proliferation, redundant transforms, and unvalidated signal combinations are
+out of scope. The external AI harness never computes indicators itself; it may
+reason over an explicitly versioned indicator fact supplied by the tool.
+
 Trade Recommendation Support produces validated evidence, candidate plans, and
 risk facts. The external AI harness owns the contextual recommendation.
 
