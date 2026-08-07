@@ -74,11 +74,12 @@ Linear project document or status update.
 
 ## Progress reporting
 
-Send a concise user update whenever an executable story or task reaches `Done`,
-becomes materially blocked, needs user input, or changes the sprint goal. Use the
-current Codex task and the configured Slack DM for completion/blocker updates so
-the user can follow progress away from the workstation. Do not send notifications
-for individual commands, ordinary red-green iterations, or unchanged status.
+Use the current Codex/ChatGPT task for material project or sprint updates when
+an executable story or task reaches `Done`, becomes materially blocked, needs
+user input, or changes the sprint goal. Do not report individual commands,
+ordinary red-green iterations, or unchanged status. Preserve concise in-session
+progress commentary when it helps the owner follow material work. Linear and
+other authorized project-state writes are coordinator-only.
 
 Every sprint update reports:
 
@@ -99,7 +100,12 @@ Epics and parent issues are tracking containers only; do not implement them
 directly. Every executable child issue must deliver one observable behavior,
 have one primary reason to change, fit one red-green-refactor cycle, be
 independently verifiable, and be small enough for one focused commit. Its
-completion must be expressible in one sentence.
+completion must be expressible in one sentence. Before implementation, record
+its completion predicate (outcome, constraints, verification, and stop
+condition) and a task-appropriate iteration budget in Linear or the active
+Goal/task state. A budget bounds investigation and repair without weakening an
+acceptance criterion or gate; exhaustion requires handoff or escalation rather
+than a silent reset.
 
 Split an issue before implementation when it contains unrelated behaviors or
 changes across unrelated layers, cannot state `Done` in one sentence, uses a
@@ -115,15 +121,68 @@ authorize parallel implementation unless the main agent explicitly re-routes
 the work while preserving the one-issue limit. Prefer slow, steady, correct
 delivery over throughput, batching, or partially completed work.
 
+## Root execution coordinator and recovery
+
+For each active project execution window, predesignate exactly one root coordinator:
+either the heartbeat target task or an active user-invoked Goal, never both.
+The coordinator owns one executable WIP, routing, integration, completion
+judgment, and authorized project-state writes. Implementers, reviewers, and
+publishers return evidence via handoff and do not mutate project tracking.
+
+Repository writes are serial. The coordinator may write its authorized scope or
+delegate one exact file/worktree scope to one implementer. While delegated, all
+other repository actors are read-only. Separate-worktree publishing begins only
+after the implementer has stopped and a handoff names the publisher, source
+revision, target worktree/branch, and authorized operation.
+
+Coordinator transfer or recovery needs explicit owner approval and proof that
+the prior coordinator and every delegated repository writer have stopped,
+completed, or been terminated. If that proof is unavailable, repository actors
+remain read-only and the task is blocked. Record the prior/new coordinator,
+approval reference, stop evidence, issue state, and repository revision. There
+is no timeout, inferred staleness, forced release, or automatic ownership
+transfer.
+
+At every durable handoff, record the active issue, branch/worktree, candidate
+revision or tree, completed phase, latest successful verification, exact next
+action, active actor, and blocker. After two materially identical verifier
+rejections or two materially identical failures of the same gate after repair,
+the circuit breaker stops cosmetic retries, preserves evidence, and routes the
+incomplete task to Sol. Expected TDD red tests do not count toward this limit.
+
+## Subscription-only efficiency policy
+
+This policy reduces avoidable subscription context and tool noise without
+weakening scope, TDD, routing, review, or market-data safeguards.
+
+- Start a fresh task only at an atomic boundary. Carry the concise
+  [handoff template](templates/codex-subscription-handoff.md); never restart an
+  unresolved red-green-refactor cycle merely to reset context.
+- After mandatory instructions and approved specifications are read at their
+  current revision, use targeted rereads and focused tests before broader
+  checks. Required full reads and quality gates remain mandatory.
+- Bound tool and log output to the command, exit status, and evidence needed for
+  the next action. Do not infer billing, token, cache, or reasoning telemetry.
+- Delegate only independent, non-overlapping work. Parallel agents are
+  read-only whenever a repository writer is active, and they never replace a
+  required verification or review gate.
+- Use Goal mode only for finite, well-specified outcomes. The heartbeat is a
+  low-frequency recovery check only: it is not the normal polling/progress
+  loop, a routine execution mechanism, or a completion path. Live agent
+  completion signals are the primary handoff. The predesignated root
+  coordinator remains the only execution owner.
+
 ## Routing and handoff
 
-The main agent owns issue state, scope, integration, and the final result.
+The root coordinator owns issue state, scope, integration, and the final
+result. Terra High is the sole implementation and repair writer for an approved
+task. Luna is limited to explicitly delegated, low-risk, read-only documentation
+or inventory support.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |
-| Default worker | Terra, medium | Workspace write | Unspecified delegated work; not a pilot implementation selection. |
-| Pilot implementer | Luna, high | Workspace write | Only for explicit, approved, bounded pilot implementation; sole task writer with strict TDD, remediation, and evidence handoff. |
-| Fallback/takeover implementer | Terra, high | Workspace write | Direct routing for unsuitable Luna work or takeover after the Luna repair budget is exhausted. |
+| Default worker | Terra, high | Workspace write | Approved bounded implementation or repair; sole repository writer. |
+| Implementer | Terra, high | Workspace write | Strict TDD implementation, remediation, and evidence handoff. |
 | Verifier | Terra, high | Read-only | Independent focused checks. |
 | Lead architect/team lead | Sol, high | Read-only | Decomposition, architecture, risk routing, and escalation. |
 | High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
@@ -136,8 +195,7 @@ not add roles, review passes, or exceptions to the table and prose below.
 flowchart TD
     root["Root coordinator<br/>scope, Linear, integration, publishing"]
     ready{"Approved and bounded task?"}
-    luna["One Luna High pilot implementer<br/>sole writer, strict TDD"]
-    terra["Terra High takeover implementer<br/>unsuitable Luna task or exhausted repair budget"]
+    terra["One Terra High implementer<br/>sole writer, strict TDD"]
     gate["Complete deterministic quality gate"]
     risk{"Normal or high-risk?"}
     verify["One Terra High verifier<br/>normal task"]
@@ -146,9 +204,7 @@ flowchart TD
     publish["Atomic publish and Done evidence"]
 
     root --> ready
-    ready -- "Approved bounded pilot" --> luna
-    ready -- "Needs stronger implementation judgment" --> terra
-    luna --> gate
+    ready --> terra
     terra --> gate
     gate --> risk
     risk -- "Normal" --> verify
@@ -156,8 +212,7 @@ flowchart TD
     verify --> verdict
     review --> verdict
     verdict -- "Yes" --> publish
-    verdict -- "Repair budget remains" --> luna
-    verdict -- "Luna unsuitable or repair budget exhausted" --> terra
+    verdict -- "Repair required" --> terra
 ```
 
 Only one repository writer may be active. Research and analysis use one
@@ -169,25 +224,22 @@ verification, never an additional Terra review of the same exact candidate.
 Each implementation handoff must state the issue and acceptance criteria,
 files changed, tests added first, commands and results, residual risks, and
 the exact decision needed next. A reviewer must not review its own change; a
-failed review returns through the main agent to the same task implementer while
-its two-round review-repair budget remains. Reviewer independence comes from
-read-only separation, not from replacing the writer. After that budget is
-exhausted, automatic Luna work stops and the main agent routes the preserved
-state to Terra or requests owner direction. No remediation restarts completed
-work or waives an acceptance criterion or gate.
+failed review returns through the root coordinator to the same Terra task
+implementer while the approved repair budget remains. Reviewer independence
+comes from read-only separation, not from replacing the writer. No remediation
+restarts completed work or waives an acceptance criterion or gate.
 
 Project configuration provides these defaults, but an active Codex session's
 permission selection is inherited by subagents and can override a custom
 agent's sandbox setting.
 
-### ARK-48 routing evidence correction
+### Routing evidence and historical pilot supersession
 
-For the quota-efficient pilot, use exact role selection from the approved
-task; do not treat the default as an implementation-pilot selection. Unspecified
-subagents use Terra Medium and the configured session concurrency remains two.
-Only the explicit `luna_implementer` role may use Luna High, and only for an
-approved, bounded pilot task. Terra takeover uses Terra High. If there is
-withheld approval or unclear authority, route the question through the parent; no
+The earlier Luna implementation pilot is superseded. It is retained only as a
+historical decision record and cannot select an active implementation writer.
+Dynamic session concurrency remains available for independent read-only work,
+but repository writes remain serial and one executable item stays in progress.
+If approval is withheld or authority is unclear, route the question through the parent; no
 subagent may infer approval.
 
 The parent maintains an evidence ledger for each candidate: writer identity,
@@ -263,37 +315,3 @@ production code; and pytest enforces branch coverage. Do not add overlapping
 formatters, import sorters, linters, or complexity tools without a demonstrated
 gap. The formatter may be run without `--check` only as a mechanical change;
 inspect its diff and run the full gate afterwards.
-
-## ARK-47 Luna implementation pilot
-
-For the remaining Sprint 1 executable tasks ARK-35, ARK-36, and ARK-37, use one
-persistent Luna High implementation subagent when the task has an approved,
-bounded specification. Model cost never changes the completion standard:
-strict TDD, the deterministic quality gate, acceptance evidence, independent
-review, security and provenance controls, and the Definition of Done remain
-mandatory.
-
-The root coordinator owns planning, scope, integration, Linear, and completion
-judgment. A task has exactly one repository-writing implementation subagent;
-the same Luna agent performs at most two review-repair rounds. Terra takes over
-the preserved state when Luna cannot clear those rounds, when the task is not
-clear and bounded, or when the coordinator determines that stronger production
-judgment is required. Terra takeover resolves correctness or design findings;
-it is not a cosmetic final-refactoring stage.
-
-Research and analysis use one subagent by default and never more than two.
-Review occurs only after the coordinator confirms a stable candidate and the
-required deterministic gate. Normal tasks use one Terra High verifier.
-High-risk tasks use one Sol High reviewer that combines independent verification
-and high-risk review. Rechecks go to the same reviewer and cover the changed
-state and prior findings; do not spawn parallel verifier, anti-pattern, and Sol
-agents for one candidate.
-
-At Sprint 1 close, compare visible quota consumption, gate results, reviewer
-findings, repair rounds, elapsed time, and quality outcomes for ARK-35 through
-ARK-37. Keep, revise, or supersede this pilot only through an explicit recorded
-decision.
-
-ARK-48 corrects the routing mechanics and scorecard record for this pilot; its
-accepted correction is appended to the pilot decision note without altering the
-historical ARK-47 text above.

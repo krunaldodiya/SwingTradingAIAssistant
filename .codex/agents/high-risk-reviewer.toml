@@ -18,7 +18,7 @@ Reject unexplained mutation or unverifiable read-only isolation. Return
 actionable findings with severity, evidence, and required remediation. Approve
 only when the acceptance criteria and relevant quality gates are met.
 Return all material findings together when practical. Whenever approval is
-withheld, return findings to the parent. Only the parent routes remediation or
-takeover, first to the same task implementer while its two-round repair budget
-remains, or to Terra after that budget is exhausted.
+withheld, return findings to the parent. Only the parent routes remediation to
+the same Terra task implementer while its approved repair budget remains, or
+escalates an exhausted budget for owner direction.
 """

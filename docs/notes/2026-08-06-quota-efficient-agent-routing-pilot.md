@@ -1,6 +1,15 @@
-# Quota-efficient agent-routing pilot
+# Quota-efficient agent-routing pilot (historical)
 
-Status: **accepted pilot**
+Status: **superseded by ARK-63 quality-first routing**
+
+## Supersession
+
+This note preserves historical pilot evidence only; it does not select an
+active implementation writer. The authoritative current routing is Terra High
+as the sole implementation and repair writer. Luna is limited to explicitly
+delegated low-risk, read-only documentation or inventory support. See the
+[development workflow](../development-workflow.md) and the Sprint 1
+[reconciliation note](2026-08-07-sprint1-workflow-reconciliation.md).
 
 ## Context
 
