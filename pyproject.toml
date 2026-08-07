@@ -7,10 +7,15 @@ name = "swing-trading-ai-assistant"
 version = "0.1.0"
 description = "Deterministic market-data and research foundations for Nifty 50 swing trading"
 requires-python = ">=3.11"
-dependencies = ["python-dotenv>=1.1"]
+dependencies = [
+    "duckdb>=1.5.5,<1.6",
+    "pyarrow>=25,<26",
+    "python-dotenv>=1.1",
+]
 
 [project.optional-dependencies]
 dev = [
+    "hatchling>=1.26,<2",
     "pyright>=1.1.400",
     "pytest>=8.0",
     "pytest-cov>=7.0",

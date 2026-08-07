@@ -12,11 +12,21 @@ import pytest
 
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponseBodyTooLarge,
+    HttpResponseHeaders,
+    HttpResponseHeadersInvalid,
     HttpTransportError,
     ProviderErrorCategory,
     SameOriginAuthorizationRedirectHandler,
     UrllibHttpTransport,
 )
+
+
+class HeaderItems:
+    def __init__(self, items: list[tuple[object, object]]) -> None:
+        self._items = items
+
+    def items(self) -> list[tuple[object, object]]:
+        return self._items
 
 
 class FakeResponse:
@@ -146,7 +156,143 @@ def test_transport_returns_non_2xx_category_and_headers() -> None:
     )
 
     assert response.error_category is ProviderErrorCategory.RATE_LIMITED
-    assert response.headers == {"Retry-After": "12", "X-Request-Id": "request-123"}
+    assert response.headers.items() == (
+        ("Retry-After", "12"),
+        ("X-Request-Id", "request-123"),
+    )
+
+
+def test_transport_preserves_ordered_repeated_headers_and_lookup_is_case_insensitive() -> (
+    None
+):
+    response_headers = HeaderItems(
+        [
+            ("X-Trace", "first"),
+            ("retry-after", "1"),
+            ("x-trace", "second"),
+        ]
+    )
+
+    response = UrllibHttpTransport(
+        opener=lambda request, timeout: _response_with_headers(response_headers)
+    ).get("https://api.upstox.com/example", headers={})
+
+    assert response.headers.items() == (
+        ("X-Trace", "first"),
+        ("retry-after", "1"),
+        ("x-trace", "second"),
+    )
+    assert response.headers.get_all("X-TRACE") == ("first", "second")
+    assert response.headers.get_single("RETRY-AFTER") == "1"
+    assert response.headers.get_single("x-trace") is None
+
+
+@pytest.mark.parametrize(
+    ("items", "expected_error"),
+    [
+        ([("X" * 256, "exact")], None),
+        ([("X" * 257, "too-long")], HttpResponseHeadersInvalid),
+        ([("X-Value", "v" * 4_096)], None),
+        ([("X-Value", "v" * 4_097)], HttpResponseHeadersInvalid),
+        ([(f"X-{index}", "value") for index in range(128)], None),
+        ([(f"X-{index}", "value") for index in range(129)], HttpResponseHeadersInvalid),
+    ],
+)
+def test_transport_enforces_exact_header_bounds(
+    items: list[tuple[object, object]],
+    expected_error: type[Exception] | None,
+) -> None:
+    transport = UrllibHttpTransport(
+        opener=lambda request, timeout: _response_with_headers(HeaderItems(items))
+    )
+
+    if expected_error is None:
+        response = transport.get("https://api.upstox.com/example", headers={})
+        assert len(response.headers) == len(items)
+    else:
+        with pytest.raises(expected_error):
+            transport.get("https://api.upstox.com/example", headers={})
+
+
+@pytest.mark.parametrize(
+    ("items", "expected_error"),
+    [
+        ([("X-Obs-Text", "\xff" * 4_096)], None),
+        ([("X-Tab", "one\ttwo")], None),
+        ([("X-Value", "euro-\u20ac")], HttpResponseHeadersInvalid),
+        ([("X-\xe9", "value")], HttpResponseHeadersInvalid),
+    ],
+)
+def test_transport_enforces_exact_latin_1_header_grammar(
+    items: list[tuple[object, object]],
+    expected_error: type[Exception] | None,
+) -> None:
+    transport = UrllibHttpTransport(
+        opener=lambda request, timeout: _response_with_headers(HeaderItems(items))
+    )
+
+    if expected_error is None:
+        response = transport.get("https://api.upstox.com/example", headers={})
+        assert response.headers.items() == tuple(items)
+    else:
+        with pytest.raises(expected_error):
+            transport.get("https://api.upstox.com/example", headers={})
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [("", "value")],
+        [("X Invalid", "value")],
+        [("X-Name", "value\r\nInjected: yes")],
+        [("X-Name", "value\x00")],
+        [("X-Name", "value\x7f")],
+        [("Bad Name", "Bearer secret")],
+        [("X-Name", object())],
+        [(object(), "value")],
+        [("X-Name", "value", "extra")],
+    ],
+)
+def test_transport_rejects_invalid_header_structure_with_one_sanitized_error(
+    items: list[tuple[object, ...]],
+) -> None:
+    transport = UrllibHttpTransport(
+        opener=lambda request, timeout: _response_with_headers(
+            HeaderItems(items),
+            body=b"response-body-secret",
+        )  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HttpResponseHeadersInvalid) as exc_info:
+        transport.get("https://api.upstox.com/example", headers={})
+
+    assert (
+        str(exc_info.value) == "market-data provider response contained invalid headers"
+    )
+    assert "Bearer secret" not in str(exc_info.value)
+    assert "response-body-secret" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_response_headers_are_immutable_and_copy_input_arrival_order() -> None:
+    items = [["X-Test", "before"]]
+    headers = HttpResponseHeaders.from_items(items)
+    items[0][1] = "after"
+
+    assert headers.items() == (("X-Test", "before"),)
+    with pytest.raises(AttributeError):
+        headers.fields = ()  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        headers.fields[0] = headers.fields[0]  # type: ignore[index]
+
+
+def _response_with_headers(
+    headers: HeaderItems, *, body: bytes = b"{}"
+) -> FakeResponse:
+    response = FakeResponse(body)
+    response.headers = headers
+    return response
 
 
 def test_transport_redacts_network_error_details() -> None:

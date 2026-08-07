@@ -39,3 +39,7 @@ update those documents as well as the note.
 ## Notes index
 
 - [2026-08-04 — Data foundation and agent-tool boundary](2026-08-04-data-foundation-and-agent-tool-boundary.md)
+- [2026-08-06 — Quota-efficient agent-routing pilot](2026-08-06-quota-efficient-agent-routing-pilot.md)
+- [2026-08-07 — Indicator minimization](2026-08-07-indicator-minimization.md)
+- [2026-08-07 — Research vision, validation, and instrument extensibility](2026-08-07-research-vision-validation-and-instrument-extensibility.md)
+- [2026-08-07 — Sprint 1 workflow reconciliation](2026-08-07-sprint1-workflow-reconciliation.md)

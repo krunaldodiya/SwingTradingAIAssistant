@@ -78,6 +78,23 @@ authority for scope, market rules, and delivery process.
   Raise it when focused tests improve those paths; never exclude production
   code or add superficial tests merely to inflate the percentage.
 
+## Tiered quality gates
+
+Use the smallest evidence-bearing tier required by the change. The `always`
+tier is mandatory for every repository change; a conditional tier is added only
+when the recorded change risk requires it. These tiers do not replace the
+approved issue specification, strict TDD, or independent review.
+
+| Tier | When | Required evidence |
+| --- | --- | --- |
+| Always | Every code, configuration, or workflow candidate | Ruff format/lint, strict Pyright, Vulture, and pytest coverage. |
+| Conditional | Evidenced dependency/security, architecture/contract, property or mutation, or performance risk | The focused dependency/security review, compatibility proof, property or mutation test, or representative benchmark that addresses that risk. |
+| Release | A versioned package or release candidate | Clean locked install, package/build smoke, and docs/release evidence. |
+
+The external Engineering Standards Suite remains reference only. Do not copy it
+wholesale or add overlapping ritual gates; adopt a control only through an
+approved, evidenced project need.
+
 ## Avoid ritual engineering
 
 Do not cargo-cult patterns, frameworks, layers, abstractions, metrics, or tests.
