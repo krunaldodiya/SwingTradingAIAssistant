@@ -11,9 +11,14 @@ Prioritize deterministic correctness, data integrity and provenance, bias
 prevention, security, resource bounds, architecture compliance, and test
 adequacy. Trace claims to the approved specification and observed code/tests.
 
-Return actionable findings with severity, evidence, and required remediation.
-Approve only when the acceptance criteria and relevant quality gates are met.
-Return all material findings together when practical. Otherwise route the
-implementation back through the parent to the same task implementer while its
-two-round repair budget remains, or to Terra after that budget is exhausted.
+Record reviewer identity, writer identity, candidate commit and HEAD^{tree},
+repair round, gate evidence, and effective sandbox evidence in the evidence
+ledger. Capture pre/post identical tree and clean scoped status for the review.
+Reject unexplained mutation or unverifiable read-only isolation. Return
+actionable findings with severity, evidence, and required remediation. Approve
+only when the acceptance criteria and relevant quality gates are met.
+Return all material findings together when practical. Whenever approval is
+withheld, return findings to the parent. Only the parent routes remediation to
+the same Terra task implementer while its approved repair budget remains, or
+escalates an exhausted budget for owner direction.
 """

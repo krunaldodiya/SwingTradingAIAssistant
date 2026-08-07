@@ -30,16 +30,36 @@ Read these documents before changing architecture or market logic:
 If code conflicts with an approved specification, stop and surface the conflict.
 Do not silently redefine trading rules or module ownership.
 
-## Hard scope boundaries
+## Current product scope
 
 - Universe: point-in-time Nifty 50 equity constituents only.
 - Horizon: swing trading; the exact holding period and bar frequency must be
   specified before strategy implementation.
-- No intraday, futures, options, crypto, penny stocks, IPOs, midcaps, smallcaps,
-  long-term investing, or generic research-platform features.
+- No intraday trading, strategy, or decision-support horizon; no futures,
+  options, forex, crypto, penny stocks, IPOs, midcaps, smallcaps, long-term
+  investing, or research behavior for another instrument. Approved one-minute
+  market data remains valid input for swing research and local aggregation.
 - No broker order placement or autonomous execution.
 - No guaranteed-return, certainty, or financial-adviser language.
 - `NO_TRADE` and insufficient-data outcomes are first-class results.
+
+## Instrument extensibility boundary
+
+Design shared infrastructure to be instrument-extensible where a current Nifty
+50 equity requirement proves the abstraction: point-in-time data, provenance,
+validation, orchestration, backtesting, risk evidence, and versioned application
+contracts should not depend unnecessarily on one broker, AI harness, or equity
+symbol convention.
+
+This is an extensibility rule, not permission to implement a generic platform.
+All currently implemented adapters, market facts, validation, research modules,
+backtests, and decision support remain limited to point-in-time Nifty 50
+equities. Equity-specific concepts such as corporate actions, fundamentals,
+promoter/shareholding evidence, and exchange disclosures belong in explicit
+equity modules. A different instrument requires its own approved scope decision,
+specification, point-in-time data model, risk model, validation evidence, and
+atomic Linear work before implementation. Do not add speculative abstractions
+for hypothetical future instruments.
 
 ## Tool and AI boundary
 

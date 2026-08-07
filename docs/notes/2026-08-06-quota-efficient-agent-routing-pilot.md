@@ -1,6 +1,15 @@
-# Quota-efficient agent-routing pilot
+# Quota-efficient agent-routing pilot (historical)
 
-Status: **accepted pilot**
+Status: **superseded by ARK-63 quality-first routing**
+
+## Supersession
+
+This note preserves historical pilot evidence only; it does not select an
+active implementation writer. The authoritative current routing is Terra High
+as the sole implementation and repair writer. Luna is limited to explicitly
+delegated low-risk, read-only documentation or inventory support. See the
+[development workflow](../development-workflow.md) and the Sprint 1
+[reconciliation note](2026-08-07-sprint1-workflow-reconciliation.md).
 
 ## Context
 
@@ -53,3 +62,70 @@ Apply the pilot to ARK-35, ARK-36, and ARK-37. At Sprint 1 close, compare
 visible subscription usage, reviewer findings, repair rounds, quality-gate
 results, elapsed time, and unresolved defects. Record a new decision before
 making the routing permanent.
+
+## Accepted correction: ARK-48 routing and scorecard
+
+Status: **accepted**
+
+This correction preserves the pilot intent and all quality invariants above. It
+does not rewrite the historical ARK-47 decision.
+
+Unspecified subagents default to Terra Medium with concurrency two. Luna High
+is available only through the explicit `luna_implementer` role for an approved,
+bounded pilot task. Terra takeover is Terra High. When approval is withheld,
+the subagent routes the decision through its parent rather than assuming
+authority.
+
+For each candidate, the parent keeps an evidence ledger containing writer
+identity, reviewer identity, model-effort, candidate commit and tree, repair
+rounds, takeover state, gate evidence, findings, and effective sandbox evidence.
+A read-only review records pre/post identical tree and clean scoped status; a
+reviewer rejects unexplained mutation or unverifiable read-only isolation.
+
+The scorecard uses ARK-34 only as an available-artifact baseline. Any
+unavailable metric or artifact is recorded as unknown. In a fixed 7-calendar-day
+post-merge window, it records the identities, model-effort, tree, rounds,
+takeover, gates, findings, Linear elapsed time, and linked defects. The
+scorecard does not infer token/quota telemetry from routing, model choice, or
+elapsed time.
+
+The root coordinator records one scorecard comment on each ARK-35, ARK-36, and
+ARK-37 Linear issue. Each comment is the evidence location and includes the
+available-artifact baseline, unknowns, spawned-agent count, and the fields
+above. Aggregate the scorecards at Sprint 1 close; no token or quota data is
+invented when it is unavailable.
+
+Keep only when all gates are unwaived, there is no unresolved blocking review
+finding, there is no confirmed linked high-severity defect in each
+7-calendar-day post-merge window, and there is usable evidence of cost
+improvement. Revise when quality holds but efficiency evidence is unknown or
+inconclusive, or takeover/repair behavior shows adjustment is needed. Supersede
+if any quality gate is weakened or waived, a blocking finding remains, or a
+linked high-severity escaped defect is confirmed.
+
+## Accepted adjustment: deterministic specification compatibility matrix
+
+Status: **accepted**
+
+ARK-49 showed that a broad, high-risk specification can consume repair rounds
+when a formal reviewer finds contract mismatches that a deterministic comparison
+could have found before review. Before the one formal Sol High review of such a
+specification, the coordinator now completes a matrix against the exact
+candidate commit. It checks each touched frozen contract, physical identity,
+lifecycle transition, exhaustive typed outcome, provenance retention, bounded
+resource/wait rule, crash/concurrency ownership, and atomic child boundary. It
+also enumerates before/during/between/after cancellation and other stateful
+boundaries, and proves each required read/write/query has an available existing
+callable contract or is isolated as an approved atomic child.
+
+This adds no subagent, reviewer, or model pass. It is coordinator preparation
+only: incompatible rows return to the one writer before review. The sole writer,
+strict TDD, deterministic gate, one final OS-enforced Sol High review, and all
+quality standards remain unchanged. This adjustment follows the practical
+guidance behind the pilot: use the lowest sufficient routing and avoid parallel
+write/review coordination cost without accepting weaker evidence.
+
+The owner later approved one narrow ARK-49 correction for boundary-state and
+identical-schedule-evidence precision, followed by one OS-enforced Sol High
+recheck of that exact corrected candidate. It does not reopen automatic repair
+rounds or add a reviewer/model pass.

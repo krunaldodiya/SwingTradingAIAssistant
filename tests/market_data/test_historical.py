@@ -20,6 +20,8 @@ from swing_trading_ai_assistant.market_data.historical import (
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
     HttpResponseBodyTooLarge,
+    HttpResponseHeaders,
+    HttpResponseHeadersInvalid,
     ProviderErrorCategory,
     UrllibHttpTransport,
 )
@@ -96,6 +98,42 @@ def _oversized_http_error(request: Request, timeout: float) -> object:
         "too many requests",
         Message(),
         BytesIO(b"1234"),
+    )
+
+
+class _InvalidHeaders:
+    def items(self) -> list[tuple[str, str]]:
+        return [("X Invalid", "header-secret")]
+
+
+class _InvalidHeadersResponse:
+    status = 200
+
+    def __init__(self) -> None:
+        self._body = BytesIO(b"body-secret")
+        self.headers = _InvalidHeaders()
+
+    def read(self, size: int = -1) -> bytes:
+        return self._body.read(size)
+
+    def __enter__(self) -> _InvalidHeadersResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _invalid_headers_success(request: Request, timeout: float) -> object:
+    return _InvalidHeadersResponse()
+
+
+def _invalid_headers_http_error(request: Request, timeout: float) -> object:
+    raise HTTPError(
+        request.full_url,
+        429,
+        "too many requests",
+        _InvalidHeaders(),
+        BytesIO(b"body-secret"),
     )
 
 
@@ -192,7 +230,9 @@ def test_historical_client_preserves_retry_and_request_headers_for_non_2xx() -> 
         HttpResponse(
             status_code=429,
             body=b'{"errors":[]}',
-            headers={"Retry-After": "12", "X-Request-Id": "request-123"},
+            headers=HttpResponseHeaders.from_items(
+                (("Retry-After", "12"), ("X-Request-Id", "request-123"))
+            ),
         )
     )
 
@@ -208,7 +248,10 @@ def test_historical_client_preserves_retry_and_request_headers_for_non_2xx() -> 
     )
 
     assert response.candles == []
-    assert response.headers == {"Retry-After": "12", "X-Request-Id": "request-123"}
+    assert response.headers.items() == (
+        ("Retry-After", "12"),
+        ("X-Request-Id", "request-123"),
+    )
     assert response.error_category is ProviderErrorCategory.RATE_LIMITED
 
 
@@ -256,5 +299,59 @@ def test_oversized_authenticated_response_traceback_retains_no_secret_state(
     assert not any(value is token for value in retained)
     assert not any(isinstance(value, (Request, HTTPError)) for value in retained)
     assert not any(_FAKE_BEARER in repr(value) for value in retained)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize(
+    "opener", [_invalid_headers_success, _invalid_headers_http_error]
+)
+def test_invalid_authenticated_response_headers_leave_no_secret_state_in_traceback(
+    opener: Callable[..., object],
+) -> None:
+    token = AccessToken(_FAKE_BEARER)
+    client = UpstoxV3HistoricalClient(UrllibHttpTransport(opener=opener))
+    token_identity = id(token)
+    client_identity = id(client)
+    provider_identity = id(client._transport)
+    request = HistoricalRequest(
+        instrument_key="NSE_EQ|INE002A01018",
+        unit="minutes",
+        interval=1,
+        from_date=date(2026, 7, 31),
+        to_date=date(2026, 7, 31),
+    )
+
+    with pytest.raises(HttpResponseHeadersInvalid) as exc_info:
+        client.fetch(request, token)
+
+    error = exc_info.value
+    del request, client, token
+    rendered = "".join(
+        traceback.TracebackException.from_exception(error, capture_locals=True).format()
+    )
+    retained = _walk_retained_objects(_project_traceback_values(error))
+
+    assert _FAKE_BEARER not in rendered
+    assert "body-secret" not in rendered
+    assert "header-secret" not in rendered
+    assert "NSE_EQ" not in rendered
+    assert "api.upstox.com" not in rendered
+    assert not any(
+        id(value) in (token_identity, client_identity, provider_identity)
+        for value in retained
+    )
+    assert not any(isinstance(value, (Request, HTTPError)) for value in retained)
+    assert not any(
+        secret in repr(value)
+        for value in retained
+        for secret in (
+            _FAKE_BEARER,
+            "body-secret",
+            "header-secret",
+            "NSE_EQ",
+            "api.upstox.com",
+        )
+    )
     assert error.__cause__ is None
     assert error.__context__ is None
