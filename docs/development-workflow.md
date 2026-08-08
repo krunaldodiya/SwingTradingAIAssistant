@@ -78,8 +78,9 @@ Use the current Codex/ChatGPT task for material project or sprint updates when
 an executable story or task reaches `Done`, becomes materially blocked, needs
 user input, or changes the sprint goal. Do not report individual commands,
 ordinary red-green iterations, or unchanged status. Preserve concise in-session
-progress commentary when it helps the owner follow material work. Linear and
-other authorized project-state writes are coordinator-only.
+progress commentary when it helps the owner follow material work. The delivery
+publisher alone performs authorized scoped Linear and other external-state
+writes after its handoff preconditions are met.
 
 Every sprint update reports:
 
@@ -123,32 +124,39 @@ delivery over throughput, batching, or partially completed work.
 
 ## Root execution coordinator and recovery
 
-For each active project execution window, predesignate exactly one root coordinator:
-either the heartbeat target task or an active user-invoked Goal, never both.
-The coordinator owns one executable WIP, routing, integration, completion
-judgment, and authorized project-state writes. Implementers, reviewers, and
-publishers return evidence via handoff and do not mutate project tracking.
+Owner and root form the top product/conversation layer. The root is always
+responsive, non-mutating, and nonblocking: it receives, brainstorms,
+validates, and synthesizes; freezes authority envelopes; delegates,
+interrupts, and reprioritizes; selects only already-committed unblocked
+children within an active accepted finite Goal; and judges and reports from
+evidence. The root never edits repository or metadata; creates worktrees,
+branches, or commits; pushes, opens or updates PRs, merges, or resolves
+conflicts; writes Linear or other external state; runs or waits for tests,
+builds, CI, providers, monitors, polls, or agent completion; or implements,
+verifies, or reviews.
 
-Repository writes are serial. The coordinator may write its authorized scope or
-delegate one exact file/worktree scope to one implementer. While delegated, all
-other repository actors are read-only. Separate-worktree publishing begins only
-after the implementer has stopped and a handoff names the publisher, source
-revision, target worktree/branch, and authorized operation.
+Only a committed Ready child of the active accepted finite Goal is executable.
+Same-Goal continuation only is permitted: proposed, Backlog, and cross-sprint
+work are never executable. Live ARK-69 authority remains owner-specific. The
+root yields immediately after delegation. Completion events reactivate root
+asynchronously; a heartbeat is crash recovery only and never a normal progress
+loop, scheduler, or completion path.
 
-Coordinator transfer or recovery needs explicit owner approval and proof that
-the prior coordinator and every delegated repository writer have stopped,
-completed, or been terminated. If that proof is unavailable, repository actors
-remain read-only and the task is blocked. Record the prior/new coordinator,
-approval reference, stop evidence, issue state, and repository revision. There
-is no timeout, inferred staleness, forced release, or automatic ownership
-transfer.
+One content writer and one mutating actor apply in each execution epoch. Terra
+implementer is the sole content writer and creates the exact candidate commit.
+The delivery publisher is the sole external mutation and publishing actor. An
+owner interrupt enters quiescing; the active actor supplies stop proof before a
+successor can begin. Tree change, conflict, stale SHA, missing approval, or CI
+failure returns control to root. The root records only an in-conversation
+authority/evidence summary, never external state.
 
-At every durable handoff, record the active issue, branch/worktree, candidate
-revision or tree, completed phase, latest successful verification, exact next
-action, active actor, and blocker. After two materially identical verifier
-rejections or two materially identical failures of the same gate after repair,
-the circuit breaker stops cosmetic retries, preserves evidence, and routes the
-incomplete task to Sol. Expected TDD red tests do not count toward this limit.
+At every durable handoff, record the active Goal, authority envelope, execution
+epoch, acceptance actor, predecessor, writer/reviewer/publisher identities,
+exact candidate SHA and HEAD^{tree}, publication state, next committed item,
+and stop or revocation state. After two materially identical verifier rejections
+or two materially identical failures of the same gate after repair, the circuit
+breaker stops cosmetic retries, preserves evidence, and routes the incomplete
+task to Sol. Expected TDD red tests do not count toward this limit.
 
 ## Subscription-only efficiency policy
 
@@ -169,23 +177,26 @@ weakening scope, TDD, routing, review, or market-data safeguards.
 - Use Goal mode only for finite, well-specified outcomes. The heartbeat is a
   low-frequency recovery check only: it is not the normal polling/progress
   loop, a routine execution mechanism, or a completion path. Live agent
-  completion signals are the primary handoff. The predesignated root
-  coordinator remains the only execution owner.
+  completion signals are the primary handoff. The root retains authority and
+  evidence judgment, while the delegated actor owns only its assigned node.
 
 ## Routing and handoff
 
-The root coordinator owns issue state, scope, integration, and the final
-result. Terra High is the sole implementation and repair writer for an approved
-task. Luna is limited to explicitly delegated, low-risk, read-only documentation
-or inventory support.
+The root owns the finite Goal authority envelope, scope synthesis, routing, and
+evidence-based judgment without performing a mutating or blocking operation.
+Terra High implementer is the sole content writer for an approved task and
+creates the exact candidate commit. Delivery publisher is the sole external
+mutation actor: it acts only on an independently approved exact SHA. Luna is limited to explicitly delegated, low-risk, read-only documentation or inventory
+support. Terra High is the sole implementation and repair writer.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |
 | Default worker | Terra, high | Workspace write | Approved bounded implementation or repair; sole repository writer. |
-| Implementer | Terra, high | Workspace write | Strict TDD implementation, remediation, and evidence handoff. |
+| Implementer | Terra, high | Workspace write | Strict TDD content change, exact candidate commit, remediation, and evidence handoff; no PR, Linear, or publication. |
 | Verifier | Terra, high | Read-only | Independent focused checks. |
 | Lead architect/team lead | Sol, high | Read-only | Decomposition, architecture, risk routing, and escalation. |
 | High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
+| Delivery publisher | Terra, high | Workspace write | Sole scoped external mutation: epoch checkpoint, Linear, push/PR/CI/merge/publication after exact approval. |
 | Documentation/inventory helper | Luna, low | Read-only | Explicit low-risk, repeatable factual support only. |
 
 The following diagram is a visual summary of the same routing rules. It does
@@ -193,7 +204,7 @@ not add roles, review passes, or exceptions to the table and prose below.
 
 ```mermaid
 flowchart TD
-    root["Root coordinator<br/>scope, Linear, integration, publishing"]
+    root["Root<br/>Goal authority, routing, evidence judgment"]
     ready{"Approved and bounded task?"}
     terra["One Terra High implementer<br/>sole writer, strict TDD"]
     gate["Complete deterministic quality gate"]
@@ -201,7 +212,7 @@ flowchart TD
     verify["One Terra High verifier<br/>normal task"]
     review["One Sol High reviewer<br/>high-risk task; no duplicate Terra pass"]
     verdict{"Approved?"}
-    publish["Atomic publish and Done evidence"]
+    publish["Delivery publisher<br/>atomic publication and Done evidence"]
 
     root --> ready
     ready --> terra
@@ -215,23 +226,44 @@ flowchart TD
     verdict -- "Repair required" --> terra
 ```
 
-Only one repository writer may be active. Research and analysis use one
-subagent by default and never more than two; they do not create a second
-implementation writer. A normal candidate receives one Terra High verification.
-A high-risk candidate receives one Sol High review that also supplies independent
-verification, never an additional Terra review of the same exact candidate.
+Only one content writer and one mutating actor may be active in an execution
+epoch. Research and analysis use one subagent by default and never more than
+two; they do not create a second implementation writer. A normal task receives
+one Terra High verification. A high-risk task receives one Sol High review that
+also supplies independent verification, never an additional Terra review of the
+same exact candidate. Lead architect and reviewers remain read-only and must
+not publish.
 
-Each implementation handoff must state the issue and acceptance criteria,
-files changed, tests added first, commands and results, residual risks, and
-the exact decision needed next. A reviewer must not review its own change; a
-failed review returns through the root coordinator to the same Terra task
-implementer while the approved repair budget remains. Reviewer independence
-comes from read-only separation, not from replacing the writer. No remediation
-restarts completed work or waives an acceptance criterion or gate.
+Each implementation handoff must state the Goal, authority envelope, execution
+epoch, acceptance actor, predecessor, writer/reviewer/publisher identities,
+exact SHA and tree, publication state, next committed item, stop/revocation
+state, acceptance criteria, files changed, tests added first, commands and
+results, residual risks, and the exact decision needed next. A reviewer must
+not review its own change; a failed review returns through root authority to the
+same Terra task implementer while the approved repair budget remains. Reviewer
+independence comes from read-only separation, not from replacing the writer. No
+remediation restarts completed work or waives an acceptance criterion or gate.
 
 Project configuration provides these defaults, but an active Codex session's
 permission selection is inherited by subagents and can override a custom
 agent's sandbox setting.
+
+### Delivery-publisher protocol
+
+Delivery publisher receives a completed handoff for one exact approved SHA and
+execution epoch. It may create or validate the publication worktree/branch and
+epoch checkpoint; perform scoped Linear updates; push that exact SHA; create or
+update its PR; monitor CI asynchronously; merge only that independently
+approved SHA after required checks; verify hosted publication; and make the
+final scoped Linear sync. It never edits, formats, or tests as review; creates
+a candidate commit; resolves a conflict; force-pushes; bypasses a gate; makes a
+scope decision; uses provider credentials; or self-reviews.
+
+Any tree change, conflict, stale SHA, missing approval, failed CI, or missing
+hosted-publication proof is a stop condition that returns to root. Publisher
+does not continue into a new Goal or an uncommitted child. An owner interrupt
+places the epoch in `quiescing`; the active writer or publisher supplies stop
+proof before a successor is delegated.
 
 ### Routing evidence and historical pilot supersession
 
@@ -272,8 +304,9 @@ or the required deterministic quality gate.
 Treat the delivery workflow as an explicit state graph while keeping each
 agent's bounded plan-act-verify loop inside its assigned node. This is a
 coordination rule, not a new runtime, dependency, agent role, or permission to
-increase parallel work. Linear, the active Goal/task state, Git, and agent
-completion messages remain the implementation substrate.
+increase parallel work. The active Goal/task state, Git, publisher-owned scoped
+Linear updates, and agent completion messages remain the implementation
+substrate.
 
 ```mermaid
 flowchart TD
@@ -299,14 +332,14 @@ flowchart TD
     verify --> verdict{"Approved?"}
     review --> verdict
     verdict -- "Repair required" --> remediation
-    verdict -- "Yes" --> publish["Atomic publish"]
+    verdict -- "Yes" --> publish["Delivery publisher: atomic publish"]
     publish --> done["Done with evidence"]
 ```
 
-The coordinator records a checkpoint at every material edge crossing and before
-yielding. Use a concise typed record with these fields; a Linear comment or the
-active Goal/task state is sufficient until evidence proves that a dedicated
-store is needed:
+The delegated actor records a checkpoint at every material edge crossing and
+before yielding. Use a concise typed record with these fields; the active
+Goal/task state is sufficient until evidence proves that a dedicated store is
+needed. Only the delivery publisher may mirror the record to scoped Linear:
 
 | Field | Required content |
 | --- | --- |
@@ -315,13 +348,13 @@ store is needed:
 | `specification_revision` | Approved specification path and revision. |
 | `phase` | `ready`, `planning`, `implementing`, `quality_gate`, `verifying`, `reviewing`, `publishing`, `blocked`, `escalated`, or `done`. |
 | `repository_state` | Branch, worktree, candidate commit or tree, and scoped status. |
-| `active_actor` | Named coordinator, Sol planner, project-owner decision actor, implementer, verifier, reviewer, publisher, or `none`; it is `none` while `phase` is `blocked`. |
+| `active_actor` | Named implementer, verifier, reviewer, delivery publisher, or `none`; it is `none` while `phase` is `blocked` or `quiescing`. |
 | `decision_actor` | Named Sol planner or project owner who supplied the latest planning, routing, or approval decision, or `none`. |
 | `approved_risk_classification` | Approved `normal` or `high-risk` classification, the approving actor, and the evidence reference. |
 | `completed_phase` | Last completed graph node and its evidence reference. |
 | `last_verification` | Command/gate, candidate revision, outcome, and time. |
 | `iteration_budget` | Approved limit, used repair rounds, and remaining rounds; no inferred token telemetry. |
-| `next_action` | One exact authorized node or observation to perform next. |
+| `next_action` | One exact already-committed action within the same accepted finite Goal. |
 | `blocker` | Precise missing decision, permission, credential, dependency, or `none`. |
 | `updated_at` | Timestamp with timezone. |
 
@@ -333,8 +366,8 @@ authorized node immediately; no model call is needed merely to discover that a
 known command passed or that a named agent completed.
 
 Resume from the last valid checkpoint. The diagram's terminal dynamic jump means
-the coordinator invokes the saved authorized `next_action` directly; it does
-not re-enter readiness, risk classification, or Sol planning merely because it
+the root delegates the saved authorized `next_action` directly; it does not
+re-enter readiness, risk classification, or Sol planning merely because it
 resumed. Do not repeat a completed agent node,
 quality gate, review, download, or build when its evidence belongs to the exact
 unchanged source revision and remains valid. If the revision changed or the
@@ -346,7 +379,7 @@ After a decision, validate the checkpoint prerequisites required by its saved
 
 Graph cost controls are mandatory:
 
-- keep one executable WIP and one repository writer;
+- keep one executable WIP, one content writer, and one mutating actor per epoch;
 - do not fan out coding work or create an agent only to relay status;
 - use parallel read-only agents only for independent questions whose expected
   value exceeds their coordination and subscription cost;

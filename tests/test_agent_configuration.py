@@ -16,6 +16,22 @@ REVIEWER_REQUIREMENTS = (
     "reject unexplained mutation",
     "unverifiable read-only isolation",
 )
+PUBLISHER_REQUIREMENTS = (
+    "worktree/branch/epoch",
+    "scoped linear",
+    "push exact handed-off sha",
+    "pr create/update",
+    "async ci monitoring",
+    "merge exact independently approved sha",
+    "verify hosted publication",
+    "final linear sync",
+    "never edit/format/test-as-review/create candidate commit/resolve conflicts/"
+    "force-push/bypass gates/make scope decisions/use provider credentials/"
+    "self-review",
+    "tree change/conflict/stale sha/missing approval/ci failure returns to root",
+    "one mutating actor and execution epoch",
+    "owner interrupt => quiescing and stop proof before successor",
+)
 
 
 def read_toml(path: Path) -> dict[str, object]:
@@ -61,7 +77,7 @@ def test_ark_63_routes_terra_as_the_only_implementation_writer() -> None:
     assert terra["model"] == "gpt-5.6-terra"
     assert terra["model_reasoning_effort"] == "high"
     assert terra["sandbox_mode"] == "workspace-write"
-    assert "sole implementation and repair worker" in terra["description"]
+    assert "sole implementation and repair worker" in str(terra["description"])
 
     luna = read_toml(AGENTS / "luna-docs-inventory.toml")
     assert luna["model"] == "gpt-5.6-luna"
@@ -138,3 +154,58 @@ def test_ark_63_workflow_supersedes_the_luna_implementation_pilot() -> None:
         "luna is limited to explicitly delegated low-risk, read-only",
     ):
         assert required in note
+
+
+def test_ark_95_delivery_publisher_is_the_only_external_mutation_actor() -> None:
+    publisher = read_toml(AGENTS / "delivery-publisher.toml")
+
+    assert publisher["name"] == "delivery_publisher"
+    assert publisher["model"] == "gpt-5.6-terra"
+    assert publisher["model_reasoning_effort"] == "high"
+    assert publisher["sandbox_mode"] == "workspace-write"
+    assert "sole external mutation" in str(publisher["description"])
+
+    instructions = " ".join(str(publisher["developer_instructions"]).lower().split())
+    assert all(requirement in instructions for requirement in PUBLISHER_REQUIREMENTS)
+
+
+def test_ark_95_role_contract_separates_root_writer_review_and_publication() -> None:
+    workflow = " ".join(
+        (ROOT / "docs" / "development-workflow.md").read_text().lower().split()
+    )
+    for required in (
+        "root is always responsive, non-mutating, and nonblocking",
+        "root never edits repository or metadata",
+        "only already-committed unblocked children within an active accepted finite goal",
+        "root yields immediately after delegation",
+        "completion events reactivate root asynchronously",
+        "same-goal continuation only",
+        "proposed, backlog, and cross-sprint work are never executable",
+        "live ark-69 authority remains owner-specific",
+        "normal task receives one terra high verification",
+        "high-risk task receives one sol high review",
+    ):
+        assert required in workflow
+
+    terra = " ".join(
+        str(read_toml(AGENTS / "terra-implementer.toml")["developer_instructions"])
+        .lower()
+        .split()
+    )
+    for required in (
+        "sole content writer",
+        "exact candidate commit",
+        "no pr, linear, or publication",
+    ):
+        assert required in terra
+
+    for filename in (
+        "lead-architect.toml",
+        "terra-verifier.toml",
+        "high-risk-reviewer.toml",
+    ):
+        instructions = " ".join(
+            str(read_toml(AGENTS / filename)["developer_instructions"]).lower().split()
+        )
+        assert "read-only" in instructions
+        assert "must not publish" in instructions

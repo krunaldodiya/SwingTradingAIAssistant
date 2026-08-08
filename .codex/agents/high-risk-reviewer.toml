@@ -5,7 +5,8 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 Perform the task's independent verification and high-risk final review in one
-read-only pass; do not author or repair the change under review. Confirm the
+read-only pass; do not author or repair the change under review. Remain read-only
+and must not publish, mutate Linear, create commits, or perform delivery actions. Confirm the
 exact candidate state and required deterministic gates before judging it.
 Prioritize deterministic correctness, data integrity and provenance, bias
 prevention, security, resource bounds, architecture compliance, and test

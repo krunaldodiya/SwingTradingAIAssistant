@@ -1,7 +1,11 @@
 # Spec-driven development workflow assessment
 
 Date: 2026-08-08
-Status: proposed
+Status: superseded
+
+Superseded by [2026-08-08 project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md).
+Its reference assessment remains useful historical research, but the proposed
+pilot is replaced by the accepted finite-Goal, writer/reviewer/publisher model.
 
 ## Context
 
@@ -102,4 +106,3 @@ authorization or traceability rule must be added to
 - [Jettro Coenradie's Codex + Backlog.md case study](https://jettro.dev/spec-driven-development-using-codex-and-backlog-md-1de89cd229d5)
 - [Marcos's Codex SDD case study](https://mmarcosab.medium.com/a-practical-path-to-spec-driven-development-with-codex-a3cec3ef554a)
 - [Reddit codex-spec launch post](https://www.reddit.com/r/OpenaiCodex/comments/1nf7v9j/codexspec_specificationdriven_development_tool/)
-

@@ -64,56 +64,41 @@ _CI_BLOCKS = {
     ),
 }
 _HEARTBEAT_HEADING = "## Root execution coordinator and recovery"
-_HEARTBEAT_END_HEADING = "## Routing and handoff"
+_HEARTBEAT_END_HEADING = "## Subscription-only efficiency policy"
 _HEARTBEAT_SECTION = """
-For each active project execution window, predesignate exactly one root coordinator:
-either the heartbeat target task or an active user-invoked Goal, never both.
-The coordinator owns one executable WIP, routing, integration, completion
-judgment, and authorized project-state writes. Implementers, reviewers, and
-publishers return evidence via handoff and do not mutate project tracking.
+Owner and root form the top product/conversation layer. The root is always
+responsive, non-mutating, and nonblocking: it receives, brainstorms,
+validates, and synthesizes; freezes authority envelopes; delegates,
+interrupts, and reprioritizes; selects only already-committed unblocked
+children within an active accepted finite Goal; and judges and reports from
+evidence. The root never edits repository or metadata; creates worktrees,
+branches, or commits; pushes, opens or updates PRs, merges, or resolves
+conflicts; writes Linear or other external state; runs or waits for tests,
+builds, CI, providers, monitors, polls, or agent completion; or implements,
+verifies, or reviews.
 
-Repository writes are serial. The coordinator may write its authorized scope or
-delegate one exact file/worktree scope to one implementer. While delegated, all
-other repository actors are read-only. Separate-worktree publishing begins only
-after the implementer has stopped and a handoff names the publisher, source
-revision, target worktree/branch, and authorized operation.
+Only a committed Ready child of the active accepted finite Goal is executable.
+Same-Goal continuation only is permitted: proposed, Backlog, and cross-sprint
+work are never executable. Live ARK-69 authority remains owner-specific. The
+root yields immediately after delegation. Completion events reactivate root
+asynchronously; a heartbeat is crash recovery only and never a normal progress
+loop, scheduler, or completion path.
 
-Coordinator transfer or recovery needs explicit owner approval and proof that
-the prior coordinator and every delegated repository writer have stopped,
-completed, or been terminated. If that proof is unavailable, repository actors
-remain read-only and the task is blocked. Record the prior/new coordinator,
-approval reference, stop evidence, issue state, and repository revision. There
-is no timeout, inferred staleness, forced release, or automatic ownership
-transfer.
+One content writer and one mutating actor apply in each execution epoch. Terra
+implementer is the sole content writer and creates the exact candidate commit.
+The delivery publisher is the sole external mutation and publishing actor. An
+owner interrupt enters quiescing; the active actor supplies stop proof before a
+successor can begin. Tree change, conflict, stale SHA, missing approval, or CI
+failure returns control to root. The root records only an in-conversation
+authority/evidence summary, never external state.
 
-At every durable handoff, record the active issue, branch/worktree, candidate
-revision or tree, completed phase, latest successful verification, exact next
-action, active actor, and blocker. After two materially identical verifier
-rejections or two materially identical failures of the same gate after repair,
-the circuit breaker stops cosmetic retries, preserves evidence, and routes the
-incomplete task to Sol. Expected TDD red tests do not count toward this limit.
-
-## Subscription-only efficiency policy
-
-This policy reduces avoidable subscription context and tool noise without
-weakening scope, TDD, routing, review, or market-data safeguards.
-
-- Start a fresh task only at an atomic boundary. Carry the concise
-  [handoff template](templates/codex-subscription-handoff.md); never restart an
-  unresolved red-green-refactor cycle merely to reset context.
-- After mandatory instructions and approved specifications are read at their
-  current revision, use targeted rereads and focused tests before broader
-  checks. Required full reads and quality gates remain mandatory.
-- Bound tool and log output to the command, exit status, and evidence needed for
-  the next action. Do not infer billing, token, cache, or reasoning telemetry.
-- Delegate only independent, non-overlapping work. Parallel agents are
-  read-only whenever a repository writer is active, and they never replace a
-  required verification or review gate.
-- Use Goal mode only for finite, well-specified outcomes. The heartbeat is a
-  low-frequency recovery check only: it is not the normal polling/progress
-  loop, a routine execution mechanism, or a completion path. Live agent
-  completion signals are the primary handoff. The predesignated root
-  coordinator remains the only execution owner.
+At every durable handoff, record the active Goal, authority envelope, execution
+epoch, acceptance actor, predecessor, writer/reviewer/publisher identities,
+exact candidate SHA and HEAD^{tree}, publication state, next committed item,
+and stop or revocation state. After two materially identical verifier rejections
+or two materially identical failures of the same gate after repair, the circuit
+breaker stops cosmetic retries, preserves evidence, and routes the incomplete
+task to Sol. Expected TDD red tests do not count toward this limit.
 """
 _TIERED_GATES_HEADING = "## Tiered quality gates"
 _TIERED_GATES_SECTION = """
@@ -338,36 +323,52 @@ def test_heartbeat_contract_rejects_multiple_owners_and_normal_execution_use() -
     validate_heartbeat_policy(policy)
 
     fixtures = (
-        policy.replace("exactly one root coordinator", "multiple root coordinators"),
+        policy.replace("One content writer", "Multiple content writers"),
         policy.replace(
-            "The heartbeat is a\n  low-frequency recovery check only",
+            "a heartbeat is crash recovery only",
             "The heartbeat is normal polling",
         ),
         policy.replace(
-            "not the normal polling/progress\n  loop",
-            "the normal polling/progress\n  loop",
+            "never a normal progress\nloop",
+            "a normal progress\nloop",
         ),
-        policy.replace("or a completion path", "or the completion path"),
-        _append_to_section(
-            policy,
-            "## Subscription-only efficiency policy",
-            "A second root coordinator may resume after interruption.",
-        ),
-        _append_to_section(
-            policy,
-            "## Subscription-only efficiency policy",
-            "Heartbeat-driven normal progress polling is required.",
-        ),
-        _append_to_section(
-            policy,
-            "## Subscription-only efficiency policy",
-            "The heartbeat may execute routine work and decide completion.",
-        ),
-        _append_to_section(
-            policy,
-            "## Subscription-only efficiency policy",
-            "The heartbeat owns final completion judgment after each check.",
+        policy.replace("never external state", "external state"),
+        policy.replace("root never edits repository", "root may edit repository"),
+        policy.replace("sole external mutation", "shared external mutation"),
+        policy.replace("Same-Goal continuation only", "Cross-Goal continuation"),
+        policy.replace(
+            "Live ARK-69 authority remains owner-specific",
+            "Live ARK-69 authority is standing",
         ),
     )
     for fixture in fixtures:
         _assert_rejected(validate_heartbeat_policy, fixture)
+
+
+def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> None:
+    sprint_index = (ROOT / "docs" / "sprints" / "README.md").read_text().lower()
+    sprint_two = (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower()
+    note_index = (ROOT / "docs" / "notes" / "README.md").read_text().lower()
+    note = (
+        (ROOT / "docs" / "notes" / "2026-08-08-project-autonomous-orchestration.md")
+        .read_text()
+        .lower()
+    )
+
+    assert "formal commitment pending ark-67" not in sprint_index
+    assert (
+        "status: **active; execution follows the accepted finite-goal contract**"
+        in (sprint_two)
+    )
+    assert "delivery publisher" in sprint_two
+    assert "2026-08-08 — project autonomous orchestration" in note_index
+    for required in (
+        "status: accepted",
+        "value",
+        "alternatives",
+        "cost",
+        "failure and revocation",
+        "supersessions",
+        "not autonomous trading",
+    ):
+        assert required in note
