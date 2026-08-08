@@ -44,3 +44,4 @@ update those documents as well as the note.
 - [2026-08-07 — Graph engineering workflow assessment](2026-08-07-graph-engineering-workflow-assessment.md)
 - [2026-08-07 — Research vision, validation, and instrument extensibility](2026-08-07-research-vision-validation-and-instrument-extensibility.md)
 - [2026-08-07 — Sprint 1 workflow reconciliation](2026-08-07-sprint1-workflow-reconciliation.md)
+- [2026-08-08 — Spec-driven development workflow assessment](2026-08-08-spec-driven-development-workflow-assessment.md)
