@@ -38,6 +38,7 @@ from .partition_ingestion import (
 )
 from .partition_reconciliation import (
     PartitionDecision,
+    ReconciliationAction,
     RequestReason,
     reconcile_partition_plans,
 )
@@ -619,6 +620,16 @@ class IngestionCoordinator:
             )
             decisions = reconcile_partition_plans(plans, evidence)
             by_plan = {decision.plan: decision for decision in decisions}
+            for result in recovery_results:
+                if (
+                    result.outcome is PartitionRecoveryOutcome.INVALIDATED
+                    and result.failure_category is not None
+                ):
+                    by_plan[result.plan] = PartitionDecision(
+                        result.plan,
+                        ReconciliationAction.REQUEST,
+                        (RequestReason(result.failure_category.value),),
+                    )
             local, pending, local_fatal = self._local_results(recovery_results, by_plan)
             completed = self._local_preflight(
                 command,
