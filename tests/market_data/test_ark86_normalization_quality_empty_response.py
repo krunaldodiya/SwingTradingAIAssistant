@@ -46,6 +46,11 @@ from swing_trading_ai_assistant.market_data.validation import (
     ValidationReason,
 )
 
+_HOSTILE_INVALID_VOLUME = (
+    "invalid-volume|secret-token|/hostile/path|https://hostile.example|"
+    "SELECT * FROM raw|hostile-key"
+)
+
 
 class _FixedClock:
     def now(self) -> datetime:
@@ -56,6 +61,7 @@ class _OneResponseSession:
     def __init__(self, response: HistoricalResponse) -> None:
         self._response = response
         self.requests: list[HistoricalRequest] = []
+        self.returned_responses: list[HistoricalResponse] = []
 
     def fetch(self, request: HistoricalRequest) -> HistoricalResponse:
         self.requests.append(request)
@@ -63,6 +69,7 @@ class _OneResponseSession:
             raise AssertionError(
                 "a terminal ARK-86 row must not issue a second request"
             )
+        self.returned_responses.append(self._response)
         return self._response
 
 
@@ -105,13 +112,17 @@ def _canonical_path(partition: BenchmarkFixturePartition) -> str:
 
 
 def _run(
-    tmp_path: Path, partition: BenchmarkFixturePartition, response: HistoricalResponse
+    tmp_path: Path,
+    partition: BenchmarkFixturePartition,
+    response: HistoricalResponse,
+    events: list[object] | None = None,
 ) -> tuple[IngestionReport, _OneResponseSessionFactory]:
     fixture = benchmark_nse_eq_v1(date(2024, 2, 1), date(2024, 2, 1))
     sessions = _OneResponseSessionFactory(response)
     report = IngestionCoordinator(
         session_factory=sessions,
         clock=_FixedClock(),
+        event_sink=events.append if events is not None else None,
         run_id_factory=lambda: "ark86-run",
     ).run(
         IngestionCommand(
@@ -185,11 +196,14 @@ def _assert_failed_report(
     return result
 
 
-def _assert_sanitized(report: IngestionReport, root: Path) -> None:
-    public_evidence = repr(report)
+def _assert_sanitized(
+    report: IngestionReport, root: Path, events: list[object] | None = None
+) -> None:
+    public_evidence = repr((report, tuple(events or ())))
     for forbidden in (
         str(root),
         "benchmark-nse-eq-v1",
+        "invalid-volume",
         "secret-token",
         "/hostile/path",
         "https://hostile.example",
@@ -305,7 +319,7 @@ def test_conflicting_duplicate_is_normalization_failure_without_publication_or_r
         ("impossible_ohlc", 2, 1.0),
         ("negative_volume", 5, -1),
         ("non_integral_volume", 5, 1.5),
-        ("invalid_volume", 5, "invalid-volume"),
+        ("invalid_volume", 5, _HOSTILE_INVALID_VOLUME),
     ],
 )
 def test_invalid_raw_family_is_normalization_failure_without_publication_or_retry(
@@ -321,8 +335,12 @@ def test_invalid_raw_family_is_normalization_failure_without_publication_or_retr
     assert all(
         raw_rows[0][index] == valid_row[index] for index in range(7) if index != field
     )
+    if label == "invalid_volume":
+        assert value == _HOSTILE_INVALID_VOLUME
 
-    report, sessions = _run(tmp_path, partition, HistoricalResponse(200, raw_rows))
+    events: list[object] = []
+    response = HistoricalResponse(200, raw_rows)
+    report, sessions = _run(tmp_path, partition, response, events)
 
     assert label in {
         "impossible_ohlc",
@@ -343,7 +361,10 @@ def test_invalid_raw_family_is_normalization_failure_without_publication_or_retr
     assert result.final_manifest.checksum_sha256 is None
     assert not (tmp_path / _canonical_path(partition)).exists()
     _assert_one_request(sessions, partition)
-    _assert_sanitized(report, tmp_path)
+    if label == "invalid_volume":
+        assert sessions.session.returned_responses == [response]
+        assert sessions.session.returned_responses[0].candles[0][5] == value
+    _assert_sanitized(report, tmp_path, events)
 
 
 @pytest.mark.parametrize(
