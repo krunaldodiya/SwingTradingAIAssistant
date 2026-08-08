@@ -23,6 +23,7 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
 )
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
+    plan_upstox_equity_months,
 )
 from swing_trading_ai_assistant.market_data.partition_ingestion import (
     PartitionLifecycleOutcome,
@@ -39,6 +40,7 @@ from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCoordinator,
     IngestionRunOutcome,
     PartitionOutcome,
+    PartitionResult,
     RunFailureCode,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
@@ -250,6 +252,23 @@ class _Sleeper:
         self.delays.append(delay)
 
 
+class _Clock:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
+
+
+def _expected_plans(last_month: int) -> tuple[PlannedInstrumentMonth, ...]:
+    return plan_upstox_equity_months(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, last_month, 28 if last_month == 2 else 31),
+        "1m",
+    )
+
+
 def _coordinator(
     schedule: ExpectedSessionSchedule,
     session_factory: _SessionFactory,
@@ -257,10 +276,12 @@ def _coordinator(
     sleeper: _Sleeper,
     lifecycle_factory: object | None = None,
     event_sink: object | None = None,
+    clock: _Clock | None = None,
 ) -> IngestionCoordinator:
     return IngestionCoordinator(
         session_factory=session_factory,  # type: ignore[arg-type]
         limiter=limiter,  # type: ignore[arg-type]
+        clock=clock,  # type: ignore[arg-type]
         sleeper=sleeper,  # type: ignore[arg-type]
         jitter=SimpleNamespace(uniform=lambda lower, _upper: lower),  # type: ignore[arg-type]
         event_sink=event_sink,  # type: ignore[arg-type]
@@ -300,6 +321,8 @@ def test_insufficient_total_attempt_budget_rejects_all_requestable_months_withou
         PartitionOutcome.NOT_ATTEMPTED,
         PartitionOutcome.NOT_ATTEMPTED,
     ]
+    assert all(type(item) is PartitionResult for item in report.results)
+    assert [item.plan for item in report.results] == list(_expected_plans(2))
     assert [item.reconciliation_reasons for item in report.results] == [
         (RequestReason.MISSING_EVIDENCE,),
         (RequestReason.MISSING_EVIDENCE,),
@@ -341,6 +364,7 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
     limiter = _Limiter()
     sleeper = _Sleeper()
     events: list[ProviderEvent] = []
+    event_time = datetime(2026, 8, 7, 10, 0, tzinfo=UTC)
 
     def lifecycle_factory(**kwargs: object) -> SimpleNamespace:
         def execute(plan: PlannedInstrumentMonth) -> PartitionLifecycleResult:
@@ -368,6 +392,7 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
         sleeper,
         lifecycle_factory,
         events.append,
+        _Clock(event_time),
     ).run(
         IngestionCommand(
             _instrument(),
@@ -394,6 +419,8 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
         PartitionOutcome.FAILED,
         PartitionOutcome.NOT_ATTEMPTED,
     ]
+    assert all(type(item) is PartitionResult for item in report.results)
+    assert [item.plan for item in report.results] == list(_expected_plans(3))
     assert [item.reconciliation_reasons for item in report.results] == [
         (RequestReason.MISSING_EVIDENCE,),
         (RequestReason.MISSING_EVIDENCE,),
@@ -442,13 +469,20 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
     ]
     assert limiter.deferrals == []
     assert sleeper.delays == [timedelta(milliseconds=500)]
+    assert all(type(event) is ProviderEvent for event in events)
     assert [
-        (event.run_id, event.attempt_ordinal, event.category, event.status_class)
+        (
+            event.run_id,
+            event.attempt_ordinal,
+            event.category,
+            event.status_class,
+            event.occurred_at,
+        )
         for event in events
     ] == [
-        ("ark80-run", 1, "provider_success", "2xx"),
-        ("ark80-run", 1, "provider_retryable", "5xx"),
-        ("ark80-run", 2, "provider_retryable", "5xx"),
+        ("ark80-run", 1, "provider_success", "2xx", event_time),
+        ("ark80-run", 1, "provider_retryable", "5xx", event_time),
+        ("ark80-run", 2, "provider_retryable", "5xx", event_time),
     ]
     public_evidence = repr((report, tuple(events)))
     assert "secret-token" not in public_evidence
