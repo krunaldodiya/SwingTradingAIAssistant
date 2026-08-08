@@ -19,6 +19,7 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     ManifestState,
     ValidationOutcome,
 )
+from swing_trading_ai_assistant.market_data.normalization import normalize_candles
 from swing_trading_ai_assistant.market_data.parquet import iter_candles_from_parquet
 from swing_trading_ai_assistant.market_data.partition_reconciliation import (
     RequestReason,
@@ -266,7 +267,18 @@ def test_conflicting_duplicate_is_normalization_failure_without_publication_or_r
     partition = _fixture()
     raw_rows = [list(row) for row in partition.response.candles]
     conflicting = list(raw_rows[0])
-    conflicting[4] = float(conflicting[4]) + 1.0
+    conflicting[4] = float(conflicting[4]) + 0.01
+
+    assert len(normalize_candles([raw_rows[0]])) == 1
+    assert len(normalize_candles([conflicting])) == 1
+    assert raw_rows[0][0] == conflicting[0]
+    assert [
+        index
+        for index, (original, candidate) in enumerate(
+            zip(raw_rows[0], conflicting, strict=True)
+        )
+        if original != candidate
+    ] == [4]
     raw_rows.append(conflicting)
 
     report, sessions = _run(tmp_path, partition, HistoricalResponse(200, raw_rows))
