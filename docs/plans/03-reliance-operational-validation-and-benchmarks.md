@@ -205,6 +205,40 @@ form `2024-03-01T00:00:00.000000Z`); B02 covers `2024-01-01` through
 to that command’s one exact schedule digest in its existing validation-policy
 version; no per-month substitute digest is permitted.
 
+**Test-only canonical row-generator contract.**  The corpus generator accepts
+only `2023-01` through `2024-03`.  For one accepted year/month, let the session
+index be `s = day - 1` for its first twenty calendar dates (`0 <= s <= 19`),
+the minute index be `0 <= m <= 374`, and the row index be `r = 375*s + m`.
+The row timestamp is the corresponding UTC calendar date at `03:45:00Z` plus
+`m` minutes.  Let `q = 12*(year - 2023) + (month - 1)` and
+`b = 100000 + 10000*q + r`, both exact built-in integers.  Its raw and canonical
+`open`, `high`, `low`, and `close` values are respectively the built-in floats
+obtained by exactly one conversion each from
+`Decimal(b).scaleb(-2)`, `Decimal(b + 4).scaleb(-2)`,
+`Decimal(b - 3).scaleb(-2)`, and `Decimal(b + 1).scaleb(-2)`; no intermediate
+float arithmetic is permitted.  `volume` is the exact built-in integer
+`1000000 + 7500*q + r`, and raw open interest is `None`.
+
+Each generated canonical row uses the identity already fixed above;
+`Instrument.isin` equals `security_id`, every `Instrument` derivative metadata
+field is `None`, and canonical derivative fields and `oi` are `None`.
+`ingested_at` is `00:00:00Z` on the first day of the following calendar month,
+`source_version` is `upstox-historical-v3`, and `adjustment_state` is `raw`.
+Rows are emitted in ascending month, session, then minute order.  The validation
+policy is exactly `nse-equity-month@v1`; `raw_count`, `normalized_count`, and
+published row count are each exactly 7,500 per month.  The fake response is
+HTTP 200 with empty headers and no error.  These are test-support facts only;
+they do not create a production generator, provider payload, or public API.
+
+The exact range-wide v2 schedule digests are
+`32b239c6e8924bdf4fb676f0f2b8b070c14869e9d3202badc001b20e863b17fd` for
+B01/B03/B04,
+`031e66087b1e7ef8d9097e585da5428d777875243c6c06f1b48670e0d2f327b3` for
+B02, and
+`edf3d0818bf0862dbb171708d6010ef380c77bf44e622ec9166a53e865d8c1db` for
+B05.  A generator result whose schedule bytes do not produce the named workload
+digest is invalid fixture evidence; it must not substitute a per-month schedule.
+
 Ingestion and repair workloads process at most one partition at a time and use
 no worker or queue concurrency.  B05 instead scans its 12 immutable partitions
 through one DuckDB thread; it is not a one-file-at-a-time claim, and its FD peak
