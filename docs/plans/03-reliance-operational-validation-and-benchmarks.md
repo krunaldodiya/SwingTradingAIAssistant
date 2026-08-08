@@ -154,8 +154,10 @@ must not use a user/canonical root.
 The offline configuration record must retain, in test output or an ignored
 artifact, only: fixture name/version, source revision, test command, dependency
 lock identity, Python/PyArrow/DuckDB versions, injected clock, schedule digest,
-policy version, requested/expanded date range, retry/attempt/wait limits,
-result enums/counts, and measurement fields in section 5.  It must exclude
+schedule coverage/as-of/source/release/timezone/kind/closure provenance, policy
+version, requested/expanded date range, retry/attempt/wait limits,
+`partition_checksums` in physical plan order, result enums/counts, and
+measurement fields in section 5.  It must exclude
 credentials, provider payloads, machine-specific absolute roots, SQL, URLs,
 instrument keys, and raw candles.
 
@@ -168,12 +170,15 @@ identity is `benchmark-nse-eq-v1`, with exact synthetic fields
 and `interval=1m`.  It is a fixture input only: no production source,
 configuration, catalog migration, or live command may contain this mapping.
 
-For each synthetic calendar month in this corpus, schedule-digest-v2 declares
-the first twenty local calendar dates as sessions from `03:45:00Z` (inclusive)
-to `10:00:00Z` (exclusive), and every remaining date as one closure with reason
-`synthetic-benchmark-closure-v1`.  Thus each month has exactly 20 sessions of
-375 one-minute bars, 7,500 expected/normalized/published rows, and a fully
-classified first-to-last calendar range.  The fixed B01 month is **2024-02**;
+For every corpus schedule, the exact v2 fields are `schema_version=2`,
+`source="synthetic-benchmark"`, `source_release="benchmark-nse-eq-v1"`,
+`timezone="Asia/Kolkata"`, session `kind="synthetic-regular"`, and closure
+reason `synthetic-benchmark-closure-v1`.  For each synthetic calendar month,
+the schedule declares the first twenty local calendar dates as sessions from
+`03:45:00Z` (inclusive) to `10:00:00Z` (exclusive), and every remaining date as
+one closure.  Thus each month has exactly 20 sessions of 375 one-minute bars,
+7,500 expected/normalized/published rows, and a fully classified first-to-last
+calendar range.  The fixed B01 month is **2024-02**;
 its injected clock is `2024-03-01T00:00:00Z`, its expected first timestamp is
 `2024-02-01T03:45:00Z`, and its expected last timestamp is
 `2024-02-20T09:59:00Z`.  Its nine remaining dates are closures.  These dates,
@@ -187,9 +192,23 @@ injected clock of `2024-04-01T00:00:00Z`.  The B05 corpus is exactly the twelve
 months **2023-01** through **2023-12**, again 20 sessions and 7,500 rows per
 month: 240 sessions, 125 closures, 12 Parquet partitions, and 90,000 rows total,
 with expected aggregate bounds
-`2023-01-01T03:45:00Z` through `2023-12-20T09:59:00Z`.  All benchmark workloads
-process at most one partition at a time; no corpus shape permits worker or
-queue concurrency.
+`2023-01-01T03:45:00Z` through `2023-12-20T09:59:00Z`.
+
+There is one canonical range-wide schedule per workload, serialized/digested
+under the existing Plan 02 v2 algorithm: B01/B03/B04 cover `2024-02-01` through
+`2024-02-29` with `as_of` instant `2024-03-01T00:00:00Z` (canonical serialized
+form `2024-03-01T00:00:00.000000Z`); B02 covers `2024-01-01` through
+`2024-03-31` with `as_of` `2024-04-01T00:00:00Z` (serialized
+`2024-04-01T00:00:00.000000Z`); and B05 covers `2023-01-01` through
+`2023-12-31` with `as_of` `2024-01-01T00:00:00Z` (serialized
+`2024-01-01T00:00:00.000000Z`).  Every partition in a multi-month command binds
+to that command’s one exact schedule digest in its existing validation-policy
+version; no per-month substitute digest is permitted.
+
+Ingestion and repair workloads process at most one partition at a time and use
+no worker or queue concurrency.  B05 instead scans its 12 immutable partitions
+through one DuckDB thread; it is not a one-file-at-a-time claim, and its FD peak
+is measured under section 5.2.
 
 The live gate instead records its owner-selected closed month, catalog-resolved
 identity, and authoritative schedule only at execution time.  It does not use,
@@ -351,14 +370,21 @@ assertion record and retain only sanitized values.
 | B04 `query_month` | existing DuckDB catalog opens one disposable-root database and executes a parameterized/filter-bounded direct Parquet scan for the synthetic identity and 2024-02 | `min(ts)=2024-02-01T03:45:00Z`, `max(ts)=2024-02-20T09:59:00Z`, `count(*)=7,500`, all agreeing with sealed manifest evidence |
 | B05 `query_history_shape` | the fixed synthetic 12-partition 2023-01..12 corpus (90,000 rows, no provider data) through a direct Parquet filtered aggregate | `count(*)=90,000` and fixed corpus bounds; DuckDB stores no candle rows |
 
+Every benchmark DuckDB query (B04 and B05) uses exactly one connection and,
+before the query, executes `SET threads = 1` and `SET memory_limit = '256MB'`.
+It then executes `SET temp_directory = '<iteration-disposable-protected-root>/duckdb-tmp'`.
+It never creates a DuckDB candle table.  B05 scans all 12 immutable Parquet
+partitions through that one connection/thread, and the external FD sampler
+measures the scan’s peak.
+
 The live gate may add a single B01/B04 record for its one response, but it must
 not add requests.  B05 is a shape/resource test only, not a claim about full
 historical coverage or a substitute for multi-stock scale work.
 
 ### 5.2 Required measurement fields and units
 
-Every measured iteration records the following fields.  `null` is required only
-as unsupported-platform diagnostic evidence; absence is not silently zero.
+Every measured iteration records the following fields.  Resource fields have no
+`null` pass path: invalid sampling blocks the resource evidence.
 
 | Field | Unit/type | Provenance |
 | --- | --- | --- |
@@ -367,25 +393,40 @@ as unsupported-platform diagnostic evidence; absence is not silently zero.
 | `python_version`, `platform`, `cpu_model`, `cpu_count`, `memory_total_bytes`, `filesystem_type` | sanitized environment strings/integers/bytes | local runtime/environment probe; no host/user/path |
 | `duckdb_version`, `pyarrow_version`, `os_version` | version string | loaded dependency/runtime |
 | `fixture_id`, `fixture_version`, `schedule_digest`, `policy_version`, `requested_range`, `physical_month_count` | stable labels/digest/date/count | injected fixture and Plan 02 command |
+| `partition_checksums` | ordered tuple of `(year, month, lowercase_sha256)` | sealed partition evidence in physical-plan order; length one for B01/B04 and the live one-partition checksum remains the existing sealed `checksum` |
 | `elapsed_wall_ms`, `elapsed_cpu_ms` | milliseconds | monotonic clock/process CPU clock around whole workload |
 | `phase_elapsed_ms` | milliseconds by normalize, validate, publish, catalog, query; `null` when not applicable | injected phase timers |
 | `rows_raw`, `rows_normalized`, `rows_published`, `bytes_parquet` | count/count/count/bytes | normalization, sealed publication evidence |
 | `throughput_rows_per_s` | rows/second | `rows_normalized / elapsed_wall_s`; `null` if elapsed is zero |
 | `request_count`, `provider_attempt_count`, `retry_count`, `resume_count`, `repair_count` | nonnegative counts | fake/live session and existing report/lifecycle results |
-| `peak_rss_bytes` | bytes or `null` | process sampler with stated platform method |
-| `open_fd_start`, `open_fd_peak`, `open_fd_end` | count or `null` | bounded platform sampler; record unavailable explicitly |
+| `peak_rss_bytes`, `open_fd_start`, `open_fd_peak`, `open_fd_end` | nonnegative bytes/counts | external parent sampler; invalid/missing resource evidence blocks |
+| `sampler_method`, `psutil_version`, `sampler_sample_count`, `sampler_max_gap_ms`, `resource_evidence_status` | stable method/version/count/milliseconds/status | pinned dev/test `psutil` parent sampler |
 | `query_result_count`, `query_min_ts`, `query_max_ts`, `query_elapsed_ms` | count/timestamps/milliseconds | existing DuckDB/direct-Parquet query result and monotonic timer |
-| `outcome`, `failure_code`, `partition_outcomes`, `checksum` | existing enum/ordered enum tuple/lowercase digest | `IngestionReport`, `PartitionResult`, sealed evidence |
+| `outcome`, `failure_code`, `partition_outcomes` | existing enum/ordered enum tuple | `IngestionReport`, `PartitionResult` |
 
 All derived arithmetic retains enough precision to reproduce the displayed
 value.  Wall time is monotonic, not wall-clock time.  Memory/FDS are process
 measurements, not claims of whole-machine use.  No measurement aggregates runs
-from different source revisions, fixtures, dependencies, or environments.  A
-portable run with unavailable RSS/FD sampling is useful diagnostic evidence,
-but cannot satisfy Milestone 2 resource-baseline acceptance.  On the declared
-reference machine, every one of the five measured B01--B05 iterations must have
-non-null `peak_rss_bytes` and non-null `open_fd_start`, `open_fd_peak`, and
-`open_fd_end`; otherwise that workload’s resource status is blocked.
+from different source revisions, fixtures, dependencies, or environments.
+
+Each warm-up and measured iteration runs in a fresh child process.  A parent
+measurement process, using the pinned dev/test `psutil` dependency, externally
+monitors the child on Darwin every 10ms monotonic with
+`Process.memory_info().rss` and `Process.num_fds()`, from the ready handshake
+immediately before the workload until the done handshake after all workload
+handles close.  The start/end samples are the handshake samples and the peaks
+are maxima across all samples.  The parent records sampler method/version,
+sample count, and maximum observed inter-sample gap.  A sampling exception,
+unsupported `num_fds()`, fewer than two samples, or a maximum gap above 50ms
+makes `resource_evidence_status=INVALID` and blocks the workload’s resource
+acceptance; it never becomes null/partial pass evidence.  The parent sampler is
+measurement-only and does not alter the production task, queue, worker, or
+provider cardinality.  On every valid controlled iteration,
+`open_fd_end == open_fd_start`.
+
+Before ARK-68k adds locked `psutil` to dev/test
+tooling, it must record the concrete dependency/license/security/maintenance
+assessment and stop for Sol/owner direction if that assessment is unacceptable.
 
 ### 5.3 Warm-up, repetition, and environment comparability
 
@@ -399,9 +440,11 @@ as insufficient for a regression threshold; do not average in a fabricated
 success.
 
 Compare a candidate to a baseline only when all of these match: workload and
-fixture version, schedule digest/policy version, source data shape, command and
-resource limits, Python/lock/PyArrow/DuckDB major-minor versions, CPU
-architecture/count, filesystem type, and measurement method.  OS patch,
+fixture version, schedule digest/range/as-of/source/release/timezone/kind and
+closure provenance, policy version, ordered `partition_checksums`, source data
+shape, command and resource limits, Python/lock/PyArrow/DuckDB major-minor
+versions, pinned `psutil` version and sampler method, CPU architecture/count,
+filesystem type, and measurement method.  OS patch,
 frequency governor, thermal state, background load, cache state, or available
 memory differences are recorded as comparability warnings.  A non-comparable
 result is useful observation but cannot pass/fail a performance regression.
@@ -525,31 +568,44 @@ blocker links before any child enters Ready.  The suffixes below are planning
 placeholders only; they neither create Linear issues nor satisfy the execution
 gate.
 
-| Candidate | Observable outcome / primary reason to change | Depends on |
-| --- | --- | --- |
-| ARK-68a fixture and schedule harness | Offline fixture factory emits valid/corrupt schedule-bound one-month inputs with no credential/provider dependency.  Reason: deterministic test data. | Plan 03 conditionally active |
-| ARK-68b validation/recovery matrix | D06--D17 assertions prove existing lifecycle, normalization, calendar, and immutability behavior.  Reason: correctness/recovery evidence. | 68a |
-| ARK-68c bounded measurement recorder | B01--B05 capture the exact section 5 fields with unavailable values explicit.  Reason: reproducible instrumentation. | 68a |
-| ARK-68d existing-boundary query proof | D22/B04 prove manifest-consistent direct Parquet query without candle-row duplication.  Reason: query boundary evidence. | 68a, 68b |
-| ARK-69 live one-month gate | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | 68a, 68b, 68c, full gate/review, owner authorization |
-| ARK-70 zero-request resume proof | An unchanged verified range records exact zero historical requests and preserved checksum/manifest/measurement evidence.  Reason: request-minimal idempotency. | 68b, 68c |
-| ARK-73 targeted disposable repair proof | One exact corrupted/incomplete disposable partition alone repairs while a control partition remains unchanged.  Reason: repair isolation. | 68b, 68c |
-| ARK-71a baseline collection | Five comparable B01--B05 samples and provenance are recorded without a threshold claim.  Reason: establish evidence. | 68c, 68d, 70, 73 |
-| ARK-71b threshold decision | A reviewed threshold method/status is derived only from ARK-71a comparable samples.  Reason: regression policy. | 71a |
-| ARK-72 M2 pre-merge crosswalk | One candidate-revision dossier resolves every section 7 row, selected denominator, gates/review, carryover, and limitations.  Reason: acceptance reconciliation. | 69, 70, 73, 71b |
+| Candidate placeholder | Case ownership | One observable outcome / primary reason to change | Done | Depends on |
+| --- | --- | --- | --- | --- |
+| ARK-68a fixed fixture/schedule corpus | benchmark fixture support | The offline corpus produces the fixed canonical rows and range-wide v2 schedule bytes.  Reason: deterministic inputs. | Done when one credential-free fixture call returns the frozen corpus and its exact command schedule digest. | Plan 03 conditionally active |
+| ARK-68b preflight/fatal-stop proof | D01, D02, D19, D20 | The coordinator emits the exact zero-side-effect preflight or fatal-stop report for a supplied stop condition.  Reason: safe refusal. | Done when each named stop leaves later provider activity absent and its existing run code/count mapping asserted. | 68a |
+| ARK-68c first-request verification proof | D03 | One missing synthetic month reaches `VERIFIED` through exactly one bounded fake request.  Reason: baseline acquisition evidence. | Done when the 7,500-row B01 partition has sealed verified evidence after one fake request. | 68a |
+| ARK-70 zero-request resume proof | D04, D05 | A verified or locally recoverable partition completes without provider/session/limiter use.  Reason: request-minimal idempotency. | Done when the named local states return the exact skip/recovery result with zero historical requests. | 68c |
+| ARK-68d cancellation/crash-state proof | D06, D07 | One injected cancellation/crash boundary preserves the exact Plan 02 ordered lifecycle/report evidence.  Reason: interruption safety. | Done when every named before/during/between/after boundary has its exhaustive typed outcome and no later request. | 68c |
+| ARK-68e schedule-coverage/no-fill proof | D08, D16, D17 | One schedule-bound validation run classifies an internal gap, closure, special session, or unproven no-trade case without fabricating a bar.  Reason: coverage integrity. | Done when the named schedule cases return their exact coverage evidence and no forward-filled row. | 68a |
+| ARK-68f verified-physical-invalidation proof | D09, D10 | One verified physical mismatch becomes the exact existing invalidation category.  Reason: trustworthy local evidence. | Done when every named missing/path/checksum/schema/coverage/quality observation selects only its existing invalidation category. | 68c |
+| ARK-68g normalization/quality/empty classification proof | D11, D12, D13, D14 | One raw response classifies exact duplicate, conflict, invalid OHLC/volume, or empty success through the existing terminal mapping.  Reason: source-data integrity. | Done when each named raw/defense input has its required normalization, validation, or empty-response evidence and no unauthorized publication/retry. | 68c |
+| ARK-68h raw-immutability proof | D15 | One verified raw partition retains identical bytes/checksum across observation and downstream-policy work.  Reason: immutable source evidence. | Done when the before/after digest and bytes are equal without a publication overwrite. | 68c |
+| ARK-68i mutable-alias reconciliation proof | D18 | One stored-alias difference yields either local recovery/skip or exact zero-request migration stop.  Reason: physical-identity stability. | Done when valid old aliases avoid a request and a required fresh old-alias request returns `MAPPING_MIGRATION_REQUIRED`. | ARK-70 |
+| ARK-68j ordered range-reconciliation proof | D21 | One mixed three-month range emits the ordered skip/recover/request tuple for only independently affected months.  Reason: request selection. | Done when result order/counts and request cardinality equal the Plan 02 reconciliation decision. | ARK-70, ARK-68f |
+| ARK-68k bounded measurement recorder | B01--B05 fields | One fresh-child workload iteration records the complete section 5 provenance/resource measurement or an explicit blocked resource result.  Reason: reproducible instrumentation. | Done when the pinned-`psutil` assessment is recorded before dependency addition and one child/parent sample record satisfies the fixed sampler method or blocks. | 68a |
+| ARK-68l existing-boundary query proof | D22, B04, B05 | One configured DuckDB direct-Parquet query returns the frozen aggregate without a candle table.  Reason: query-boundary evidence. | Done when B04/B05 use the fixed one-connection settings and return their manifest-consistent aggregate. | 68a, ARK-68k |
+| ARK-69 live one-month gate | section 4 | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | Done when the one permitted response is ingested and compared under the live gate without a second request. | ARK-68b--ARK-68l, ARK-70, ARK-73, full gate/review, owner authorization |
+| ARK-73 targeted disposable repair proof | B03 | One exact checksum-mismatched disposable partition alone repairs while its control remains unchanged.  Reason: repair isolation. | Done when B03 records the target-only invalidation/quarantine/request/publication and unchanged control evidence. | ARK-68c, ARK-68f, ARK-68k |
+| ARK-71a baseline collection | section 5 samples | Five comparable B01--B05 measured samples are retained without a threshold claim.  Reason: establish evidence. | Done when each workload has its five raw comparable measurements or an explicit blocked status. | ARK-68k, ARK-68l, ARK-70, ARK-73 |
+| ARK-71b threshold decision | section 5.4 | One deterministic threshold status is derived from ARK-71a samples.  Reason: regression policy. | Done when every workload is `UNSET`, threshold-accepted, or rejected by the frozen sample rule without sample tuning. | ARK-71a |
+| ARK-72 M2 pre-merge crosswalk | section 7 | One candidate-revision dossier resolves every section 7 row, selected denominator, gates/review, carryover, and limitations.  Reason: acceptance reconciliation. | Done when every mandatory crosswalk row is evidenced or explicitly blocks acceptance. | ARK-69, ARK-70, ARK-73, ARK-71b |
 
-ARK-69, ARK-70, ARK-73, and the split ARK-71 candidates are framed as one
-observable behavior each.  ARK-72 is a bounded evidence/reconciliation task,
-not a claim that it will merge or close Linear.  Only after the required Linear
-reclassification/replacement, real child creation, and blocker recording may
-the coordinator reconcile their actual IDs for scheduling; this document does
-not alter issue tracking.
+Each placeholder above has exactly one observable outcome, one primary reason
+to change, and one-sentence Done condition.  ARK-72 is a bounded
+evidence/reconciliation task, not a claim that it will merge or close Linear.
+Only after the required Linear reclassification/replacement, real child creation,
+and blocker recording may the coordinator reconcile their actual IDs for
+scheduling; this document does not alter issue tracking.
 
 Required order is:
 
 ```text
-68a -> 68b -> {68c, 68d} -> {70, 73} -> 71a -> 71b
-68b + 68c + full deterministic gate + owner authorization -> 69
+68a -> {68b, 68c, 68e, 68k}
+68c -> {70, 68d, 68f, 68g, 68h}
+70 -> {68i, 68j}
+68f + 68k -> 73
+68a + 68k -> 68l
+{68b, 68d--68l, 70, 73} -> 71a -> 71b
+{68b--68l, 70, 73} + full deterministic gate + owner authorization -> 69
 69 + 70 + 73 + 71b -> 72
 ```
 
