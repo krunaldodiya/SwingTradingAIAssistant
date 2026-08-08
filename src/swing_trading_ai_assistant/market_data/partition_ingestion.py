@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -438,7 +438,7 @@ class PartitionIngestionExecutor:
         try:
             verified = verify_manifest(
                 active,
-                _utc_now(self._clock),
+                max(_utc_now(self._clock), active.updated_at),
                 published.actual_from_ts,
                 published.actual_to_ts,
                 published.row_count,
@@ -551,13 +551,14 @@ class PartitionIngestionExecutor:
             return active
         if current.state is not ManifestState.FAILED:
             raise PartitionLifecycleConflict("partition is not requestable")
+        retry_started_at = max(now, current.updated_at + timedelta(microseconds=1))
         active = retry_manifest(
             current,
             self._run_id,
             _SOURCE_VERSION,
             policy_version,
-            now,
-            now,
+            retry_started_at,
+            retry_started_at,
         )
         self._transition(current, active)
         return active
