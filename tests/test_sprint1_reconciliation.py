@@ -209,6 +209,39 @@ def validate_tiered_gates(text: str) -> None:
         raise ValueError("tiered quality-gate policy is not approved")
 
 
+def validate_publisher_timing_contract(workflow: str, sprint_two: str) -> None:
+    """Reject mixed pre-review lifecycle and post-approval publication authority."""
+    normalized_workflow = _normalize(workflow).lower()
+    normalized_sprint = _normalize(sprint_two).lower()
+    required_workflow = (
+        "bounded root handoff",
+        "one-active-mutator epoch",
+        "only scoped linear",
+        "before implementation or review",
+        "publication worktree/branch",
+        "push, pr, merge, and final closure require the exact independently approved sha",
+        "final scoped linear sync",
+    )
+    required_sprint = (
+        "bounded root handoff",
+        "one active mutator epoch",
+        "scoped linear lifecycle/checkpoint transitions before implementation or review",
+        "worktree publication, push, pr, ci, merge, hosted verification, final closure, and final linear synchronization require the exact independently approved sha",
+    )
+    forbidden = (
+        "it acts only on an independently approved exact sha",
+        "epoch checkpoint, linear, push/pr/ci/merge/publication after exact approval",
+        "scoped linear checkpoints, push/pr/async-ci/merge/publication verification only for the exact independently approved sha",
+    )
+    if (
+        any(value not in normalized_workflow for value in required_workflow)
+        or any(value not in normalized_sprint for value in required_sprint)
+        or any(value in normalized_workflow for value in forbidden)
+        or any(value in normalized_sprint for value in forbidden)
+    ):
+        raise ValueError("publisher lifecycle and publication timing is not approved")
+
+
 def _assert_rejected(validator: Callable[[str], None], fixture: str) -> None:
     try:
         validator(fixture)
@@ -397,3 +430,41 @@ def test_ark_95_matrix_and_sprint_publication_keep_root_nonmutating() -> None:
         "coordinator records the resulting merge and final issue closure"
         not in sprint_two
     )
+
+
+def test_ark_95_publisher_timing_separates_lifecycle_from_publication() -> None:
+    workflow = WORKFLOW_PATH.read_text()
+    sprint_two = (ROOT / "docs" / "sprints" / "sprint-2.md").read_text()
+    validate_publisher_timing_contract(workflow, sprint_two)
+
+    fixtures = (
+        (
+            workflow.replace(
+                "before implementation or review", "after independent approval"
+            ).replace("before implementation\nor review", "after independent approval"),
+            sprint_two,
+        ),
+        (
+            workflow,
+            sprint_two.replace(
+                "before implementation or review", "after independent approval"
+            ).replace("before implementation or\nreview", "after independent approval"),
+        ),
+        (
+            workflow + "\nIt acts only on an independently approved exact SHA.\n",
+            sprint_two,
+        ),
+        (
+            workflow,
+            sprint_two
+            + "\nScoped Linear checkpoints, push/PR/async-CI/merge/publication "
+            "verification only for the exact independently approved SHA.\n",
+        ),
+    )
+    for workflow_fixture, sprint_fixture in fixtures:
+        _assert_rejected(
+            lambda _ignored, workflow_fixture=workflow_fixture, sprint_fixture=sprint_fixture: (
+                validate_publisher_timing_contract(workflow_fixture, sprint_fixture)
+            ),
+            "",
+        )

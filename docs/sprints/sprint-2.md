@@ -92,9 +92,11 @@ authority to route its safe normal lifecycle, but not to perform a mutating or
 blocking operation. Terra implementer is the sole content writer: strict TDD,
 reviewer-directed in-scope repairs within the recorded budget, deterministic
 gates, and the exact candidate commit. Delivery publisher is the sole external
-mutation actor: scoped Linear checkpoints, push/PR/async-CI/merge/publication
-verification only for the exact independently approved SHA. These safe
-same-Goal steps do not require repeated owner approval.
+mutation actor: a bounded root handoff and one active mutator epoch authorize
+only scoped Linear lifecycle/checkpoint transitions before implementation or
+review. Worktree publication, push, PR, CI, merge, hosted verification, final
+closure, and final Linear synchronization require the exact independently
+approved SHA. These safe same-Goal steps do not require repeated owner approval.
 
 Owner input remains mandatory only for a scope, architecture, trading-rule, or
 product decision; the ARK-69 live provider/credential gate; destructive or

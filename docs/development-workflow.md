@@ -185,9 +185,13 @@ weakening scope, TDD, routing, review, or market-data safeguards.
 The root owns the finite Goal authority envelope, scope synthesis, routing, and
 evidence-based judgment without performing a mutating or blocking operation.
 Terra High implementer is the sole content writer for an approved task and
-creates the exact candidate commit. Delivery publisher is the sole external
-mutation actor: it acts only on an independently approved exact SHA. Luna is limited to explicitly delegated, low-risk, read-only documentation or inventory
-support. Terra High is the sole implementation and repair writer.
+creates the exact candidate commit. On a bounded root handoff and one-active-
+mutator epoch, delivery publisher is the sole external mutation actor and may
+make only scoped Linear lifecycle/checkpoint transitions before implementation
+or review. Worktree publication, push, PR, CI, merge, hosted verification,
+final closure, and final Linear synchronization require the exact independently
+approved SHA. Luna is limited to explicitly delegated, low-risk, read-only
+documentation or inventory support. Terra High is the sole implementation and repair writer.
 
 | Role | Model and effort | Sandbox | Responsibility |
 | --- | --- | --- | --- |
@@ -196,7 +200,7 @@ support. Terra High is the sole implementation and repair writer.
 | Verifier | Terra, high | Read-only | Independent focused checks. |
 | Lead architect/team lead | Sol, high | Read-only | Decomposition, architecture, risk routing, and escalation. |
 | High-risk reviewer | Sol, high | Read-only | Combined independent verification and final review of high-risk or cross-cutting work. |
-| Delivery publisher | Terra, high | Workspace write | Sole scoped external mutation: epoch checkpoint, Linear, push/PR/CI/merge/publication after exact approval. |
+| Delivery publisher | Terra, high | Workspace write | Bounded root handoff and one-active-mutator epoch: only scoped Linear lifecycle/checkpoint transitions before implementation or review; worktree publication, push/PR/CI/merge/hosted verification/final closure/final Linear synchronization require exact independent approval. |
 | Documentation/inventory helper | Luna, low | Read-only | Explicit low-risk, repeatable factual support only. |
 
 The following diagram is a visual summary of the same routing rules. It does
