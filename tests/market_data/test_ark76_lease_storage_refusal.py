@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -21,6 +24,8 @@ from swing_trading_ai_assistant.market_data.range_ingestion import (
     RunFailureCode,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseFailureCode,
+    LeaseOutcome,
     StorageRootLease,
 )
 
@@ -67,8 +72,58 @@ class _NeverUseLimiter:
         raise AssertionError("limiter defer must remain inactive during refusal")
 
 
-def _listing(root: Path) -> tuple[str, ...]:
-    return tuple(sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
+@dataclass(frozen=True, slots=True)
+class _FilesystemEntry:
+    relative_path: str
+    device: int
+    inode: int
+    file_type: int
+    mode: int
+    size: int
+    content_sha256: str | None
+    symlink_target: str | None
+
+
+def _snapshot(root: Path) -> tuple[_FilesystemEntry, ...]:
+    entries: list[_FilesystemEntry] = []
+
+    def visit(path: Path, relative_path: str) -> None:
+        metadata = os.lstat(path)
+        file_type = stat.S_IFMT(metadata.st_mode)
+        entries.append(
+            _FilesystemEntry(
+                relative_path,
+                metadata.st_dev,
+                metadata.st_ino,
+                file_type,
+                stat.S_IMODE(metadata.st_mode),
+                metadata.st_size,
+                (
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    if stat.S_ISREG(metadata.st_mode)
+                    else None
+                ),
+                os.readlink(path) if stat.S_ISLNK(metadata.st_mode) else None,
+            )
+        )
+        if stat.S_ISDIR(metadata.st_mode):
+            with os.scandir(path) as children:
+                for child in sorted(children, key=lambda item: item.name):
+                    child_relative_path = (
+                        child.name
+                        if relative_path == "."
+                        else f"{relative_path}/{child.name}"
+                    )
+                    visit(path / child.name, child_relative_path)
+
+    visit(root, ".")
+    return tuple(sorted(entries, key=lambda item: item.relative_path))
+
+
+def _entry(
+    snapshot: tuple[_FilesystemEntry, ...], relative_path: str
+) -> _FilesystemEntry:
+    return next(item for item in snapshot if item.relative_path == relative_path)
 
 
 def _command(storage_root: Path) -> IngestionCommand:
@@ -136,18 +191,38 @@ def test_held_real_storage_root_lease_returns_already_running_without_side_effec
     """D19 preserves a held protected root and stops before all later ports."""
     acquired = StorageRootLease.try_acquire(tmp_path)
     assert acquired.lease is not None
-    before = _listing(tmp_path)
+    before = _snapshot(tmp_path)
+    assert _entry(before, ".").inode == os.lstat(tmp_path).st_ino
+    assert (
+        _entry(before, ".ingestion.lock").content_sha256
+        == hashlib.sha256((tmp_path / ".ingestion.lock").read_bytes()).hexdigest()
+    )
     audit = _DependencyAudit()
     try:
         report = _coordinator(audit).run(_command(tmp_path))
+        _assert_refusal_report(
+            report, IngestionRunOutcome.ALREADY_RUNNING, RunFailureCode.ALREADY_RUNNING
+        )
+        assert audit.calls == {}
+        assert _snapshot(tmp_path) == before
+
+        with acquired.lease.root_operation(tmp_path) as operation:
+            assert type(operation.descriptor) is int
+        contention = StorageRootLease.try_acquire(tmp_path)
+        assert contention.outcome is LeaseOutcome.ALREADY_RUNNING
+        assert contention.failure_code is LeaseFailureCode.ALREADY_RUNNING
+        assert contention.lease is None
+        assert _snapshot(tmp_path) == before
     finally:
         acquired.lease.close()
 
-    _assert_refusal_report(
-        report, IngestionRunOutcome.ALREADY_RUNNING, RunFailureCode.ALREADY_RUNNING
-    )
-    assert audit.calls == {}
-    assert _listing(tmp_path) == before
+    # Closing only releases the advisory lock; it does not alter durable evidence.
+    assert _snapshot(tmp_path) == before
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.outcome is LeaseOutcome.ACQUIRED
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+    assert _snapshot(tmp_path) == before
 
 
 def test_symlink_storage_root_is_rejected_without_creating_through_the_link(
@@ -156,13 +231,21 @@ def test_symlink_storage_root_is_rejected_without_creating_through_the_link(
     """D19 refuses a physical symlink root before any storage or provider work."""
     target = tmp_path / "target"
     target.mkdir()
+    sentinel = target / "preserved.bin"
+    sentinel.write_bytes(b"ARK-76 unsafe-root sentinel")
     unsafe_root = tmp_path / "unsafe-root"
-    try:
-        unsafe_root.symlink_to(target, target_is_directory=True)
-    except OSError as error:
-        pytest.skip(f"symlink unavailable in this environment: {error}")
-    before_root = _listing(tmp_path)
-    before_target = _listing(target)
+    if not hasattr(os, "symlink"):
+        pytest.skip("the operating system does not support symlinks")
+    unsafe_root.symlink_to(target, target_is_directory=True)
+    before_root = _snapshot(tmp_path)
+    before_target = _snapshot(target)
+    unsafe_entry = _entry(before_root, "unsafe-root")
+    assert unsafe_entry.file_type == stat.S_IFLNK
+    assert unsafe_entry.symlink_target == os.readlink(unsafe_root)
+    assert (
+        _entry(before_target, "preserved.bin").content_sha256
+        == hashlib.sha256(sentinel.read_bytes()).hexdigest()
+    )
     audit = _DependencyAudit()
 
     report = _coordinator(audit).run(_command(unsafe_root))
@@ -171,6 +254,6 @@ def test_symlink_storage_root_is_rejected_without_creating_through_the_link(
         report, IngestionRunOutcome.REJECTED, RunFailureCode.STORAGE_UNSAFE
     )
     assert audit.calls == {}
-    assert _listing(tmp_path) == before_root
-    assert _listing(target) == before_target
+    assert _snapshot(tmp_path) == before_root
+    assert _snapshot(target) == before_target
     assert not (target / ".ingestion.lock").exists()
