@@ -453,19 +453,30 @@ from different source revisions, fixtures, dependencies, or environments.
 
 Each warm-up and measured iteration runs in a fresh child process.  A parent
 measurement process, using the pinned dev/test `psutil` dependency, externally
-monitors the child on Darwin every 10ms monotonic with
-`Process.memory_info().rss` and `Process.num_fds()`, from the ready handshake
-immediately before the workload until the done handshake after all workload
-handles close.  At both ready and done, parent and child acknowledge the
-handshake; a sample counts only after that acknowledgement, excluding
-startup/teardown races.  The start/end samples are the acknowledged handshake
-samples and the peaks are maxima across all counted samples.  The parent records sampler method/version,
-sample count, and maximum observed inter-sample gap.  A sampling exception,
-unsupported `num_fds()`, fewer than two samples, or a maximum gap above 50ms
-makes `resource_evidence_status=INVALID` and blocks the workload’s resource
-acceptance; it never becomes null/partial pass evidence.  The parent sampler is
-measurement-only and does not alter the production task, queue, worker, or
-provider cardinality.  On every valid controlled iteration,
+monitors the child on Darwin with `Process.memory_info().rss` and
+`Process.num_fds()` under this frozen ordered protocol:
+
+1. The child initializes, sends exactly `READY`, then blocks and must not start
+   the workload.
+2. The parent receives `READY`, captures the counted start RSS/FD sample while
+   the child remains blocked, then sends exactly `START` to release it.
+3. The child receives `START`, runs the workload, closes every workload-owned
+   handle, sends exactly `DONE`, then blocks and must not exit.
+4. The parent receives `DONE`, captures the counted end RSS/FD sample while the
+   child remains alive and blocked, then sends exactly `EXIT` to release it.
+5. The child receives `EXIT` and exits.
+
+`READY` and `DONE` are child signals; `START` and `EXIT` are parent
+acknowledgements/releases.  No signal doubles as an acknowledgement.  The 10ms
+monotonic sampling starts strictly after the counted start sample and continues
+through the counted end sample.  Both boundary samples are included in
+`sampler_sample_count` and peak calculations.  The parent records sampler
+method/version, sample count, and maximum observed inter-sample gap.  A sampling
+exception, unsupported `num_fds()`, fewer than two samples, or a maximum gap
+above 50ms makes `resource_evidence_status=INVALID` and blocks the workload’s
+resource acceptance; it never becomes null/partial pass evidence.  The parent
+sampler is measurement-only and does not alter the production task, queue,
+worker, or provider cardinality.  On every valid controlled iteration,
 `open_fd_end == open_fd_start`.
 
 Before ARK-68q adds locked `psutil` to dev/test
