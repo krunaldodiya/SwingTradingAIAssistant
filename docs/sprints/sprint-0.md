@@ -33,6 +33,8 @@ atomic tasks.
 ## Current evidence
 
 - Executable progress: 11 of 11 non-canceled stories/tasks Done (100%).
+- PR 1 merged the Sprint 0 baseline into `main` as commit
+  `0a518813ec26d32945ce49d1f27999e8618f64cc`.
 - ARK-9 authenticated live probe passed with a one-year read-only Upstox
   Analytics Token.
 - RELIANCE resolved through the current master catalog and returned 375
@@ -46,7 +48,9 @@ atomic tasks.
 
 ## Open and carryover
 
-- Persistent Parquet/DuckDB storage has not started.
+- At the Sprint 0 close, persistent Parquet/DuckDB storage had not started.
+  That unfinished work was explicitly carried into Sprint 1 rather than
+  changing the Sprint 0 completion record.
 - ARK-17 through ARK-23 and ARK-25 remain explicit future-sprint backlog; they
   were not silently pulled into Sprint 0.
 

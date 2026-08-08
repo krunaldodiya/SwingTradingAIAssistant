@@ -95,7 +95,8 @@ high-risk review.
 
 Sprint 1 closed on 2026-08-07 with **21 of 21 executable Story/Task items
 complete (100%)**. Tracking parents, canceled work, and deferred work are not
-part of that denominator. No Sprint 2 work has started.
+part of that denominator. This is a historical Sprint 1 closure record;
+subsequent sprint work is tracked independently.
 
 The completed increment includes the canonical logical and physical candle
 contracts, Upstox NSE equity normalization, calendar-month planning, physical
@@ -109,6 +110,10 @@ Closure evidence:
 
 - PR 23 merged the final Sprint 1 integration into `main` as commit
   `314587e9dae9c1d96b180a7b254d94ef86295259`.
+- PR 25 merged the Sprint 1 documentation reconciliation into `main` as commit
+  `a3d2f0ccac641030f40c87076e55f5754d650b28`.
+- PR 2 and PR 24 were closed unmerged as obsolete; neither is merge evidence
+  for the completed Sprint 1 increment.
 - The exact final candidate passed Ruff format and lint, strict Pyright,
   Vulture, and **949 tests with 87.79% branch coverage**.
 - The required GitHub **Quality and build** and **GitGuardian Security Checks**

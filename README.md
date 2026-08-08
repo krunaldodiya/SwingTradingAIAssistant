@@ -61,15 +61,16 @@ TDD, model routing, and review gates.
 Development is organized into one-week sprints with a Linear-backed hierarchy
 of saga → epic → story → atomic task. Sprint goals and retrospectives are
 preserved under [docs/sprints](docs/sprints/README.md); all work completed or
-actively worked so far belongs to Sprint 0.
+actively worked so far spans Sprint 0 and Sprint 1.
 
 ## Current status
 
-The repository is in its data-foundation phase. Milestone 0 completed a
+The repository is in its data-foundation phase. Sprint 0 completed a
 credential-safe, non-persistent instrument capability probe against Upstox
-Historical Candle V3. The caller supplies a segment and symbol, which are
-resolved through the Upstox master instrument catalog. Persistent candle
-storage, indicators, strategies, and trading rules have not been implemented.
+Historical Candle V3. Sprint 1 then implemented the deliberately narrow
+persistent one-minute candle storage increment. The caller supplies a segment
+and symbol, which are resolved through the Upstox master instrument catalog.
+Indicators, strategies, and trading rules remain later roadmap work.
 
 The live RELIANCE proof of capability returned 375 one-minute candles for
 2026-08-03 (09:15 through 15:29 Asia/Kolkata) with a valid seven-field schema.
