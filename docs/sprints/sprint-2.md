@@ -29,6 +29,127 @@ implementation tasks be committed to the one-week Sprint 2 timebox.
   For this sprint, `Todo` is the operational representation of the workflow's
   `Ready` state and still requires the complete Definition of Ready.
 
+## Deadline accountability
+
+This is a tracking-only accountability record. It preserves the historical
+Sprint 2 timebox and does not change the committed work, its order, its WIP
+limit, or any Definition-of-Done requirement. It is deliberately pending until
+the cutoff so it does not precompute future completion or blocker evidence.
+Deadline expiry never marks work Done, closes the sprint, or waives any gate;
+committed work continues after the cutoff until its normal completion evidence
+exists.
+
+```json
+{
+  "deadline_id": "sprint-2-owner-cutoff-v1",
+  "historical_timebox": {
+    "start": "2026-08-08",
+    "end": "2026-08-14"
+  },
+  "cutoff_local": "2026-08-09T22:00:00+05:30",
+  "timezone": "Asia/Kolkata",
+  "cutoff_utc": "2026-08-09T16:30:00Z",
+  "decision_recorded_at_utc": "2026-08-08T07:16:18.133Z",
+  "decision_recorded_at_source": "Linear ARK-97 createdAt",
+  "conversation_decision_time": "unavailable/unproven",
+  "original_denominator": [
+    "ARK-74", "ARK-75", "ARK-76", "ARK-77", "ARK-78", "ARK-79",
+    "ARK-80", "ARK-81", "ARK-82", "ARK-83", "ARK-84", "ARK-85",
+    "ARK-86", "ARK-87", "ARK-88", "ARK-89", "ARK-90", "ARK-91",
+    "ARK-70", "ARK-73", "ARK-92", "ARK-93", "ARK-69", "ARK-72"
+  ],
+  "original_denominator_count": 24,
+  "tracking_governance_additions": [
+    {
+      "id": "ARK-95",
+      "reason": "Accepted workflow-orchestration remediation and publication control.",
+      "owner_approval_reference": "Accepted finite-Goal workflow authority; exact owner-chat decision time is unavailable/unproven.",
+      "accepted_at": {"value": null, "status": "unproven", "source": "authoritative approval timestamp not retained in the sprint record"},
+      "created_at": {"value": null, "status": "unproven", "source": "Linear issue history must be queried at snapshot time"},
+      "started_at": {"value": null, "status": "unproven", "source": "Linear lifecycle history must be queried at snapshot time"},
+      "completed_at": {"value": null, "status": "unproven", "source": "GitHub merge and Linear Done timestamps must be queried at snapshot time"},
+      "included_in_original_denominator": false
+    },
+    {
+      "id": "ARK-96",
+      "reason": "Documentation reconciliation required by the accepted workflow change.",
+      "owner_approval_reference": "Accepted finite-Goal workflow authority; exact owner-chat decision time is unavailable/unproven.",
+      "accepted_at": {"value": null, "status": "unproven", "source": "authoritative approval timestamp not retained in the sprint record"},
+      "created_at": {"value": null, "status": "unproven", "source": "Linear issue history must be queried at snapshot time"},
+      "started_at": {"value": null, "status": "pending", "source": "Linear lifecycle history must be queried at snapshot time"},
+      "completed_at": {"value": null, "status": "pending", "source": "Linear Done history must be queried at snapshot time"},
+      "included_in_original_denominator": false
+    },
+    {
+      "id": "ARK-97",
+      "reason": "Tracking-only owner cutoff accountability record.",
+      "owner_approval_reference": "Owner accepted a tracking-only deadline; exact conversation decision time is unavailable/unproven.",
+      "accepted_at": {"value": null, "status": "unproven", "source": "exact owner-chat decision timestamp is unavailable"},
+      "created_at": {"value": "2026-08-08T07:16:18.133Z", "status": "observed", "source": "Linear ARK-97 createdAt"},
+      "started_at": {"value": null, "status": "pending", "source": "Linear lifecycle history must be queried at snapshot time"},
+      "completed_at": {"value": null, "status": "pending", "source": "Linear Done history must be queried at snapshot time"},
+      "included_in_original_denominator": false
+    }
+  ],
+  "cutoff_snapshot": {
+    "status": "pending_until_cutoff",
+    "captured_at": null,
+    "completed_baseline_ids": null,
+    "completed_baseline_count": null,
+    "unfinished_baseline_ids": null,
+    "unfinished_baseline_count": null,
+    "observed_state_or_blocker": null,
+    "added_work_rows": null,
+    "baseline_partition_rules": [
+      "completed_baseline_ids and unfinished_baseline_ids are disjoint",
+      "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
+      "completed_baseline_count + unfinished_baseline_count == original_denominator_count"
+    ],
+    "snapshot_rule": "Populate only at or after cutoff from raw authoritative evidence; added-work rows retain reason, approval reference, accepted/created/started/completed timestamps, and included_in_original_denominator=false."
+  },
+  "completion_classification_rules": {
+    "required_events": [
+      "successful hosted checks",
+      "exact-SHA merge/publication",
+      "Linear Done synchronization"
+    ],
+    "on_time": "every required event timestamp is less than or equal to cutoff_utc",
+    "after_cutoff": "any required event timestamp is greater than cutoff_utc",
+    "unproven": "missing, date-only, or coarse required timestamps are unproven",
+    "raw_sources": [
+      "GitHub hosted-check timestamps",
+      "GitHub exact-SHA merge/publication timestamp",
+      "Linear issue-history Done timestamp"
+    ],
+    "not_evidence": ["updatedAt", "issue age", "PR age"],
+    "human_variance": "may be rounded; never infer labor-hours"
+  },
+  "post_cutoff_ledger": {
+    "completed_after_ids": null,
+    "carryover": null,
+    "final_completion_at": null,
+    "elapsed_overrun_as_of": null,
+    "final_schedule_variance": null,
+    "final_schedule_variance_rule": "null until all 24 baseline tasks have Definition-of-Done evidence"
+  },
+  "post_cutoff_interpretation": "continuing committed work is carryover/schedule overrun; only newly added work is expansion",
+  "deadline_never_waives": {
+    "scope": "deadline expiry only",
+    "requirements": [
+      "specification",
+      "strict red-green-refactor TDD",
+      "deterministic quality gates",
+      "independent review",
+      "hosted CI/security",
+      "exact-SHA merge/publication",
+      "ordering/WIP",
+      "ARK-69 owner live authority",
+      "Sprint Done/closure"
+    ]
+  }
+}
+```
+
 ## Completed pre-sprint specification
 
 **ARK-67 — Freeze RELIANCE operational-validation and benchmark contract** is
