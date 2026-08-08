@@ -36,7 +36,7 @@ _CANONICAL_PATH = (
     "year=2024/month=02/bars.parquet"
 )
 _CHECKSUM = "a" * 64
-_OBSERVED_MISMATCHED_PATH = _CANONICAL_PATH.replace("month=02", "month=01")
+_OBSERVED_INVALID_PATH = "../" + _CANONICAL_PATH
 
 
 @pytest.fixture(autouse=True)
@@ -119,7 +119,7 @@ def _matching_observation() -> PhysicalObservation:
     [
         ({"file_exists": False}, FailureCategory.FILE_MISSING),
         (
-            {"observed_canonical_path": _OBSERVED_MISMATCHED_PATH},
+            {"observed_canonical_path": _OBSERVED_INVALID_PATH},
             FailureCategory.PATH_INVALID_OR_MISMATCHED,
         ),
         (
@@ -135,7 +135,7 @@ def _matching_observation() -> PhysicalObservation:
     ],
     ids=(
         "missing-file",
-        "canonical-path-mismatch",
+        "invalid-canonical-path",
         "checksum-mismatch",
         "unsupported-schema",
         "coverage-failure",
