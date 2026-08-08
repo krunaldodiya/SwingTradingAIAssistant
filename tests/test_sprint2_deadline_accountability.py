@@ -105,6 +105,7 @@ def test_record_preserves_provenance_and_pending_snapshot_structure() -> None:
     snapshot = record["cutoff_snapshot"]
     assert snapshot["status"] == "pending_until_cutoff"
     assert set(snapshot) >= {
+        "captured_at",
         "completed_baseline_ids",
         "completed_baseline_count",
         "unfinished_baseline_ids",
@@ -112,9 +113,18 @@ def test_record_preserves_provenance_and_pending_snapshot_structure() -> None:
         "observed_state_or_blocker",
         "added_work_rows",
     }
+    assert snapshot["captured_at"] is None
     assert snapshot["completed_baseline_ids"] is None
+    assert snapshot["completed_baseline_count"] is None
     assert snapshot["unfinished_baseline_ids"] is None
+    assert snapshot["unfinished_baseline_count"] is None
+    assert snapshot["observed_state_or_blocker"] is None
     assert snapshot["added_work_rows"] is None
+    assert set(snapshot["baseline_partition_rules"]) == {
+        "completed_baseline_ids and unfinished_baseline_ids are disjoint",
+        "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
+        "completed_baseline_count + unfinished_baseline_count == original_denominator_count",
+    }
 
 
 def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
@@ -152,6 +162,10 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
         "final_schedule_variance",
     }
     assert ledger["final_schedule_variance"] is None
+    assert ledger["completed_after_ids"] is None
+    assert ledger["carryover"] is None
+    assert ledger["final_completion_at"] is None
+    assert ledger["elapsed_overrun_as_of"] is None
     assert ledger["final_schedule_variance_rule"] == (
         "null until all 24 baseline tasks have Definition-of-Done evidence"
     )
@@ -159,7 +173,9 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
     assert record["post_cutoff_interpretation"] == (
         "continuing committed work is carryover/schedule overrun; only newly added work is expansion"
     )
-    assert set(record["deadline_never_waives"]) >= {
+    no_waiver = record["deadline_never_waives"]
+    assert no_waiver["scope"] == "deadline expiry only"
+    assert set(no_waiver["requirements"]) >= {
         "specification",
         "strict red-green-refactor TDD",
         "deterministic quality gates",

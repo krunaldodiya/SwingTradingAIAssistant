@@ -100,6 +100,11 @@ exists.
     "unfinished_baseline_count": null,
     "observed_state_or_blocker": null,
     "added_work_rows": null,
+    "baseline_partition_rules": [
+      "completed_baseline_ids and unfinished_baseline_ids are disjoint",
+      "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
+      "completed_baseline_count + unfinished_baseline_count == original_denominator_count"
+    ],
     "snapshot_rule": "Populate only at or after cutoff from raw authoritative evidence; added-work rows retain reason, approval reference, accepted/created/started/completed timestamps, and included_in_original_denominator=false."
   },
   "completion_classification_rules": {
@@ -128,17 +133,20 @@ exists.
     "final_schedule_variance_rule": "null until all 24 baseline tasks have Definition-of-Done evidence"
   },
   "post_cutoff_interpretation": "continuing committed work is carryover/schedule overrun; only newly added work is expansion",
-  "deadline_never_waives": [
-    "specification",
-    "strict red-green-refactor TDD",
-    "deterministic quality gates",
-    "independent review",
-    "hosted CI/security",
-    "exact-SHA merge/publication",
-    "ordering/WIP",
-    "ARK-69 owner live authority",
-    "Sprint Done/closure"
-  ]
+  "deadline_never_waives": {
+    "scope": "deadline expiry only",
+    "requirements": [
+      "specification",
+      "strict red-green-refactor TDD",
+      "deterministic quality gates",
+      "independent review",
+      "hosted CI/security",
+      "exact-SHA merge/publication",
+      "ordering/WIP",
+      "ARK-69 owner live authority",
+      "Sprint Done/closure"
+    ]
+  }
 }
 ```
 
