@@ -366,7 +366,7 @@ assertion record and retain only sanitized values.
 | --- | --- | --- |
 | B01 `ingest` | the fixed synthetic 2024-02 7,500-row month: normalize, validate, publish, and persist catalog terminal evidence in a fresh disposable root | existing sealed evidence and `VERIFIED`; one fake/known request, 7,500 published rows |
 | B02 `resume` | the exact three-month 2024-01..03 corpus, each 7,500 rows: January and February `VERIFIED`; March has a valid final with no catalog verification | `SUCCEEDED/NONE`, exactly two `SKIPPED_VERIFIED`, one `RECOVERED_LOCALLY`, three planned results, and zero historical requests, provider-session-factory calls, or limiter calls |
-| B03 `repair` | target 2024-02 has a valid 7,500-row final but its `VERIFIED` manifest checksum differs at the first hex nibble (`0` becomes `1`; every other value becomes `0`); 2024-01 is the untouched verified 7,500-row control | exact `CHECKSUM_INVALID_OR_MISMATCHED`, target-only quarantine/request/publication, one fake request and one repair; control digest/manifest unchanged.  Other corrupt/incomplete modes remain D09/D10 correctness cases, not timed B03 variants. |
+| B03 `repair` | the unchanged February command/schedule has one 2024-02 target with a valid 7,500-row final but a `VERIFIED` manifest checksum differing at the first hex nibble (`0` becomes `1`; every other value becomes `0`); the January verified control is explicitly out of plan | exact `CHECKSUM_INVALID_OR_MISMATCHED`, February-only quarantine/request/publication, one fake request and one repair; February `partition_checksums` has length one.  January has identical pre/post control evidence, is absent from results/request count/quarantine, and is neither mutated nor queried through the February command.  Other corrupt/incomplete modes remain D09/D10 correctness cases, not timed B03 variants. |
 | B04 `query_month` | existing DuckDB catalog opens one disposable-root database and executes a parameterized/filter-bounded direct Parquet scan for the synthetic identity and 2024-02 | `min(ts)=2024-02-01T03:45:00Z`, `max(ts)=2024-02-20T09:59:00Z`, `count(*)=7,500`, all agreeing with sealed manifest evidence |
 | B05 `query_history_shape` | the fixed synthetic 12-partition 2023-01..12 corpus (90,000 rows, no provider data) through a direct Parquet filtered aggregate | `count(*)=90,000` and fixed corpus bounds; DuckDB stores no candle rows |
 
@@ -376,6 +376,48 @@ It then executes `SET temp_directory = '<iteration-disposable-protected-root>/du
 It never creates a DuckDB candle table.  B05 scans all 12 immutable Parquet
 partitions through that one connection/thread, and the external FD sampler
 measures the scan’s peak.
+
+#### B03 out-of-plan control provenance
+
+The B03 January verified control is test-only, explicitly outside the unchanged
+February command’s plan, and is not a second plan/result/query target.  It never
+appears in that command’s `IngestionReport.results` or physical-plan-order
+`partition_checksums`, causes no provider request, and is neither quarantined,
+mutated, nor queried through the February command.  Its only bounded sanitized
+observation is `control_partition_evidence_v1`, whose fields are in this exact
+order: `physical_identity`, `pre_physical_checksum`, `post_physical_checksum`,
+`pre_manifest_fingerprint`, `post_manifest_fingerprint`,
+`manifest_bound_schedule_digest`.
+
+`physical_identity` is the ordered tuple `(provider, exchange, segment,
+instrument_type, security_id, interval, year, month)`.  Every checksum, digest,
+and fingerprint is lowercase SHA-256.  The pre/post physical checksums must be
+equal; the pre/post manifest fingerprints must be equal; and
+`manifest_bound_schedule_digest` is the January control’s own existing digest
+extracted from its validation-policy provenance and is identical before/after.
+No current February schedule replaces it.  This sanitized evidence emits no
+alias, path, or raw candle value.
+
+`control_manifest_fingerprint_v1` is the lowercase SHA-256 of UTF-8 canonical
+JSON for a complete existing `PartitionManifest`.  The named **test-only**
+projection adds no persisted production schema.  Its top-level fields are
+exactly `manifest_schema_version`, `plan`, `ingestion_run_id`,
+`candle_schema_version`, `state`, `validation_outcome`,
+`validation_policy_version`, `actual_from_ts`, `actual_to_ts`, `row_count`,
+`checksum_sha256`, `canonical_path`, `source_version`, `created_at`,
+`attempt_started_at`, `updated_at`, and `failure_category`.  Its nested `plan`
+contains exactly `provider`, `instrument_key`, `security_id`, `symbol`,
+`exchange`, `segment`, `instrument_type`, `interval`, `year`, `month`,
+`from_date`, and `to_date`; no field may be omitted.
+
+Canonicalization is exactly
+`json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))`
+encoded as UTF-8 before SHA-256.  Enums serialize as `.value`; dates use
+`YYYY-MM-DD`; UTC datetimes use RFC3339 with literal `Z` and exactly six
+fractional digits; `None` becomes JSON `null`; and exact ints, bools, and
+strings are preserved.  The complete projection is used only to compute the
+fingerprint and is not emitted, so its aliases/path remain outside sanitized
+output.
 
 The live gate may add a single B01/B04 record for its one response, but it must
 not add requests.  B05 is a shape/resource test only, not a claim about full
@@ -414,8 +456,10 @@ measurement process, using the pinned dev/test `psutil` dependency, externally
 monitors the child on Darwin every 10ms monotonic with
 `Process.memory_info().rss` and `Process.num_fds()`, from the ready handshake
 immediately before the workload until the done handshake after all workload
-handles close.  The start/end samples are the handshake samples and the peaks
-are maxima across all samples.  The parent records sampler method/version,
+handles close.  At both ready and done, parent and child acknowledge the
+handshake; a sample counts only after that acknowledgement, excluding
+startup/teardown races.  The start/end samples are the acknowledged handshake
+samples and the peaks are maxima across all counted samples.  The parent records sampler method/version,
 sample count, and maximum observed inter-sample gap.  A sampling exception,
 unsupported `num_fds()`, fewer than two samples, or a maximum gap above 50ms
 makes `resource_evidence_status=INVALID` and blocks the workload’s resource
@@ -424,7 +468,7 @@ measurement-only and does not alter the production task, queue, worker, or
 provider cardinality.  On every valid controlled iteration,
 `open_fd_end == open_fd_start`.
 
-Before ARK-68k adds locked `psutil` to dev/test
+Before ARK-68q adds locked `psutil` to dev/test
 tooling, it must record the concrete dependency/license/security/maintenance
 assessment and stop for Sol/owner direction if that assessment is unacceptable.
 
@@ -571,21 +615,27 @@ gate.
 | Candidate placeholder | Case ownership | One observable outcome / primary reason to change | Done | Depends on |
 | --- | --- | --- | --- | --- |
 | ARK-68a fixed fixture/schedule corpus | benchmark fixture support | The offline corpus produces the fixed canonical rows and range-wide v2 schedule bytes.  Reason: deterministic inputs. | Done when one credential-free fixture call returns the frozen corpus and its exact command schedule digest. | Plan 03 conditionally active |
-| ARK-68b preflight/fatal-stop proof | D01, D02, D19, D20 | The coordinator emits the exact zero-side-effect preflight or fatal-stop report for a supplied stop condition.  Reason: safe refusal. | Done when each named stop leaves later provider activity absent and its existing run code/count mapping asserted. | 68a |
-| ARK-68c first-request verification proof | D03 | One missing synthetic month reaches `VERIFIED` through exactly one bounded fake request.  Reason: baseline acquisition evidence. | Done when the 7,500-row B01 partition has sealed verified evidence after one fake request. | 68a |
-| ARK-70 zero-request resume proof | D04, D05 | A verified or locally recoverable partition completes without provider/session/limiter use.  Reason: request-minimal idempotency. | Done when the named local states return the exact skip/recovery result with zero historical requests. | 68c |
-| ARK-68d cancellation/crash-state proof | D06, D07 | One injected cancellation/crash boundary preserves the exact Plan 02 ordered lifecycle/report evidence.  Reason: interruption safety. | Done when every named before/during/between/after boundary has its exhaustive typed outcome and no later request. | 68c |
-| ARK-68e schedule-coverage/no-fill proof | D08, D16, D17 | One schedule-bound validation run classifies an internal gap, closure, special session, or unproven no-trade case without fabricating a bar.  Reason: coverage integrity. | Done when the named schedule cases return their exact coverage evidence and no forward-filled row. | 68a |
-| ARK-68f verified-physical-invalidation proof | D09, D10 | One verified physical mismatch becomes the exact existing invalidation category.  Reason: trustworthy local evidence. | Done when every named missing/path/checksum/schema/coverage/quality observation selects only its existing invalidation category. | 68c |
-| ARK-68g normalization/quality/empty classification proof | D11, D12, D13, D14 | One raw response classifies exact duplicate, conflict, invalid OHLC/volume, or empty success through the existing terminal mapping.  Reason: source-data integrity. | Done when each named raw/defense input has its required normalization, validation, or empty-response evidence and no unauthorized publication/retry. | 68c |
-| ARK-68h raw-immutability proof | D15 | One verified raw partition retains identical bytes/checksum across observation and downstream-policy work.  Reason: immutable source evidence. | Done when the before/after digest and bytes are equal without a publication overwrite. | 68c |
-| ARK-68i mutable-alias reconciliation proof | D18 | One stored-alias difference yields either local recovery/skip or exact zero-request migration stop.  Reason: physical-identity stability. | Done when valid old aliases avoid a request and a required fresh old-alias request returns `MAPPING_MIGRATION_REQUIRED`. | ARK-70 |
-| ARK-68j ordered range-reconciliation proof | D21 | One mixed three-month range emits the ordered skip/recover/request tuple for only independently affected months.  Reason: request selection. | Done when result order/counts and request cardinality equal the Plan 02 reconciliation decision. | ARK-70, ARK-68f |
-| ARK-68k bounded measurement recorder | B01--B05 fields | One fresh-child workload iteration records the complete section 5 provenance/resource measurement or an explicit blocked resource result.  Reason: reproducible instrumentation. | Done when the pinned-`psutil` assessment is recorded before dependency addition and one child/parent sample record satisfies the fixed sampler method or blocks. | 68a |
-| ARK-68l existing-boundary query proof | D22, B04, B05 | One configured DuckDB direct-Parquet query returns the frozen aggregate without a candle table.  Reason: query-boundary evidence. | Done when B04/B05 use the fixed one-connection settings and return their manifest-consistent aggregate. | 68a, ARK-68k |
-| ARK-69 live one-month gate | section 4 | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | Done when the one permitted response is ingested and compared under the live gate without a second request. | ARK-68b--ARK-68l, ARK-70, ARK-73, full gate/review, owner authorization |
-| ARK-73 targeted disposable repair proof | B03 | One exact checksum-mismatched disposable partition alone repairs while its control remains unchanged.  Reason: repair isolation. | Done when B03 records the target-only invalidation/quarantine/request/publication and unchanged control evidence. | ARK-68c, ARK-68f, ARK-68k |
-| ARK-71a baseline collection | section 5 samples | Five comparable B01--B05 measured samples are retained without a threshold claim.  Reason: establish evidence. | Done when each workload has its five raw comparable measurements or an explicit blocked status. | ARK-68k, ARK-68l, ARK-70, ARK-73 |
+| ARK-68b coordinator-admission proof | D01, D02 | One invalid interval/open-month/schedule command returns its exact preflight rejection before ownership or provider activity.  Reason: command admission. | Done when every named coordinator admission case has its exact `REJECTED` code and zero later side effects. | 68a |
+| ARK-68c lease/storage-refusal proof | D19 lease contention and storage unsafe | One held or unsafe root returns its exact ownership refusal without provider activity.  Reason: protected-root ownership. | Done when lease contention and unsafe-root cases return their existing refusal code with no unauthorized mutation or request. | 68a |
+| ARK-68d catalog-failure proof | D19 catalog failure | One unavailable/corrupt catalog returns `CATALOG_UNAVAILABLE` before provider-session creation.  Reason: catalog availability. | Done when the catalog failure report has its exact typed code and zero provider activity. | 68a |
+| ARK-68e local-repair-refusal proof | D19 unsafe local maintenance | One unsafe target/quarantine refusal returns `LOCAL_REPAIR_BLOCKED` without a request.  Reason: repair safety. | Done when the unsafe local-repair case has its exact zero-request failure evidence. | 68a |
+| ARK-68f provider-auth/authz-stop proof | D20 authentication and authorization | One provider authentication or authorization failure stops later provider work with its exact run code.  Reason: credential boundary. | Done when each auth/authz failure preserves charged attempts and makes no later request. | ARK-68i |
+| ARK-68g attempt-budget-stop proof | D20 attempt-budget insufficient/exhausted | One insufficient or exhausted total-attempt budget returns its exact preflight/runtime stop.  Reason: bounded requests. | Done when the budget case records the existing code and never exceeds its request cardinality. | 68a |
+| ARK-68h retry-wait-stop proof | D20 retry-wait bound | One over-bound retry/limiter wait returns `RETRY_WAIT_BOUND_EXCEEDED` before another wait or request.  Reason: bounded waiting. | Done when the wait case preserves the charged ledger and makes no later provider request. | ARK-68i |
+| ARK-68i first-request verification proof | D03 | One missing synthetic month reaches `VERIFIED` through exactly one bounded fake request.  Reason: baseline acquisition evidence. | Done when the 7,500-row B01 partition has sealed verified evidence after one fake request. | 68a |
+| ARK-70 zero-request resume proof | D04, D05 | A verified or locally recoverable partition completes without provider/session/limiter use.  Reason: request-minimal idempotency. | Done when the named local states return the exact skip/recovery result with zero historical requests. | ARK-68i |
+| ARK-68j cancellation/crash-state proof | D06, D07 | One injected cancellation/crash boundary preserves the exact Plan 02 ordered lifecycle/report evidence.  Reason: interruption safety. | Done when every named before/during/between/after boundary has its exhaustive typed outcome and no later request. | ARK-68i |
+| ARK-68k schedule-coverage/no-fill proof | D08, D16, D17 | One schedule-bound validation run classifies an internal gap, closure, special session, or unproven no-trade case without fabricating a bar.  Reason: coverage integrity. | Done when the named schedule cases return their exact coverage evidence and no forward-filled row. | 68a |
+| ARK-68l verified-physical-invalidation proof | D09, D10 | One verified physical mismatch becomes the exact existing invalidation category.  Reason: trustworthy local evidence. | Done when every named missing/path/checksum/schema/coverage/quality observation selects only its existing invalidation category. | ARK-68i |
+| ARK-68m normalization/quality/empty classification proof | D11, D12, D13, D14 | One raw response classifies exact duplicate, conflict, invalid OHLC/volume, or empty success through the existing terminal mapping.  Reason: source-data integrity. | Done when each named raw/defense input has its required normalization, validation, or empty-response evidence and no unauthorized publication/retry. | ARK-68i |
+| ARK-68n raw-immutability proof | D15 | One verified raw partition retains identical bytes/checksum across observation and downstream-policy work.  Reason: immutable source evidence. | Done when the before/after digest and bytes are equal without a publication overwrite. | ARK-68i |
+| ARK-68o mutable-alias reconciliation proof | D18 | One stored-alias difference yields either local recovery/skip or exact zero-request migration stop.  Reason: physical-identity stability. | Done when valid old aliases avoid a request and a required fresh old-alias request returns `MAPPING_MIGRATION_REQUIRED`. | ARK-70 |
+| ARK-68p ordered range-reconciliation proof | D21 | One mixed three-month range emits the ordered skip/recover/request tuple for only independently affected months.  Reason: request selection. | Done when result order/counts and request cardinality equal the Plan 02 reconciliation decision. | ARK-70, ARK-68l |
+| ARK-68q bounded measurement recorder | B01--B05 fields | One fresh-child workload iteration records the complete section 5 provenance/resource measurement or an explicit blocked resource result.  Reason: reproducible instrumentation. | Done when the pinned-`psutil` assessment is recorded before dependency addition and one child/parent sample record satisfies the fixed sampler method or blocks. | 68a |
+| ARK-68r existing-boundary query proof | D22, B04, B05 | One configured DuckDB direct-Parquet query returns the frozen aggregate without a candle table.  Reason: query-boundary evidence. | Done when B04/B05 use the fixed one-connection settings and return their manifest-consistent aggregate. | 68a, ARK-68q |
+| ARK-69 live one-month gate | section 4 | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | Done when the one permitted response is ingested and compared under the live gate without a second request. | ARK-68b--ARK-68r, ARK-70, ARK-73, full gate/review, owner authorization |
+| ARK-73 targeted disposable repair proof | B03 | One exact checksum-mismatched disposable partition alone repairs while its control remains unchanged.  Reason: repair isolation. | Done when B03 records the February target-only invalidation/quarantine/request/publication and the out-of-plan control evidence. | ARK-68i, ARK-68l, ARK-68q |
+| ARK-71a baseline collection | section 5 samples | Five comparable B01--B05 measured samples are retained without a threshold claim.  Reason: establish evidence. | Done when each workload has its five raw comparable measurements or an explicit blocked status. | ARK-68q, ARK-68r, ARK-70, ARK-73 |
 | ARK-71b threshold decision | section 5.4 | One deterministic threshold status is derived from ARK-71a samples.  Reason: regression policy. | Done when every workload is `UNSET`, threshold-accepted, or rejected by the frozen sample rule without sample tuning. | ARK-71a |
 | ARK-72 M2 pre-merge crosswalk | section 7 | One candidate-revision dossier resolves every section 7 row, selected denominator, gates/review, carryover, and limitations.  Reason: acceptance reconciliation. | Done when every mandatory crosswalk row is evidenced or explicitly blocks acceptance. | ARK-69, ARK-70, ARK-73, ARK-71b |
 
@@ -599,13 +649,13 @@ scheduling; this document does not alter issue tracking.
 Required order is:
 
 ```text
-68a -> {68b, 68c, 68e, 68k}
-68c -> {70, 68d, 68f, 68g, 68h}
-70 -> {68i, 68j}
-68f + 68k -> 73
-68a + 68k -> 68l
-{68b, 68d--68l, 70, 73} -> 71a -> 71b
-{68b--68l, 70, 73} + full deterministic gate + owner authorization -> 69
+68a -> {68b, 68c, 68d, 68e, 68g, 68i, 68k, 68q}
+68i -> {70, 68f, 68h, 68j, 68l, 68m, 68n}
+70 -> {68o, 68p}
+68l + 68q -> 73
+68a + 68q -> 68r
+{68b--68r, 70, 73} -> 71a -> 71b
+{68b--68r, 70, 73} + full deterministic gate + owner authorization -> 69
 69 + 70 + 73 + 71b -> 72
 ```
 
