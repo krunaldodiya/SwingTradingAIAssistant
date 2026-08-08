@@ -8,26 +8,40 @@ import os
 import platform as runtime_platform
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Literal
+from unittest.mock import patch
 
 import duckdb
 import psutil
 import pyarrow
 from ark74_benchmark_fixture import BenchmarkFixturePartition, benchmark_nse_eq_v1
 
+from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.historical import (
     HistoricalRequest,
     HistoricalResponse,
+)
+from swing_trading_ai_assistant.market_data.partition_ingestion import (
+    PartitionIngestionExecutor,
+    canonicalize_upstox_equity_candles,
+    normalize_candles,
+)
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    publish_partition,
 )
 from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCommand,
     IngestionCoordinator,
     IngestionReport,
+)
+from swing_trading_ai_assistant.market_data.validation import (
+    EquityMonthValidationPolicy,
 )
 
 _CONTROL_TIMEOUT_S = 30.0
@@ -37,7 +51,11 @@ _PSUTIL_VERSION = "7.2.2"
 _SAMPLER_METHOD = "psutil-parent-child-v1"
 _PhaseElapsed = dict[str, int | None]
 _SamplerFailure = Literal[
-    "sampling_exception", "unsupported_num_fds", "too_few_samples", "gap_exceeded"
+    "sampling_exception",
+    "unsupported_num_fds",
+    "loop_sampling_exception",
+    "too_few_samples",
+    "gap_exceeded",
 ]
 
 
@@ -123,6 +141,7 @@ class _ChildB01Result:
     repair_count: int
     elapsed_wall_ms: int
     elapsed_cpu_ms: int
+    phase_elapsed_ms: _PhaseElapsed
     outcome: str
     failure_code: str
     partition_outcomes: tuple[str, ...]
@@ -145,6 +164,64 @@ class _Sample:
     monotonic_ns: int
     rss_bytes: int
     open_fds: int
+
+
+class _PhaseTimers:
+    """Test-only monotonic timers around the existing B01 phase boundaries."""
+
+    def __init__(self) -> None:
+        self._elapsed_ms: _PhaseElapsed = {
+            "normalize": 0,
+            "validate": 0,
+            "publish": 0,
+            "catalog": 0,
+            "query": None,
+        }
+
+    def call(
+        self,
+        phase: str,
+        action: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        started = time.monotonic_ns()
+        try:
+            return action(*args, **kwargs)
+        finally:
+            elapsed = _elapsed_ms(started, time.monotonic_ns())
+            current = self._elapsed_ms[phase]
+            if current is not None:
+                self._elapsed_ms[phase] = current + elapsed
+
+    def snapshot(self) -> _PhaseElapsed:
+        return dict(self._elapsed_ms)
+
+
+class _TimedCatalog:
+    """Measure catalog operations without changing the production catalog."""
+
+    def __init__(self, root: Path, timers: _PhaseTimers) -> None:
+        self._catalog = DuckDBCatalog(root)
+        self._timers = timers
+
+    def __enter__(self) -> _TimedCatalog:
+        self._catalog.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._catalog.__exit__(*args)
+
+    def get_manifest(self, plan: object) -> object:
+        return self._timers.call("catalog", self._catalog.get_manifest, plan)
+
+    def create_manifest(self, manifest: object) -> object:
+        return self._timers.call("catalog", self._catalog.create_manifest, manifest)
+
+    def transition_manifest(self, current: object, target: object) -> object:
+        return self._timers.call(
+            "catalog", self._catalog.transition_manifest, current, target
+        )
 
 
 class _FixedClock:
@@ -214,6 +291,7 @@ def get_args_for_sampler_failure() -> tuple[_SamplerFailure, ...]:
     return (
         "sampling_exception",
         "unsupported_num_fds",
+        "loop_sampling_exception",
         "too_few_samples",
         "gap_exceeded",
     )
@@ -225,7 +303,7 @@ def _run_b01_child(connection: Connection, root_text: str) -> None:
         if connection.recv() != "START":
             return
         connection.send(("DONE", _execute_b01(Path(root_text))))
-        connection.recv()
+        _accept_exact_exit(connection)
     except Exception:
         connection.send(("ERROR", "B01_CHILD_FAILED"))
     finally:
@@ -246,14 +324,25 @@ def _execute_b01(root: Path) -> _ChildB01Result:
         fixture.validation_policy,
         max_total_provider_attempts=1,
     )
-    coordinator = IngestionCoordinator(
-        session_factory=sessions,
-        clock=_FixedClock(),
-        run_id_factory=lambda: "ark90-run",
-    )
+    timers = _PhaseTimers()
+    coordinator = _timed_coordinator(sessions, timers)
     wall_started = time.monotonic_ns()
     cpu_started = time.process_time_ns()
-    report = coordinator.run(command)
+    with (
+        patch(
+            "swing_trading_ai_assistant.market_data.partition_ingestion.normalize_candles",
+            _timed_normalizer(timers),
+        ),
+        patch(
+            "swing_trading_ai_assistant.market_data.partition_ingestion.canonicalize_upstox_equity_candles",
+            _timed_canonicalizer(timers),
+        ),
+        patch(
+            "swing_trading_ai_assistant.market_data.validation.EquityMonthValidationPolicy.validate",
+            _timed_validator(timers),
+        ),
+    ):
+        report = coordinator.run(command)
     elapsed_cpu_ms = _elapsed_ms(cpu_started, time.process_time_ns())
     elapsed_wall_ms = _elapsed_ms(wall_started, time.monotonic_ns())
     return _child_result(
@@ -266,7 +355,47 @@ def _execute_b01(root: Path) -> _ChildB01Result:
         sessions,
         elapsed_wall_ms,
         elapsed_cpu_ms,
+        timers.snapshot(),
     )
+
+
+def _timed_coordinator(
+    sessions: _OneResponseSessionFactory, timers: _PhaseTimers
+) -> IngestionCoordinator:
+    return IngestionCoordinator(
+        session_factory=sessions,
+        clock=_FixedClock(),
+        run_id_factory=lambda: "ark90-run",
+        catalog_factory=lambda root: _TimedCatalog(root, timers),
+        lifecycle_executor_factory=_timed_executor_factory(timers),
+    )
+
+
+def _timed_normalizer(timers: _PhaseTimers) -> Callable[..., object]:
+    return lambda *args: timers.call("normalize", normalize_candles, *args)
+
+
+def _timed_canonicalizer(timers: _PhaseTimers) -> Callable[..., object]:
+    return lambda *args: timers.call(
+        "normalize", canonicalize_upstox_equity_candles, *args
+    )
+
+
+def _timed_validator(timers: _PhaseTimers) -> Callable[..., object]:
+    validate = EquityMonthValidationPolicy.validate
+    return lambda *args, **kwargs: timers.call("validate", validate, *args, **kwargs)
+
+
+def _timed_executor_factory(
+    timers: _PhaseTimers,
+) -> Callable[..., PartitionIngestionExecutor]:
+    def factory(**kwargs: object) -> PartitionIngestionExecutor:
+        return PartitionIngestionExecutor(
+            **kwargs,
+            publisher=lambda *args: timers.call("publish", publish_partition, *args),
+        )
+
+    return factory
 
 
 def _child_result(
@@ -279,6 +408,7 @@ def _child_result(
     sessions: _OneResponseSessionFactory,
     elapsed_wall_ms: int,
     elapsed_cpu_ms: int,
+    phase_elapsed_ms: _PhaseElapsed,
 ) -> _ChildB01Result:
     result = report.results[0]
     manifest = result.final_manifest
@@ -308,6 +438,7 @@ def _child_result(
         0,
         elapsed_wall_ms,
         elapsed_cpu_ms,
+        phase_elapsed_ms,
         report.outcome.value,
         report.failure_code.value,
         tuple(item.outcome.value for item in report.results),
@@ -327,9 +458,13 @@ def _control_and_sample_child(
     samples, invalid_blocker = _initial_sample(process, sampler_failure)
     connection.send("START")
     _inject_gap_if_requested(process, samples, sampler_failure, invalid_blocker)
-    message = _wait_for_done(connection, process, samples, sampler_failure)
+    message, loop_blocker = _wait_for_done(
+        connection, process, samples, sampler_failure
+    )
     result = _done_child_result(message)
-    invalid_blocker = _end_sample(process, samples, sampler_failure, invalid_blocker)
+    invalid_blocker = _end_sample(
+        process, samples, sampler_failure, invalid_blocker or loop_blocker
+    )
     connection.send("EXIT")
     invalid_blocker = _sampling_blocker(samples, sampler_failure, invalid_blocker)
     resources = _resource_evidence(samples, invalid_blocker)
@@ -365,6 +500,11 @@ def _done_child_result(message: tuple[object, object]) -> _ChildB01Result:
     if message[0] != "DONE" or type(message[1]) is not _ChildB01Result:
         raise RuntimeError("B01 child failed")
     return message[1]
+
+
+def _accept_exact_exit(connection: Connection) -> None:
+    if connection.recv() != "EXIT":
+        raise RuntimeError("B01 child protocol is invalid")
 
 
 def _end_sample(
@@ -403,17 +543,23 @@ def _wait_for_done(
     process: psutil.Process,
     samples: list[_Sample],
     sampler_failure: _SamplerFailure | None,
-) -> tuple[object, object]:
+) -> tuple[tuple[object, object], str | None]:
     deadline = time.monotonic() + _CONTROL_TIMEOUT_S
+    blocker: str | None = None
     while not connection.poll(_SAMPLING_INTERVAL_S):
         if time.monotonic() >= deadline:
             raise RuntimeError("B01 child did not complete")
-        if sampler_failure is None:
-            samples.append(_sample(process))
+        if sampler_failure is None or sampler_failure == "loop_sampling_exception":
+            try:
+                if sampler_failure == "loop_sampling_exception":
+                    raise RuntimeError("sampling exception")
+                samples.append(_sample(process))
+            except Exception:
+                blocker = "sampling_exception"
     message = connection.recv()
     if type(message) is not tuple or len(message) != 2:
         raise RuntimeError("B01 child protocol is invalid")
-    return message
+    return message, blocker
 
 
 def _sample(process: psutil.Process) -> _Sample:
@@ -432,6 +578,12 @@ def _max_gap_ms(samples: list[_Sample]) -> int:
 def _resource_evidence(
     samples: list[_Sample], blocker: str | None
 ) -> _ResourceEvidence:
+    if (
+        blocker is None
+        and len(samples) >= 2
+        and samples[-1].open_fds != samples[0].open_fds
+    ):
+        blocker = "open_fd_not_closed"
     if blocker is not None or len(samples) < 2:
         return _ResourceEvidence(
             None,
@@ -487,13 +639,7 @@ def _record_b01(
         partition_checksums=((2024, 2, result.checksum),),
         elapsed_wall_ms=result.elapsed_wall_ms,
         elapsed_cpu_ms=result.elapsed_cpu_ms,
-        phase_elapsed_ms={
-            "normalize": None,
-            "validate": None,
-            "publish": None,
-            "catalog": None,
-            "query": None,
-        },
+        phase_elapsed_ms=result.phase_elapsed_ms,
         rows_raw=result.rows_raw,
         rows_normalized=result.rows_normalized,
         rows_published=result.rows_published,

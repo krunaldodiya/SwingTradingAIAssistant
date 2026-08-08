@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 from ark90_benchmark_measurement import (
     ResourceEvidenceStatus,
+    _resource_evidence,
+    _run_b01_child,
+    _Sample,
     measure_b01,
 )
 
@@ -35,13 +38,16 @@ def test_b01_fresh_child_measurement_records_complete_sanitized_evidence(
     assert record.outcome == "SUCCEEDED"
     assert record.failure_code == "NONE"
     assert record.partition_outcomes == ("VERIFIED",)
-    assert record.phase_elapsed_ms == {
-        "normalize": None,
-        "validate": None,
-        "publish": None,
-        "catalog": None,
-        "query": None,
-    }
+    assert record.phase_elapsed_ms["normalize"] is not None
+    assert record.phase_elapsed_ms["validate"] is not None
+    assert record.phase_elapsed_ms["publish"] is not None
+    assert record.phase_elapsed_ms["catalog"] is not None
+    assert all(
+        value >= 0
+        for name, value in record.phase_elapsed_ms.items()
+        if name != "query" and value is not None
+    )
+    assert record.phase_elapsed_ms["query"] is None
     assert record.query_result_count is None
     assert record.query_min_ts is None
     assert record.query_max_ts is None
@@ -66,8 +72,8 @@ def test_b01_fresh_child_measurement_records_complete_sanitized_evidence(
         assert record.open_fd_start is None
         assert record.open_fd_peak is None
         assert record.open_fd_end is None
-        assert record.sampler_sample_count == 0
-        assert record.sampler_max_gap_ms is None
+        assert record.sampler_sample_count >= 2
+        assert record.sampler_max_gap_ms is not None
     assert record.source_revision
     assert record.source_tree
     assert len(record.lock_identity) == 64
@@ -91,6 +97,7 @@ def test_b01_fresh_child_measurement_records_complete_sanitized_evidence(
     [
         ("sampling_exception", "sampling_exception", 0, False),
         ("unsupported_num_fds", "unsupported_num_fds", 0, False),
+        ("loop_sampling_exception", "sampling_exception", 1, False),
         ("too_few_samples", "too_few_samples", 1, False),
         ("gap_exceeded", "max_gap_exceeded", 2, True),
     ],
@@ -123,6 +130,49 @@ def test_b01_invalid_resource_sampling_retains_sampler_provenance(
         assert record.sampler_max_gap_ms is None
     assert record.outcome == "SUCCEEDED"
     assert record.request_count == record.provider_attempt_count == 1
+
+
+@pytest.mark.parametrize("end_fds", [3, 5])
+def test_fd_end_mismatch_is_fail_closed_resource_evidence(end_fds: int) -> None:
+    evidence = _resource_evidence(
+        [_Sample(0, 10, 4), _Sample(10_000_000, 11, end_fds)],
+        None,
+    )
+
+    assert evidence.status is ResourceEvidenceStatus.INVALID
+    assert evidence.blocker == "open_fd_not_closed"
+    assert evidence.peak_rss_bytes is None
+    assert evidence.open_fd_start is None
+    assert evidence.open_fd_peak is None
+    assert evidence.open_fd_end is None
+    assert evidence.sample_count == 2
+    assert evidence.max_gap_ms == 10
+
+
+class _ProtocolConnection:
+    def __init__(self, received: list[object]) -> None:
+        self._received = received
+        self.sent: list[object] = []
+
+    def send(self, value: object) -> None:
+        self.sent.append(value)
+
+    def recv(self) -> object:
+        return self._received.pop(0)
+
+    def close(self) -> None:
+        pass
+
+
+def test_child_rejects_non_exit_release_after_done(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _ProtocolConnection(["START", "NOT_EXIT"])
+    monkeypatch.setattr("ark90_benchmark_measurement._execute_b01", lambda _: None)
+
+    _run_b01_child(connection, "unused")
+
+    assert connection.sent == ["READY", ("DONE", None), ("ERROR", "B01_CHILD_FAILED")]
 
 
 def test_b01_rejects_nonpositive_iteration_and_unknown_sampler_failure(
