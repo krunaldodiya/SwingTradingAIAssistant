@@ -301,8 +301,14 @@ def test_invalid_raw_family_is_normalization_failure_without_publication_or_retr
 ) -> None:
     partition = _fixture()
     raw_rows = [list(row) for row in partition.response.candles]
+    valid_row = list(raw_rows[0])
     raw_rows[0][field] = value
-    raw_rows[0][6] = "/hostile/path SELECT * FROM raw secret-token hostile-key"
+
+    assert valid_row[6] is None
+    assert raw_rows[0][6] is valid_row[6]
+    assert all(
+        raw_rows[0][index] == valid_row[index] for index in range(7) if index != field
+    )
 
     report, sessions = _run(tmp_path, partition, HistoricalResponse(200, raw_rows))
 
