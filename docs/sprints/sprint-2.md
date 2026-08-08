@@ -1,6 +1,6 @@
 # Sprint 2 — RELIANCE operational proof
 
-Status: **committed; execution starts with ARK-74**
+Status: **active; execution follows the accepted finite-goal contract**
 
 ## Sprint goal
 
@@ -87,18 +87,24 @@ or denominator change.
 
 ## Standing execution authority
 
-Committing a bounded child grants the root coordinator standing authority for
-its safe normal lifecycle: strict TDD, reviewer-directed in-scope repairs within
-the recorded budget, deterministic gates, commits, Linear checkpoints, PR
-publication, merge after required checks, and publication verification. These
-steps do not require repeated owner approval.
+Committing a bounded Ready child inside an accepted finite Goal grants the root
+authority to route its safe normal lifecycle, but not to perform a mutating or
+blocking operation. Terra implementer is the sole content writer: strict TDD,
+reviewer-directed in-scope repairs within the recorded budget, deterministic
+gates, and the exact candidate commit. Delivery publisher is the sole external
+mutation actor: a bounded root handoff and one active mutator epoch authorize
+only scoped Linear lifecycle/checkpoint transitions before implementation or
+review. Worktree publication, push, PR, CI, merge, hosted verification, final
+closure, and final Linear synchronization require the exact independently
+approved SHA. These safe same-Goal steps do not require repeated owner approval.
 
 Owner input remains mandatory only for a scope, architecture, trading-rule, or
 product decision; the ARK-69 live provider/credential gate; destructive or
-non-recoverable shared-data action; coordinator ownership transfer; a material
-security/licensing exception; or the mandatory circuit breaker after two
-materially identical failures. Ordinary review findings inside an approved
-child return automatically to the same implementer while its budget remains.
+non-recoverable shared-data action; a material security/licensing exception; or
+the mandatory circuit breaker after two materially identical failures. An owner
+interrupt requires quiescing and stop proof before another epoch starts.
+Ordinary review findings inside an approved child return automatically to the
+same implementer while its budget remains.
 
 ## Acceptance gate
 
@@ -131,8 +137,9 @@ Sprint 2 is complete only when:
 - the complete deterministic quality gate and required independent review pass;
   and
 - the pre-merge ARK-72 handoff records the exact candidate, selected denominator,
-  checks, review, carryover, and retrospective inputs; the coordinator records
-  the resulting merge and final issue closure in Linear after publication.
+  checks, review, carryover, and retrospective inputs; delivery publisher records
+  hosted merge evidence and performs final Linear synchronization after
+  publication. Root receives and reports that evidence only.
 
 ## Explicit exclusions
 
@@ -167,11 +174,11 @@ record.
 
 ARK-67 completed the first graph-lite workflow pilot. Exact-revision
 checkpoints, the isolated writer worktree, deterministic gates, and independent
-review preserved state correctly through repair rounds and publication. The
-pilot also exposed excessive owner waiting caused by treating every repair
-round as a new permission boundary. The standing execution authority above is
-the corrective rule for Sprint 2: one task approval covers safe in-scope repair
-and publication until the real circuit breaker or another listed owner gate.
+review preserved state correctly through repair rounds. ARK-95 supersedes its
+root-as-publisher assumption: the root now remains responsive and non-mutating,
+Terra implementer creates the candidate, and delivery publisher alone performs
+authorized scoped publication after review. The pilot's owner-wait finding is
+addressed by one finite-Goal authority envelope, not by autonomous execution.
 
 Continue recording observable elapsed time, handoff delay, agent turns,
 retries, repair rounds, repeated gates, missed handoffs, owner-wait time, final

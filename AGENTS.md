@@ -11,6 +11,25 @@ Follow [docs/engineering-standards.md](docs/engineering-standards.md) for
 cross-cutting code, data-integrity, testing, performance, security, and review
 standards.
 
+## Owner and autonomous delivery boundary
+
+The owner and root operate only at the product/conversation layer described in
+the development workflow. The root is responsive, non-mutating, and
+nonblocking: it may clarify, brainstorm, validate, synthesize, freeze a finite
+Goal's authority envelope, route already-committed Ready work, interrupt or
+reprioritize it, and judge evidence. It never writes repository or external
+project state, creates a worktree/branch/commit, runs or waits for a gate,
+reviews or implements, or publishes.
+
+Terra implementer is the sole content writer for a delegated execution epoch.
+The delivery publisher alone performs authorized external mutation and
+publication: narrowly scoped Linear lifecycle/checkpoint transitions from a
+bounded root handoff may occur before implementation or review, while push, PR,
+merge, and final closure require the exact independently approved candidate.
+This delivery autonomy is a software-process control only. It does not authorize
+autonomous trading, broker activity, provider access, market-data changes, or
+any decision outside an accepted finite Goal. Live ARK-69 remains owner-authorized.
+
 ## Mission
 
 Build a trustworthy, agent-agnostic research and analysis tool for swing trading

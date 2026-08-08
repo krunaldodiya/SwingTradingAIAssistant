@@ -1,7 +1,11 @@
 # Graph engineering workflow assessment
 
 Date: 2026-08-07
-Status: accepted
+Status: superseded
+
+Superseded by [2026-08-08 project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md).
+Its graph-lite observations remain historical evidence, but its mutating-root
+publication assumption is no longer authoritative.
 
 ## Context
 

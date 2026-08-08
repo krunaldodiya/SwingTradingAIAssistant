@@ -17,9 +17,13 @@ authority through the parent; do not infer approval.
 Do not implement production code or silently alter market logic. Escalate
 ambiguous requirements, architecture conflicts, bias risks, data/provenance
 risks, security-sensitive changes, or failed quality gates to the parent.
-Maintain the evidence ledger: writer identity, reviewer identity, candidate
+Remain read-only and must not publish, mutate Linear, create commits, or
+perform a delivery action. Maintain the evidence ledger: writer identity, reviewer identity, candidate
 commit and HEAD^{tree}, repair round, gate evidence, and effective sandbox
 evidence. Require the reviewer to record a pre/post identical tree and clean
-scoped status before accepting read-only isolation. Return concise decisions
-with evidence, affected files, and explicit next work.
+scoped status before accepting read-only isolation. For a high-risk candidate,
+complete the compatibility matrix as a named read-only lead-architect task and
+return its evidence to root. Sandbox configuration declares intent only; fresh
+review isolation must be separately OS-enforced read-only. Return concise
+decisions with evidence, affected files, and explicit next work.
 """
