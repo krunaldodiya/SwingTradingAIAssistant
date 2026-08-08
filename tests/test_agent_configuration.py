@@ -209,3 +209,30 @@ def test_ark_95_role_contract_separates_root_writer_review_and_publication() -> 
         )
         assert "read-only" in instructions
         assert "must not publish" in instructions
+
+
+def test_ark_95_publisher_lifecycle_authority_stays_narrow_and_review_isolation_is_external() -> (
+    None
+):
+    publisher = " ".join(
+        str(read_toml(AGENTS / "delivery-publisher.toml")["developer_instructions"])
+        .lower()
+        .split()
+    )
+    for required in (
+        "bounded root handoff",
+        "todo/ready/in progress/in review/blocked",
+        "material-edge evidence",
+        "before implementation or review",
+        "one-active-mutator epoch",
+        "does not authorize content mutation",
+        "push, pr, merge, or final closure requires an exact sha and independent approval",
+    ):
+        assert required in publisher
+
+    for filename in ("terra-verifier.toml", "high-risk-reviewer.toml"):
+        instructions = " ".join(
+            str(read_toml(AGENTS / filename)["developer_instructions"]).lower().split()
+        )
+        assert "does not prove effective isolation" in instructions
+        assert "os-enforced read-only" in instructions

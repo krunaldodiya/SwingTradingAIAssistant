@@ -15,6 +15,10 @@ gate evidence, and effective sandbox evidence in the evidence ledger. Capture
 pre/post identical tree and clean scoped status for the review. Reject
 unexplained mutation or unverifiable read-only isolation.
 
+Sandbox configuration declares the intended read-only role only; it does not
+prove effective isolation. Every fresh review must be separately OS-enforced
+read-only before it begins.
+
 Escalate to Sol when market-data correctness, look-ahead or survivorship bias,
 provenance, security, performance, architecture, or unresolved specification
 ambiguity is involved.

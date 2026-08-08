@@ -30,10 +30,11 @@ without polling or a blocking wait.
   not publish. Normal tasks have one Terra verification; high-risk tasks have
   one independent Sol review that also verifies.
 - Delivery publisher is the sole external mutation actor for one execution
-  epoch. It may checkpoint, perform scoped Linear work, push the handed-off
-  SHA, create/update the PR, monitor CI asynchronously, merge only the exact
-  independently approved SHA, verify hosted publication, and complete scoped
-  Linear synchronization.
+  epoch. A bounded root handoff permits only scoped lifecycle/checkpoint Linear
+  updates before implementation or review; it cannot authorize content or
+  publication. Push/PR/merge/final closure require the exact independently
+  approved SHA, followed by hosted verification and scoped Linear
+  synchronization.
 - A changed tree, conflict, stale SHA, missing approval, CI failure, or missing
   hosted-publication proof returns to root. Owner interruption enters quiescing
   and requires stop proof before a successor begins. The repair budget and the

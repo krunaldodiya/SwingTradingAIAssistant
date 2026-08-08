@@ -250,14 +250,19 @@ agent's sandbox setting.
 
 ### Delivery-publisher protocol
 
-Delivery publisher receives a completed handoff for one exact approved SHA and
-execution epoch. It may create or validate the publication worktree/branch and
-epoch checkpoint; perform scoped Linear updates; push that exact SHA; create or
-update its PR; monitor CI asynchronously; merge only that independently
-approved SHA after required checks; verify hosted publication; and make the
-final scoped Linear sync. It never edits, formats, or tests as review; creates
-a candidate commit; resolves a conflict; force-pushes; bypasses a gate; makes a
-scope decision; uses provider credentials; or self-reviews.
+Delivery publisher is authorized by a bounded root handoff, within one active
+accepted finite Goal and one-active-mutator epoch, to make only scoped Linear
+`Todo`/`Ready`/`In Progress`/`In Review`/`Blocked` lifecycle transitions and
+material-edge evidence checkpoints before implementation or review. That
+lifecycle authority never authorizes content mutation, candidate creation,
+publication, or a new Goal. Push, PR, merge, and final closure require the
+exact independently approved SHA. Only then may publisher create or validate
+the publication worktree/branch and epoch checkpoint; push that SHA; create or
+update its PR; monitor CI asynchronously; merge only that SHA after required
+checks; verify hosted publication; and make the final scoped Linear sync. It
+never edits, formats, or tests as review; creates a candidate commit; resolves
+a conflict; force-pushes; bypasses a gate; makes a scope decision; uses provider
+credentials; or self-reviews.
 
 Any tree change, conflict, stale SHA, missing approval, failed CI, or missing
 hosted-publication proof is a stop condition that returns to root. Publisher
@@ -274,17 +279,20 @@ but repository writes remain serial and one executable item stays in progress.
 If approval is withheld or authority is unclear, route the question through the parent; no
 subagent may infer approval.
 
-The parent maintains an evidence ledger for each candidate: writer identity,
-reviewer identity, candidate commit, `HEAD^{tree}`, repair round, gate evidence,
-and effective sandbox evidence. Before a read-only reviewer accepts a candidate,
-it must record a pre/post identical tree and clean scoped status. A reviewer
-rejects unexplained mutation or unverifiable read-only isolation.
+The delivery publisher maintains a scoped external evidence ledger for each
+candidate: writer identity, reviewer identity, candidate commit, `HEAD^{tree}`,
+repair round, gate evidence, and effective sandbox evidence. Configuration
+declares a reviewer's intended role only and does not prove effective isolation.
+Before a read-only reviewer accepts a candidate, its fresh review must be
+OS-enforced read-only and record a pre/post identical tree and clean scoped
+status. A reviewer rejects unexplained mutation or unverifiable read-only
+isolation.
 
 ### High-risk specification compatibility matrix
 
-For a high-risk or broad specification, the coordinator completes a deterministic
-contract-compatibility matrix against the exact candidate commit before the one
-formal Sol High review. It verifies every touched frozen contract, physical
+For a high-risk or broad specification, the named read-only lead architect
+completes a deterministic contract-compatibility matrix against the exact
+candidate commit before the one formal Sol High review. It verifies every touched frozen contract, physical
 identity, lifecycle transition, exhaustive typed outcome, provenance retention,
 bounded resource/wait rule, crash/concurrency ownership, and atomic child
 boundary. It additionally enumerates before/during/between/after cancellation
@@ -292,12 +300,13 @@ and other stateful boundaries, and proves every necessary read/write/query
 occurs after its dependency is available and maps to an existing callable
 contract or an approved atomic child. Each row cites the governing and candidate
 locations and records a compatible/incompatible result; an incompatibility
-returns to the sole writer.
+returns to the sole writer. Root only routes and judges returned evidence; it
+does not complete or verify the matrix.
 
-This is coordinator-owned preparation, not a subagent, second review, model
-pass, or weakened gate. It replaces avoidable review-repair discovery without
-changing the one-writer limit, the single final OS-enforced Sol High reviewer,
-or the required deterministic quality gate.
+This is a named read-only lead-architect task, not a second review or a weakened
+gate. It replaces avoidable review-repair discovery without changing the
+one-writer limit, the single final OS-enforced Sol High reviewer, or the
+required deterministic quality gate.
 
 ## Graph-lite execution control
 

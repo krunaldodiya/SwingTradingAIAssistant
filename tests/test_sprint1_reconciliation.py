@@ -347,7 +347,9 @@ def test_heartbeat_contract_rejects_multiple_owners_and_normal_execution_use() -
 
 def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> None:
     sprint_index = (ROOT / "docs" / "sprints" / "README.md").read_text().lower()
-    sprint_two = (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower()
+    sprint_two = " ".join(
+        (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower().split()
+    )
     note_index = (ROOT / "docs" / "notes" / "README.md").read_text().lower()
     note = (
         (ROOT / "docs" / "notes" / "2026-08-08-project-autonomous-orchestration.md")
@@ -372,3 +374,26 @@ def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> No
         "not autonomous trading",
     ):
         assert required in note
+
+
+def test_ark_95_matrix_and_sprint_publication_keep_root_nonmutating() -> None:
+    workflow = (ROOT / "docs" / "development-workflow.md").read_text()
+    matrix = _bounded_section(
+        workflow, "### High-risk specification compatibility matrix"
+    ).lower()
+    sprint_two = " ".join(
+        (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower().split()
+    )
+
+    assert "named read-only lead architect completes" in matrix
+    assert "root only routes and judges returned evidence" in matrix
+    assert "coordinator completes" not in matrix
+    assert "not a subagent" not in matrix
+    assert (
+        "delivery publisher records hosted merge evidence and performs final linear synchronization"
+        in sprint_two
+    )
+    assert (
+        "coordinator records the resulting merge and final issue closure"
+        not in sprint_two
+    )

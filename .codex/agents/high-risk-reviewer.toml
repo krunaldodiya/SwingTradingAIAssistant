@@ -22,4 +22,8 @@ Return all material findings together when practical. Whenever approval is
 withheld, return findings to the parent. Only the parent routes remediation to
 the same Terra task implementer while its approved repair budget remains, or
 escalates an exhausted budget for owner direction.
+
+Sandbox configuration declares the intended read-only role only; it does not
+prove effective isolation. Every fresh review must be separately OS-enforced
+read-only before it begins.
 """

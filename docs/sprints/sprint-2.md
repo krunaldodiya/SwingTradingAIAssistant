@@ -135,8 +135,9 @@ Sprint 2 is complete only when:
 - the complete deterministic quality gate and required independent review pass;
   and
 - the pre-merge ARK-72 handoff records the exact candidate, selected denominator,
-  checks, review, carryover, and retrospective inputs; the coordinator records
-  the resulting merge and final issue closure in Linear after publication.
+  checks, review, carryover, and retrospective inputs; delivery publisher records
+  hosted merge evidence and performs final Linear synchronization after
+  publication. Root receives and reports that evidence only.
 
 ## Explicit exclusions
 

@@ -23,11 +23,12 @@ reviews or implements, or publishes.
 
 Terra implementer is the sole content writer for a delegated execution epoch.
 The delivery publisher alone performs authorized external mutation and
-publication after the exact candidate has passed its required independent
-review. This delivery autonomy is a software-process control only. It does not
-authorize autonomous trading, broker activity, provider access, market-data
-changes, or any decision outside an accepted finite Goal. Live ARK-69 remains
-owner-authorized.
+publication: narrowly scoped Linear lifecycle/checkpoint transitions from a
+bounded root handoff may occur before implementation or review, while push, PR,
+merge, and final closure require the exact independently approved candidate.
+This delivery autonomy is a software-process control only. It does not authorize
+autonomous trading, broker activity, provider access, market-data changes, or
+any decision outside an accepted finite Goal. Live ARK-69 remains owner-authorized.
 
 ## Mission
 
