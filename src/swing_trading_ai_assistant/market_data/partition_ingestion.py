@@ -451,6 +451,10 @@ class PartitionIngestionExecutor:
                     active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
                 )
             raise
+        if self._cancelled():
+            return self._terminal_failure(
+                active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
+            )
         self._transition(active, verified)
         return PartitionLifecycleResult(
             plan,
