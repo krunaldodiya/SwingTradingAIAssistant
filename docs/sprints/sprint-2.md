@@ -1,6 +1,6 @@
 # Sprint 2 — RELIANCE operational proof
 
-Status: **sprint goal approved; formal commitment and implementation not started**
+Status: **committed; execution starts with ARK-74**
 
 ## Sprint goal
 
@@ -15,57 +15,90 @@ implementation tasks be committed to the one-week Sprint 2 timebox.
 
 ## Timebox, hierarchy, and WIP
 
-- Planned execution timebox: one week. It starts only after ARK-67 is complete
-  and the selected implementation tasks satisfy the Definition of Ready.
+- Execution timebox: **2026-08-08 through 2026-08-14** (one week). ARK-67 is
+  complete and every selected child has the accepted Plan 03 revision,
+  completion predicate, stop condition, dependency links, iteration budget,
+  and high-risk review path recorded in Linear.
 - Tracking Saga: **ARK-11**, which is not implemented directly.
 - Tracking Epic: **ARK-66**, which is not implemented directly.
 - Implementation WIP: one executable Story/Task.
-- No Sprint 2 denominator is frozen yet. Only Ready Story/Task items may be
-  selected during the post-ARK-67 commitment review.
+- Frozen denominator: **24 executable Tasks**. ARK-66, ARK-68, and ARK-71 are
+  tracking-only Epics/Sagas and are excluded. ARK-67 is completed pre-sprint
+  specification work and is also excluded.
 - The current Linear team exposes `Todo` rather than a literal `Ready` status.
   For this sprint, `Todo` is the operational representation of the workflow's
   `Ready` state and still requires the complete Definition of Ready.
 
-## Required pre-sprint specification
+## Completed pre-sprint specification
 
 **ARK-67 — Freeze RELIANCE operational-validation and benchmark contract** is
-the only operationally Ready (`Todo`) task. It is pre-sprint planning work, not
-part of a Sprint 2 implementation denominator. It must define exact
-deterministic and authenticated cases, measurements, provenance, resource
-bounds, failure behavior, regression-policy method, a complete Milestone 2
-crosswalk, and atomic implementation handoffs.
+Done. [Plan 03](../plans/03-reliance-operational-validation-and-benchmarks.md)
+was independently approved and merged by
+[PR 27](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/27) at
+`766505e8ee113c319a5ebf5a663faf6073cf1997`. It is pre-sprint planning work,
+not part of the Sprint 2 denominator.
 
-## Candidate implementation sequence
+## Committed implementation backlog
 
-These Backlog tasks describe the approved direction but are not Sprint 2
-commitments. ARK-67 may correct or split them before the commitment review:
+The former broad ARK-68 and ARK-71 Tasks are now non-executable tracking Epics.
+Their real children and the four retained atomic Tasks form this denominator:
 
-1. **ARK-68 — Build deterministic M2 validation and benchmark harness.**
-   Strict TDD over the existing application contracts; it must not prematurely
-   define the later public package interface.
-2. **ARK-69 — Validate exactly one closed RELIANCE month against live Upstox
-   evidence.** Follow the frozen Plan 02 live gate: one total attempt, no retry,
-   authoritative schedule evidence, a caller-created isolated protected root,
-   explicit owner authorization, and tightly bounded sanitized output. Compare
-   stored evidence with the same response used for ingestion; this task does
-   not authorize a second duplicate candle request.
-3. **ARK-70 — Prove measured zero-request resume.** An unchanged verified range
-   performs no historical candle request and preserves exact request-count,
-   manifest, checksum, elapsed-time, and resource evidence.
-4. **ARK-73 — Prove targeted repair of one disposable partition.** Mutate only
-   an exact validated target inside a caller-created isolated protected test
-   root while holding the storage lease. Never damage, overwrite, or repair a
-   shared or canonical user dataset.
-5. **ARK-71 — Record RELIANCE ingestion, query, and resource baselines.**
-   Capture reproducible elapsed-time, throughput, bytes, peak-memory,
-   file-descriptor, retry, resume, repair, and DuckDB query evidence. Derive
-   regression thresholds from measurements rather than inventing targets.
-6. **ARK-72 — Reconcile the exact candidate against the Milestone 2 acceptance
-   crosswalk.** Produce one pre-merge evidence handoff covering the selected
-   sprint denominator, tests, gates, review, live evidence, benchmarks, scope,
-   and unresolved limitations. Post-merge issue closure and the final Linear
-   comment are coordinator operations, not claims made by the candidate about
-   its own future merge SHA.
+| ID | Atomic outcome |
+| --- | --- |
+| ARK-74 | fixed synthetic fixture and v2 schedule corpus |
+| ARK-75 | coordinator admission rejection |
+| ARK-76 | lease and storage refusal |
+| ARK-77 | catalog failure stop |
+| ARK-78 | unsafe local-repair refusal |
+| ARK-79 | provider authentication/authorization stop |
+| ARK-80 | total-attempt-budget stop |
+| ARK-81 | retry-wait-bound stop |
+| ARK-82 | one-request synthetic verification |
+| ARK-83 | cancellation and crash-state mapping |
+| ARK-84 | schedule coverage without forward fill |
+| ARK-85 | verified physical invalidation |
+| ARK-86 | normalization, quality-defense, and empty-response classification |
+| ARK-87 | raw partition immutability |
+| ARK-88 | mutable-alias reconciliation |
+| ARK-89 | ordered mixed-range reconciliation |
+| ARK-90 | bounded benchmark measurement recorder |
+| ARK-91 | existing-boundary DuckDB query proof |
+| ARK-70 | measured zero-request resume |
+| ARK-73 | targeted repair of one disposable partition |
+| ARK-92 | five comparable B01--B05 baseline samples |
+| ARK-93 | deterministic regression-threshold decision |
+| ARK-69 | one owner-authorized closed-month live gate |
+| ARK-72 | exact-candidate Milestone 2 acceptance crosswalk |
+
+All 24 carry the `Sprint 2` and `Task` labels and use Linear `Todo` as Ready.
+Explicit blocker links are authoritative. The default single-WIP order is:
+
+```text
+74 -> 82 -> 70 -> 85 -> 90 -> 73 -> 75 -> 76 -> 77 -> 78 -> 80 -> 84
+   -> 91 -> 79 -> 81 -> 83 -> 86 -> 87 -> 88 -> 89 -> 92 -> 93 -> 69 -> 72
+```
+
+This order brings the reusable corpus and successful one-request path forward,
+then proves resume, invalidation, measurement, and repair before completing the
+remaining failure/coverage matrix. Baselines and thresholds precede the live
+gate; the acceptance crosswalk remains last. A blocked live gate records the
+frozen failure and leaves the sprint incomplete; it does not authorize a retry
+or denominator change.
+
+## Standing execution authority
+
+Committing a bounded child grants the root coordinator standing authority for
+its safe normal lifecycle: strict TDD, reviewer-directed in-scope repairs within
+the recorded budget, deterministic gates, commits, Linear checkpoints, PR
+publication, merge after required checks, and publication verification. These
+steps do not require repeated owner approval.
+
+Owner input remains mandatory only for a scope, architecture, trading-rule, or
+product decision; the ARK-69 live provider/credential gate; destructive or
+non-recoverable shared-data action; coordinator ownership transfer; a material
+security/licensing exception; or the mandatory circuit breaker after two
+materially identical failures. Ordinary review findings inside an approved
+child return automatically to the same implementer while its budget remains.
 
 ## Acceptance gate
 
@@ -113,8 +146,9 @@ Sprint 2 is complete only when:
   and
 - optimization without a measured bottleneck.
 
-ARK-12 remains the next roadmap candidate only after ARK-11 closes. No Sprint 2
-implementation or stretch work is pre-authorized by this planning record.
+ARK-12 remains the next roadmap candidate only after ARK-11 closes. No work
+outside the frozen 24-item denominator is pre-authorized by this planning
+record.
 
 ## Risks and controls
 
@@ -125,21 +159,25 @@ implementation or stretch work is pre-authorized by this planning record.
   never attach candle payloads, tokens, provider keys, or local storage paths.
 - **Benchmark noise:** record environment and configuration, use warm-up and
   repetition rules from ARK-67, report variance, and avoid universal claims.
-- **Scope drift into product interfaces:** ARK-68 is an evidence harness only;
-  stable Python/CLI contracts remain owned by ARK-59.
+- **Scope drift into product interfaces:** ARK-68's children produce evidence
+  harness behavior only; stable Python/CLI contracts remain owned by ARK-59.
 - **Premature scaling:** no additional equity or worker pool enters this sprint.
 
 ## Workflow pilot
 
-ARK-67 is the first graph-lite workflow pilot. Before execution, record the full
-schema-v1 checkpoint as a Linear comment, including specification revision,
-repository state, completed phase, last verification, approved risk actor and
-evidence, used/remaining iteration budget, next action, blocker, and timestamp.
-Record observable elapsed time, handoff delay, agent turns, retries, repair
-rounds, repeated gates, missed handoffs, owner-wait time, final acceptance, and
-visible subscription usage. Do not infer unavailable token or cache telemetry.
-The eventual Sprint 2 closeout records whether graph-lite is retained, revised,
-or superseded.
+ARK-67 completed the first graph-lite workflow pilot. Exact-revision
+checkpoints, the isolated writer worktree, deterministic gates, and independent
+review preserved state correctly through repair rounds and publication. The
+pilot also exposed excessive owner waiting caused by treating every repair
+round as a new permission boundary. The standing execution authority above is
+the corrective rule for Sprint 2: one task approval covers safe in-scope repair
+and publication until the real circuit breaker or another listed owner gate.
+
+Continue recording observable elapsed time, handoff delay, agent turns,
+retries, repair rounds, repeated gates, missed handoffs, owner-wait time, final
+acceptance, and visible subscription usage. Do not infer unavailable token or
+cache telemetry. Sprint closeout decides whether this revised graph-lite
+control is retained, revised again, or superseded.
 
 ## Backlog reconciliation at planning
 
