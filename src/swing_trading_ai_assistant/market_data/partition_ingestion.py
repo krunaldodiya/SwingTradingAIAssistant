@@ -453,7 +453,16 @@ class PartitionIngestionExecutor:
             raise
         if self._cancelled():
             return self._terminal_failure(
-                active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
+                active,
+                FailureCategory.INTERRUPTED,
+                attempts,
+                "CANCELLED",
+                row_count=published.row_count,
+                actual_from_ts=published.actual_from_ts,
+                actual_to_ts=published.actual_to_ts,
+                checksum_sha256=published.checksum_sha256,
+                canonical_path=published.canonical_path,
+                candle_schema_version=published.candle_schema_version,
             )
         self._transition(active, verified)
         return PartitionLifecycleResult(
