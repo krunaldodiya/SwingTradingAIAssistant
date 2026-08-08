@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationToken,
     HistoricalResponse,
+    ProviderEvent,
     RetryPolicy,
 )
 from swing_trading_ai_assistant.market_data.instruments import Instrument
@@ -26,6 +27,9 @@ from swing_trading_ai_assistant.market_data.monthly_request_planner import (
 from swing_trading_ai_assistant.market_data.partition_ingestion import (
     PartitionLifecycleOutcome,
     PartitionLifecycleResult,
+)
+from swing_trading_ai_assistant.market_data.partition_reconciliation import (
+    RequestReason,
 )
 from swing_trading_ai_assistant.market_data.partition_recovery import (
     PartitionRecoveryOutcome,
@@ -252,12 +256,14 @@ def _coordinator(
     limiter: _Limiter,
     sleeper: _Sleeper,
     lifecycle_factory: object | None = None,
+    event_sink: object | None = None,
 ) -> IngestionCoordinator:
     return IngestionCoordinator(
         session_factory=session_factory,  # type: ignore[arg-type]
         limiter=limiter,  # type: ignore[arg-type]
         sleeper=sleeper,  # type: ignore[arg-type]
         jitter=SimpleNamespace(uniform=lambda lower, _upper: lower),  # type: ignore[arg-type]
+        event_sink=event_sink,  # type: ignore[arg-type]
         run_id_factory=lambda: "ark80-run",
         lease_acquirer=StorageRootLease.try_acquire,
         catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
@@ -294,6 +300,15 @@ def test_insufficient_total_attempt_budget_rejects_all_requestable_months_withou
         PartitionOutcome.NOT_ATTEMPTED,
         PartitionOutcome.NOT_ATTEMPTED,
     ]
+    assert [item.reconciliation_reasons for item in report.results] == [
+        (RequestReason.MISSING_EVIDENCE,),
+        (RequestReason.MISSING_EVIDENCE,),
+    ]
+    assert [item.ingestion_run_id for item in report.results] == [None, None]
+    assert [item.provider_attempts for item in report.results] == [0, 0]
+    assert [item.final_manifest for item in report.results] == [None, None]
+    assert [item.failure_category for item in report.results] == [None, None]
+    assert [item.error_code for item in report.results] == [None, None]
     assert (
         report.planned_count,
         report.skipped_count,
@@ -315,15 +330,17 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
     tmp_path: Path,
 ) -> None:
     schedule = _schedule(3)
+    hostile_provider_input = ["secret-token", "/hostile/path", "hostile-payload"]
     session_factory = _SessionFactory(
         [
             HistoricalResponse(200, []),
-            HistoricalResponse(500, []),
-            HistoricalResponse(500, []),
+            HistoricalResponse(500, [hostile_provider_input]),
+            HistoricalResponse(500, [hostile_provider_input]),
         ]
     )
     limiter = _Limiter()
     sleeper = _Sleeper()
+    events: list[ProviderEvent] = []
 
     def lifecycle_factory(**kwargs: object) -> SimpleNamespace:
         def execute(plan: PlannedInstrumentMonth) -> PartitionLifecycleResult:
@@ -345,7 +362,12 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
         return SimpleNamespace(execute=execute)
 
     report = _coordinator(
-        schedule, session_factory, limiter, sleeper, lifecycle_factory
+        schedule,
+        session_factory,
+        limiter,
+        sleeper,
+        lifecycle_factory,
+        events.append,
     ).run(
         IngestionCommand(
             _instrument(),
@@ -372,6 +394,31 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
         PartitionOutcome.FAILED,
         PartitionOutcome.NOT_ATTEMPTED,
     ]
+    assert [item.reconciliation_reasons for item in report.results] == [
+        (RequestReason.MISSING_EVIDENCE,),
+        (RequestReason.MISSING_EVIDENCE,),
+        (RequestReason.MISSING_EVIDENCE,),
+    ]
+    assert [item.ingestion_run_id for item in report.results] == [
+        "ark80-run",
+        "ark80-run",
+        None,
+    ]
+    assert [item.provider_attempts for item in report.results] == [1, 2, 0]
+    assert [
+        item.final_manifest.state if item.final_manifest is not None else None
+        for item in report.results
+    ] == [ManifestState.VERIFIED, ManifestState.FAILED, None]
+    assert [item.failure_category for item in report.results] == [
+        None,
+        FailureCategory.PROVIDER_RETRYABLE,
+        None,
+    ]
+    assert [item.error_code for item in report.results] == [
+        None,
+        "ATTEMPT_BUDGET_EXHAUSTED",
+        None,
+    ]
     assert (
         report.planned_count,
         report.skipped_count,
@@ -395,3 +442,15 @@ def test_runtime_total_attempt_budget_preserves_completed_month_and_stops_third(
     ]
     assert limiter.deferrals == []
     assert sleeper.delays == [timedelta(milliseconds=500)]
+    assert [
+        (event.run_id, event.attempt_ordinal, event.category, event.status_class)
+        for event in events
+    ] == [
+        ("ark80-run", 1, "provider_success", "2xx"),
+        ("ark80-run", 1, "provider_retryable", "5xx"),
+        ("ark80-run", 2, "provider_retryable", "5xx"),
+    ]
+    public_evidence = repr((report, tuple(events)))
+    assert "secret-token" not in public_evidence
+    assert "/hostile/path" not in public_evidence
+    assert "hostile-payload" not in public_evidence
