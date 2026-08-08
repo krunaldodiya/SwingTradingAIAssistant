@@ -106,7 +106,21 @@ def _ingest_fixture(
 
 def _sealed_path(root: Path, manifest: PartitionManifest) -> Path:
     assert manifest.canonical_path is not None
-    return root / manifest.canonical_path
+    plan = manifest.plan
+    expected_relative_path = (
+        Path("candles")
+        / f"provider={plan.provider}"
+        / f"exchange={plan.exchange}"
+        / f"segment={plan.segment}"
+        / f"instrument_type={plan.instrument_type}"
+        / f"security_id={plan.security_id}"
+        / f"interval={plan.interval}"
+        / f"year={plan.year:04d}"
+        / f"month={plan.month:02d}"
+        / "bars.parquet"
+    )
+    assert Path(manifest.canonical_path) == expected_relative_path
+    return root / expected_relative_path
 
 
 def _manifest_bounds(manifest: PartitionManifest) -> tuple[datetime, datetime]:
@@ -219,9 +233,15 @@ def test_b05_queries_the_sealed_2023_history_shape_through_direct_read_parquet(
         now=datetime(2024, 1, 1, tzinfo=UTC),
         run_id="ark91-b05",
     )
-    paths = tuple(str(_sealed_path(tmp_path, manifest)) for manifest in manifests)
-    assert len(paths) == 12
-    assert all(Path(path).is_file() for path in paths)
+    expected_year_months = tuple((2023, month) for month in range(1, 13))
+    assert tuple(
+        (manifest.plan.year, manifest.plan.month) for manifest in manifests
+    ) == (expected_year_months)
+    sealed_paths = tuple(_sealed_path(tmp_path, manifest) for manifest in manifests)
+    assert len(sealed_paths) == len(set(sealed_paths)) == 12
+    assert all(path.is_file() for path in sealed_paths)
+    query_paths = [str(path) for path in sealed_paths]
+    assert tuple(query_paths) == tuple(str(path) for path in sealed_paths)
     evidence = tuple(
         (_manifest_row_count(manifest), *_manifest_bounds(manifest))
         for manifest in manifests
@@ -239,7 +259,7 @@ def test_b05_queries_the_sealed_2023_history_shape_through_direct_read_parquet(
             "AND instrument_type = ? AND security_id = ? AND interval = ? "
             "AND ts >= ? AND ts <= ?",
             [
-                list(paths),
+                query_paths,
                 manifests[0].plan.provider,
                 fixture.instrument.exchange,
                 fixture.instrument.segment,
