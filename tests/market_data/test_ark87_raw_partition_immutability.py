@@ -16,6 +16,7 @@ from ark74_benchmark_fixture import (
 )
 
 import swing_trading_ai_assistant.market_data.partition_publication as publication_module
+import swing_trading_ai_assistant.market_data.partition_recovery as recovery_module
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     ManifestState,
@@ -65,87 +66,175 @@ def _empty_strings() -> list[str]:
 
 
 @dataclass(slots=True)
+class _DirectoryIdentity:
+    device: int
+    inode: int
+
+
+class _TargetPathOSProxy:
+    """A module-local OS proxy that refuses writes to one exact raw artifact."""
+
+    def __init__(self, barrier: _FinalPathWriteBarrier) -> None:
+        self._barrier = barrier
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(os, name)
+
+    def open(
+        self,
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        self._barrier.record_open(path, flags, dir_fd)
+        if dir_fd is None:
+            return os.open(path, flags, mode)  # type: ignore[arg-type]
+        return os.open(path, flags, mode, dir_fd=dir_fd)  # type: ignore[arg-type]
+
+    def link(
+        self,
+        source: object,
+        destination: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        self._barrier.record_link(source, destination, src_dir_fd, dst_dir_fd)
+        os.link(
+            source,  # type: ignore[arg-type]
+            destination,  # type: ignore[arg-type]
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    def replace(
+        self,
+        source: object,
+        destination: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        self._barrier.deny_target_mutation("replace", destination, dst_dir_fd)
+        os.replace(
+            source,  # type: ignore[arg-type]
+            destination,  # type: ignore[arg-type]
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def rename(
+        self,
+        source: object,
+        destination: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        self._barrier.deny_target_mutation("rename", destination, dst_dir_fd)
+        os.rename(
+            source,  # type: ignore[arg-type]
+            destination,  # type: ignore[arg-type]
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def unlink(self, path: object, *, dir_fd: int | None = None) -> None:
+        self._barrier.deny_target_mutation("unlink", path, dir_fd)
+        if dir_fd is None:
+            os.unlink(path)  # type: ignore[arg-type]
+            return
+        os.unlink(path, dir_fd=dir_fd)  # type: ignore[arg-type]
+
+
+@dataclass(slots=True)
 class _FinalPathWriteBarrier:
-    """Records final-path operations while leaving temp-file publication usable."""
+    """Binds final-path observations to the exact canonical parent directory."""
 
-    final_read_opens: int = 0
-    final_link_attempts: int = 0
-    blocked_final_mutations: list[str] = field(default_factory=_empty_strings)
+    target: Path
+    target_parent: _DirectoryIdentity = field(init=False)
+    target_read_opens: int = 0
+    target_link_destinations: int = 0
+    blocked_target_mutations: list[str] = field(default_factory=_empty_strings)
+    temporary_operations: list[str] = field(default_factory=_empty_strings)
+    wrong_directory_bars: int = 0
 
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: C901
-        original_open = publication_module.os.open
-        original_link = publication_module.os.link
-        original_replace = publication_module.os.replace
-        original_unlink = publication_module.os.unlink
+    def __post_init__(self) -> None:
+        target_parent = self.target.parent.stat()
+        self.target_parent = _DirectoryIdentity(
+            target_parent.st_dev, target_parent.st_ino
+        )
 
-        def guarded_open(
-            path: object,
-            flags: int,
-            mode: int = 0o777,
-            *,
-            dir_fd: int | None = None,
-        ) -> int:
-            if path == "bars.parquet":
-                if flags & (
-                    os.O_WRONLY | os.O_RDWR | os.O_TRUNC | os.O_CREAT | os.O_APPEND
-                ):
-                    self.blocked_final_mutations.append("open")
-                    raise AssertionError(
-                        "ARK-87 final path must never be opened writable"
-                    )
-                self.final_read_opens += 1
-            if dir_fd is None:
-                return original_open(path, flags, mode)  # type: ignore[arg-type]
-            return original_open(path, flags, mode, dir_fd=dir_fd)  # type: ignore[arg-type]
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        proxy = _TargetPathOSProxy(self)
+        monkeypatch.setattr(publication_module, "os", proxy)
+        monkeypatch.setattr(recovery_module, "os", proxy)
 
-        def guarded_link(
-            source: object,
-            destination: object,
-            *,
-            src_dir_fd: int | None = None,
-            dst_dir_fd: int | None = None,
-            follow_symlinks: bool = True,
-        ) -> None:
-            if destination == "bars.parquet":
-                self.final_link_attempts += 1
-            original_link(
-                source,  # type: ignore[arg-type]
-                destination,  # type: ignore[arg-type]
-                src_dir_fd=src_dir_fd,
-                dst_dir_fd=dst_dir_fd,
-                follow_symlinks=follow_symlinks,
-            )
+    def record_open(self, path: object, flags: int, dir_fd: int | None) -> None:
+        if self._is_target(path, dir_fd):
+            if flags & (
+                os.O_WRONLY | os.O_RDWR | os.O_TRUNC | os.O_CREAT | os.O_APPEND
+            ):
+                self.blocked_target_mutations.append("open")
+                raise AssertionError("ARK-87 final path must never be opened writable")
+            self.target_read_opens += 1
+        else:
+            self._record_temp("open", path)
 
-        def guarded_replace(
-            source: object,
-            destination: object,
-            *,
-            src_dir_fd: int | None = None,
-            dst_dir_fd: int | None = None,
-        ) -> None:
-            if destination == "bars.parquet":
-                self.blocked_final_mutations.append("replace")
-                raise AssertionError("ARK-87 final path must never be replaced")
-            original_replace(
-                source,  # type: ignore[arg-type]
-                destination,  # type: ignore[arg-type]
-                src_dir_fd=src_dir_fd,
-                dst_dir_fd=dst_dir_fd,
-            )
+    def record_link(
+        self,
+        source: object,
+        destination: object,
+        source_dir_fd: int | None,
+        destination_dir_fd: int | None,
+    ) -> None:
+        if self._is_target(destination, destination_dir_fd):
+            self.target_link_destinations += 1
+        else:
+            self._record_temp("link", source)
 
-        def guarded_unlink(path: object, *, dir_fd: int | None = None) -> None:
-            if path == "bars.parquet":
-                self.blocked_final_mutations.append("unlink")
-                raise AssertionError("ARK-87 final path must never be removed")
-            if dir_fd is None:
-                original_unlink(path)  # type: ignore[arg-type]
-                return
-            original_unlink(path, dir_fd=dir_fd)  # type: ignore[arg-type]
+    def deny_target_mutation(
+        self, operation: str, path: object, dir_fd: int | None
+    ) -> None:
+        if self._is_target(path, dir_fd):
+            self.blocked_target_mutations.append(operation)
+            raise AssertionError(f"ARK-87 final path must never be {operation}d")
+        self._record_temp(operation, path)
 
-        monkeypatch.setattr(publication_module.os, "open", guarded_open)
-        monkeypatch.setattr(publication_module.os, "link", guarded_link)
-        monkeypatch.setattr(publication_module.os, "replace", guarded_replace)
-        monkeypatch.setattr(publication_module.os, "unlink", guarded_unlink)
+    def _is_target(self, path: object, dir_fd: int | None) -> bool:
+        if not self._is_bars_name(path):
+            return False
+        identity = self._parent_identity(path, dir_fd)
+        if identity == self.target_parent:
+            return True
+        self.wrong_directory_bars += 1
+        return False
+
+    def _parent_identity(
+        self, path: object, dir_fd: int | None
+    ) -> _DirectoryIdentity | None:
+        try:
+            if dir_fd is not None:
+                parent = os.fstat(dir_fd)
+            elif isinstance(path, (str, Path)) and Path(path).is_absolute():
+                parent = Path(path).parent.stat()
+            else:
+                return None
+        except OSError:
+            return None
+        return _DirectoryIdentity(parent.st_dev, parent.st_ino)
+
+    def _record_temp(self, operation: str, path: object) -> None:
+        if isinstance(path, str) and path.startswith(".publish-"):
+            self.temporary_operations.append(operation)
+
+    @staticmethod
+    def _is_bars_name(path: object) -> bool:
+        return isinstance(path, (str, Path)) and Path(path).name == "bars.parquet"
 
 
 class _NeverProviderSessionFactory:
@@ -185,6 +274,7 @@ class _PartitionSnapshot:
     manifest: PartitionManifest | None
     bytes: bytes
     checksum: str
+    device: int
     inode: int
 
 
@@ -301,13 +391,15 @@ def _expected_verified_manifest(
 def _snapshot(root: Path, partition: BenchmarkFixturePartition) -> _PartitionSnapshot:
     artifact = root / _canonical_path(partition)
     data = artifact.read_bytes()
+    metadata = artifact.stat()
     with DuckDBCatalog(root) as catalog:
         manifest = catalog.get_manifest(partition.plan)
     return _PartitionSnapshot(
         manifest,
         data,
         hashlib.sha256(data).hexdigest(),
-        artifact.stat().st_ino,
+        metadata.st_dev,
+        metadata.st_ino,
     )
 
 
@@ -428,6 +520,7 @@ def _assert_verified_provenance(
 
 def test_verified_b01_rerun_skips_without_mutating_raw_partition(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture, partition = _fixture()
     expected_plan = _expected_plan(fixture)
@@ -450,6 +543,8 @@ def test_verified_b01_rerun_skips_without_mutating_raw_partition(
         "ark87-seed",
     )
     assert seeded == expected_seeded
+    barrier = _FinalPathWriteBarrier(tmp_path / _canonical_path(partition))
+    barrier.install(monkeypatch)
     sessions = _NeverProviderSessionFactory()
     limiter = _NeverLimiter()
     sleeper = _NeverSleeper()
@@ -457,6 +552,10 @@ def test_verified_b01_rerun_skips_without_mutating_raw_partition(
     report = _coordinator(sessions, limiter, sleeper, "ark87-rerun").run(
         _command(tmp_path, fixture)
     )
+    assert barrier.target_read_opens >= 1
+    assert barrier.target_link_destinations == 0
+    assert barrier.blocked_target_mutations == []
+    assert barrier.temporary_operations == []
 
     result = _assert_zero_request_success(
         report,
@@ -479,12 +578,13 @@ def test_verified_b01_rerun_skips_without_mutating_raw_partition(
 
 def test_valid_final_without_catalog_recovers_locally_without_mutating_raw_partition(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture, partition = _fixture()
     expected_plan = _expected_plan(fixture)
     published = publish_partition(tmp_path, partition.plan, partition.canonical_candles)
-    before_bytes = (tmp_path / published.canonical_path).read_bytes()
-    before_checksum = hashlib.sha256(before_bytes).hexdigest()
+    before = _snapshot(tmp_path, partition)
+    before_checksum = before.checksum
     assert before_checksum == published.checksum_sha256
     expected_recovered = _expected_verified_manifest(
         fixture,
@@ -493,6 +593,8 @@ def test_valid_final_without_catalog_recovers_locally_without_mutating_raw_parti
         before_checksum,
         "ark87-recovery",
     )
+    barrier = _FinalPathWriteBarrier(tmp_path / published.canonical_path)
+    barrier.install(monkeypatch)
     sessions = _NeverProviderSessionFactory()
     limiter = _NeverLimiter()
     sleeper = _NeverSleeper()
@@ -500,6 +602,10 @@ def test_valid_final_without_catalog_recovers_locally_without_mutating_raw_parti
     report = _coordinator(sessions, limiter, sleeper, "ark87-recovery").run(
         _command(tmp_path, fixture)
     )
+    assert barrier.target_read_opens >= 1
+    assert barrier.target_link_destinations == 0
+    assert barrier.blocked_target_mutations == []
+    assert barrier.temporary_operations == []
 
     _assert_zero_request_success(
         report,
@@ -524,8 +630,10 @@ def test_valid_final_without_catalog_recovers_locally_without_mutating_raw_parti
         == 0
     )
     after = _snapshot(tmp_path, partition)
-    assert after.bytes == before_bytes
+    assert after.bytes == before.bytes
     assert after.checksum == before_checksum
+    assert after.device == before.device
+    assert after.inode == before.inode
     assert after.manifest == expected_recovered
 
 
@@ -537,9 +645,20 @@ def test_repeat_exact_publication_is_already_present_without_overwrite(
     first = publish_partition(tmp_path, partition.plan, partition.canonical_candles)
     artifact = tmp_path / first.canonical_path
     before_bytes = artifact.read_bytes()
-    before_inode = artifact.stat().st_ino
-    barrier = _FinalPathWriteBarrier()
+    before_metadata = artifact.stat()
+    barrier = _FinalPathWriteBarrier(artifact)
     barrier.install(monkeypatch)
+    wrong_parent = tmp_path / "wrong-parent"
+    wrong_parent.mkdir()
+    (wrong_parent / "bars.parquet").write_bytes(b"control")
+    wrong_parent_fd = os.open(wrong_parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        wrong_descriptor = publication_module.os.open(
+            "bars.parquet", os.O_RDONLY, dir_fd=wrong_parent_fd
+        )
+        os.close(wrong_descriptor)
+    finally:
+        os.close(wrong_parent_fd)
 
     repeated = publish_partition(tmp_path, partition.plan, partition.canonical_candles)
 
@@ -561,8 +680,11 @@ def test_repeat_exact_publication_is_already_present_without_overwrite(
         == partition.canonical_candles[-1].ts
     )
     assert repeated.source_version == first.source_version == "upstox-historical-v3"
-    assert barrier.final_read_opens == 1
-    assert barrier.final_link_attempts == 1
-    assert barrier.blocked_final_mutations == []
+    assert barrier.target_read_opens == 1
+    assert barrier.target_link_destinations == 1
+    assert barrier.blocked_target_mutations == []
+    assert barrier.temporary_operations == ["open", "unlink"]
+    assert barrier.wrong_directory_bars == 1
     assert artifact.read_bytes() == before_bytes
-    assert artifact.stat().st_ino == before_inode
+    assert artifact.stat().st_dev == before_metadata.st_dev
+    assert artifact.stat().st_ino == before_metadata.st_ino
