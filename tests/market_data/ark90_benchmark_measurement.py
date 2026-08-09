@@ -1591,12 +1591,15 @@ def _b03_result(
     control_before: tuple[str, str, str],
     control_after: tuple[str, str, str],
 ) -> _ChildB01Result:
+    observed_request_count = len(sessions.session.requests)
     if (
         report.outcome.value != "SUCCEEDED"
         or report.failure_code.value != "NONE"
         or len(report.results) != 1
         or report.provider_attempt_count != 1
-        or sessions.open_calls != len(sessions.session.requests) != 1
+        or not _b03_observed_request_evidence_is_exact(
+            sessions.open_calls, observed_request_count
+        )
     ):
         raise RuntimeError("B03 benchmark proof failed")
     result = report.results[0]
@@ -1643,7 +1646,7 @@ def _b03_result(
         7_500,
         7_500,
         february_path.stat().st_size,
-        1,
+        observed_request_count,
         report.provider_attempt_count,
         0,
         0,
@@ -1662,6 +1665,12 @@ def _b03_result(
         control_partition_evidence=control,
         **_schedule_result_fields(typed_fixture),
     )
+
+
+def _b03_observed_request_evidence_is_exact(
+    open_calls: int, request_count: int
+) -> bool:
+    return open_calls == 1 and request_count == 1
 
 
 def _manifest_fingerprint(manifest: PartitionManifest) -> str:

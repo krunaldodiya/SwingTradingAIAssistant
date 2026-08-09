@@ -12,6 +12,7 @@ from ark90_benchmark_measurement import (
     ComparabilityIdentity,
     SourceDataShape,
     _b02_zero_side_effect_counters,
+    _b03_observed_request_evidence_is_exact,
     _Sample,
     _sampling_blocker,
     measure_b01,
@@ -80,6 +81,15 @@ def test_b02_zero_side_effect_proof_rejects_chained_comparison_counter_pattern()
 ):
     assert not _b02_zero_side_effect_counters(0, 1, 0, 0)
     assert _b02_zero_side_effect_counters(0, 0, 0, 0)
+
+
+def test_b03_request_evidence_rejects_hostile_asymmetric_counter_pattern() -> None:
+    # The former chained expression accepts this mismatched evidence because
+    # its second comparison is false.  Each B03 counter must be exact instead.
+    assert (0 != 1 != 1) is False
+    assert not _b03_observed_request_evidence_is_exact(0, 1)
+    assert not _b03_observed_request_evidence_is_exact(1, 0)
+    assert _b03_observed_request_evidence_is_exact(1, 1)
 
 
 def test_equal_untyped_comparability_values_are_retained_but_insufficient(
