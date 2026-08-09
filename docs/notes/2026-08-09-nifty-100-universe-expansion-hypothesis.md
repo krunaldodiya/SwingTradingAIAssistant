@@ -85,8 +85,9 @@ results by market regime, and report uncertainty rather than a single headline
 result. A durable trial ledger must use immutable, append-only or equivalently
 tamper-evident records preserving the code/configuration/data and membership
 versions, run dates, universe snapshots, candidate and exclusion counts,
-fills/cost assumptions, deviations, failures, decisions, timestamps, and
-provenance.
+each excluded candidate's stable point-in-time identity and explicit typed
+exclusion reason, fills/cost assumptions, deviations, failures, decisions,
+timestamps, and provenance.
 
 Operational feasibility is also an acceptance question: the program must show
 bounded request, storage, catalog, memory, runtime, retry, and review costs;
