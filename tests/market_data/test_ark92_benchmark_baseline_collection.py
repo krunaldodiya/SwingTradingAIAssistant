@@ -11,6 +11,7 @@ from ark90_benchmark_measurement import (
     BenchmarkResourceLimits,
     ComparabilityIdentity,
     SourceDataShape,
+    _b02_zero_side_effect_counters,
     _Sample,
     _sampling_blocker,
     measure_b01,
@@ -72,6 +73,13 @@ def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding(
     samples = [_Sample(0, 1, 1), _Sample(50_000_001, 1, 1)]
 
     assert _sampling_blocker(samples, None, None) == "max_gap_exceeded"
+
+
+def test_b02_zero_side_effect_proof_rejects_chained_comparison_counter_pattern() -> (
+    None
+):
+    assert not _b02_zero_side_effect_counters(0, 1, 0, 0)
+    assert _b02_zero_side_effect_counters(0, 0, 0, 0)
 
 
 def test_equal_untyped_comparability_values_are_retained_but_insufficient(
@@ -357,11 +365,12 @@ def test_catalog_timer_records_construction_and_b03_control_lookup_boundaries(
         benchmark_measurement._prepare_benchmark_workload("B04", tmp_path / "b04")
     )
 
-    assert timers[0].events[-4:] == (
+    assert timers[0].events[-5:] == (
         ("catalog", "construct"),
         ("catalog", "open"),
         ("catalog", "get_manifest"),
         ("catalog", "close"),
+        ("measurement", "b03_total_complete"),
     )
     assert timers[1].events == (
         ("catalog", "construct"),
@@ -370,6 +379,32 @@ def test_catalog_timer_records_construction_and_b03_control_lookup_boundaries(
         ("query", "execute_and_fetch"),
         ("catalog", "assert_metadata_relations"),
         ("catalog", "close"),
+    )
+
+
+def test_b03_total_timing_ends_after_post_repair_control_lookup(
+    monkeypatch: object, tmp_path: Path
+) -> None:
+    timers: list[benchmark_measurement._PhaseTimers] = []
+    base = benchmark_measurement._PhaseTimers
+
+    class _RecordingTimers(base):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            timers.append(self)
+
+    monkeypatch.setattr(benchmark_measurement, "_PhaseTimers", _RecordingTimers)
+    (tmp_path / "b03").mkdir()
+    benchmark_measurement._execute_prepared_benchmark_workload(
+        benchmark_measurement._prepare_benchmark_workload("B03", tmp_path / "b03")
+    )
+
+    assert timers[0].events[-5:] == (
+        ("catalog", "construct"),
+        ("catalog", "open"),
+        ("catalog", "get_manifest"),
+        ("catalog", "close"),
+        ("measurement", "b03_total_complete"),
     )
 
 
@@ -493,6 +528,13 @@ def test_b04_queries_one_sealed_month_through_one_configured_connection(
     assert record.query_max_ts == "2024-02-20T09:59:00.000000Z"
     assert record.query_elapsed_ms is not None
     assert record.phase_elapsed_ms["query"] == record.query_elapsed_ms
+    assert record.phase_elapsed_ms == {
+        "normalize": None,
+        "validate": None,
+        "publish": None,
+        "catalog": record.phase_elapsed_ms["catalog"],
+        "query": record.query_elapsed_ms,
+    }
 
 
 def test_b05_queries_the_twelve_partition_history_shape_with_one_connection(
@@ -514,6 +556,9 @@ def test_b05_queries_the_twelve_partition_history_shape_with_one_connection(
     assert record.physical_month_count == len(record.partition_checksums) == 12
     assert record.query_elapsed_ms is not None
     assert record.phase_elapsed_ms["query"] == record.query_elapsed_ms
+    assert record.phase_elapsed_ms["normalize"] is None
+    assert record.phase_elapsed_ms["validate"] is None
+    assert record.phase_elapsed_ms["publish"] is None
 
 
 def test_collection_retains_one_warmup_and_exactly_five_ordered_measurements_per_workload(

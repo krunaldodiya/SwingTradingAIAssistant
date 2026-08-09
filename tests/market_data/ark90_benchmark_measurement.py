@@ -336,12 +336,14 @@ class _Sample:
 class _PhaseTimers:
     """Test-only monotonic timers around the existing B01 phase boundaries."""
 
-    def __init__(self, *, query_applicable: bool = False) -> None:
+    def __init__(
+        self, *, query_applicable: bool = False, workload_phases_applicable: bool = True
+    ) -> None:
         self._events: list[tuple[str, str]] = []
         self._elapsed_ms: _PhaseElapsed = {
-            "normalize": 0,
-            "validate": 0,
-            "publish": 0,
+            "normalize": 0 if workload_phases_applicable else None,
+            "validate": 0 if workload_phases_applicable else None,
+            "publish": 0 if workload_phases_applicable else None,
             "catalog": 0,
             "query": 0 if query_applicable else None,
         }
@@ -370,6 +372,9 @@ class _PhaseTimers:
     @property
     def events(self) -> tuple[tuple[str, str], ...]:
         return tuple(self._events)
+
+    def mark(self, phase: str, operation: str) -> None:
+        self._events.append((phase, operation))
 
 
 class _TimedCatalog:
@@ -1407,8 +1412,12 @@ def _b02_result(
         or report.failure_code.value != "NONE"
         or tuple(item.outcome.value for item in report.results)
         != ("SKIPPED_VERIFIED", "SKIPPED_VERIFIED", "RECOVERED_LOCALLY")
-        or report.provider_attempt_count != 0
-        or sessions.open_calls != limiter.acquire_calls != limiter.defer_calls != 0
+        or not _b02_zero_side_effect_counters(
+            report.provider_attempt_count,
+            sessions.open_calls,
+            limiter.acquire_calls,
+            limiter.defer_calls,
+        )
     ):
         raise RuntimeError("B02 benchmark proof failed")
     typed_fixture = fixture
@@ -1422,6 +1431,7 @@ def _b02_result(
         )
         for partition in typed_fixture.partitions  # type: ignore[union-attr]
     )
+
     return _ChildB01Result(
         typed_fixture.fixture_id,  # type: ignore[union-attr]
         typed_fixture.schedule_digest,  # type: ignore[union-attr]
@@ -1451,6 +1461,10 @@ def _b02_result(
         partition_checksums=checksums,
         **_schedule_result_fields(typed_fixture),
     )
+
+
+def _b02_zero_side_effect_counters(*counters: int) -> bool:
+    return all(counter == 0 for counter in counters)
 
 
 def _prepare_b03(root: Path) -> _PreparedB03:
@@ -1524,11 +1538,12 @@ def _execute_b03(prepared: _PreparedB03) -> _ChildB01Result:
                 max_total_provider_attempts=1,
             )
         )
-    elapsed_wall_ms = _elapsed_ms(started_wall, time.monotonic_ns())
-    elapsed_cpu_ms = _elapsed_ms(started_cpu, time.process_time_ns())
     control_after = _control_evidence(
         january, _catalog_manifest(root, january, timers), root
     )
+    elapsed_wall_ms = _elapsed_ms(started_wall, time.monotonic_ns())
+    elapsed_cpu_ms = _elapsed_ms(started_cpu, time.process_time_ns())
+    timers.mark("measurement", "b03_total_complete")
     return _b03_result(
         report,
         february_fixture,
@@ -1721,7 +1736,7 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
     manifests = prepared.manifests
     workload_id = prepared.workload_id
     started_wall, started_cpu = time.monotonic_ns(), time.process_time_ns()
-    timers = _PhaseTimers(query_applicable=True)
+    timers = _PhaseTimers(query_applicable=True, workload_phases_applicable=False)
     with _TimedCatalog(root, timers) as catalog:
         timers.call(
             "catalog", _configure_benchmark_query, catalog, root, operation="configure"
