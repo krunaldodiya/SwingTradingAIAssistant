@@ -29,8 +29,10 @@ from swing_trading_ai_assistant.market_data.partition_reconciliation import (
 from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCommand,
     IngestionCoordinator,
+    IngestionReport,
     IngestionRunOutcome,
     PartitionOutcome,
+    PartitionResult,
     RunFailureCode,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
@@ -44,10 +46,12 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     StorageRootLease,
 )
 
+_FIXED_NOW = datetime(2024, 4, 1, tzinfo=UTC)
+
 
 class _FixedClock:
     def now(self) -> datetime:
-        return datetime(2024, 4, 1, tzinfo=UTC)
+        return _FIXED_NOW
 
 
 class _OneResponseSession:
@@ -174,6 +178,42 @@ def _seed_final_without_catalog(
     assert published.row_count == partition.published_count
 
 
+def _expected_verified_manifest(
+    partition: BenchmarkFixturePartition,
+    run_id: str,
+    schedule_digest: str,
+    checksum: str,
+) -> PartitionManifest:
+    active = PartitionManifest(
+        1,
+        partition.plan,
+        run_id,
+        None,
+        ManifestState.IN_PROGRESS,
+        ValidationOutcome.NOT_RUN,
+        f"nse-equity-month@v1+sessions-sha256:{schedule_digest}",
+        None,
+        None,
+        None,
+        None,
+        None,
+        partition.canonical_candles[0].source_version,
+        _FIXED_NOW,
+        _FIXED_NOW,
+        _FIXED_NOW,
+        None,
+    )
+    return verify_manifest(
+        active,
+        _FIXED_NOW,
+        partition.canonical_candles[0].ts,
+        partition.canonical_candles[-1].ts,
+        partition.published_count,
+        checksum,
+        _canonical_path(partition),
+    )
+
+
 def _snapshot(root: Path, partition: BenchmarkFixturePartition) -> _PartitionSnapshot:
     path = root / _canonical_path(partition)
     data = path.read_bytes()
@@ -275,22 +315,84 @@ def test_d21_orders_verified_skip_local_recovery_and_only_missing_month_request(
     january_after = _snapshot(tmp_path, january)
     february_after = _snapshot(tmp_path, february)
     march_after = _snapshot(tmp_path, march)
+    expected_manifests = (
+        _expected_verified_manifest(
+            january,
+            "ark89-seed-verified",
+            fixture.schedule_digest,
+            january_before.checksum,
+        ),
+        _expected_verified_manifest(
+            february,
+            "ark89-recovery",
+            fixture.schedule_digest,
+            february_before.checksum,
+        ),
+        _expected_verified_manifest(
+            march,
+            "ark89-request",
+            fixture.schedule_digest,
+            march_after.checksum,
+        ),
+    )
+    expected_results = (
+        PartitionResult(
+            january.plan,
+            PartitionOutcome.SKIPPED_VERIFIED,
+            (),
+            "ark89-seed-verified",
+            0,
+            expected_manifests[0],
+            None,
+            None,
+        ),
+        PartitionResult(
+            february.plan,
+            PartitionOutcome.RECOVERED_LOCALLY,
+            (),
+            "ark89-recovery",
+            0,
+            expected_manifests[1],
+            None,
+            None,
+        ),
+        PartitionResult(
+            march.plan,
+            PartitionOutcome.VERIFIED,
+            (RequestReason.MISSING_EVIDENCE,),
+            "ark89-request",
+            1,
+            expected_manifests[2],
+            None,
+            None,
+        ),
+    )
+    expected_report = IngestionReport(
+        IngestionRunOutcome.SUCCEEDED,
+        RunFailureCode.NONE,
+        expected_results,
+        3,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        _FIXED_NOW,
+        _FIXED_NOW,
+    )
+
+    assert type(report) is IngestionReport
+    assert all(type(result) is PartitionResult for result in report.results)
+    assert report.results == expected_results
+    assert report == expected_report
+    assert (
+        tuple(result.final_manifest for result in report.results) == expected_manifests
+    )
     assert january_after == january_before
-    assert january_after.manifest == january_manifest
+    assert january_after.manifest == january_manifest == expected_manifests[0]
     assert february_after.bytes == february_before.bytes
     assert february_after.checksum == february_before.checksum
-    assert february_after.manifest is not None
-    assert february_after.manifest.state is ManifestState.VERIFIED
-    assert february_after.manifest.validation_outcome is ValidationOutcome.PASSED
-    assert february_after.manifest.ingestion_run_id == "ark89-recovery"
-    assert february_after.manifest.row_count == february.published_count == 7_500
-    assert february_after.manifest.checksum_sha256 == february_before.checksum
-    assert march_after.manifest is not None
-    assert march_after.manifest.state is ManifestState.VERIFIED
-    assert march_after.manifest.validation_outcome is ValidationOutcome.PASSED
-    assert march_after.manifest.ingestion_run_id == "ark89-request"
-    assert march_after.manifest.row_count == march.published_count == 7_500
-    assert (
-        march_after.manifest.checksum_sha256
-        == hashlib.sha256(march_after.bytes).hexdigest()
-    )
+    assert february_after.manifest == expected_manifests[1]
+    assert march_after.manifest == expected_manifests[2]
