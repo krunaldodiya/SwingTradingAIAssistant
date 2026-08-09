@@ -439,6 +439,7 @@ def test_verified_old_alias_invalid_final_stops_before_quarantine(
         catalog.current.failure_category
         is FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED
     )
+    assert not list(tmp_path.rglob(".quarantine-*.parquet"))
 
 
 def test_abandoned_publisher_temp_is_removed_and_does_not_count_as_final(
@@ -556,6 +557,11 @@ def test_failed_old_alias_without_valid_final_requires_typed_mapping_migration(
     assert result.failure_category is None
     assert result.error_code == "MAPPING_MIGRATION_REQUIRED"
     assert result.provider_requests == 0
+    assert result.final_manifest is failed
+    assert catalog.current is failed
+    assert catalog.current.plan.instrument_key == "NSE_EQ|OLD"
+    assert catalog.current.state is ManifestState.FAILED
+    assert catalog.current.failure_category is FailureCategory.EMPTY_RESPONSE
     assert not list(tmp_path.rglob(".quarantine-*.parquet"))
     assert catalog.transitions == []
 
