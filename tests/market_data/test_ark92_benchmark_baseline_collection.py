@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import ark90_benchmark_measurement as benchmark_measurement
@@ -23,6 +23,39 @@ from ark92_benchmark_baseline_collection import (
 )
 
 
+def _identity() -> ComparabilityIdentity:
+    return ComparabilityIdentity(
+        "B01",
+        "fixture",
+        "fixture-v1",
+        "revision",
+        "tree",
+        "lock",
+        "digest",
+        "range",
+        "as-of",
+        "source",
+        "release",
+        "timezone",
+        ("kind",),
+        (("closure", "reason"),),
+        "policy",
+        ((2024, 2, "checksum"),),
+        SourceDataShape(1, 1, 1, 1),
+        BenchmarkCommandLimits("1m", 1, 1, 0, 0, 0, 0, 1, 1, 1),
+        BenchmarkResourceLimits(1.0, 10, 50, 2, "closed"),
+        "method",
+        "3.13",
+        "25.0",
+        "1.5",
+        "7.2.2",
+        "sampler",
+        "arch",
+        1,
+        "filesystem",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _IterationRecord:
     workload_id: str
@@ -30,7 +63,7 @@ class _IterationRecord:
     iteration_index: int
     outcome: str
     resource_evidence_status: str
-    comparability_key: object = "same"
+    comparability_key: object = field(default_factory=_identity)
 
 
 def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (
@@ -39,6 +72,30 @@ def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding(
     samples = [_Sample(0, 1, 1), _Sample(50_000_001, 1, 1)]
 
     assert _sampling_blocker(samples, None, None) == "max_gap_exceeded"
+
+
+def test_equal_untyped_comparability_values_are_retained_but_insufficient(
+    tmp_path: Path,
+) -> None:
+    untyped_identity = object()
+
+    def measure(workload_id: str, kind: str, index: int) -> _IterationRecord:
+        return _IterationRecord(
+            workload_id,
+            kind,
+            index,
+            "SUCCEEDED",
+            "VALID",
+            untyped_identity,
+        )
+
+    report = collect_baseline_samples(tmp_path, measure)
+    b01 = report.results[0]
+
+    assert b01.retained_measurement_count == 5
+    assert b01.valid_measurement_count == 0
+    assert b01.status is BaselineCollectionStatus.INSUFFICIENT
+    assert b01.threshold_claim is None
 
 
 def test_ordinary_terminal_observations_are_typed_done_results_with_actual_provenance(
@@ -121,36 +178,7 @@ def test_comparability_identity_includes_each_frozen_plan03_dimension() -> None:
 def test_each_comparability_identity_dimension_mismatch_is_insufficient(
     tmp_path: Path,
 ) -> None:
-    base = ComparabilityIdentity(
-        "B01",
-        "fixture",
-        "fixture-v1",
-        "revision",
-        "tree",
-        "lock",
-        "digest",
-        "range",
-        "as-of",
-        "source",
-        "release",
-        "timezone",
-        ("kind",),
-        (("closure", "reason"),),
-        "policy",
-        ((2024, 2, "checksum"),),
-        SourceDataShape(1, 1, 1, 1),
-        BenchmarkCommandLimits("1m", 1, 1, 0, 0, 0, 0, 1, 1, 1),
-        BenchmarkResourceLimits(1.0, 10, 50, 2, "closed"),
-        "method",
-        "3.13",
-        "25.0",
-        "1.5",
-        "7.2.2",
-        "sampler",
-        "arch",
-        1,
-        "filesystem",
-    )
+    base = _identity()
 
     for field_name in ComparabilityIdentity.__dataclass_fields__:
         changed = replace(base, **{field_name: (getattr(base, field_name), "other")})
@@ -256,6 +284,9 @@ def test_non_b01_child_terminal_failures_are_retained_with_its_own_provenance(
 def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(
     tmp_path: Path,
 ) -> None:
+    base = _identity()
+    changed = replace(base, source_tree="other-tree")
+
     def measure(workload_id: str, kind: str, index: int) -> _IterationRecord:
         return _IterationRecord(
             workload_id,
@@ -263,7 +294,7 @@ def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(
             index,
             "SUCCEEDED",
             "VALID",
-            "other" if (workload_id, kind, index) == ("B02", "measured", 4) else "same",
+            changed if (workload_id, kind, index) == ("B02", "measured", 4) else base,
         )
 
     report = collect_baseline_samples(tmp_path, measure)
@@ -301,8 +332,45 @@ def test_b02_and_query_catalog_phases_are_measured_at_execution(
     assert b04.phase_elapsed_ms["catalog"] is not None
     assert b04.phase_elapsed_ms["query"] is not None
     assert b02_catalog_calls >= 5  # open, reconciliation operations, and close
-    assert b04_catalog_calls == 4  # open, configuration, assertion, and close
+    assert b04_catalog_calls == 5  # construct, open, configuration, assertion, close
     assert "query" in calls
+
+
+def test_catalog_timer_records_construction_and_b03_control_lookup_boundaries(
+    monkeypatch: object, tmp_path: Path
+) -> None:
+    timers: list[benchmark_measurement._PhaseTimers] = []
+    base = benchmark_measurement._PhaseTimers
+
+    class _RecordingTimers(base):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            timers.append(self)
+
+    monkeypatch.setattr(benchmark_measurement, "_PhaseTimers", _RecordingTimers)
+    (tmp_path / "b03").mkdir()
+    (tmp_path / "b04").mkdir()
+    benchmark_measurement._execute_prepared_benchmark_workload(
+        benchmark_measurement._prepare_benchmark_workload("B03", tmp_path / "b03")
+    )
+    benchmark_measurement._execute_prepared_benchmark_workload(
+        benchmark_measurement._prepare_benchmark_workload("B04", tmp_path / "b04")
+    )
+
+    assert timers[0].events[-4:] == (
+        ("catalog", "construct"),
+        ("catalog", "open"),
+        ("catalog", "get_manifest"),
+        ("catalog", "close"),
+    )
+    assert timers[1].events == (
+        ("catalog", "construct"),
+        ("catalog", "open"),
+        ("catalog", "configure"),
+        ("query", "execute_and_fetch"),
+        ("catalog", "assert_metadata_relations"),
+        ("catalog", "close"),
+    )
 
 
 def test_non_b01_child_prepares_the_corpus_before_its_start_barrier(

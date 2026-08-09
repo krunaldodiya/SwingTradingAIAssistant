@@ -8,7 +8,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, TypeVar
 
-from ark90_benchmark_measurement import measure_b01, measure_benchmark_workload
+from ark90_benchmark_measurement import (
+    ComparabilityIdentity,
+    measure_b01,
+    measure_benchmark_workload,
+)
 
 _WORKLOAD_IDS = ("B01", "B02", "B03", "B04", "B05")
 _MEASURED_ITERATION_COUNT = 5
@@ -22,7 +26,7 @@ class BaselineIterationRecord(Protocol):
     iteration_index: int
     outcome: str
     resource_evidence_status: str
-    comparability_key: object
+    comparability_key: ComparabilityIdentity
 
 
 RecordT = TypeVar("RecordT", bound=BaselineIterationRecord)
@@ -140,4 +144,8 @@ def _validate_records(
 
 
 def _is_valid_record(record: BaselineIterationRecord) -> bool:
-    return record.outcome == "SUCCEEDED" and record.resource_evidence_status == "VALID"
+    return (
+        record.outcome == "SUCCEEDED"
+        and record.resource_evidence_status == "VALID"
+        and type(record.comparability_key) is ComparabilityIdentity
+    )

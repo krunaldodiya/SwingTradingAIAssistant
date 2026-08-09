@@ -337,6 +337,7 @@ class _PhaseTimers:
     """Test-only monotonic timers around the existing B01 phase boundaries."""
 
     def __init__(self, *, query_applicable: bool = False) -> None:
+        self._events: list[tuple[str, str]] = []
         self._elapsed_ms: _PhaseElapsed = {
             "normalize": 0,
             "validate": 0,
@@ -350,8 +351,10 @@ class _PhaseTimers:
         phase: str,
         action: Callable[..., object],
         *args: object,
+        operation: str | None = None,
         **kwargs: object,
     ) -> object:
+        self._events.append((phase, operation or action.__name__))
         started = time.monotonic_ns()
         try:
             return action(*args, **kwargs)
@@ -364,34 +367,52 @@ class _PhaseTimers:
     def snapshot(self) -> _PhaseElapsed:
         return dict(self._elapsed_ms)
 
+    @property
+    def events(self) -> tuple[tuple[str, str], ...]:
+        return tuple(self._events)
+
 
 class _TimedCatalog:
     """Measure catalog operations without changing the production catalog."""
 
     def __init__(self, root: Path, timers: _PhaseTimers) -> None:
-        self._catalog = DuckDBCatalog(root)
         self._timers = timers
+        catalog = timers.call("catalog", DuckDBCatalog, root, operation="construct")
+        if not isinstance(catalog, DuckDBCatalog):
+            raise RuntimeError("benchmark catalog construction failed")
+        self._catalog = catalog
 
     def __enter__(self) -> _TimedCatalog:
-        self._timers.call("catalog", self._catalog.__enter__)
+        self._timers.call("catalog", self._catalog.__enter__, operation="open")
         return self
 
     def __exit__(self, *args: object) -> None:
-        self._timers.call("catalog", self._catalog.__exit__, *args)
+        self._timers.call("catalog", self._catalog.__exit__, *args, operation="close")
 
     @property
     def connection(self) -> object:
         return self._catalog.connection
 
     def get_manifest(self, plan: object) -> object:
-        return self._timers.call("catalog", self._catalog.get_manifest, plan)
+        return self._timers.call(
+            "catalog", self._catalog.get_manifest, plan, operation="get_manifest"
+        )
 
     def create_manifest(self, manifest: object) -> object:
-        return self._timers.call("catalog", self._catalog.create_manifest, manifest)
+        return self._timers.call(
+            "catalog",
+            self._catalog.create_manifest,
+            manifest,
+            operation="create_manifest",
+        )
 
     def transition_manifest(self, current: object, target: object) -> object:
         return self._timers.call(
-            "catalog", self._catalog.transition_manifest, current, target
+            "catalog",
+            self._catalog.transition_manifest,
+            current,
+            target,
+            operation="transition_manifest",
         )
 
 
@@ -1505,7 +1526,9 @@ def _execute_b03(prepared: _PreparedB03) -> _ChildB01Result:
         )
     elapsed_wall_ms = _elapsed_ms(started_wall, time.monotonic_ns())
     elapsed_cpu_ms = _elapsed_ms(started_cpu, time.process_time_ns())
-    control_after = _control_evidence(january, _catalog_manifest(root, january), root)
+    control_after = _control_evidence(
+        january, _catalog_manifest(root, january, timers), root
+    )
     return _b03_result(
         report,
         february_fixture,
@@ -1520,9 +1543,9 @@ def _execute_b03(prepared: _PreparedB03) -> _ChildB01Result:
 
 
 def _catalog_manifest(
-    root: Path, partition: BenchmarkFixturePartition
+    root: Path, partition: BenchmarkFixturePartition, timers: _PhaseTimers
 ) -> PartitionManifest:
-    with DuckDBCatalog(root) as catalog:
+    with _TimedCatalog(root, timers) as catalog:
         manifest = catalog.get_manifest(partition.plan)
     if not isinstance(manifest, PartitionManifest):
         raise RuntimeError("benchmark control manifest is unavailable")
@@ -1700,7 +1723,9 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
     started_wall, started_cpu = time.monotonic_ns(), time.process_time_ns()
     timers = _PhaseTimers(query_applicable=True)
     with _TimedCatalog(root, timers) as catalog:
-        timers.call("catalog", _configure_benchmark_query, catalog, root)
+        timers.call(
+            "catalog", _configure_benchmark_query, catalog, root, operation="configure"
+        )
         aggregate = timers.call(
             "query",
             _fetch_benchmark_aggregate,
@@ -1708,8 +1733,14 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
             paths,
             fixture,
             manifests,
+            operation="execute_and_fetch",
         )
-        timers.call("catalog", _assert_metadata_relations_only, catalog)
+        timers.call(
+            "catalog",
+            _assert_metadata_relations_only,
+            catalog,
+            operation="assert_metadata_relations",
+        )
     phase_elapsed_ms = timers.snapshot()
     return _query_result(
         aggregate,
