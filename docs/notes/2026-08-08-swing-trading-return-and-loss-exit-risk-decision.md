@@ -90,6 +90,40 @@ The evidence must prevent look-ahead, survivorship, and data-snooping bias. It
 must use point-in-time Nifty 50 membership because Nifty 50 constituents are
 reviewed and may be replaced or reconstituted [4].
 
+## Open research: implied-volatility and forensic-evidence limits
+
+**Status: open research/supporting rationale.** This section records a boundary
+for interpreting options-market observations; it does not add an options
+strategy, option analytics, a strategy specification, architecture work, or a
+Sprint 2 requirement. The accepted no-F&O/no-option-analytics product direction
+remains unchanged.
+
+An implied-volatility (IV) decline can hurt a long-vega option buyer (often
+called IV crush), while an IV rise can hurt a short-vega option seller even when
+spot remains range-bound. Those effects are option-position mechanics, not a
+signal or recommendation for this delivery-equity swing tool. NSE describes
+India VIX as a near-term expected-volatility measure calculated from best
+bid-ask quotes in the NIFTY options order book [5]. Expected-volatility
+repricing, order-book liquidity, and event risk can therefore explain observed
+IV movement without establishing a directional spot view.
+
+IV movement alone does not prove intent, manipulation, or a particular
+counterparty relationship. NSE publishes a Reversal Trade Cancellation
+Mechanism under surveillance resources [6]. SEBI has also issued an
+adjudication order concerning three-way reversals in illiquid stock-options
+contracts [7]. That regulatory evidence establishes that reversal-based
+manipulation allegations and findings have existed in that specific illiquid
+contract context; it cannot be generalized to every liquid NIFTY move, IV
+change, or ordinary market trade.
+
+A retail last-traded-price feed or chart cannot establish counterparties, order
+intent, coordination, or whether an observed sequence was abusive. Any future
+forensic question would require appropriately authorized, complete evidence
+such as timestamped order and trade audit trails, order modifications and
+cancellations, market-wide order-book and liquidity context, contract details,
+and the relevant exchange or regulatory record. This is an evidence boundary,
+not a request to collect or process those data in the current product.
+
 ## Consequences and next steps
 
 Before implementation, a future strategy specification must freeze exact entry,
@@ -103,3 +137,6 @@ returns or autonomously trade.
 2. [SEBI Investor — Avenues for Investments](https://investor.sebi.gov.in/investment-assetclasses.html), accessed 2026-08-08.
 3. [Zerodha Support — What is Verified P&L and how to use it?](https://support.zerodha.com/category/console/reports/other-queries/articles/verified-p-l), accessed 2026-08-08. Cited only for the platform-specific capability statement above.
 4. [NSE Indices — Methodology Document for Equity Indices](https://www.niftyindices.com/Methodology/Method_Nifty_50.pdf), accessed 2026-08-08.
+5. [NSE India — India VIX Index](https://www.nseindia.com/static/products-services/indices-indiavix-index), reverified 2026-08-09.
+6. [NSE India — FAQs: Reversal Trade Cancellation Mechanism](https://www.nseindia.com/static/resources/faqs), reverified 2026-08-09.
+7. [SEBI — Adjudication Order: three-way reversals in illiquid stock-options contracts on NSE](https://www.sebi.gov.in/enforcement/orders/jan-2026/adjudication-order-in-the-matter-of-execution-of-three-way-reversals-by-certain-entities-in-illiquid-stock-options-segment-contract-on-nse_99424.html), reverified 2026-08-09.
