@@ -127,6 +127,20 @@ Before ending a substantive design or research task, explicitly check whether
 anything worth preserving has been captured. Trivial implementation chatter and
 temporary debugging details do not require a note.
 
+### Capture commitment and permission
+
+Do not end a substantive discussion with ambiguous wording such as “worth
+capturing” that leaves the action unresolved. When capture is within existing
+authority and needs no new owner decision, dependency, or scope change, state
+“I am capturing this” (or equally explicit committed wording) and complete the
+curation in the same task/workflow. An explicit owner direction to capture
+already grants that authority. When capture instead requires owner authority, a
+meaningful product, scope, or architecture choice, sensitive action, or an
+unresolved dependency, ask “Should I capture this?” (or an equally explicit
+permission question) and wait. This communication rule does not bypass the
+knowledge-curation, privacy, source-of-truth, approved-specification, single-WIP,
+Linear, quality-gate, review, or safety boundaries above.
+
 ## Research integrity
 
 - Use point-in-time constituent membership and sector classification.

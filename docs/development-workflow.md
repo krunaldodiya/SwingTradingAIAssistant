@@ -20,6 +20,20 @@ acceptance criteria. Keep architecture decisions in the authoritative docs and
 record durable, non-duplicative discussion outcomes under `docs/notes/` when
 required by `AGENTS.md`.
 
+## Knowledge-capture communication contract
+
+For a substantive discussion, agents must not leave capture unresolved with
+ambiguous phrasing such as “worth capturing.” Follow the capture commitment and
+permission rule in `AGENTS.md`: when existing authority covers the curation,
+state “I am capturing this” (or equally explicit committed wording) and proceed
+in the same task/workflow; an explicit owner direction to capture already grants
+that authority. When owner authority, a meaningful product, scope, or
+architecture choice, sensitive action, or an unresolved dependency is required,
+ask “Should I capture this?” (or an equally explicit permission question) and
+wait. This wording never creates a new Goal, changes scope, or bypasses the
+approved-specification, single-WIP, Linear, quality-gate, review, privacy, or
+safety controls.
+
 ## Agile hierarchy and product backlog
 
 Use this hierarchy consistently in Linear:
