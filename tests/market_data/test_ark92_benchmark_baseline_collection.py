@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ark90_benchmark_measurement as benchmark_measurement
-from ark90_benchmark_measurement import measure_benchmark_workload
+from ark90_benchmark_measurement import (
+    _Sample,
+    _sampling_blocker,
+    measure_b01,
+    measure_benchmark_workload,
+)
 from ark92_benchmark_baseline_collection import (
     BaselineCollectionStatus,
     collect_baseline_samples,
@@ -21,6 +26,130 @@ class _IterationRecord:
     iteration_index: int
     outcome: str
     resource_evidence_status: str
+    comparability_key: str = "same"
+
+
+def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (
+    None
+):
+    samples = [_Sample(0, 1, 1), _Sample(50_000_001, 1, 1)]
+
+    assert _sampling_blocker(samples, None, None) == "max_gap_exceeded"
+
+
+def test_real_child_failure_is_sanitized_retained_and_does_not_stop_collection(
+    tmp_path: Path,
+) -> None:
+    failed = measure_b01(
+        tmp_path,
+        iteration_kind="measured",
+        iteration_index=1,
+        child_failure=True,
+    )
+
+    assert failed.outcome == "FAILED"
+    assert failed.failure_code == "B01_CHILD_FAILED"
+    assert failed.rows_published == 0
+    assert failed.resource_blocker is not None
+    assert "Exception" not in failed.failure_code
+    assert len(failed.source_revision) == len(failed.source_tree) == 40
+    assert len(failed.lock_identity) == len(failed.schedule_digest) == 64
+
+    calls: list[tuple[str, str, int]] = []
+
+    def measure(workload_id: str, kind: str, index: int) -> _IterationRecord:
+        calls.append((workload_id, kind, index))
+        if (workload_id, kind, index) == ("B03", "measured", 3):
+            return _IterationRecord(workload_id, kind, index, "FAILED", "INVALID")
+        return _IterationRecord(workload_id, kind, index, "SUCCEEDED", "VALID")
+
+    report = collect_baseline_samples(tmp_path / "collection", measure)
+
+    assert calls[-1] == ("B05", "measured", 5)
+    assert report.results[2].status is BaselineCollectionStatus.INSUFFICIENT
+    assert report.results[2].measured[2].outcome == "FAILED"
+
+
+def test_non_b01_child_terminal_failures_are_retained_with_its_own_provenance(
+    tmp_path: Path,
+) -> None:
+    records = tuple(
+        measure_benchmark_workload(
+            tmp_path,
+            workload_id="B02",
+            iteration_kind="measured",
+            iteration_index=index,
+            child_terminal=terminal,
+        )
+        for index, terminal in enumerate(("failure", "cancelled", "invalid"), start=1)
+    )
+
+    assert tuple(record.workload_id for record in records) == ("B02",) * 3
+    assert tuple(record.outcome for record in records) == ("FAILED",) * 3
+    assert tuple(record.failure_code for record in records) == (
+        "BENCHMARK_CHILD_FAILED",
+        "BENCHMARK_CHILD_CANCELLED",
+        "CHILD_PROTOCOL_INVALID",
+    )
+    for record in records:
+        assert record.rows_published == 0
+        assert record.resource_evidence_status.value == "INVALID"
+        assert record.resource_blocker == record.failure_code
+        assert record.physical_month_count == len(record.partition_checksums) == 3
+        assert all(
+            checksum == "0" * 64 for _, _, checksum in record.partition_checksums
+        )
+        assert len(record.source_revision) == len(record.source_tree) == 40
+        assert len(record.lock_identity) == len(record.schedule_digest) == 64
+
+
+def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(
+    tmp_path: Path,
+) -> None:
+    def measure(workload_id: str, kind: str, index: int) -> _IterationRecord:
+        return _IterationRecord(
+            workload_id,
+            kind,
+            index,
+            "SUCCEEDED",
+            "VALID",
+            "other" if (workload_id, kind, index) == ("B02", "measured", 4) else "same",
+        )
+
+    report = collect_baseline_samples(tmp_path, measure)
+    b02 = report.results[1]
+
+    assert b02.retained_measurement_count == 5
+    assert b02.valid_measurement_count == 4
+    assert b02.status is BaselineCollectionStatus.INSUFFICIENT
+
+
+def test_b02_and_query_catalog_phases_are_measured_at_execution(
+    monkeypatch: object, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    base = benchmark_measurement._PhaseTimers
+
+    class _RecordingTimers(base):
+        def call(self, phase: str, *args: object, **kwargs: object) -> object:
+            calls.append(phase)
+            return super().call(phase, *args, **kwargs)
+
+    monkeypatch.setattr(benchmark_measurement, "_PhaseTimers", _RecordingTimers)
+    (tmp_path / "b02").mkdir()
+    (tmp_path / "b04").mkdir()
+    b02 = benchmark_measurement._execute_prepared_benchmark_workload(
+        benchmark_measurement._prepare_benchmark_workload("B02", tmp_path / "b02")
+    )
+    b04 = benchmark_measurement._execute_prepared_benchmark_workload(
+        benchmark_measurement._prepare_benchmark_workload("B04", tmp_path / "b04")
+    )
+
+    assert b02.phase_elapsed_ms["catalog"] is not None
+    assert b04.phase_elapsed_ms["catalog"] is not None
+    assert b04.phase_elapsed_ms["query"] is not None
+    assert calls.count("catalog") >= 2
+    assert "query" in calls
 
 
 def test_non_b01_child_prepares_the_corpus_before_its_start_barrier(

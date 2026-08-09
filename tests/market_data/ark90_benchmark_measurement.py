@@ -74,6 +74,7 @@ _SamplerFailure = Literal[
     "too_few_samples",
     "gap_exceeded",
 ]
+_ChildTerminal = Literal["failure", "cancelled", "invalid"]
 
 
 class ResourceEvidenceStatus(StrEnum):
@@ -141,6 +142,7 @@ class B01MeasurementRecord:
     partition_outcomes: tuple[str, ...]
     reconciliation_reasons: tuple[str, ...]
     control_partition_evidence: _ControlPartitionEvidence | None
+    comparability_key: tuple[object, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,13 +240,13 @@ class _Sample:
 class _PhaseTimers:
     """Test-only monotonic timers around the existing B01 phase boundaries."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, query_applicable: bool = False) -> None:
         self._elapsed_ms: _PhaseElapsed = {
             "normalize": 0,
             "validate": 0,
             "publish": 0,
             "catalog": 0,
-            "query": None,
+            "query": 0 if query_applicable else None,
         }
 
     def call(
@@ -324,6 +326,7 @@ def measure_b01(
     iteration_kind: Literal["warmup", "measured"],
     iteration_index: int,
     sampler_failure: _SamplerFailure | None = None,
+    child_failure: bool = False,
 ) -> B01MeasurementRecord:
     """Measure one real B01 ingestion in a fresh child with parent sampling."""
     if iteration_kind not in {"warmup", "measured"} or iteration_index < 1:
@@ -338,7 +341,7 @@ def measure_b01(
     parent_connection, child_connection = multiprocessing.get_context("spawn").Pipe()
     child = multiprocessing.get_context("spawn").Process(
         target=_run_b01_child,
-        args=(child_connection, str(child_root)),
+        args=(child_connection, str(child_root), child_failure),
     )
     child.start()
     child_connection.close()
@@ -347,6 +350,7 @@ def measure_b01(
             parent_connection,
             child,
             sampler_failure,
+            "B01",
         )
     finally:
         parent_connection.close()
@@ -361,6 +365,7 @@ def measure_benchmark_workload(
     workload_id: Literal["B02", "B03", "B04", "B05"],
     iteration_kind: Literal["warmup", "measured"],
     iteration_index: int,
+    child_terminal: _ChildTerminal | None = None,
 ) -> B01MeasurementRecord:
     """Measure one non-B01 Plan 03 workload in its own controlled child."""
     if iteration_kind not in {"warmup", "measured"} or iteration_index < 1:
@@ -373,12 +378,14 @@ def measure_benchmark_workload(
     parent_connection, child_connection = context.Pipe()
     child = context.Process(
         target=_run_benchmark_child,
-        args=(child_connection, workload_id, str(child_root)),
+        args=(child_connection, workload_id, str(child_root), child_terminal),
     )
     child.start()
     child_connection.close()
     try:
-        result, resources = _control_and_sample_child(parent_connection, child, None)
+        result, resources = _control_and_sample_child(
+            parent_connection, child, None, workload_id
+        )
     finally:
         parent_connection.close()
         _stop_child(child)
@@ -396,11 +403,15 @@ def get_args_for_sampler_failure() -> tuple[_SamplerFailure, ...]:
     )
 
 
-def _run_b01_child(connection: Connection, root_text: str) -> None:
+def _run_b01_child(
+    connection: Connection, root_text: str, child_failure: bool = False
+) -> None:
     try:
         connection.send("READY")
         if connection.recv() != "START":
             return
+        if child_failure:
+            raise RuntimeError("injected child failure")
         connection.send(("DONE", _execute_b01(Path(root_text))))
         _accept_exact_exit(connection)
     except Exception:
@@ -410,12 +421,23 @@ def _run_b01_child(connection: Connection, root_text: str) -> None:
 
 
 def _run_benchmark_child(
-    connection: Connection, workload_id: str, root_text: str
+    connection: Connection,
+    workload_id: str,
+    root_text: str,
+    child_terminal: _ChildTerminal | None = None,
 ) -> None:
     try:
         prepared = _prepare_benchmark_workload(workload_id, Path(root_text))
         connection.send("READY")
         if connection.recv() != "START":
+            return
+        if child_terminal == "failure":
+            raise RuntimeError("injected child failure")
+        if child_terminal == "cancelled":
+            connection.send(("CANCELLED", "BENCHMARK_CHILD_CANCELLED"))
+            return
+        if child_terminal == "invalid":
+            connection.send(("INVALID", "BENCHMARK_CHILD_PROTOCOL_INVALID"))
             return
         connection.send(("DONE", _execute_prepared_benchmark_workload(prepared)))
         _accept_exact_exit(connection)
@@ -564,6 +586,7 @@ def _control_and_sample_child(
     connection: Connection,
     child: multiprocessing.Process,
     sampler_failure: _SamplerFailure | None,
+    workload_id: str,
 ) -> tuple[_ChildB01Result, _ResourceEvidence]:
     if not connection.poll(_CONTROL_TIMEOUT_S) or connection.recv() != "READY":
         raise RuntimeError("B01 child did not become ready")
@@ -576,11 +599,15 @@ def _control_and_sample_child(
     message, loop_blocker = _wait_for_done(
         connection, process, samples, sampler_failure
     )
-    result = _done_child_result(message)
+    result, completed = _child_message_result(message, workload_id)
     invalid_blocker = _end_sample(
-        process, samples, sampler_failure, invalid_blocker or loop_blocker
+        process,
+        samples,
+        sampler_failure,
+        invalid_blocker or loop_blocker or (None if completed else result.failure_code),
     )
-    connection.send("EXIT")
+    if completed:
+        connection.send("EXIT")
     invalid_blocker = _sampling_blocker(samples, sampler_failure, invalid_blocker)
     resources = _resource_evidence(samples, invalid_blocker)
     return result, resources
@@ -611,10 +638,79 @@ def _inject_gap_if_requested(
     samples.append(_sample(process))
 
 
-def _done_child_result(message: tuple[object, object]) -> _ChildB01Result:
-    if message[0] != "DONE" or type(message[1]) is not _ChildB01Result:
-        raise RuntimeError("B01 child failed")
-    return message[1]
+def _child_message_result(
+    message: tuple[object, object],
+    workload_id: str,
+) -> tuple[_ChildB01Result, bool]:
+    if message[0] == "DONE" and type(message[1]) is _ChildB01Result:
+        return message[1], True
+    if message[0] == "ERROR" and message[1] in {
+        "B01_CHILD_FAILED",
+        "BENCHMARK_CHILD_FAILED",
+    }:
+        return _failed_child_result(str(message[1]), workload_id), False
+    if message[0] == "CANCELLED" and message[1] in {
+        "B01_CHILD_CANCELLED",
+        "BENCHMARK_CHILD_CANCELLED",
+    }:
+        return _failed_child_result(str(message[1]), workload_id), False
+    return _failed_child_result("CHILD_PROTOCOL_INVALID", workload_id), False
+
+
+def _failed_child_result(failure_code: str, workload_id: str) -> _ChildB01Result:
+    fixture = _fixture_for_workload(workload_id)
+    return _ChildB01Result(
+        fixture.fixture_id,
+        fixture.schedule_digest,
+        fixture.validation_policy,
+        "0" * 64,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        {
+            "normalize": None,
+            "validate": None,
+            "publish": None,
+            "catalog": None,
+            "query": None,
+        },
+        "FAILED",
+        failure_code,
+        (),
+        workload_id=workload_id,
+        requested_range=_requested_range(fixture),
+        physical_month_count=len(fixture.partitions),
+        partition_checksums=tuple(
+            (partition.plan.year, partition.plan.month, "0" * 64)
+            for partition in fixture.partitions
+        ),
+    )
+
+
+def _fixture_for_workload(workload_id: str) -> object:
+    ranges = {
+        "B01": (date(2024, 2, 1), date(2024, 2, 1)),
+        "B02": (date(2024, 1, 1), date(2024, 3, 1)),
+        "B03": (date(2024, 2, 1), date(2024, 2, 1)),
+        "B04": (date(2024, 2, 1), date(2024, 2, 1)),
+        "B05": (date(2023, 1, 1), date(2023, 12, 1)),
+    }
+    from_month, to_month = ranges[workload_id]
+    return benchmark_nse_eq_v1(from_month, to_month)
+
+
+def _requested_range(fixture: object) -> str:
+    partitions = fixture.partitions  # type: ignore[attr-defined]
+    first, last = partitions[0].plan, partitions[-1].plan
+    return f"{first.year:04d}-{first.month:02d}-01..{last.year:04d}-{last.month:02d}-31"
 
 
 def _accept_exact_exit(connection: Connection) -> None:
@@ -648,7 +744,7 @@ def _sampling_blocker(
         return "too_few_samples"
     if invalid_blocker is not None:
         return invalid_blocker
-    if _max_gap_ms(samples) > _MAX_SAMPLING_GAP_MS:
+    if _max_gap_ns(samples) > _MAX_SAMPLING_GAP_MS * 1_000_000:
         return "max_gap_exceeded"
     return None
 
@@ -682,10 +778,14 @@ def _sample(process: psutil.Process) -> _Sample:
 
 
 def _max_gap_ms(samples: list[_Sample]) -> int:
+    return _max_gap_ns(samples) // 1_000_000
+
+
+def _max_gap_ns(samples: list[_Sample]) -> int:
     if len(samples) < 2:
         return 0
     return max(
-        _elapsed_ms(samples[index].monotonic_ns, samples[index + 1].monotonic_ns)
+        samples[index + 1].monotonic_ns - samples[index].monotonic_ns
         for index in range(len(samples) - 1)
     )
 
@@ -788,6 +888,28 @@ def _record_b01(
         partition_outcomes=result.partition_outcomes,
         reconciliation_reasons=result.reconciliation_reasons,
         control_partition_evidence=result.control_partition_evidence,
+        comparability_key=(
+            result.workload_id,
+            result.fixture_id,
+            result.schedule_digest,
+            result.policy_version,
+            result.requested_range,
+            result.physical_month_count,
+            result.partition_checksums or ((2024, 2, result.checksum),),
+            result.rows_raw,
+            result.rows_normalized,
+            result.rows_published,
+            runtime_platform.python_version().rsplit(".", 1)[0],
+            duckdb.__version__.rsplit(".", 1)[0],
+            pyarrow.__version__.rsplit(".", 1)[0],
+            psutil.__version__,
+            _SAMPLER_METHOD,
+            runtime_platform.machine(),
+            os.cpu_count() or 1,
+            _filesystem_type(root),
+            _SAMPLING_INTERVAL_S,
+            _MAX_SAMPLING_GAP_MS,
+        ),
     )
 
 
@@ -978,12 +1100,14 @@ def _execute_b02(prepared: _PreparedB02) -> _ChildB01Result:
     fixture = prepared.fixture
     sessions = prepared.sessions
     limiter = prepared.limiter
+    timers = _PhaseTimers()
     started_wall, started_cpu = time.monotonic_ns(), time.process_time_ns()
     report = IngestionCoordinator(
         session_factory=sessions,  # type: ignore[arg-type]
         limiter=limiter,  # type: ignore[arg-type]
         clock=_StaticClock(datetime(2024, 4, 1, tzinfo=UTC)),
         run_id_factory=lambda: "ark92-b02-recovery",
+        catalog_factory=lambda catalog_root: _TimedCatalog(catalog_root, timers),
     ).run(
         IngestionCommand(
             fixture.instrument,
@@ -1004,6 +1128,7 @@ def _execute_b02(prepared: _PreparedB02) -> _ChildB01Result:
         limiter,
         started_wall,
         started_cpu,
+        timers.snapshot(),
     )
 
 
@@ -1016,6 +1141,7 @@ def _b02_result(
     limiter: _NeverLimiter,
     started_wall: int,
     started_cpu: int,
+    phase_elapsed_ms: _PhaseElapsed,
 ) -> _ChildB01Result:
     if (
         report.outcome.value != "SUCCEEDED"
@@ -1056,13 +1182,7 @@ def _b02_result(
         0,
         _elapsed_ms(started_wall, time.monotonic_ns()),
         _elapsed_ms(started_cpu, time.process_time_ns()),
-        {
-            "normalize": None,
-            "validate": None,
-            "publish": None,
-            "catalog": 0,
-            "query": None,
-        },
+        {**phase_elapsed_ms, "normalize": None, "validate": None, "publish": None},
         report.outcome.value,
         report.failure_code.value,
         tuple(item.outcome.value for item in report.results),
@@ -1338,10 +1458,12 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
     manifests = prepared.manifests
     workload_id = prepared.workload_id
     started_wall, started_cpu = time.monotonic_ns(), time.process_time_ns()
-    query_started = time.monotonic_ns()
+    timers = _PhaseTimers(query_applicable=True)
     with DuckDBCatalog(root) as catalog:
-        _configure_benchmark_query(catalog, root)
-        aggregate = catalog.connection.execute(
+        timers.call("catalog", _configure_benchmark_query, catalog, root)
+        aggregate = timers.call(
+            "query",
+            catalog.connection.execute,
             "SELECT count(*), CAST(min(ts) AS VARCHAR), CAST(max(ts) AS VARCHAR) "
             "FROM read_parquet(?) "
             "WHERE provider = ? AND exchange = ? AND segment = ? "
@@ -1360,7 +1482,7 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
             ],
         ).fetchone()
         _assert_metadata_relations_only(catalog)
-    query_elapsed_ms = _elapsed_ms(query_started, time.monotonic_ns())
+    phase_elapsed_ms = timers.snapshot()
     return _query_result(
         aggregate,
         fixture,
@@ -1369,7 +1491,7 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
         workload_id,
         _elapsed_ms(started_wall, time.monotonic_ns()),
         _elapsed_ms(started_cpu, time.process_time_ns()),
-        query_elapsed_ms,
+        phase_elapsed_ms,
     )
 
 
@@ -1410,7 +1532,7 @@ def _query_result(
     workload_id: Literal["B04", "B05"],
     elapsed_wall_ms: int,
     elapsed_cpu_ms: int,
-    query_elapsed_ms: int,
+    phase_elapsed_ms: _PhaseElapsed,
 ) -> _ChildB01Result:
     if (
         type(aggregate) is not tuple
@@ -1461,13 +1583,7 @@ def _query_result(
         0,
         elapsed_wall_ms,
         elapsed_cpu_ms,
-        {
-            "normalize": None,
-            "validate": None,
-            "publish": None,
-            "catalog": 0,
-            "query": query_elapsed_ms,
-        },
+        phase_elapsed_ms,
         "SUCCEEDED",
         "NONE",
         (),
@@ -1481,7 +1597,7 @@ def _query_result(
         query_result_count=aggregate[0],
         query_min_ts=expected_from.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         query_max_ts=expected_to.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-        query_elapsed_ms=query_elapsed_ms,
+        query_elapsed_ms=phase_elapsed_ms["query"],
     )
 
 

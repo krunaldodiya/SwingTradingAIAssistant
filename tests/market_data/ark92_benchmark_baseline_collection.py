@@ -22,6 +22,7 @@ class BaselineIterationRecord(Protocol):
     iteration_index: int
     outcome: str
     resource_evidence_status: str
+    comparability_key: object
 
 
 RecordT = TypeVar("RecordT", bound=BaselineIterationRecord)
@@ -100,7 +101,11 @@ def _collect_workload(
         for iteration_index in range(1, _MEASURED_ITERATION_COUNT + 1)
     )
     _validate_records(workload_id, warmup, measured)
-    valid_count = sum(_is_valid_record(record) for record in measured)
+    valid_records = tuple(record for record in measured if _is_valid_record(record))
+    reference_key = valid_records[0].comparability_key if valid_records else None
+    valid_count = sum(
+        record.comparability_key == reference_key for record in valid_records
+    )
     return BaselineWorkloadResult(
         workload_id,
         warmup,
