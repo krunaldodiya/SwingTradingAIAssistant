@@ -48,3 +48,4 @@ update those documents as well as the note.
 - [2026-08-08 — Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md)
 - [2026-08-08 — psutil benchmark sampler assessment](2026-08-08-psutil-benchmark-sampler-assessment.md)
 - [2026-08-08 — Swing-trading return and loss-exit risk decision](2026-08-08-swing-trading-return-and-loss-exit-risk-decision.md)
+- [2026-08-09 — Nifty 100 universe-expansion hypothesis](2026-08-09-nifty-100-universe-expansion-hypothesis.md)
