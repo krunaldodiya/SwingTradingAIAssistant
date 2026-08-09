@@ -439,6 +439,7 @@ def test_verified_old_alias_invalid_final_stops_before_quarantine(
         catalog.current.failure_category
         is FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED
     )
+    assert not list(tmp_path.rglob(".quarantine-*.parquet"))
 
 
 def test_abandoned_publisher_temp_is_removed_and_does_not_count_as_final(

@@ -38,6 +38,7 @@ from swing_trading_ai_assistant.market_data.partition_reconciliation import (
 )
 from swing_trading_ai_assistant.market_data.partition_recovery import (
     PartitionRecoveryOutcome,
+    PartitionRecoveryResult,
 )
 from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCommand,
@@ -576,6 +577,79 @@ def test_all_local_reconciliation_skips_provider_session_and_attempts(
     assert report.failure_code is RunFailureCode.NONE
     assert report.skipped_count == 1
     assert report.provider_attempt_count == 0
+
+
+def test_obsolete_alias_migration_stops_the_run_before_provider_session(
+    tmp_path: Path,
+) -> None:
+    session_opened: list[object] = []
+
+    class _NeverOpen:
+        def open(self) -> object:
+            session_opened.append(object())
+            raise AssertionError("provider session must remain unopened")
+
+    def observer_factory(**_kwargs: object) -> SimpleNamespace:
+        def observe(plan: PlannedInstrumentMonth) -> PartitionRecoveryResult:
+            stored_plan = PlannedInstrumentMonth(
+                plan.provider,
+                "NSE_EQ|OLD",
+                plan.security_id,
+                "OLD",
+                plan.exchange,
+                plan.segment,
+                plan.instrument_type,
+                plan.interval,
+                plan.year,
+                plan.month,
+                plan.from_date,
+                plan.to_date,
+            )
+            failed = fail_manifest(
+                _in_progress_manifest(stored_plan, "old-run"),
+                datetime(2026, 3, 1, 0, 0, 1, tzinfo=UTC),
+                FailureCategory.EMPTY_RESPONSE,
+                row_count=0,
+            )
+            return PartitionRecoveryResult(
+                plan,
+                PartitionRecoveryOutcome.FAILED,
+                failed,
+                None,
+                None,
+                "MAPPING_MIGRATION_REQUIRED",
+                None,
+            )
+
+        return SimpleNamespace(observe=observe)
+
+    report = _coordinator(observer_factory, session_factory=_NeverOpen()).run(
+        IngestionCommand(
+            _instrument(),
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            "1m",
+            tmp_path,
+            _wide_schedule(),
+            "nse-equity-month@v1",
+            max_total_provider_attempts=1,
+        )
+    )
+
+    assert report.outcome is IngestionRunOutcome.FAILED
+    assert report.failure_code is RunFailureCode.MAPPING_MIGRATION_REQUIRED
+    assert report.planned_count == 1
+    assert report.failed_count == 1
+    assert report.skipped_count == report.locally_recovered_count == 0
+    assert report.not_attempted_count == report.cancelled_count == 0
+    assert report.provider_attempt_count == 0
+    assert session_opened == []
+    assert len(report.results) == 1
+    assert report.results[0].outcome is PartitionOutcome.FAILED
+    assert report.results[0].failure_category is None
+    assert report.results[0].error_code == "MAPPING_MIGRATION_REQUIRED"
+    assert report.results[0].final_manifest is not None
+    assert report.results[0].final_manifest.plan.instrument_key == "NSE_EQ|OLD"
 
 
 def test_complete_local_reconciliation_precedes_one_lazy_sequential_session(
