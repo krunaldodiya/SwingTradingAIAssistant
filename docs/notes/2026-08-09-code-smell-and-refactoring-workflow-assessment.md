@@ -103,6 +103,11 @@ requires an atomic issue with a predeclared stop condition before execution.
 
 ## Read-only Rust workflow evidence
 
+Source provenance: `proalgotrader_core_rust` (local read-only checkout,
+inspected commit `7c31d889ac88d2b80a33f36d4f244833b83fdd4c`). The inspection was
+limited to workflow and tooling mechanics; no trading logic, product idea, or
+domain architecture was used.
+
 The inspected Rust repository uses `cargo fmt --check`, Clippy with warnings
 denied, workspace tests, `just ci`, `just bench`, a committed `Cargo.lock`, and
 Criterion benchmarks configured to produce HTML reports. Its GitHub workflow
