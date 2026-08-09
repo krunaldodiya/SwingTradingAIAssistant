@@ -82,9 +82,11 @@ snapshots, features, metrics, decision rules, exclusions, and promotion gates
 before inspecting outcomes. It must control multiple testing and data snooping,
 separate in-sample work from out-of-sample and walk-forward evaluation, split
 results by market regime, and report uncertainty rather than a single headline
-result. A durable trial ledger must preserve the code/configuration/data and
-membership versions, run dates, universe snapshots, candidate and exclusion
-counts, fills/cost assumptions, deviations, failures, and decision status.
+result. A durable trial ledger must use immutable, append-only or equivalently
+tamper-evident records preserving the code/configuration/data and membership
+versions, run dates, universe snapshots, candidate and exclusion counts,
+fills/cost assumptions, deviations, failures, decisions, timestamps, and
+provenance.
 
 Operational feasibility is also an acceptance question: the program must show
 bounded request, storage, catalog, memory, runtime, retry, and review costs;
