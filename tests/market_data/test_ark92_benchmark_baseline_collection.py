@@ -48,7 +48,7 @@ def _identity() -> ComparabilityIdentity:
         "2024-03-01T00:00:00.000000Z",
         "source",
         "release",
-        "timezone",
+        "Asia/Kolkata",
         ("kind",),
         (("closure", "reason"),),
         "policy",
@@ -86,6 +86,28 @@ def _artifact_record(
     outcome: str = "SUCCEEDED",
     failure_code: str = "NONE",
 ) -> B01MeasurementRecord:
+    checksum_months = {
+        "B01": ((2024, 2),),
+        "B02": ((2024, 1), (2024, 2), (2024, 3)),
+        "B03": ((2024, 2),),
+        "B04": ((2024, 2),),
+        "B05": tuple((2023, month) for month in range(1, 13)),
+    }[workload_id]
+    checksums = tuple(
+        (year, month, f"{month:x}" * 64) for year, month in checksum_months
+    )
+    control = (
+        benchmark_measurement._ControlPartitionEvidence(
+            ("synthetic", "NSE", "NSE_EQ", "EQ", "fixture", "1m", 2024, 1),
+            "a" * 64,
+            "a" * 64,
+            "b" * 64,
+            "b" * 64,
+            "d" * 64,
+        )
+        if workload_id == "B03" and outcome == "SUCCEEDED"
+        else None
+    )
     return B01MeasurementRecord(
         workload_id,
         iteration_kind,
@@ -95,7 +117,7 @@ def _artifact_record(
         "c" * 64,
         "3.13.7",
         "macOS",
-        "cpu",
+        "arch",
         1,
         1_024,
         "apfs",
@@ -107,8 +129,8 @@ def _artifact_record(
         "d" * 64,
         "policy",
         "2024-02-01..2024-02-29",
-        1,
-        ((2024, 2, "e" * 64),),
+        len(checksums),
+        checksums,
         1,
         1,
         {"normalize": 1, "validate": 1, "publish": 1, "catalog": 1, "query": None},
@@ -140,7 +162,7 @@ def _artifact_record(
         failure_code,
         ("VERIFIED",),
         (),
-        None,
+        control,
         replace(
             _identity(),
             workload_id=workload_id,
@@ -152,10 +174,11 @@ def _artifact_record(
             schedule_digest="d" * 64,
             requested_range="2024-02-01..2024-02-29",
             policy_version="policy",
-            partition_checksums=((2024, 2, "e" * 64),),
+            partition_checksums=checksums,
             source_data_shape=SourceDataShape(1, 1, 1, 1),
             sampler_method="psutil-parent-child-v1",
             psutil_version="7.2.2",
+            cpu_architecture="arch",
             cpu_count=1,
             filesystem_type="apfs",
         ),
@@ -176,9 +199,13 @@ def _artifact_report() -> BaselineCollectionReport:
                     measured[2],
                     outcome="CANCELLED",
                     failure_code="BENCHMARK_CHILD_CANCELLED",
+                    control_partition_evidence=None,
                 ),
                 replace(
-                    measured[3], outcome="FAILED", failure_code="CHILD_PROTOCOL_INVALID"
+                    measured[3],
+                    outcome="FAILED",
+                    failure_code="CHILD_PROTOCOL_INVALID",
+                    control_partition_evidence=None,
                 ),
                 measured[4],
             )
@@ -277,6 +304,8 @@ def test_write_baseline_artifact_rejects_nonapproved_text_evidence(
         if field_name in ComparabilityIdentity.__dataclass_fields__
         else record.comparability_key
     )
+    if field_name == "cpu_model":
+        identity = replace(identity, cpu_architecture=unsafe_value)
     unsafe = replace(
         report.results[0],
         warmup=replace(
@@ -322,6 +351,39 @@ def test_write_baseline_artifact_rejects_unsafe_nested_identity_evidence(
     assert tuple(tmp_path.iterdir()) == ()
 
 
+def test_identity_text_validation_accepts_timezone_and_rejects_separator_obfuscated_secret(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    timezone_record = replace(
+        record,
+        comparability_key=replace(
+            record.comparability_key, schedule_timezone="Asia/Kolkata"
+        ),
+    )
+    write_baseline_artifact(
+        replace(
+            report,
+            results=(
+                replace(report.results[0], warmup=timezone_record),
+                *report.results[1:],
+            ),
+        ),
+        tmp_path / "timezone.json",
+    )
+
+    unsafe = replace(
+        record,
+        cpu_model="ACCESS-TOKEN",
+        comparability_key=replace(
+            record.comparability_key, cpu_architecture="ACCESS-TOKEN"
+        ),
+    )
+    with pytest.raises(ValueError, match="unsanitized"):
+        baseline_collection._serialize_record(unsafe)
+
+
 def test_write_baseline_artifact_rejects_untyped_nested_identity_limits(
     tmp_path: Path,
 ) -> None:
@@ -353,10 +415,10 @@ def test_write_baseline_artifact_preserves_safe_typed_control_evidence(
     control = benchmark_measurement._ControlPartitionEvidence(
         ("synthetic", "NSE", "NSE_EQ", "EQ", "fixture", "1m", 2024, 1),
         "a" * 64,
+        "a" * 64,
         "b" * 64,
-        "c" * 64,
+        "b" * 64,
         "d" * 64,
-        "e" * 64,
     )
     b03 = replace(
         report.results[2],
@@ -382,10 +444,10 @@ def test_write_baseline_artifact_preserves_safe_typed_control_evidence(
             1,
         ],
         "pre_physical_checksum": "a" * 64,
-        "post_physical_checksum": "b" * 64,
-        "pre_manifest_fingerprint": "c" * 64,
-        "post_manifest_fingerprint": "d" * 64,
-        "manifest_bound_schedule_digest": "e" * 64,
+        "post_physical_checksum": "a" * 64,
+        "pre_manifest_fingerprint": "b" * 64,
+        "post_manifest_fingerprint": "b" * 64,
+        "manifest_bound_schedule_digest": "d" * 64,
     }
 
 
@@ -473,6 +535,52 @@ def test_write_baseline_artifact_rejects_partition_checksum_order_change(
     assert tuple(tmp_path.iterdir()) == ()
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda record: replace(record, cpu_model="different-architecture"),
+        lambda record: replace(record, python_version="3.14.1"),
+        lambda record: replace(
+            record,
+            phase_elapsed_ms={
+                "normalize": -1,
+                "validate": 1,
+                "publish": 1,
+                "catalog": 1,
+                "query": None,
+            },
+        ),
+        lambda record: replace(record, physical_month_count=2),
+        lambda record: replace(
+            record, partition_checksums=(record.partition_checksums[0],) * 2
+        ),
+        lambda record: replace(record, peak_rss_bytes=None),
+        lambda record: replace(record, sampler_max_gap_ms=51),
+        lambda record: replace(
+            record,
+            resource_evidence_status=ResourceEvidenceStatus.INVALID,
+            resource_blocker=None,
+        ),
+        lambda record: replace(record, outcome="SUCCEEDED", failure_code="FAILED"),
+        lambda record: replace(
+            record,
+            control_partition_evidence=benchmark_measurement._ControlPartitionEvidence(
+                ("only",), "a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64
+            ),
+        ),
+    ),
+)
+def test_write_baseline_artifact_rejects_final_matrix_invariants(
+    tmp_path: Path, mutate: object
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    malformed = mutate(record)  # type: ignore[operator]
+
+    with pytest.raises(ValueError):
+        baseline_collection._serialize_record(malformed)
+
+
 @pytest.mark.parametrize("measured_count", (4, 6))
 def test_write_baseline_artifact_rejects_missing_or_extra_iterations(
     tmp_path: Path, measured_count: int
@@ -532,11 +640,11 @@ def test_write_baseline_artifact_cleans_up_after_temporary_write_failure(
 ) -> None:
     output = tmp_path / "baseline.json"
 
-    def write_then_fail(temporary: Path, _encoded: bytes) -> None:
-        temporary.write_bytes(b"partial")
+    def write_then_fail(descriptor: int, _encoded: bytes) -> None:
+        baseline_collection.os.write(descriptor, b"partial")
         raise OSError("write failed")
 
-    monkeypatch.setattr(baseline_collection, "_write_temporary", write_then_fail)
+    monkeypatch.setattr(baseline_collection, "_write_temporary_fd", write_then_fail)
 
     with pytest.raises(OSError, match="write failed"):
         write_baseline_artifact(_artifact_report(), output)
@@ -567,8 +675,8 @@ def test_write_baseline_artifact_preserves_concurrent_destination_and_cleans_tem
 ) -> None:
     output = tmp_path / "baseline.json"
 
-    def competing_link(_temporary: Path, destination: Path) -> None:
-        destination.write_text("concurrent artifact")
+    def competing_link(_temporary: str, destination: str, **kwargs: object) -> None:
+        output.write_text("concurrent artifact")
         raise FileExistsError("destination exists")
 
     monkeypatch.setattr(baseline_collection.os, "link", competing_link)
@@ -578,6 +686,43 @@ def test_write_baseline_artifact_preserves_concurrent_destination_and_cleans_tem
 
     assert output.read_text() == "concurrent artifact"
     assert tuple(tmp_path.iterdir()) == (output,)
+
+
+def test_write_baseline_artifact_keeps_linked_output_after_directory_fsync_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "baseline.json"
+    calls = 0
+    actual_fsync = baseline_collection.os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory fsync failed")
+        actual_fsync(descriptor)
+
+    monkeypatch.setattr(baseline_collection.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        write_baseline_artifact(_artifact_report(), output)
+
+    assert output.is_file()
+    assert tuple(tmp_path.iterdir()) == (output,)
+
+
+def test_write_baseline_artifact_rejects_symlinked_parent_without_following_it(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        write_baseline_artifact(_artifact_report(), linked_parent / "baseline.json")
+
+    assert tuple(target.iterdir()) == ()
 
 
 def test_write_baseline_artifact_rejects_duplicate_incomplete_and_nonfinite_rows(
@@ -704,6 +849,36 @@ def test_persistence_entry_point_rejects_malformed_arguments_without_paths(
     assert captured.err == "baseline artifact collection failed: INVALID_ARGUMENTS\n"
     assert "/private/not-allowed" not in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_persistence_entry_point_sanitizes_unexpected_collection_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir()
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    def fail_once(_root: Path) -> BaselineCollectionReport:
+        raise RuntimeError(str(tmp_path))
+
+    monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", fail_once)
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(artifact_root / "baseline.json"),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.err == "baseline artifact collection failed: COLLECTION_FAILED\n"
+    assert str(tmp_path) not in captured.err
 
 
 def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (

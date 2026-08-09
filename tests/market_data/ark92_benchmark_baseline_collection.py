@@ -10,6 +10,7 @@ import re
 import sys
 import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
@@ -59,10 +60,33 @@ _SQL_TEXT = re.compile(
 )
 _SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+\-]*")
 _SAFE_ENVIRONMENT_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:@+\-]*")
+_SAFE_TIMEZONE = re.compile(r"[A-Za-z]+/[A-Za-z_]+")
 _RFC3339_MICROSECONDS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
 _REQUESTED_RANGE = re.compile(r"\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}")
 _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
+_PHYSICAL_MONTH_COUNTS = {"B01": 1, "B02": 3, "B03": 1, "B04": 1, "B05": 12}
+_FAILURE_CODES = frozenset(
+    (
+        "B01_CHILD_FAILED",
+        "BENCHMARK_CHILD_CANCELLED",
+        "BENCHMARK_CHILD_FAILED",
+        "BENCHMARK_CHILD_PROTOCOL_INVALID",
+        "CHILD_PROTOCOL_INVALID",
+    )
+)
+_PARTITION_OUTCOMES = frozenset(("VERIFIED", "SKIPPED_VERIFIED", "RECOVERED_LOCALLY"))
+_RECONCILIATION_REASONS = frozenset(("CHECKSUM_INVALID_OR_MISMATCHED",))
+_RESOURCE_BLOCKERS = frozenset(
+    (
+        "sampling_exception",
+        "unsupported_num_fds",
+        "loop_sampling_exception",
+        "too_few_samples",
+        "max_gap_exceeded",
+        "open_fd_not_closed",
+    )
+)
 
 
 class BaselineIterationRecord(Protocol):
@@ -148,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "baseline artifact collection failed: PERSISTENCE_FAILED", file=sys.stderr
         )
+        return 2
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        print("baseline artifact collection failed: COLLECTION_FAILED", file=sys.stderr)
         return 2
     return 0
 
@@ -303,6 +332,7 @@ def _serialize_record(record: BaselineIterationRecord) -> dict[str, object]:
     if tuple(field.name for field in fields(record)) != expected_fields:
         raise ValueError("measurement record has missing or extra fields")
     _validate_record_identity(record)
+    _validate_record_contract(record)
     return {
         "workload_id": _serialize_workload_id(record.workload_id),
         "iteration_kind": _serialize_iteration_kind(record.iteration_kind),
@@ -414,10 +444,142 @@ def _validate_record_identity(record: B01MeasurementRecord) -> None:
         raise ValueError("measurement record contradicts comparability identity")
 
 
+def _validate_record_contract(record: B01MeasurementRecord) -> None:
+    key = record.comparability_key
+    if (
+        record.cpu_model != key.cpu_architecture
+        or _major_minor(record.python_version) != key.python_major_minor
+        or _major_minor(record.pyarrow_version) != key.pyarrow_major_minor
+        or _major_minor(record.duckdb_version) != key.duckdb_major_minor
+    ):
+        raise ValueError("measurement record contradicts comparability identity")
+    _validate_physical_shape(record)
+    _validate_resource_evidence(record)
+    _validate_terminal_evidence(record)
+    _validate_control_evidence(record)
+
+
+def _major_minor(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError("invalid version evidence")
+    matched = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", value)
+    if matched is None:
+        raise ValueError("invalid version evidence")
+    return f"{matched.group(1)}.{matched.group(2)}"
+
+
+def _validate_physical_shape(record: B01MeasurementRecord) -> None:
+    expected_count = _PHYSICAL_MONTH_COUNTS.get(record.workload_id)
+    if expected_count is None or type(record.physical_month_count) is not int:
+        raise ValueError("invalid physical workload evidence")
+    if record.physical_month_count != expected_count:
+        raise ValueError("invalid physical workload evidence")
+    checksums = record.partition_checksums
+    if type(checksums) is not tuple:
+        raise ValueError("invalid physical workload evidence")
+    if any(type(item) is not tuple or len(item) != 3 for item in checksums):
+        raise ValueError("invalid physical workload evidence")
+    months = tuple((item[0], item[1]) for item in checksums)
+    if any(
+        type(year) is not int or type(month) is not int for year, month in months
+    ) or months != tuple(sorted(months)):
+        raise ValueError("invalid physical workload evidence")
+    if len(set(months)) != len(months):
+        raise ValueError("invalid physical workload evidence")
+    if record.outcome == "SUCCEEDED" and len(checksums) != expected_count:
+        raise ValueError("incomplete successful workload evidence")
+    if record.outcome != "SUCCEEDED" and len(checksums) > expected_count:
+        raise ValueError("invalid terminal workload evidence")
+
+
+def _validate_resource_evidence(record: B01MeasurementRecord) -> None:
+    key = record.comparability_key.resource_limits
+    if type(record.resource_evidence_status) is not ResourceEvidenceStatus:
+        raise ValueError("invalid resource evidence status")
+    if record.resource_evidence_status is ResourceEvidenceStatus.VALID:
+        fields_to_require = (
+            record.peak_rss_bytes,
+            record.open_fd_start,
+            record.open_fd_peak,
+            record.open_fd_end,
+            record.sampler_max_gap_ms,
+        )
+        if any(value is None for value in fields_to_require):
+            raise ValueError("valid resource evidence is incomplete")
+        if (
+            record.resource_blocker is not None
+            or record.sampler_sample_count < key.minimum_sampler_samples
+            or record.sampler_max_gap_ms > key.max_sampling_gap_ms  # type: ignore[operator]
+            or record.open_fd_start != record.open_fd_end
+            or record.open_fd_peak < record.open_fd_start  # type: ignore[operator]
+            or record.open_fd_peak < record.open_fd_end  # type: ignore[operator]
+        ):
+            raise ValueError("valid resource evidence is inconsistent")
+        return
+    if record.resource_blocker not in _RESOURCE_BLOCKERS or any(
+        value is not None
+        for value in (
+            record.peak_rss_bytes,
+            record.open_fd_start,
+            record.open_fd_peak,
+            record.open_fd_end,
+        )
+    ):
+        raise ValueError("invalid resource evidence is inconsistent")
+
+
+def _validate_terminal_evidence(record: B01MeasurementRecord) -> None:
+    if record.outcome not in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+        raise ValueError("invalid terminal outcome")
+    if (record.outcome == "SUCCEEDED") != (record.failure_code == "NONE"):
+        raise ValueError("invalid terminal outcome")
+    if record.outcome != "SUCCEEDED" and record.failure_code not in _FAILURE_CODES:
+        raise ValueError("invalid terminal outcome")
+    if (
+        type(record.partition_outcomes) is not tuple
+        or any(value not in _PARTITION_OUTCOMES for value in record.partition_outcomes)
+        or type(record.reconciliation_reasons) is not tuple
+        or any(
+            value not in _RECONCILIATION_REASONS
+            for value in record.reconciliation_reasons
+        )
+    ):
+        raise ValueError("invalid terminal evidence")
+
+
+def _validate_control_evidence(record: B01MeasurementRecord) -> None:
+    evidence = record.control_partition_evidence
+    if record.workload_id != "B03":
+        if evidence is not None:
+            raise ValueError("control evidence is only valid for B03")
+        return
+    if record.outcome != "SUCCEEDED":
+        if evidence is not None:
+            raise ValueError("terminal B03 evidence must be incomplete")
+        return
+    if type(evidence) is not _ControlPartitionEvidence:
+        raise ValueError("successful B03 evidence requires a control")
+    identity = evidence.physical_identity
+    if (
+        type(identity) is not tuple
+        or len(identity) != 8
+        or any(type(value) is not str for value in identity[:6])
+        or type(identity[6]) is not int
+        or type(identity[7]) is not int
+        or evidence.pre_physical_checksum != evidence.post_physical_checksum
+        or evidence.pre_manifest_fingerprint != evidence.post_manifest_fingerprint
+        or evidence.manifest_bound_schedule_digest != record.schedule_digest
+    ):
+        raise ValueError("invalid B03 control evidence")
+
+
 def _serialize_phase_elapsed(value: object) -> dict[str, int | None]:
     if type(value) is not dict or set(value) != _PHASE_FIELDS:
         raise ValueError("phase timing evidence is incomplete")
-    if any(item is not None and type(item) is not int for item in value.values()):
+    if any(
+        item is not None and (type(item) is not int or item < 0)
+        for item in value.values()
+    ):
         raise ValueError("phase timing evidence is invalid")
     return {phase: value[phase] for phase in sorted(_PHASE_FIELDS)}
 
@@ -447,6 +609,13 @@ def _serialize_label(value: object) -> str:
     return value
 
 
+def _serialize_timezone(value: object) -> str:
+    if type(value) is not str or not _SAFE_TIMEZONE.fullmatch(value):
+        raise ValueError("unsanitized timezone evidence")
+    _reject_sensitive_text(value, allow_timezone_separator=True)
+    return value
+
+
 def _serialize_environment_text(value: object) -> str:
     if type(value) is not str or not _SAFE_ENVIRONMENT_TEXT.fullmatch(value):
         raise ValueError("unsanitized environment evidence")
@@ -454,13 +623,34 @@ def _serialize_environment_text(value: object) -> str:
     return value
 
 
-def _reject_sensitive_text(value: str) -> None:
+def _reject_sensitive_text(
+    value: str, *, allow_timezone_separator: bool = False
+) -> None:
     lowered = value.lower()
+    normalized = re.sub(r"[^a-z0-9]", "", lowered)
     if (
-        "/" in value
+        ("/" in value and not allow_timezone_separator)
         or "\\" in value
         or "|" in value
         or any(marker in lowered for marker in _SENSITIVE_TEXT)
+        or any(
+            marker in normalized
+            for marker in (
+                "authorization",
+                "bearer",
+                "password",
+                "secret",
+                "token",
+                "accesstoken",
+                "apikey",
+                "cookie",
+                "credential",
+                "instrumentkey",
+                "provideralias",
+                "rawpayload",
+                "rawalias",
+            )
+        )
         or _SQL_TEXT.search(value) is not None
     ):
         raise ValueError("unsanitized path or secret evidence")
@@ -646,7 +836,7 @@ def _serialize_comparability_identity(value: object) -> dict[str, object]:
         "schedule_as_of": _serialize_timestamp(value.schedule_as_of),
         "schedule_source": _serialize_label(value.schedule_source),
         "schedule_release": _serialize_label(value.schedule_release),
-        "schedule_timezone": _serialize_label(value.schedule_timezone),
+        "schedule_timezone": _serialize_timezone(value.schedule_timezone),
         "schedule_kind_provenance": _serialize_label_tuple(
             value.schedule_kind_provenance
         ),
@@ -684,23 +874,53 @@ def _serialize_schedule_closures(value: object) -> list[list[str]]:
 
 
 def _write_no_overwrite(output: Path, encoded: bytes) -> None:
-    if output.exists():
-        raise FileExistsError(f"baseline artifact already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.parent / f".{output.name}.{uuid.uuid4().hex}.tmp"
+    directory_fd = _open_artifact_directory(output.parent)
+    temporary_name = f".{output.name}.{uuid.uuid4().hex}.tmp"
     try:
-        _write_temporary(temporary, encoded)
-        os.link(temporary, output)
+        _ensure_absent(output.name, directory_fd)
+        temporary_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        try:
+            _write_temporary_fd(temporary_fd, encoded)
+        finally:
+            os.close(temporary_fd)
+        os.link(
+            temporary_name,
+            output.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(directory_fd)
     finally:
-        if temporary.exists():
-            temporary.unlink()
+        with suppress(FileNotFoundError):
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        os.close(directory_fd)
 
 
-def _write_temporary(temporary: Path, encoded: bytes) -> None:
-    with temporary.open("xb") as stream:
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
+def _open_artifact_directory(directory: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    return os.open(directory, flags)
+
+
+def _ensure_absent(name: str, directory_fd: int) -> None:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise FileExistsError("baseline artifact already exists")
+
+
+def _write_temporary_fd(descriptor: int, encoded: bytes) -> None:
+    written = 0
+    while written < len(encoded):
+        written += os.write(descriptor, encoded[written:])
+    os.fsync(descriptor)
 
 
 def _artifact_path(path: Path, label: str) -> Path:
