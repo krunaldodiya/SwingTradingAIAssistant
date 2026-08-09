@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import ark90_benchmark_measurement as benchmark_measurement
+import ark92_benchmark_baseline_collection as baseline_collection
+import pytest
 from ark90_benchmark_measurement import (
+    B01MeasurementRecord,
     BenchmarkCommandLimits,
     BenchmarkResourceLimits,
     ComparabilityIdentity,
+    ResourceEvidenceStatus,
     SourceDataShape,
     _b02_zero_side_effect_counters,
     _b03_observed_request_evidence_is_exact,
@@ -19,10 +24,14 @@ from ark90_benchmark_measurement import (
     measure_benchmark_workload,
 )
 from ark92_benchmark_baseline_collection import (
+    BaselineCollectionReport,
     BaselineCollectionStatus,
+    BaselineWorkloadResult,
     collect_baseline_samples,
     collect_benchmark_baselines,
+    write_baseline_artifact,
 )
+from ark92_benchmark_baseline_collection import main as persist_baseline_artifact
 
 
 def _identity() -> ComparabilityIdentity:
@@ -66,6 +75,229 @@ class _IterationRecord:
     outcome: str
     resource_evidence_status: str
     comparability_key: object = field(default_factory=_identity)
+
+
+def _artifact_record(
+    workload_id: str,
+    iteration_kind: str,
+    iteration_index: int,
+    *,
+    outcome: str = "SUCCEEDED",
+    failure_code: str = "NONE",
+) -> B01MeasurementRecord:
+    return B01MeasurementRecord(
+        workload_id,
+        iteration_kind,
+        iteration_index,
+        "a" * 40,
+        "b" * 40,
+        "c" * 64,
+        "3.13.7",
+        "macOS",
+        "cpu",
+        1,
+        1_024,
+        "apfs",
+        "1.5.0",
+        "25.0.0",
+        "macOS 15",
+        "fixture",
+        "fixture-v1",
+        "d" * 64,
+        "policy",
+        "2024-02-01..2024-02-29",
+        1,
+        ((2024, 2, "e" * 64),),
+        1,
+        1,
+        {"normalize": 1, "validate": 1, "publish": 1, "catalog": 1, "query": None},
+        1,
+        1,
+        1,
+        1,
+        1.0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1_024,
+        3,
+        3,
+        3,
+        "psutil-parent-child-v1",
+        "7.2.2",
+        2,
+        10,
+        ResourceEvidenceStatus.VALID,
+        None,
+        None,
+        None,
+        None,
+        None,
+        outcome,
+        failure_code,
+        ("VERIFIED",),
+        (),
+        None,
+        replace(_identity(), workload_id=workload_id),
+    )
+
+
+def _artifact_report() -> BaselineCollectionReport:
+    results = []
+    for workload_id in ("B01", "B02", "B03", "B04", "B05"):
+        measured = tuple(
+            _artifact_record(workload_id, "measured", index) for index in range(1, 6)
+        )
+        if workload_id == "B03":
+            measured = (
+                measured[0],
+                measured[1],
+                replace(
+                    measured[2],
+                    outcome="CANCELLED",
+                    failure_code="BENCHMARK_CHILD_CANCELLED",
+                ),
+                replace(
+                    measured[3], outcome="FAILED", failure_code="CHILD_PROTOCOL_INVALID"
+                ),
+                measured[4],
+            )
+        valid_measurement_count = sum(
+            record.outcome == "SUCCEEDED" for record in measured
+        )
+        results.append(
+            BaselineWorkloadResult(
+                workload_id,
+                _artifact_record(workload_id, "warmup", 1),
+                measured,
+                (
+                    BaselineCollectionStatus.RETAINED
+                    if valid_measurement_count == 5
+                    else BaselineCollectionStatus.INSUFFICIENT
+                ),
+                5,
+                valid_measurement_count,
+            )
+        )
+    return BaselineCollectionReport(tuple(results))
+
+
+def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "baseline.json"
+
+    write_baseline_artifact(_artifact_report(), output)
+
+    payload = json.loads(output.read_text())
+    assert tuple(item["workload_id"] for item in payload["results"]) == (
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+    )
+    b03 = payload["results"][2]
+    assert b03["status"] == "INSUFFICIENT"
+    assert b03["threshold_claim"] is None
+    assert [item["iteration_index"] for item in b03["measured"]] == [1, 2, 3, 4, 5]
+    assert [item["outcome"] for item in b03["measured"]][2:4] == [
+        "CANCELLED",
+        "FAILED",
+    ]
+    assert set(b03["warmup"]) == set(B01MeasurementRecord.__dataclass_fields__)
+    assert "path" not in json.dumps(payload).lower()
+
+
+def test_write_baseline_artifact_rejects_unsafe_or_incomplete_evidence_without_temp(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    unsafe = replace(
+        report.results[0],
+        warmup=replace(report.results[0].warmup, platform="/private/raw-payload"),
+    )
+
+    with pytest.raises(ValueError, match="unsanitized"):
+        write_baseline_artifact(
+            replace(report, results=(unsafe,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_never_overwrites_existing_output(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "baseline.json"
+    output.write_text("existing")
+
+    with pytest.raises(FileExistsError):
+        write_baseline_artifact(_artifact_report(), output)
+
+    assert output.read_text() == "existing"
+
+
+def test_write_baseline_artifact_rejects_duplicate_incomplete_and_nonfinite_rows(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    duplicate_workload = replace(report, results=(report.results[0],) * 5)
+    duplicate_iteration = replace(
+        report.results[0],
+        measured=(
+            report.results[0].measured[0],
+            replace(report.results[0].measured[1], iteration_index=1),
+        )
+        + report.results[0].measured[2:],
+    )
+    incomplete = replace(report.results[0], warmup=object())  # type: ignore[arg-type]
+    nonfinite = replace(
+        report.results[0],
+        warmup=replace(report.results[0].warmup, throughput_rows_per_s=float("nan")),
+    )
+
+    for malformed in (
+        duplicate_workload,
+        replace(report, results=(duplicate_iteration,) + report.results[1:]),
+        replace(report, results=(incomplete,) + report.results[1:]),
+        replace(report, results=(nonfinite,) + report.results[1:]),
+    ):
+        with pytest.raises(ValueError):
+            write_baseline_artifact(malformed, tmp_path / "baseline.json")
+        assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_persistence_entry_point_uses_disposable_root_and_never_retries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[Path] = []
+    output = tmp_path / "artifact" / "baseline.json"
+    work_root = tmp_path / "artifact" / "work"
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path / "artifact")
+    monkeypatch.setattr(
+        baseline_collection,
+        "collect_benchmark_baselines",
+        lambda root: calls.append(root) or _artifact_report(),
+    )
+
+    assert (
+        persist_baseline_artifact(
+            ["--output", str(output), "--work-root", str(work_root)]
+        )
+        == 0
+    )
+    assert calls == [work_root]
+    assert output.is_file()
+
+    with pytest.raises(FileExistsError):
+        persist_baseline_artifact(
+            ["--output", str(output), "--work-root", str(work_root)]
+        )
+    assert calls == [work_root]
 
 
 def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (
