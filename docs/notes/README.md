@@ -38,6 +38,7 @@ update those documents as well as the note.
 
 ## Notes index
 
+- [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
 - [2026-08-09 — Code-smell and refactoring workflow assessment](2026-08-09-code-smell-and-refactoring-workflow-assessment.md)
 - [2026-08-04 — Data foundation and agent-tool boundary](2026-08-04-data-foundation-and-agent-tool-boundary.md)
 - [2026-08-06 — Quota-efficient agent-routing pilot](2026-08-06-quota-efficient-agent-routing-pilot.md)
