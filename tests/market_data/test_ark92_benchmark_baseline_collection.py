@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ark90_benchmark_measurement as benchmark_measurement
 from ark90_benchmark_measurement import (
+    BenchmarkCommandLimits,
+    BenchmarkResourceLimits,
+    ComparabilityIdentity,
+    SourceDataShape,
     _Sample,
     _sampling_blocker,
     measure_b01,
@@ -26,7 +30,7 @@ class _IterationRecord:
     iteration_index: int
     outcome: str
     resource_evidence_status: str
-    comparability_key: str = "same"
+    comparability_key: object = "same"
 
 
 def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (
@@ -35,6 +39,141 @@ def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding(
     samples = [_Sample(0, 1, 1), _Sample(50_000_001, 1, 1)]
 
     assert _sampling_blocker(samples, None, None) == "max_gap_exceeded"
+
+
+def test_ordinary_terminal_observations_are_typed_done_results_with_actual_provenance(
+    tmp_path: Path,
+) -> None:
+    failed = measure_benchmark_workload(
+        tmp_path,
+        workload_id="B02",
+        iteration_kind="measured",
+        iteration_index=1,
+        child_terminal="failure",
+    )
+    cancelled = measure_benchmark_workload(
+        tmp_path,
+        workload_id="B02",
+        iteration_kind="measured",
+        iteration_index=2,
+        child_terminal="cancelled",
+    )
+
+    assert (failed.outcome, failed.failure_code) == (
+        "FAILED",
+        "BENCHMARK_CHILD_FAILED",
+    )
+    assert (cancelled.outcome, cancelled.failure_code) == (
+        "CANCELLED",
+        "BENCHMARK_CHILD_CANCELLED",
+    )
+    for record in (failed, cancelled):
+        assert tuple(
+            (year, month) for year, month, _ in record.partition_checksums
+        ) == (
+            (2024, 1),
+            (2024, 2),
+            (2024, 3),
+        )
+        assert all(
+            checksum != "0" * 64 for _, _, checksum in record.partition_checksums
+        )
+        assert record.requested_range == "2024-01-01..2024-03-31"
+        assert record.resource_evidence_status.value == "VALID"
+        assert record.open_fd_end == record.open_fd_start
+
+
+def test_comparability_identity_includes_each_frozen_plan03_dimension() -> None:
+    field_names = tuple(ComparabilityIdentity.__dataclass_fields__)
+
+    assert field_names == (
+        "workload_id",
+        "fixture_id",
+        "fixture_version",
+        "source_revision",
+        "source_tree",
+        "lock_identity",
+        "schedule_digest",
+        "requested_range",
+        "schedule_as_of",
+        "schedule_source",
+        "schedule_release",
+        "schedule_timezone",
+        "schedule_kind_provenance",
+        "schedule_closure_provenance",
+        "policy_version",
+        "partition_checksums",
+        "source_data_shape",
+        "command_limits",
+        "resource_limits",
+        "measurement_method",
+        "python_major_minor",
+        "pyarrow_major_minor",
+        "duckdb_major_minor",
+        "psutil_version",
+        "sampler_method",
+        "cpu_architecture",
+        "cpu_count",
+        "filesystem_type",
+    )
+
+
+def test_each_comparability_identity_dimension_mismatch_is_insufficient(
+    tmp_path: Path,
+) -> None:
+    base = ComparabilityIdentity(
+        "B01",
+        "fixture",
+        "fixture-v1",
+        "revision",
+        "tree",
+        "lock",
+        "digest",
+        "range",
+        "as-of",
+        "source",
+        "release",
+        "timezone",
+        ("kind",),
+        (("closure", "reason"),),
+        "policy",
+        ((2024, 2, "checksum"),),
+        SourceDataShape(1, 1, 1, 1),
+        BenchmarkCommandLimits("1m", 1, 1, 0, 0, 0, 0, 1, 1, 1),
+        BenchmarkResourceLimits(1.0, 10, 50, 2, "closed"),
+        "method",
+        "3.13",
+        "25.0",
+        "1.5",
+        "7.2.2",
+        "sampler",
+        "arch",
+        1,
+        "filesystem",
+    )
+
+    for field_name in ComparabilityIdentity.__dataclass_fields__:
+        changed = replace(base, **{field_name: (getattr(base, field_name), "other")})
+
+        def measure(
+            workload_id: str,
+            kind: str,
+            index: int,
+            changed_identity: ComparabilityIdentity = changed,
+        ) -> _IterationRecord:
+            identity = (
+                changed_identity
+                if (workload_id, kind, index) == ("B01", "measured", 5)
+                else base
+            )
+            return _IterationRecord(
+                workload_id, kind, index, "SUCCEEDED", "VALID", identity
+            )
+
+        report = collect_baseline_samples(tmp_path / field_name, measure)
+
+        assert report.results[0].status is BaselineCollectionStatus.INSUFFICIENT
+        assert report.results[0].valid_measurement_count == 4
 
 
 def test_real_child_failure_is_sanitized_retained_and_does_not_stop_collection(
@@ -50,7 +189,9 @@ def test_real_child_failure_is_sanitized_retained_and_does_not_stop_collection(
     assert failed.outcome == "FAILED"
     assert failed.failure_code == "B01_CHILD_FAILED"
     assert failed.rows_published == 0
-    assert failed.resource_blocker is not None
+    assert failed.partition_checksums == ()
+    assert failed.resource_evidence_status.value == "VALID"
+    assert failed.resource_blocker is None
     assert "Exception" not in failed.failure_code
     assert len(failed.source_revision) == len(failed.source_tree) == 40
     assert len(failed.lock_identity) == len(failed.schedule_digest) == 64
@@ -85,22 +226,31 @@ def test_non_b01_child_terminal_failures_are_retained_with_its_own_provenance(
     )
 
     assert tuple(record.workload_id for record in records) == ("B02",) * 3
-    assert tuple(record.outcome for record in records) == ("FAILED",) * 3
+    assert tuple(record.outcome for record in records) == (
+        "FAILED",
+        "CANCELLED",
+        "FAILED",
+    )
     assert tuple(record.failure_code for record in records) == (
         "BENCHMARK_CHILD_FAILED",
         "BENCHMARK_CHILD_CANCELLED",
         "CHILD_PROTOCOL_INVALID",
     )
-    for record in records:
+    for record in records[:2]:
         assert record.rows_published == 0
-        assert record.resource_evidence_status.value == "INVALID"
-        assert record.resource_blocker == record.failure_code
+        assert record.resource_evidence_status.value == "VALID"
+        assert record.resource_blocker is None
         assert record.physical_month_count == len(record.partition_checksums) == 3
         assert all(
-            checksum == "0" * 64 for _, _, checksum in record.partition_checksums
+            checksum != "0" * 64 for _, _, checksum in record.partition_checksums
         )
         assert len(record.source_revision) == len(record.source_tree) == 40
         assert len(record.lock_identity) == len(record.schedule_digest) == 64
+
+    malformed = records[2]
+    assert malformed.resource_evidence_status.value == "INVALID"
+    assert malformed.resource_blocker == malformed.failure_code
+    assert malformed.partition_checksums == ()
 
 
 def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(
@@ -141,14 +291,17 @@ def test_b02_and_query_catalog_phases_are_measured_at_execution(
     b02 = benchmark_measurement._execute_prepared_benchmark_workload(
         benchmark_measurement._prepare_benchmark_workload("B02", tmp_path / "b02")
     )
+    b02_catalog_calls = calls.count("catalog")
     b04 = benchmark_measurement._execute_prepared_benchmark_workload(
         benchmark_measurement._prepare_benchmark_workload("B04", tmp_path / "b04")
     )
+    b04_catalog_calls = calls.count("catalog") - b02_catalog_calls
 
     assert b02.phase_elapsed_ms["catalog"] is not None
     assert b04.phase_elapsed_ms["catalog"] is not None
     assert b04.phase_elapsed_ms["query"] is not None
-    assert calls.count("catalog") >= 2
+    assert b02_catalog_calls >= 5  # open, reconciliation operations, and close
+    assert b04_catalog_calls == 4  # open, configuration, assertion, and close
     assert "query" in calls
 
 

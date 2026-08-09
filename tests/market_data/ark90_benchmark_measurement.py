@@ -85,6 +85,89 @@ class ResourceEvidenceStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SourceDataShape:
+    """The observed row and immutable-artifact shape of one workload."""
+
+    rows_raw: int
+    rows_normalized: int
+    rows_published: int
+    bytes_parquet: int
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkCommandLimits:
+    """Frozen command and direct-query resource limits for Plan 03 B01--B05."""
+
+    interval: str
+    max_attempts_per_partition: int
+    max_total_provider_attempts: int
+    base_backoff_ms: int
+    max_backoff_ms: int
+    max_retry_after_ms: int
+    max_total_wait_ms: int
+    query_connection_count: int
+    query_threads: int
+    query_memory_limit_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkResourceLimits:
+    """Frozen parent-child measurement limits for Plan 03 B01--B05."""
+
+    child_control_timeout_s: float
+    sampling_interval_ms: int
+    max_sampling_gap_ms: int
+    minimum_sampler_samples: int
+    fd_closure_rule: str
+
+
+_BENCHMARK_COMMAND_LIMITS = BenchmarkCommandLimits(
+    "1m", 3, 1, 1_000, 8_000, 60_000, 120_000, 1, 1, 256 * 1024 * 1024
+)
+_BENCHMARK_RESOURCE_LIMITS = BenchmarkResourceLimits(
+    _CONTROL_TIMEOUT_S,
+    int(_SAMPLING_INTERVAL_S * 1_000),
+    _MAX_SAMPLING_GAP_MS,
+    2,
+    "open_fd_end_equals_open_fd_start",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ComparabilityIdentity:
+    """The complete frozen Plan 03 identity of one measured observation."""
+
+    workload_id: str
+    fixture_id: str
+    fixture_version: str
+    source_revision: str
+    source_tree: str
+    lock_identity: str
+    schedule_digest: str
+    requested_range: str
+    schedule_as_of: str
+    schedule_source: str
+    schedule_release: str
+    schedule_timezone: str
+    schedule_kind_provenance: tuple[str, ...]
+    schedule_closure_provenance: tuple[tuple[str, str], ...]
+    policy_version: str
+    partition_checksums: tuple[tuple[int, int, str], ...]
+    source_data_shape: SourceDataShape
+    command_limits: BenchmarkCommandLimits
+    resource_limits: BenchmarkResourceLimits
+    measurement_method: str
+    python_major_minor: str
+    pyarrow_major_minor: str
+    duckdb_major_minor: str
+    psutil_version: str
+    sampler_method: str
+    cpu_architecture: str
+    cpu_count: int
+    filesystem_type: str
+
+
+@dataclass(frozen=True, slots=True)
 class B01MeasurementRecord:
     """Sanitized Plan 03 section 5.2 evidence for one B01 iteration."""
 
@@ -142,7 +225,7 @@ class B01MeasurementRecord:
     partition_outcomes: tuple[str, ...]
     reconciliation_reasons: tuple[str, ...]
     control_partition_evidence: _ControlPartitionEvidence | None
-    comparability_key: tuple[object, ...]
+    comparability_key: ComparabilityIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +247,13 @@ class _PreparedB02:
     sessions: _NeverProviderSessionFactory
     limiter: _NeverLimiter
     march_checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedB01:
+    root: Path
+    fixture: object
+    sessions: _OneResponseSessionFactory
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +280,7 @@ class _ChildB01Result:
     fixture_id: str
     schedule_digest: str
     policy_version: str
-    checksum: str
+    checksum: str | None
     rows_raw: int
     rows_normalized: int
     rows_published: int
@@ -216,6 +306,12 @@ class _ChildB01Result:
     query_elapsed_ms: int | None = None
     reconciliation_reasons: tuple[str, ...] = ()
     control_partition_evidence: _ControlPartitionEvidence | None = None
+    schedule_as_of: str = ""
+    schedule_source: str = ""
+    schedule_release: str = ""
+    schedule_timezone: str = ""
+    schedule_kind_provenance: tuple[str, ...] = ()
+    schedule_closure_provenance: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,11 +373,15 @@ class _TimedCatalog:
         self._timers = timers
 
     def __enter__(self) -> _TimedCatalog:
-        self._catalog.__enter__()
+        self._timers.call("catalog", self._catalog.__enter__)
         return self
 
     def __exit__(self, *args: object) -> None:
-        self._catalog.__exit__(*args)
+        self._timers.call("catalog", self._catalog.__exit__, *args)
+
+    @property
+    def connection(self) -> object:
+        return self._catalog.connection
 
     def get_manifest(self, plan: object) -> object:
         return self._timers.call("catalog", self._catalog.get_manifest, plan)
@@ -406,16 +506,26 @@ def get_args_for_sampler_failure() -> tuple[_SamplerFailure, ...]:
 def _run_b01_child(
     connection: Connection, root_text: str, child_failure: bool = False
 ) -> None:
+    prepared: _PreparedB01 | None = None
     try:
+        prepared = _prepare_b01(Path(root_text))
         connection.send("READY")
         if connection.recv() != "START":
             return
         if child_failure:
-            raise RuntimeError("injected child failure")
-        connection.send(("DONE", _execute_b01(Path(root_text))))
-        _accept_exact_exit(connection)
-    except Exception:
-        connection.send(("ERROR", "B01_CHILD_FAILED"))
+            result = _terminal_result(prepared, "B01_CHILD_FAILED", outcome="FAILED")
+        else:
+            try:
+                result = _execute_b01(prepared)
+            except Exception:
+                result = _terminal_result(
+                    prepared, "B01_CHILD_FAILED", outcome="FAILED"
+                )
+        connection.send(("DONE", result))
+        try:
+            _accept_exact_exit(connection)
+        except Exception:
+            connection.send(("ERROR", "B01_CHILD_FAILED"))
     finally:
         connection.close()
 
@@ -426,31 +536,51 @@ def _run_benchmark_child(
     root_text: str,
     child_terminal: _ChildTerminal | None = None,
 ) -> None:
+    prepared: object | None = None
     try:
         prepared = _prepare_benchmark_workload(workload_id, Path(root_text))
         connection.send("READY")
         if connection.recv() != "START":
             return
         if child_terminal == "failure":
-            raise RuntimeError("injected child failure")
-        if child_terminal == "cancelled":
-            connection.send(("CANCELLED", "BENCHMARK_CHILD_CANCELLED"))
-            return
+            result = _terminal_result(
+                prepared, "BENCHMARK_CHILD_FAILED", outcome="FAILED"
+            )
+        elif child_terminal == "cancelled":
+            result = _terminal_result(
+                prepared, "BENCHMARK_CHILD_CANCELLED", outcome="CANCELLED"
+            )
         if child_terminal == "invalid":
             connection.send(("INVALID", "BENCHMARK_CHILD_PROTOCOL_INVALID"))
             return
-        connection.send(("DONE", _execute_prepared_benchmark_workload(prepared)))
-        _accept_exact_exit(connection)
-    except Exception:
-        connection.send(("ERROR", "BENCHMARK_CHILD_FAILED"))
+        if child_terminal is None:
+            try:
+                result = _execute_prepared_benchmark_workload(prepared)
+            except Exception:
+                result = _terminal_result(
+                    prepared, "BENCHMARK_CHILD_FAILED", outcome="FAILED"
+                )
+        connection.send(("DONE", result))
+        try:
+            _accept_exact_exit(connection)
+        except Exception:
+            connection.send(("ERROR", "BENCHMARK_CHILD_FAILED"))
     finally:
         connection.close()
 
 
-def _execute_b01(root: Path) -> _ChildB01Result:
+def _prepare_b01(root: Path) -> _PreparedB01:
     fixture = benchmark_nse_eq_v1(date(2024, 2, 1), date(2024, 2, 1))
     partition = fixture.partitions[0]
     sessions = _OneResponseSessionFactory(partition.response)
+    return _PreparedB01(root, fixture, sessions)
+
+
+def _execute_b01(prepared: _PreparedB01) -> _ChildB01Result:
+    root = prepared.root
+    fixture = prepared.fixture
+    partition = fixture.partitions[0]
+    sessions = prepared.sessions
     command = IngestionCommand(
         fixture.instrument,
         date(2024, 2, 1),
@@ -484,6 +614,7 @@ def _execute_b01(root: Path) -> _ChildB01Result:
     elapsed_wall_ms = _elapsed_ms(wall_started, time.monotonic_ns())
     return _child_result(
         report,
+        fixture,
         fixture.fixture_id,
         fixture.schedule_digest,
         fixture.validation_policy,
@@ -537,6 +668,7 @@ def _timed_executor_factory(
 
 def _child_result(
     report: IngestionReport,
+    fixture: object,
     fixture_id: str,
     schedule_digest: str,
     policy_version: str,
@@ -579,6 +711,11 @@ def _child_result(
         report.outcome.value,
         report.failure_code.value,
         tuple(item.outcome.value for item in report.results),
+        requested_range=_requested_range(fixture),
+        partition_checksums=(
+            (partition.plan.year, partition.plan.month, manifest.checksum_sha256),
+        ),
+        **_schedule_result_fields(fixture),
     )
 
 
@@ -604,7 +741,9 @@ def _control_and_sample_child(
         process,
         samples,
         sampler_failure,
-        invalid_blocker or loop_blocker or (None if completed else result.failure_code),
+        invalid_blocker
+        or loop_blocker
+        or (None if completed and child.is_alive() else result.failure_code),
     )
     if completed:
         connection.send("EXIT")
@@ -644,26 +783,16 @@ def _child_message_result(
 ) -> tuple[_ChildB01Result, bool]:
     if message[0] == "DONE" and type(message[1]) is _ChildB01Result:
         return message[1], True
-    if message[0] == "ERROR" and message[1] in {
-        "B01_CHILD_FAILED",
-        "BENCHMARK_CHILD_FAILED",
-    }:
-        return _failed_child_result(str(message[1]), workload_id), False
-    if message[0] == "CANCELLED" and message[1] in {
-        "B01_CHILD_CANCELLED",
-        "BENCHMARK_CHILD_CANCELLED",
-    }:
-        return _failed_child_result(str(message[1]), workload_id), False
-    return _failed_child_result("CHILD_PROTOCOL_INVALID", workload_id), False
+    return _invalid_protocol_result(workload_id), False
 
 
-def _failed_child_result(failure_code: str, workload_id: str) -> _ChildB01Result:
+def _invalid_protocol_result(workload_id: str) -> _ChildB01Result:
     fixture = _fixture_for_workload(workload_id)
     return _ChildB01Result(
         fixture.fixture_id,
         fixture.schedule_digest,
         fixture.validation_policy,
-        "0" * 64,
+        None,
         0,
         0,
         0,
@@ -683,16 +812,76 @@ def _failed_child_result(failure_code: str, workload_id: str) -> _ChildB01Result
             "query": None,
         },
         "FAILED",
-        failure_code,
+        "CHILD_PROTOCOL_INVALID",
         (),
         workload_id=workload_id,
         requested_range=_requested_range(fixture),
         physical_month_count=len(fixture.partitions),
-        partition_checksums=tuple(
-            (partition.plan.year, partition.plan.month, "0" * 64)
-            for partition in fixture.partitions
-        ),
+        partition_checksums=(),
     )
+
+
+def _terminal_result(
+    prepared: object, failure_code: str, *, outcome: Literal["FAILED", "CANCELLED"]
+) -> _ChildB01Result:
+    fixture = _prepared_fixture(prepared)
+    checksums = _actual_partition_checksums(fixture, _prepared_root(prepared))
+    return _ChildB01Result(
+        fixture.fixture_id,
+        fixture.schedule_digest,
+        fixture.validation_policy,
+        checksums[-1][2] if checksums else None,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        {
+            "normalize": None,
+            "validate": None,
+            "publish": None,
+            "catalog": None,
+            "query": None,
+        },
+        outcome,
+        failure_code,
+        (),
+        workload_id=_prepared_workload_id(prepared),
+        requested_range=_requested_range(fixture),
+        physical_month_count=len(fixture.partitions),
+        partition_checksums=checksums,
+        **_schedule_result_fields(fixture),
+    )
+
+
+def _prepared_fixture(prepared: object) -> object:
+    if isinstance(prepared, (_PreparedB01, _PreparedB02, _PreparedB03, _PreparedQuery)):
+        return prepared.fixture
+    raise RuntimeError("benchmark prepared fixture is unavailable")
+
+
+def _prepared_root(prepared: object) -> Path:
+    if isinstance(prepared, (_PreparedB01, _PreparedB02, _PreparedB03, _PreparedQuery)):
+        return prepared.root
+    raise RuntimeError("benchmark prepared root is unavailable")
+
+
+def _prepared_workload_id(prepared: object) -> str:
+    if isinstance(prepared, _PreparedB01):
+        return "B01"
+    if isinstance(prepared, _PreparedB02):
+        return "B02"
+    if isinstance(prepared, _PreparedB03):
+        return "B03"
+    if isinstance(prepared, _PreparedQuery):
+        return prepared.workload_id
+    raise RuntimeError("benchmark workload is unavailable")
 
 
 def _fixture_for_workload(workload_id: str) -> object:
@@ -710,7 +899,37 @@ def _fixture_for_workload(workload_id: str) -> object:
 def _requested_range(fixture: object) -> str:
     partitions = fixture.partitions  # type: ignore[attr-defined]
     first, last = partitions[0].plan, partitions[-1].plan
-    return f"{first.year:04d}-{first.month:02d}-01..{last.year:04d}-{last.month:02d}-31"
+    return f"{first.from_date.isoformat()}..{last.to_date.isoformat()}"
+
+
+def _actual_partition_checksums(
+    fixture: object, root: Path
+) -> tuple[tuple[int, int, str], ...]:
+    partitions = fixture.partitions  # type: ignore[attr-defined]
+    checksums: list[tuple[int, int, str]] = []
+    for partition in partitions:
+        path = root / _canonical_path(partition)
+        if not path.is_file():
+            return ()
+        checksums.append((partition.plan.year, partition.plan.month, _checksum(path)))
+    return tuple(checksums)
+
+
+def _schedule_result_fields(fixture: object) -> dict[str, object]:
+    schedule = fixture.schedule  # type: ignore[attr-defined]
+    return {
+        "schedule_as_of": schedule.as_of.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "schedule_source": schedule.source,
+        "schedule_release": schedule.source_release,
+        "schedule_timezone": schedule.timezone,
+        "schedule_kind_provenance": tuple(
+            session.kind for session in schedule.sessions
+        ),
+        "schedule_closure_provenance": tuple(
+            (closure.trade_date.isoformat(), closure.reason)
+            for closure in schedule.closures
+        ),
+    }
 
 
 def _accept_exact_exit(connection: Connection) -> None:
@@ -851,7 +1070,7 @@ def _record_b01(
         policy_version=result.policy_version,
         requested_range=result.requested_range,
         physical_month_count=result.physical_month_count,
-        partition_checksums=result.partition_checksums or ((2024, 2, result.checksum),),
+        partition_checksums=result.partition_checksums,
         elapsed_wall_ms=result.elapsed_wall_ms,
         elapsed_cpu_ms=result.elapsed_cpu_ms,
         phase_elapsed_ms=result.phase_elapsed_ms,
@@ -888,28 +1107,47 @@ def _record_b01(
         partition_outcomes=result.partition_outcomes,
         reconciliation_reasons=result.reconciliation_reasons,
         control_partition_evidence=result.control_partition_evidence,
-        comparability_key=(
-            result.workload_id,
-            result.fixture_id,
-            result.schedule_digest,
-            result.policy_version,
-            result.requested_range,
-            result.physical_month_count,
-            result.partition_checksums or ((2024, 2, result.checksum),),
+        comparability_key=_comparability_identity(result, root),
+    )
+
+
+def _comparability_identity(
+    result: _ChildB01Result, root: Path
+) -> ComparabilityIdentity:
+    return ComparabilityIdentity(
+        result.workload_id,
+        result.fixture_id,
+        result.fixture_id,
+        _git_identifier("HEAD"),
+        _git_identifier("HEAD^{tree}"),
+        hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest(),
+        result.schedule_digest,
+        result.requested_range,
+        result.schedule_as_of,
+        result.schedule_source,
+        result.schedule_release,
+        result.schedule_timezone,
+        result.schedule_kind_provenance,
+        result.schedule_closure_provenance,
+        result.policy_version,
+        result.partition_checksums,
+        SourceDataShape(
             result.rows_raw,
             result.rows_normalized,
             result.rows_published,
-            runtime_platform.python_version().rsplit(".", 1)[0],
-            duckdb.__version__.rsplit(".", 1)[0],
-            pyarrow.__version__.rsplit(".", 1)[0],
-            psutil.__version__,
-            _SAMPLER_METHOD,
-            runtime_platform.machine(),
-            os.cpu_count() or 1,
-            _filesystem_type(root),
-            _SAMPLING_INTERVAL_S,
-            _MAX_SAMPLING_GAP_MS,
+            result.bytes_parquet,
         ),
+        _BENCHMARK_COMMAND_LIMITS,
+        _BENCHMARK_RESOURCE_LIMITS,
+        "monotonic-parent-child-v2",
+        runtime_platform.python_version().rsplit(".", 1)[0],
+        pyarrow.__version__.rsplit(".", 1)[0],
+        duckdb.__version__.rsplit(".", 1)[0],
+        psutil.__version__,
+        _SAMPLER_METHOD,
+        runtime_platform.machine(),
+        os.cpu_count() or 1,
+        _filesystem_type(root),
     )
 
 
@@ -1187,9 +1425,10 @@ def _b02_result(
         report.failure_code.value,
         tuple(item.outcome.value for item in report.results),
         workload_id="B02",
-        requested_range="2024-01-01..2024-03-31",
+        requested_range=_requested_range(typed_fixture),
         physical_month_count=3,
         partition_checksums=checksums,
+        **_schedule_result_fields(typed_fixture),
     )
 
 
@@ -1378,11 +1617,12 @@ def _b03_result(
         report.failure_code.value,
         (result.outcome.value,),
         workload_id="B03",
-        requested_range="2024-02-01..2024-02-29",
+        requested_range=_requested_range(typed_fixture),
         physical_month_count=1,
         partition_checksums=((2024, 2, manifest.checksum_sha256),),
         reconciliation_reasons=reasons,
         control_partition_evidence=control,
+        **_schedule_result_fields(typed_fixture),
     )
 
 
@@ -1459,29 +1699,17 @@ def _execute_query(prepared: _PreparedQuery) -> _ChildB01Result:
     workload_id = prepared.workload_id
     started_wall, started_cpu = time.monotonic_ns(), time.process_time_ns()
     timers = _PhaseTimers(query_applicable=True)
-    with DuckDBCatalog(root) as catalog:
+    with _TimedCatalog(root, timers) as catalog:
         timers.call("catalog", _configure_benchmark_query, catalog, root)
         aggregate = timers.call(
             "query",
-            catalog.connection.execute,
-            "SELECT count(*), CAST(min(ts) AS VARCHAR), CAST(max(ts) AS VARCHAR) "
-            "FROM read_parquet(?) "
-            "WHERE provider = ? AND exchange = ? AND segment = ? "
-            "AND instrument_type = ? AND security_id = ? AND interval = ? "
-            "AND ts >= ? AND ts <= ?",
-            [
-                [str(path) for path in paths],
-                fixture.partitions[0].plan.provider,
-                fixture.instrument.exchange,
-                fixture.instrument.segment,
-                fixture.instrument.instrument_type,
-                fixture.instrument.security_id,
-                "1m",
-                manifests[0].actual_from_ts.isoformat(),
-                manifests[-1].actual_to_ts.isoformat(),
-            ],
-        ).fetchone()
-        _assert_metadata_relations_only(catalog)
+            _fetch_benchmark_aggregate,
+            catalog,
+            paths,
+            fixture,
+            manifests,
+        )
+        timers.call("catalog", _assert_metadata_relations_only, catalog)
     phase_elapsed_ms = timers.snapshot()
     return _query_result(
         aggregate,
@@ -1513,6 +1741,32 @@ def _configure_benchmark_query(catalog: DuckDBCatalog, root: Path) -> None:
         != (str(temp_directory),)
     ):
         raise RuntimeError("benchmark DuckDB configuration was not applied")
+
+
+def _fetch_benchmark_aggregate(
+    catalog: DuckDBCatalog,
+    paths: tuple[Path, ...],
+    fixture: object,
+    manifests: tuple[PartitionManifest, ...],
+) -> object:
+    return catalog.connection.execute(
+        "SELECT count(*), CAST(min(ts) AS VARCHAR), CAST(max(ts) AS VARCHAR) "
+        "FROM read_parquet(?) "
+        "WHERE provider = ? AND exchange = ? AND segment = ? "
+        "AND instrument_type = ? AND security_id = ? AND interval = ? "
+        "AND ts >= ? AND ts <= ?",
+        [
+            [str(path) for path in paths],
+            fixture.partitions[0].plan.provider,  # type: ignore[attr-defined]
+            fixture.instrument.exchange,  # type: ignore[attr-defined]
+            fixture.instrument.segment,  # type: ignore[attr-defined]
+            fixture.instrument.instrument_type,  # type: ignore[attr-defined]
+            fixture.instrument.security_id,  # type: ignore[attr-defined]
+            "1m",
+            manifests[0].actual_from_ts.isoformat(),
+            manifests[-1].actual_to_ts.isoformat(),
+        ],
+    ).fetchone()
 
 
 def _assert_metadata_relations_only(catalog: DuckDBCatalog) -> None:
@@ -1598,6 +1852,7 @@ def _query_result(
         query_min_ts=expected_from.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         query_max_ts=expected_to.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         query_elapsed_ms=phase_elapsed_ms["query"],
+        **_schedule_result_fields(fixture),
     )
 
 
