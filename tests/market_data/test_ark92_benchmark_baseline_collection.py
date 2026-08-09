@@ -27,6 +27,7 @@ from ark92_benchmark_baseline_collection import (
     BaselineCollectionReport,
     BaselineCollectionStatus,
     BaselineWorkloadResult,
+    _comparable_valid_count,
     collect_baseline_samples,
     collect_benchmark_baselines,
     write_baseline_artifact,
@@ -44,7 +45,7 @@ def _identity() -> ComparabilityIdentity:
         "lock",
         "digest",
         "range",
-        "as-of",
+        "2024-03-01T00:00:00.000000Z",
         "source",
         "release",
         "timezone",
@@ -140,7 +141,24 @@ def _artifact_record(
         ("VERIFIED",),
         (),
         None,
-        replace(_identity(), workload_id=workload_id),
+        replace(
+            _identity(),
+            workload_id=workload_id,
+            fixture_id="fixture",
+            fixture_version="fixture-v1",
+            source_revision="a" * 40,
+            source_tree="b" * 40,
+            lock_identity="c" * 64,
+            schedule_digest="d" * 64,
+            requested_range="2024-02-01..2024-02-29",
+            policy_version="policy",
+            partition_checksums=((2024, 2, "e" * 64),),
+            source_data_shape=SourceDataShape(1, 1, 1, 1),
+            sampler_method="psutil-parent-child-v1",
+            psutil_version="7.2.2",
+            cpu_count=1,
+            filesystem_type="apfs",
+        ),
     )
 
 
@@ -211,6 +229,15 @@ def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically
     assert "path" not in json.dumps(payload).lower()
 
 
+def test_comparable_valid_count_excludes_one_mismatched_valid_identity() -> None:
+    records = tuple(_artifact_record("B01", "measured", index) for index in range(1, 6))
+    mismatched = replace(
+        records[4], comparability_key=replace(_identity(), workload_id="B02")
+    )
+
+    assert _comparable_valid_count(records[:4] + (mismatched,)) == 4
+
+
 def test_write_baseline_artifact_rejects_unsafe_or_incomplete_evidence_without_temp(
     tmp_path: Path,
 ) -> None:
@@ -229,6 +256,265 @@ def test_write_baseline_artifact_rejects_unsafe_or_incomplete_evidence_without_t
     assert tuple(tmp_path.iterdir()) == ()
 
 
+@pytest.mark.parametrize(
+    ("field_name", "unsafe_value"),
+    (
+        ("cpu_model", "SELECT * FROM candle_copy"),
+        ("platform", "NSE_EQ|TESTEQ"),
+        ("os_version", '{"raw_payload":"secret"}'),
+        ("cpu_model", "instrument_key=NSE_EQ|TESTEQ"),
+        ("fixture_id", "fixture?access_token=secret"),
+        ("query_min_ts", "https://provider.example/raw"),
+    ),
+)
+def test_write_baseline_artifact_rejects_nonapproved_text_evidence(
+    tmp_path: Path, field_name: str, unsafe_value: str
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    identity = (
+        replace(record.comparability_key, **{field_name: unsafe_value})
+        if field_name in ComparabilityIdentity.__dataclass_fields__
+        else record.comparability_key
+    )
+    unsafe = replace(
+        report.results[0],
+        warmup=replace(
+            record, comparability_key=identity, **{field_name: unsafe_value}
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unsanitized"):
+        write_baseline_artifact(
+            replace(report, results=(unsafe,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_rejects_unsafe_nested_identity_evidence(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    unsafe_identity = replace(
+        record.comparability_key,
+        command_limits=replace(
+            record.comparability_key.command_limits,
+            interval="SELECT * FROM candles",
+        ),
+        resource_limits=replace(
+            record.comparability_key.resource_limits,
+            fd_closure_rule="NSE_EQ|TESTEQ",
+        ),
+    )
+    unsafe = replace(
+        report.results[0], warmup=replace(record, comparability_key=unsafe_identity)
+    )
+
+    with pytest.raises(ValueError, match="unsanitized"):
+        write_baseline_artifact(
+            replace(report, results=(unsafe,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_rejects_untyped_nested_identity_limits(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    for field_name in ("command_limits", "resource_limits"):
+        mismatched_identity = replace(
+            record.comparability_key,
+            **{field_name: "invalid"},  # type: ignore[arg-type]
+        )
+        mismatched = replace(
+            report.results[0],
+            warmup=replace(record, comparability_key=mismatched_identity),
+        )
+
+        with pytest.raises(ValueError, match="identity"):
+            write_baseline_artifact(
+                replace(report, results=(mismatched,) + report.results[1:]),
+                tmp_path / "baseline.json",
+            )
+
+        assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_preserves_safe_typed_control_evidence(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    control = benchmark_measurement._ControlPartitionEvidence(
+        ("synthetic", "NSE", "NSE_EQ", "EQ", "fixture", "1m", 2024, 1),
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        "d" * 64,
+        "e" * 64,
+    )
+    b03 = replace(
+        report.results[2],
+        warmup=replace(report.results[2].warmup, control_partition_evidence=control),
+    )
+    output = tmp_path / "baseline.json"
+
+    write_baseline_artifact(
+        replace(report, results=(*report.results[:2], b03, *report.results[3:])),
+        output,
+    )
+
+    payload = json.loads(output.read_text())
+    assert payload["results"][2]["warmup"]["control_partition_evidence"] == {
+        "physical_identity": [
+            "synthetic",
+            "NSE",
+            "NSE_EQ",
+            "EQ",
+            "fixture",
+            "1m",
+            2024,
+            1,
+        ],
+        "pre_physical_checksum": "a" * 64,
+        "post_physical_checksum": "b" * 64,
+        "pre_manifest_fingerprint": "c" * 64,
+        "post_manifest_fingerprint": "d" * 64,
+        "manifest_bound_schedule_digest": "e" * 64,
+    }
+
+
+@pytest.mark.parametrize(
+    "record_field",
+    (
+        "workload_id",
+        "fixture_id",
+        "fixture_version",
+        "source_revision",
+        "source_tree",
+        "lock_identity",
+        "schedule_digest",
+        "policy_version",
+        "requested_range",
+        "partition_checksums",
+        "rows_raw",
+        "rows_normalized",
+        "rows_published",
+        "bytes_parquet",
+        "cpu_count",
+        "filesystem_type",
+        "sampler_method",
+        "psutil_version",
+    ),
+)
+def test_write_baseline_artifact_rejects_every_direct_identity_contradiction(
+    tmp_path: Path, record_field: str
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    key = record.comparability_key
+    changed_key = _contradict_identity_field(key, record_field)
+    contradictory = replace(
+        report.results[0], warmup=replace(record, comparability_key=changed_key)
+    )
+
+    with pytest.raises(ValueError, match="contradicts"):
+        write_baseline_artifact(
+            replace(report, results=(contradictory,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def _contradict_identity_field(
+    identity: ComparabilityIdentity, record_field: str
+) -> ComparabilityIdentity:
+    if record_field in SourceDataShape.__dataclass_fields__:
+        shape = replace(
+            identity.source_data_shape,
+            **{record_field: getattr(identity.source_data_shape, record_field) + 1},
+        )
+        return replace(identity, source_data_shape=shape)
+    if record_field == "partition_checksums":
+        checksums = ((2024, 1, "f" * 64), *identity.partition_checksums)
+        return replace(identity, partition_checksums=checksums)
+    if record_field == "workload_id":
+        return replace(identity, workload_id="B02")
+    return replace(identity, **{record_field: "different"})
+
+
+def test_write_baseline_artifact_rejects_partition_checksum_order_change(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    checksums = ((2024, 1, "f" * 64), (2024, 2, "e" * 64))
+    record = replace(record, physical_month_count=2, partition_checksums=checksums)
+    reversed_identity = replace(
+        record.comparability_key,
+        partition_checksums=tuple(reversed(checksums)),
+    )
+    contradictory = replace(
+        report.results[0], warmup=replace(record, comparability_key=reversed_identity)
+    )
+
+    with pytest.raises(ValueError, match="contradicts"):
+        write_baseline_artifact(
+            replace(report, results=(contradictory,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.parametrize("measured_count", (4, 6))
+def test_write_baseline_artifact_rejects_missing_or_extra_iterations(
+    tmp_path: Path, measured_count: int
+) -> None:
+    report = _artifact_report()
+    measured = report.results[0].measured
+    if measured_count < len(measured):
+        changed = measured[:measured_count]
+    else:
+        changed = measured + (replace(measured[-1], iteration_index=6),)
+    incomplete = replace(report.results[0], measured=changed)
+
+    with pytest.raises(ValueError, match="incomplete"):
+        write_baseline_artifact(
+            replace(report, results=(incomplete,) + report.results[1:]),
+            tmp_path / "baseline.json",
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.parametrize(
+    "results",
+    (
+        lambda report: report.results[1:],
+        lambda report: report.results + (report.results[0],),
+    ),
+)
+def test_write_baseline_artifact_rejects_missing_or_extra_workloads(
+    tmp_path: Path, results: object
+) -> None:
+    report = _artifact_report()
+    changed_results = results(report)  # type: ignore[operator]
+
+    with pytest.raises(ValueError, match="workloads"):
+        write_baseline_artifact(
+            replace(report, results=changed_results), tmp_path / "baseline.json"
+        )
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
 def test_write_baseline_artifact_never_overwrites_existing_output(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +525,59 @@ def test_write_baseline_artifact_never_overwrites_existing_output(
         write_baseline_artifact(_artifact_report(), output)
 
     assert output.read_text() == "existing"
+
+
+def test_write_baseline_artifact_cleans_up_after_temporary_write_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "baseline.json"
+
+    def write_then_fail(temporary: Path, _encoded: bytes) -> None:
+        temporary.write_bytes(b"partial")
+        raise OSError("write failed")
+
+    monkeypatch.setattr(baseline_collection, "_write_temporary", write_then_fail)
+
+    with pytest.raises(OSError, match="write failed"):
+        write_baseline_artifact(_artifact_report(), output)
+
+    assert not output.exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_cleans_up_after_fsync_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "baseline.json"
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(baseline_collection.os, "fsync", fail_fsync)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        write_baseline_artifact(_artifact_report(), output)
+
+    assert not output.exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_write_baseline_artifact_preserves_concurrent_destination_and_cleans_temp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "baseline.json"
+
+    def competing_link(_temporary: Path, destination: Path) -> None:
+        destination.write_text("concurrent artifact")
+        raise FileExistsError("destination exists")
+
+    monkeypatch.setattr(baseline_collection.os, "link", competing_link)
+
+    with pytest.raises(FileExistsError, match="destination exists"):
+        write_baseline_artifact(_artifact_report(), output)
+
+    assert output.read_text() == "concurrent artifact"
+    assert tuple(tmp_path.iterdir()) == (output,)
 
 
 def test_write_baseline_artifact_rejects_duplicate_incomplete_and_nonfinite_rows(
@@ -293,11 +632,78 @@ def test_persistence_entry_point_uses_disposable_root_and_never_retries(
     assert calls == [work_root]
     assert output.is_file()
 
-    with pytest.raises(FileExistsError):
+    assert (
         persist_baseline_artifact(
             ["--output", str(output), "--work-root", str(work_root)]
         )
+        == 2
+    )
     assert calls == [work_root]
+
+
+@pytest.mark.parametrize(
+    ("output_suffix", "work_suffix", "setup", "expected_code"),
+    (
+        ("outside.json", "work", None, "PERSISTENCE_FAILED"),
+        ("artifact/same", "artifact/same", None, "OUTPUT_WORK_ROOT_OVERLAP"),
+        ("artifact/output.json", "artifact", None, "OUTPUT_WORK_ROOT_OVERLAP"),
+        (
+            "artifact/output.json",
+            "artifact/output.json/work",
+            None,
+            "OUTPUT_WORK_ROOT_OVERLAP",
+        ),
+        ("artifact/output.json", "artifact/work", "work", "WORK_ROOT_EXISTS"),
+    ),
+)
+def test_persistence_entry_point_rejects_invalid_paths_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    output_suffix: str,
+    work_suffix: str,
+    setup: str | None,
+    expected_code: str,
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    output = tmp_path / output_suffix
+    work_root = tmp_path / work_suffix
+    calls: list[Path] = []
+    artifact_root.mkdir()
+    if setup == "work":
+        work_root.mkdir(parents=True)
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    monkeypatch.setattr(
+        baseline_collection,
+        "collect_benchmark_baselines",
+        lambda root: calls.append(root) or _artifact_report(),
+    )
+
+    assert (
+        persist_baseline_artifact(
+            ["--output", str(output), "--work-root", str(work_root)]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"baseline artifact collection failed: {expected_code}\n"
+    assert str(tmp_path) not in captured.err
+    assert "Traceback" not in captured.err
+    assert calls == []
+
+
+def test_persistence_entry_point_rejects_malformed_arguments_without_paths(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert persist_baseline_artifact(["--output", "/private/not-allowed"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "baseline artifact collection failed: INVALID_ARGUMENTS\n"
+    assert "/private/not-allowed" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_sampling_gap_over_limit_is_invalid_before_millisecond_display_rounding() -> (

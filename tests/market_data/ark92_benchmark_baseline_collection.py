@@ -6,9 +6,11 @@ import argparse
 import json
 import math
 import os
+import re
+import sys
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, TypeVar
@@ -36,17 +38,31 @@ _SENSITIVE_TEXT = (
     "password",
     "secret",
     "token=",
+    "access_token",
+    "access token",
+    "api_key",
+    "api-key",
+    "cookie",
+    "credential",
+    "instrument_key",
+    "instrument-key",
+    "provider_alias",
+    "provider-alias",
     "raw-payload",
     "raw_payload",
     "raw_alias",
 )
-_NESTED_EVIDENCE_TYPES = (
-    ComparabilityIdentity,
-    SourceDataShape,
-    BenchmarkCommandLimits,
-    BenchmarkResourceLimits,
-    _ControlPartitionEvidence,
+_SQL_TEXT = re.compile(
+    r"(?:^|[^a-z])(select|insert|update|delete|drop|alter|create|attach|detach|"
+    r"pragma|vacuum|copy|union)(?:$|[^a-z])",
+    re.IGNORECASE,
 )
+_SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+\-]*")
+_SAFE_ENVIRONMENT_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:@+\-]*")
+_RFC3339_MICROSECONDS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
+_REQUESTED_RANGE = re.compile(r"\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}")
+_HEX_40 = re.compile(r"[0-9a-f]{40}")
+_HEX_64 = re.compile(r"[0-9a-f]{64}")
 
 
 class BaselineIterationRecord(Protocol):
@@ -69,6 +85,16 @@ class BaselineCollectionStatus(StrEnum):
 
     RETAINED = "RETAINED"
     INSUFFICIENT = "INSUFFICIENT"
+
+
+class _ArtifactCliFailure(Exception):
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+
+class _ArtifactArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> None:
+        raise _ArtifactCliFailure("INVALID_ARGUMENTS")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,21 +125,30 @@ def write_baseline_artifact(report: BaselineCollectionReport, output: Path) -> N
 
 def main(argv: list[str] | None = None) -> int:
     """Collect once into an explicit new artifact and disposable work root."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _ArtifactArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
-    arguments = parser.parse_args(argv)
-    output = _artifact_path(arguments.output, "output")
-    work_root = _artifact_path(arguments.work_root, "work root")
-    if output.exists():
-        raise FileExistsError(f"baseline artifact already exists: {output}")
-    if work_root.exists():
-        raise FileExistsError(f"disposable work root already exists: {work_root}")
-    if work_root == output.parent or work_root in output.parents:
-        raise ValueError("output must not be inside the disposable work root")
+    try:
+        arguments = parser.parse_args(argv)
+        output = _artifact_path(arguments.output, "output")
+        work_root = _artifact_path(arguments.work_root, "work root")
+        if output.exists():
+            raise _ArtifactCliFailure("OUTPUT_EXISTS")
+        if _paths_overlap(output, work_root):
+            raise _ArtifactCliFailure("OUTPUT_WORK_ROOT_OVERLAP")
+        if work_root.exists():
+            raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
 
-    report = collect_benchmark_baselines(work_root)
-    write_baseline_artifact(report, output)
+        report = collect_benchmark_baselines(work_root)
+        write_baseline_artifact(report, output)
+    except _ArtifactCliFailure as error:
+        print(f"baseline artifact collection failed: {error.code}", file=sys.stderr)
+        return 2
+    except (ValueError, FileExistsError, OSError):
+        print(
+            "baseline artifact collection failed: PERSISTENCE_FAILED", file=sys.stderr
+        )
+        return 2
     return 0
 
 
@@ -162,11 +197,7 @@ def _collect_workload(
         for iteration_index in range(1, _MEASURED_ITERATION_COUNT + 1)
     )
     _validate_records(workload_id, warmup, measured)
-    valid_records = tuple(record for record in measured if _is_valid_record(record))
-    reference_key = valid_records[0].comparability_key if valid_records else None
-    valid_count = sum(
-        record.comparability_key == reference_key for record in valid_records
-    )
+    valid_count = _comparable_valid_count(measured)
     return BaselineWorkloadResult(
         workload_id,
         warmup,
@@ -208,6 +239,12 @@ def _is_valid_record(record: BaselineIterationRecord) -> bool:
     )
 
 
+def _comparable_valid_count(records: tuple[BaselineIterationRecord, ...]) -> int:
+    valid_records = tuple(record for record in records if _is_valid_record(record))
+    reference_key = valid_records[0].comparability_key if valid_records else None
+    return sum(record.comparability_key == reference_key for record in valid_records)
+
+
 def _serialize_report(report: BaselineCollectionReport) -> bytes:
     if (
         type(report) is not BaselineCollectionReport
@@ -235,7 +272,7 @@ def _serialize_workload(result: BaselineWorkloadResult) -> dict[str, object]:
     if len(result.measured) != _MEASURED_ITERATION_COUNT:
         raise ValueError("baseline workload has an incomplete measured set")
     _validate_records(result.workload_id, result.warmup, result.measured)
-    valid_count = sum(_is_valid_record(record) for record in result.measured)
+    valid_count = _comparable_valid_count(result.measured)
     expected_status = (
         BaselineCollectionStatus.RETAINED
         if valid_count == _MEASURED_ITERATION_COUNT
@@ -265,15 +302,116 @@ def _serialize_record(record: BaselineIterationRecord) -> dict[str, object]:
     expected_fields = tuple(B01MeasurementRecord.__dataclass_fields__)
     if tuple(field.name for field in fields(record)) != expected_fields:
         raise ValueError("measurement record has missing or extra fields")
-    serialized: dict[str, object] = {}
-    for field_name in expected_fields:
-        value = getattr(record, field_name)
-        serialized[field_name] = (
-            _serialize_phase_elapsed(value)
-            if field_name == "phase_elapsed_ms"
-            else _serialize_value(value)
-        )
-    return serialized
+    _validate_record_identity(record)
+    return {
+        "workload_id": _serialize_workload_id(record.workload_id),
+        "iteration_kind": _serialize_iteration_kind(record.iteration_kind),
+        "iteration_index": _serialize_positive_int(record.iteration_index),
+        "source_revision": _serialize_hex(record.source_revision, _HEX_40),
+        "source_tree": _serialize_hex(record.source_tree, _HEX_40),
+        "lock_identity": _serialize_hex(record.lock_identity, _HEX_64),
+        "python_version": _serialize_label(record.python_version),
+        "platform": _serialize_environment_text(record.platform),
+        "cpu_model": _serialize_environment_text(record.cpu_model),
+        "cpu_count": _serialize_positive_int(record.cpu_count),
+        "memory_total_bytes": _serialize_nonnegative_int(record.memory_total_bytes),
+        "filesystem_type": _serialize_label(record.filesystem_type),
+        "duckdb_version": _serialize_label(record.duckdb_version),
+        "pyarrow_version": _serialize_label(record.pyarrow_version),
+        "os_version": _serialize_environment_text(record.os_version),
+        "fixture_id": _serialize_label(record.fixture_id),
+        "fixture_version": _serialize_label(record.fixture_version),
+        "schedule_digest": _serialize_hex(record.schedule_digest, _HEX_64),
+        "policy_version": _serialize_label(record.policy_version),
+        "requested_range": _serialize_requested_range(record.requested_range),
+        "physical_month_count": _serialize_nonnegative_int(record.physical_month_count),
+        "partition_checksums": _serialize_partition_checksums(
+            record.partition_checksums
+        ),
+        "elapsed_wall_ms": _serialize_nonnegative_int(record.elapsed_wall_ms),
+        "elapsed_cpu_ms": _serialize_nonnegative_int(record.elapsed_cpu_ms),
+        "phase_elapsed_ms": _serialize_phase_elapsed(record.phase_elapsed_ms),
+        "rows_raw": _serialize_nonnegative_int(record.rows_raw),
+        "rows_normalized": _serialize_nonnegative_int(record.rows_normalized),
+        "rows_published": _serialize_nonnegative_int(record.rows_published),
+        "bytes_parquet": _serialize_nonnegative_int(record.bytes_parquet),
+        "throughput_rows_per_s": _serialize_optional_nonnegative_float(
+            record.throughput_rows_per_s
+        ),
+        "request_count": _serialize_nonnegative_int(record.request_count),
+        "provider_attempt_count": _serialize_nonnegative_int(
+            record.provider_attempt_count
+        ),
+        "retry_count": _serialize_nonnegative_int(record.retry_count),
+        "resume_count": _serialize_nonnegative_int(record.resume_count),
+        "repair_count": _serialize_nonnegative_int(record.repair_count),
+        "peak_rss_bytes": _serialize_optional_nonnegative_int(record.peak_rss_bytes),
+        "open_fd_start": _serialize_optional_nonnegative_int(record.open_fd_start),
+        "open_fd_peak": _serialize_optional_nonnegative_int(record.open_fd_peak),
+        "open_fd_end": _serialize_optional_nonnegative_int(record.open_fd_end),
+        "sampler_method": _serialize_label(record.sampler_method),
+        "psutil_version": _serialize_label(record.psutil_version),
+        "sampler_sample_count": _serialize_nonnegative_int(record.sampler_sample_count),
+        "sampler_max_gap_ms": _serialize_optional_nonnegative_int(
+            record.sampler_max_gap_ms
+        ),
+        "resource_evidence_status": _serialize_resource_status(
+            record.resource_evidence_status
+        ),
+        "resource_blocker": _serialize_optional_label(record.resource_blocker),
+        "query_result_count": _serialize_optional_nonnegative_int(
+            record.query_result_count
+        ),
+        "query_min_ts": _serialize_optional_timestamp(record.query_min_ts),
+        "query_max_ts": _serialize_optional_timestamp(record.query_max_ts),
+        "query_elapsed_ms": _serialize_optional_nonnegative_int(
+            record.query_elapsed_ms
+        ),
+        "outcome": _serialize_outcome(record.outcome),
+        "failure_code": _serialize_outcome(record.failure_code),
+        "partition_outcomes": _serialize_labels(record.partition_outcomes),
+        "reconciliation_reasons": _serialize_labels(record.reconciliation_reasons),
+        "control_partition_evidence": _serialize_control_partition_evidence(
+            record.control_partition_evidence
+        ),
+        "comparability_key": _serialize_comparability_identity(
+            record.comparability_key
+        ),
+    }
+
+
+def _validate_record_identity(record: B01MeasurementRecord) -> None:
+    key = record.comparability_key
+    if type(key) is not ComparabilityIdentity:
+        raise ValueError("measurement comparability identity is invalid")
+    if (
+        type(key.source_data_shape) is not SourceDataShape
+        or type(key.command_limits) is not BenchmarkCommandLimits
+        or type(key.resource_limits) is not BenchmarkResourceLimits
+    ):
+        raise ValueError("measurement comparability identity is invalid")
+    direct_pairs = (
+        (record.workload_id, key.workload_id),
+        (record.fixture_id, key.fixture_id),
+        (record.fixture_version, key.fixture_version),
+        (record.source_revision, key.source_revision),
+        (record.source_tree, key.source_tree),
+        (record.lock_identity, key.lock_identity),
+        (record.schedule_digest, key.schedule_digest),
+        (record.policy_version, key.policy_version),
+        (record.requested_range, key.requested_range),
+        (record.partition_checksums, key.partition_checksums),
+        (record.rows_raw, key.source_data_shape.rows_raw),
+        (record.rows_normalized, key.source_data_shape.rows_normalized),
+        (record.rows_published, key.source_data_shape.rows_published),
+        (record.bytes_parquet, key.source_data_shape.bytes_parquet),
+        (record.cpu_count, key.cpu_count),
+        (record.filesystem_type, key.filesystem_type),
+        (record.sampler_method, key.sampler_method),
+        (record.psutil_version, key.psutil_version),
+    )
+    if any(left != right for left, right in direct_pairs):
+        raise ValueError("measurement record contradicts comparability identity")
 
 
 def _serialize_phase_elapsed(value: object) -> dict[str, int | None]:
@@ -284,32 +422,265 @@ def _serialize_phase_elapsed(value: object) -> dict[str, int | None]:
     return {phase: value[phase] for phase in sorted(_PHASE_FIELDS)}
 
 
-def _serialize_value(value: object) -> object:
-    if isinstance(value, ResourceEvidenceStatus):
-        return value.value
-    if type(value) is str:
-        lowered = value.lower()
-        if (
-            "/" in value
-            or "\\" in value
-            or any(marker in lowered for marker in _SENSITIVE_TEXT)
-        ):
-            raise ValueError("unsanitized path or secret evidence")
-        return value
-    if value is None or type(value) is bool or type(value) is int:
-        return value
-    if type(value) is float:
-        if not math.isfinite(value):
-            raise ValueError("nonfinite measurement evidence")
-        return value
-    if type(value) is tuple:
-        return [_serialize_value(item) for item in value]
-    if is_dataclass(value) and type(value) in _NESTED_EVIDENCE_TYPES:
-        return {
-            field.name: _serialize_value(getattr(value, field.name))
-            for field in fields(value)
-        }
-    raise ValueError("unsupported or unsanitized measurement evidence")
+def _serialize_workload_id(value: object) -> str:
+    if type(value) is not str or value not in _WORKLOAD_IDS:
+        raise ValueError("unsanitized workload evidence")
+    return value
+
+
+def _serialize_iteration_kind(value: object) -> str:
+    if value not in {"warmup", "measured"}:
+        raise ValueError("unsanitized iteration evidence")
+    return value
+
+
+def _serialize_outcome(value: object) -> str:
+    if type(value) is not str or not re.fullmatch(r"[A-Z0-9_]+", value):
+        raise ValueError("unsanitized outcome evidence")
+    return value
+
+
+def _serialize_label(value: object) -> str:
+    if type(value) is not str or not _SAFE_LABEL.fullmatch(value):
+        raise ValueError("unsanitized label evidence")
+    _reject_sensitive_text(value)
+    return value
+
+
+def _serialize_environment_text(value: object) -> str:
+    if type(value) is not str or not _SAFE_ENVIRONMENT_TEXT.fullmatch(value):
+        raise ValueError("unsanitized environment evidence")
+    _reject_sensitive_text(value)
+    return value
+
+
+def _reject_sensitive_text(value: str) -> None:
+    lowered = value.lower()
+    if (
+        "/" in value
+        or "\\" in value
+        or "|" in value
+        or any(marker in lowered for marker in _SENSITIVE_TEXT)
+        or _SQL_TEXT.search(value) is not None
+    ):
+        raise ValueError("unsanitized path or secret evidence")
+
+
+def _serialize_hex(value: object, expected: re.Pattern[str]) -> str:
+    if type(value) is not str or not expected.fullmatch(value):
+        raise ValueError("unsanitized digest evidence")
+    return value
+
+
+def _serialize_requested_range(value: object) -> str:
+    if type(value) is not str or not _REQUESTED_RANGE.fullmatch(value):
+        raise ValueError("unsanitized range evidence")
+    return value
+
+
+def _serialize_timestamp(value: object) -> str:
+    if type(value) is not str or not _RFC3339_MICROSECONDS.fullmatch(value):
+        raise ValueError("unsanitized timestamp evidence")
+    return value
+
+
+def _serialize_optional_timestamp(value: object) -> str | None:
+    return None if value is None else _serialize_timestamp(value)
+
+
+def _serialize_nonnegative_int(value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid numeric measurement evidence")
+    return value
+
+
+def _serialize_positive_int(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError("invalid numeric measurement evidence")
+    return value
+
+
+def _serialize_optional_nonnegative_int(value: object) -> int | None:
+    return None if value is None else _serialize_nonnegative_int(value)
+
+
+def _serialize_optional_nonnegative_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if type(value) is not float or not math.isfinite(value) or value < 0:
+        raise ValueError("nonfinite measurement evidence")
+    return value
+
+
+def _serialize_resource_status(value: object) -> str:
+    if type(value) is not ResourceEvidenceStatus:
+        raise ValueError("invalid resource evidence status")
+    return value.value
+
+
+def _serialize_optional_label(value: object) -> str | None:
+    return None if value is None else _serialize_label(value)
+
+
+def _serialize_labels(value: object) -> list[str]:
+    if type(value) is not tuple:
+        raise ValueError("unsanitized ordered evidence")
+    return [_serialize_outcome(item) for item in value]
+
+
+def _serialize_label_tuple(value: object) -> list[str]:
+    if type(value) is not tuple:
+        raise ValueError("unsanitized ordered evidence")
+    return [_serialize_label(item) for item in value]
+
+
+def _serialize_partition_checksums(value: object) -> list[list[int | str]]:
+    if type(value) is not tuple:
+        raise ValueError("unsanitized partition checksum evidence")
+    serialized: list[list[int | str]] = []
+    for item in value:
+        if type(item) is not tuple or len(item) != 3:
+            raise ValueError("unsanitized partition checksum evidence")
+        year, month, checksum = item
+        if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
+            raise ValueError("unsanitized partition checksum evidence")
+        serialized.append([year, month, _serialize_hex(checksum, _HEX_64)])
+    return serialized
+
+
+def _serialize_source_data_shape(value: object) -> dict[str, int]:
+    if type(value) is not SourceDataShape:
+        raise ValueError("measurement comparability identity is invalid")
+    return {
+        "rows_raw": _serialize_nonnegative_int(value.rows_raw),
+        "rows_normalized": _serialize_nonnegative_int(value.rows_normalized),
+        "rows_published": _serialize_nonnegative_int(value.rows_published),
+        "bytes_parquet": _serialize_nonnegative_int(value.bytes_parquet),
+    }
+
+
+def _serialize_command_limits(value: object) -> dict[str, int | str]:
+    if type(value) is not BenchmarkCommandLimits:
+        raise ValueError("measurement comparability identity is invalid")
+    return {
+        "interval": _serialize_label(value.interval),
+        "max_attempts_per_partition": _serialize_positive_int(
+            value.max_attempts_per_partition
+        ),
+        "max_total_provider_attempts": _serialize_nonnegative_int(
+            value.max_total_provider_attempts
+        ),
+        "base_backoff_ms": _serialize_nonnegative_int(value.base_backoff_ms),
+        "max_backoff_ms": _serialize_nonnegative_int(value.max_backoff_ms),
+        "max_retry_after_ms": _serialize_nonnegative_int(value.max_retry_after_ms),
+        "max_total_wait_ms": _serialize_nonnegative_int(value.max_total_wait_ms),
+        "query_connection_count": _serialize_positive_int(value.query_connection_count),
+        "query_threads": _serialize_positive_int(value.query_threads),
+        "query_memory_limit_bytes": _serialize_positive_int(
+            value.query_memory_limit_bytes
+        ),
+    }
+
+
+def _serialize_resource_limits(value: object) -> dict[str, float | int | str]:
+    if type(value) is not BenchmarkResourceLimits:
+        raise ValueError("measurement comparability identity is invalid")
+    timeout = value.child_control_timeout_s
+    if type(timeout) is not float or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("invalid resource limit evidence")
+    return {
+        "child_control_timeout_s": timeout,
+        "sampling_interval_ms": _serialize_positive_int(value.sampling_interval_ms),
+        "max_sampling_gap_ms": _serialize_positive_int(value.max_sampling_gap_ms),
+        "minimum_sampler_samples": _serialize_positive_int(
+            value.minimum_sampler_samples
+        ),
+        "fd_closure_rule": _serialize_label(value.fd_closure_rule),
+    }
+
+
+def _serialize_control_partition_evidence(
+    value: object,
+) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if (
+        type(value) is not _ControlPartitionEvidence
+        or type(value.physical_identity) is not tuple
+    ):
+        raise ValueError("unsanitized control partition evidence")
+    physical_identity = []
+    for item in value.physical_identity:
+        if type(item) is int:
+            physical_identity.append(_serialize_nonnegative_int(item))
+        else:
+            physical_identity.append(_serialize_label(item))
+    return {
+        "physical_identity": physical_identity,
+        "pre_physical_checksum": _serialize_hex(value.pre_physical_checksum, _HEX_64),
+        "post_physical_checksum": _serialize_hex(value.post_physical_checksum, _HEX_64),
+        "pre_manifest_fingerprint": _serialize_hex(
+            value.pre_manifest_fingerprint, _HEX_64
+        ),
+        "post_manifest_fingerprint": _serialize_hex(
+            value.post_manifest_fingerprint, _HEX_64
+        ),
+        "manifest_bound_schedule_digest": _serialize_hex(
+            value.manifest_bound_schedule_digest, _HEX_64
+        ),
+    }
+
+
+def _serialize_comparability_identity(value: object) -> dict[str, object]:
+    if type(value) is not ComparabilityIdentity:
+        raise ValueError("measurement comparability identity is invalid")
+    return {
+        "workload_id": _serialize_workload_id(value.workload_id),
+        "fixture_id": _serialize_label(value.fixture_id),
+        "fixture_version": _serialize_label(value.fixture_version),
+        "source_revision": _serialize_hex(value.source_revision, _HEX_40),
+        "source_tree": _serialize_hex(value.source_tree, _HEX_40),
+        "lock_identity": _serialize_hex(value.lock_identity, _HEX_64),
+        "schedule_digest": _serialize_hex(value.schedule_digest, _HEX_64),
+        "requested_range": _serialize_requested_range(value.requested_range),
+        "schedule_as_of": _serialize_timestamp(value.schedule_as_of),
+        "schedule_source": _serialize_label(value.schedule_source),
+        "schedule_release": _serialize_label(value.schedule_release),
+        "schedule_timezone": _serialize_label(value.schedule_timezone),
+        "schedule_kind_provenance": _serialize_label_tuple(
+            value.schedule_kind_provenance
+        ),
+        "schedule_closure_provenance": _serialize_schedule_closures(
+            value.schedule_closure_provenance
+        ),
+        "policy_version": _serialize_label(value.policy_version),
+        "partition_checksums": _serialize_partition_checksums(
+            value.partition_checksums
+        ),
+        "source_data_shape": _serialize_source_data_shape(value.source_data_shape),
+        "command_limits": _serialize_command_limits(value.command_limits),
+        "resource_limits": _serialize_resource_limits(value.resource_limits),
+        "measurement_method": _serialize_label(value.measurement_method),
+        "python_major_minor": _serialize_label(value.python_major_minor),
+        "pyarrow_major_minor": _serialize_label(value.pyarrow_major_minor),
+        "duckdb_major_minor": _serialize_label(value.duckdb_major_minor),
+        "psutil_version": _serialize_label(value.psutil_version),
+        "sampler_method": _serialize_label(value.sampler_method),
+        "cpu_architecture": _serialize_label(value.cpu_architecture),
+        "cpu_count": _serialize_positive_int(value.cpu_count),
+        "filesystem_type": _serialize_label(value.filesystem_type),
+    }
+
+
+def _serialize_schedule_closures(value: object) -> list[list[str]]:
+    if type(value) is not tuple:
+        raise ValueError("unsanitized schedule closure evidence")
+    serialized: list[list[str]] = []
+    for item in value:
+        if type(item) is not tuple or len(item) != 2:
+            raise ValueError("unsanitized schedule closure evidence")
+        serialized.append([_serialize_label(item[0]), _serialize_label(item[1])])
+    return serialized
 
 
 def _write_no_overwrite(output: Path, encoded: bytes) -> None:
@@ -318,14 +689,18 @@ def _write_no_overwrite(output: Path, encoded: bytes) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.parent / f".{output.name}.{uuid.uuid4().hex}.tmp"
     try:
-        with temporary.open("xb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
+        _write_temporary(temporary, encoded)
         os.link(temporary, output)
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def _write_temporary(temporary: Path, encoded: bytes) -> None:
+    with temporary.open("xb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def _artifact_path(path: Path, label: str) -> Path:
@@ -336,6 +711,10 @@ def _artifact_path(path: Path, label: str) -> Path:
     except ValueError as error:
         raise ValueError(f"{label} must be under gitignored artifacts") from error
     return resolved
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
 
 
 if __name__ == "__main__":
