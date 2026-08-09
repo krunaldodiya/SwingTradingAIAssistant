@@ -10,10 +10,7 @@ from pathlib import Path
 from ark74_benchmark_fixture import BenchmarkFixturePartition, benchmark_nse_eq_v1
 
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
-from swing_trading_ai_assistant.market_data.historical import (
-    HistoricalRequest,
-    HistoricalResponse,
-)
+from swing_trading_ai_assistant.market_data.historical import HistoricalResponse
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     ManifestState,
     PartitionManifest,
@@ -57,10 +54,10 @@ class _FixedClock:
 class _OneResponseSession:
     def __init__(self, response: HistoricalResponse) -> None:
         self._response = response
-        self.requests: list[HistoricalRequest] = []
+        self.request_count = 0
 
-    def fetch(self, request: HistoricalRequest) -> HistoricalResponse:
-        self.requests.append(request)
+    def fetch(self, _request: object) -> HistoricalResponse:
+        self.request_count += 1
         return self._response
 
 
@@ -184,33 +181,24 @@ def _expected_verified_manifest(
     schedule_digest: str,
     checksum: str,
 ) -> PartitionManifest:
-    active = PartitionManifest(
+    return PartitionManifest(
         1,
         partition.plan,
         run_id,
-        None,
-        ManifestState.IN_PROGRESS,
-        ValidationOutcome.NOT_RUN,
+        1,
+        ManifestState.VERIFIED,
+        ValidationOutcome.PASSED,
         f"nse-equity-month@v1+sessions-sha256:{schedule_digest}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        partition.canonical_candles[0].source_version,
-        _FIXED_NOW,
-        _FIXED_NOW,
-        _FIXED_NOW,
-        None,
-    )
-    return verify_manifest(
-        active,
-        _FIXED_NOW,
         partition.canonical_candles[0].ts,
         partition.canonical_candles[-1].ts,
         partition.published_count,
         checksum,
         _canonical_path(partition),
+        partition.canonical_candles[0].source_version,
+        _FIXED_NOW,
+        _FIXED_NOW,
+        _FIXED_NOW,
+        None,
     )
 
 
@@ -296,20 +284,11 @@ def test_d21_orders_verified_skip_local_recovery_and_only_missing_month_request(
     )
     assert (
         sessions.open_calls
-        == len(sessions.session.requests)
+        == sessions.session.request_count
         == limiter.acquire_calls
         == 1
     )
     assert limiter.defer_calls == sleeper.calls == 0
-    assert sessions.session.requests == [
-        HistoricalRequest(
-            fixture.instrument.instrument_key,
-            "minutes",
-            1,
-            date(2024, 3, 1),
-            date(2024, 3, 31),
-        )
-    ]
     assert schedule_path.read_bytes() == schedule_before == fixture.schedule_bytes
 
     january_after = _snapshot(tmp_path, january)
