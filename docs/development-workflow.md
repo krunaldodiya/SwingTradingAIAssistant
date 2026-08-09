@@ -109,6 +109,40 @@ tracking `Saga`/`Epic` items and canceled work from the completion denominator.
 Linear remains the live source of truth; repository sprint records are updated
 at meaningful milestones and sprint close.
 
+## Time-accountability contract
+
+Use a structured sprint ledger for time accountability. It is an evidence
+record, not an effort estimate, a performance score, or a replacement for the
+committed scope, Definition of Done, Linear, or the sprint denominator.
+
+Before an atomic lifecycle starts, record a prospective *wall-clock* range and
+the assumptions that make it plausible (for example: frozen scope, available
+environment, expected gate duration, and whether a reviewer repair is assumed).
+This range describes elapsed calendar time across the workflow; it must not be
+relabeled as labor hours or used to infer them. A completed item without a
+prospectively recorded range is `UNSET`: do not invent an estimate
+retroactively. Linear points remain planning-size units and must never be
+converted to hours.
+
+For every tracked row, retain the raw authoritative timestamps separately for
+Linear creation, first `In Progress`, Linear `Done`, pull-request creation,
+terminal required CI, and exact-SHA merge/publication. Record the source and
+timezone for each value. Git commit dates can corroborate a repository event,
+but do not substitute for missing Linear lifecycle or hosted PR/CI timestamps.
+Derive elapsed values only when both operands are authoritative, sufficiently
+precise timestamps; otherwise leave the derived value `UNSET` with its missing
+inputs. Keep active gate duration, owner/external wait, retries, repair rounds,
+and repeated gates as separate fields rather than folding them into a single
+unexplained elapsed value.
+
+Each ledger snapshot must identify its source revision and capture time. Before
+a declared cutoff, the cutoff report remains `pending_until_cutoff`; it must not
+project completion, blockers, or a final count. At or after the cutoff, the
+authorized recorder captures immutable raw Linear and hosted evidence, validates
+the frozen-denominator partition, calculates only supported derived durations,
+and records any missing evidence as `UNSET`. Deadline expiry never closes work,
+waives quality, or turns an unproven timestamp into a completion claim.
+
 ## Atomic incremental delivery
 
 Epics and parent issues are tracking containers only; do not implement them

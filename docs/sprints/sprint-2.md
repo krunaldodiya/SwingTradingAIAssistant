@@ -150,6 +150,24 @@ exists.
 }
 ```
 
+### Time-accountability ledger
+
+The [structured time-accountability ledger](sprint-2-time-accountability-ledger.json)
+standardizes the prospective range, raw lifecycle/publication timestamps,
+derived elapsed fields, and separately measured workflow waits and gates for
+the frozen 24-item baseline plus ARK-95 through ARK-110 additions. Its current
+snapshot is a **pre-cutoff candidate**: this page's cutoff report remains
+`pending_until_cutoff` and no completed/unfinished partition has been
+populated before **2026-08-09T22:00:00+05:30**.
+
+At or after the cutoff, an authorized recorder must: capture the exact Linear
+issue and state-history fields; capture the matching PR, required CI, and merge
+timestamps for the exact candidate SHA; record their sources and timezones;
+validate the frozen baseline partition; and calculate only elapsed fields whose
+two authoritative operands are present. Missing values remain `UNSET`; do not
+backfill estimates for completed work, derive labor hours from Linear points,
+or use issue age or `updatedAt` as lifecycle evidence.
+
 ## Completed pre-sprint specification
 
 **ARK-67 — Freeze RELIANCE operational-validation and benchmark contract** is

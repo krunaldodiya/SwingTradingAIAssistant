@@ -1,0 +1,114 @@
+{
+  "schema_version": "sprint-2-time-accountability-v1",
+  "record_status": "PRE_CUTOFF_CANDIDATE",
+  "snapshot": {
+    "captured_at": "2026-08-09T18:45:53+05:30",
+    "timezone": "Asia/Kolkata",
+    "repository_revision": "10cd59bc5edb7adf3fceccedb1ff67cccc040d42",
+    "repository_tree": "7468c1bc4adabdb10a619b056c169e19b99e7c84",
+    "sources": [
+      "Sprint 2 record at this repository revision",
+      "local origin/main Git history at this repository revision"
+    ],
+    "limits": "This snapshot has no live Linear or hosted GitHub API capture. Missing lifecycle and hosted-publication fields are UNSET."
+  },
+  "cutoff": {
+    "local": "2026-08-09T22:00:00+05:30",
+    "utc": "2026-08-09T16:30:00Z",
+    "report_status": "PENDING_UNTIL_CUTOFF",
+    "completed_baseline_ids": null,
+    "unfinished_baseline_ids": null,
+    "rule": "Do not populate the baseline partition or make a cutoff completion claim before the cutoff."
+  },
+  "row_contract": {
+    "prospective": {
+      "expected_wall_clock_minutes": {
+        "minimum": null,
+        "maximum": null,
+        "status": "UNSET"
+      },
+      "assumptions": [],
+      "rule": "Completed work without a pre-start prospectus remains UNSET; never invent an estimate retroactively."
+    },
+    "actual_timestamps": {
+      "created_at": {"value": null, "status": "UNSET", "source": "Linear createdAt"},
+      "started_at": {"value": null, "status": "UNSET", "source": "first Linear In Progress history event"},
+      "completed_at": {"value": null, "status": "UNSET", "source": "Linear Done history event"},
+      "pull_request_created_at": {"value": null, "status": "UNSET", "source": "hosted pull request createdAt"},
+      "required_ci_terminal_at": {"value": null, "status": "UNSET", "source": "terminal required hosted check for exact candidate SHA"},
+      "merged_at": {"value": null, "status": "UNSET", "source": "hosted exact-SHA merge/publication timestamp"}
+    },
+    "derived_elapsed": {
+      "started_to_completed_seconds": {"value": null, "status": "UNSET", "rule": "completed_at - started_at only when both are authoritative"},
+      "created_to_merged_seconds": {"value": null, "status": "UNSET", "rule": "merged_at - created_at only when both are authoritative"},
+      "pull_request_to_ci_seconds": {"value": null, "status": "UNSET", "rule": "required_ci_terminal_at - pull_request_created_at only when both are authoritative"}
+    },
+    "workflow_breakdown": {
+      "active_gate_seconds": {"value": null, "status": "UNSET"},
+      "owner_or_external_wait_seconds": {"value": null, "status": "UNSET"},
+      "retry_count": {"value": null, "status": "UNSET"},
+      "repair_round_count": {"value": null, "status": "UNSET"},
+      "repeated_gate_count": {"value": null, "status": "UNSET"}
+    },
+    "linear_points": {
+      "value": null,
+      "status": "UNSET",
+      "rule": "Linear points are planning-size units, never labor hours."
+    },
+    "repository_observation": {
+      "value": null,
+      "status": "UNSET",
+      "rule": "A local Git commit can corroborate repository history but does not replace Linear lifecycle or hosted PR/CI evidence."
+    }
+  },
+  "issues": [
+    {"id": "ARK-74", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:31:01+05:30", "status": "OBSERVED", "source": "origin/main merge commit c48b4fffc149b7b0fa29f94bb92de5ddd26a372d (PR #31)"}},
+    {"id": "ARK-75", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-76", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-77", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-78", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-79", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T17:15:56+05:30", "status": "OBSERVED", "source": "origin/main merge commit b0301dc27034db4b75c22a0d1f6d1d65d4a9760e (PR #47)"}},
+    {"id": "ARK-80", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-81", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T17:41:15+05:30", "status": "OBSERVED", "source": "origin/main merge commit 3ef7103fde69d3f1b436ec90e79ad6e0d00c5440 (PR #48)"}},
+    {"id": "ARK-82", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:47:19+05:30", "status": "OBSERVED", "source": "origin/main merge commit e7fd9e35360fa25ab1074455efe47714bba62152 (PR #32)"}},
+    {"id": "ARK-83", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T18:23:56+05:30", "status": "OBSERVED", "source": "origin/main merge commit c7d2f535d80c9f05fa3784c3a3fb97cce28db5ba (PR #49)"}},
+    {"id": "ARK-84", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T16:30:49+05:30", "status": "OBSERVED", "source": "origin/main merge commit 5bb41ab5b6cc493a195c4672533e8c166b2cda72 (PR #45)"}},
+    {"id": "ARK-85", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T10:20:26+05:30", "status": "OBSERVED", "source": "origin/main merge commit a4a9e152ccf1569fff68ff8f1906609fe7f06885 (PR #34)"}},
+    {"id": "ARK-86", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T20:36:38+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8631564feb51a328fd3a90ad35d89f363af1a8db (PR #51)"}},
+    {"id": "ARK-87", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T07:55:39+05:30", "status": "OBSERVED", "source": "origin/main merge commit 79181eacbd0f72988d97df63088fc06e494c4c78 (PR #52)"}},
+    {"id": "ARK-88", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T10:30:42+05:30", "status": "OBSERVED", "source": "origin/main merge commit 4d7ee03d7631184e2bcfa7b57283ddfdeefbf54f (PR #58)"}},
+    {"id": "ARK-89", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T12:19:41+05:30", "status": "OBSERVED", "source": "origin/main merge commit 205ee394f0f5fa25ad9bd0170cc50718eb6ca1ed (PR #61)"}},
+    {"id": "ARK-90", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-91", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T16:56:51+05:30", "status": "OBSERVED", "source": "origin/main merge commit be6242d89c1f5d4fbc8a699dd3e49e5b12dd2b07 (PR #46)"}},
+    {"id": "ARK-70", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:59:37+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8e68e61efebb6edf22777b71aabda15db02fdd24 (PR #33)"}},
+    {"id": "ARK-73", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-92", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T18:39:41+05:30", "status": "OBSERVED", "source": "origin/main merge commit 10cd59bc5edb7adf3fceccedb1ff67cccc040d42 (PR #62)"}},
+    {"id": "ARK-93", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-69", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-72", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-95", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-96", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-97", "cohort": "addition", "included_in_original_denominator": false, "actual_timestamp_overrides": {"created_at": {"value": "2026-08-08T07:16:18.133Z", "status": "OBSERVED", "source": "Linear ARK-97 createdAt recorded in Sprint 2 deadline accountability"}}},
+    {"id": "ARK-98", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-08T18:39:21+05:30", "status": "OBSERVED", "source": "origin/main merge commit 26e852b0f660dfa1f6ddfc816882371f5b01c859 (PR #50)"}},
+    {"id": "ARK-99", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T08:16:32+05:30", "status": "OBSERVED", "source": "origin/main merge commit 4b6fad3d633ac36b0baf902ab6d9ed3f8b6527d1 (PR #53)"}},
+    {"id": "ARK-100", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T08:29:29+05:30", "status": "OBSERVED", "source": "origin/main merge commit 0d15e15816360ef33626b371b90dd0c64009a338 (PR #54)"}},
+    {"id": "ARK-101", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:06:55+05:30", "status": "OBSERVED", "source": "origin/main merge commit 2a8541aa2b16ca285105ac5cea79c53601a15ae3 (PR #55)"}},
+    {"id": "ARK-102", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:28:21+05:30", "status": "OBSERVED", "source": "origin/main merge commit cf3de6887f6191363354bdcecd87e0c5a777cdc9 (PR #56)"}},
+    {"id": "ARK-103", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:50:48+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8ed78ee34c9710e86b071349b29a7361aab36fa2 (PR #57)"}},
+    {"id": "ARK-104", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T11:00:33+05:30", "status": "OBSERVED", "source": "origin/main merge commit 7b52349a9c6e802d19f4c88110d3a374a6c22814 (PR #59)"}},
+    {"id": "ARK-105", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T11:27:23+05:30", "status": "OBSERVED", "source": "origin/main merge commit 24971e808338c2237b9dc4791d1d217318681263 (PR #60)"}},
+    {"id": "ARK-106", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-107", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-108", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T17:20:51+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 3baf4fdae3a05dc2e92fe695cfed2aa45e4cde1d; hosted lifecycle evidence remains UNSET"}},
+    {"id": "ARK-109", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T18:21:27+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 100f4955d957a217837eaf7b4503cb69de09564b; hosted lifecycle evidence remains UNSET"}},
+    {"id": "ARK-110", "cohort": "addition", "included_in_original_denominator": false, "prospective_override": {"expected_wall_clock_minutes": {"minimum": 45, "maximum": 120, "status": "RECORDED_BEFORE_LIFECYCLE"}, "recorded_at": "2026-08-09T18:45:53+05:30", "assumptions": ["approved bounded documentation-only scope", "no external publication or Linear mutation", "local deterministic quality gate is available", "no reviewer-directed repair"], "rule": "This is a prospective wall-clock range, not labor hours."}}
+  ],
+  "post_cutoff_update_procedure": [
+    "At or after cutoff, preserve this candidate and capture the exact query time and source revision.",
+    "For each row, obtain Linear createdAt, first In Progress history event, and Done history event; retain raw values, source identifiers, and timezones.",
+    "For each candidate, obtain hosted PR createdAt, required CI terminal timestamps, and exact-SHA mergedAt/publication evidence; do not use updatedAt, issue age, or local candidate commit time as substitutes.",
+    "Calculate a derived elapsed value only when both named raw operands are authoritative and sufficiently precise; otherwise retain UNSET and identify the missing operand.",
+    "Record active gate, owner/external wait, retry, repair-round, and repeated-gate values in their dedicated fields without converting Linear points to labor hours.",
+    "Populate the cutoff baseline partition only then; validate that its completed and unfinished sets are disjoint and together equal the frozen 24 IDs."
+  ]
+}
