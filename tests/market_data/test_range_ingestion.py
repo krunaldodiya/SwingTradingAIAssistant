@@ -35,6 +35,7 @@ from swing_trading_ai_assistant.market_data.partition_ingestion import (
 )
 from swing_trading_ai_assistant.market_data.partition_reconciliation import (
     PartitionEvidence,
+    RequestReason,
 )
 from swing_trading_ai_assistant.market_data.partition_recovery import (
     PartitionRecoveryOutcome,
@@ -303,11 +304,15 @@ def _coordinator(
     *,
     session_factory: object | None = None,
     lifecycle_factory: object | None = None,
+    limiter: object | None = None,
+    sleeper: object | None = None,
     cancellation: CancellationToken | None = None,
     schedule: ExpectedSessionSchedule | None = None,
 ) -> IngestionCoordinator:
     return IngestionCoordinator(
         session_factory=session_factory,  # type: ignore[arg-type]
+        limiter=limiter,  # type: ignore[arg-type]
+        sleeper=sleeper,  # type: ignore[arg-type]
         cancellation=cancellation,
         lease_acquirer=_lease,
         catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
@@ -583,14 +588,36 @@ def test_obsolete_alias_migration_stops_the_run_before_provider_session(
     tmp_path: Path,
 ) -> None:
     session_opened: list[object] = []
+    limiter_calls: list[str] = []
+    sleeper_calls: list[object] = []
+    recovery_plans: list[PlannedInstrumentMonth] = []
+    lifecycle_plans: list[PlannedInstrumentMonth] = []
+    failed_manifest: PartitionManifest | None = None
 
     class _NeverOpen:
         def open(self) -> object:
             session_opened.append(object())
             raise AssertionError("provider session must remain unopened")
 
+    class _NeverLimit:
+        def acquire(self, *_args: object) -> None:
+            limiter_calls.append("acquire")
+            raise AssertionError("limiter must remain unused")
+
+        def defer_for(self, *_args: object) -> None:
+            limiter_calls.append("defer_for")
+            raise AssertionError("limiter must remain unused")
+
+    def never_sleep(*args: object) -> None:
+        sleeper_calls.extend(args)
+        raise AssertionError("sleeper must remain unused")
+
     def observer_factory(**_kwargs: object) -> SimpleNamespace:
         def observe(plan: PlannedInstrumentMonth) -> PartitionRecoveryResult:
+            nonlocal failed_manifest
+            recovery_plans.append(plan)
+            if plan.month != 1:
+                raise AssertionError("fatal migration stop must prevent later recovery")
             stored_plan = PlannedInstrumentMonth(
                 plan.provider,
                 "NSE_EQ|OLD",
@@ -605,7 +632,7 @@ def test_obsolete_alias_migration_stops_the_run_before_provider_session(
                 plan.from_date,
                 plan.to_date,
             )
-            failed = fail_manifest(
+            failed_manifest = fail_manifest(
                 _in_progress_manifest(stored_plan, "old-run"),
                 datetime(2026, 3, 1, 0, 0, 1, tzinfo=UTC),
                 FailureCategory.EMPTY_RESPONSE,
@@ -614,7 +641,7 @@ def test_obsolete_alias_migration_stops_the_run_before_provider_session(
             return PartitionRecoveryResult(
                 plan,
                 PartitionRecoveryOutcome.FAILED,
-                failed,
+                failed_manifest,
                 None,
                 None,
                 "MAPPING_MIGRATION_REQUIRED",
@@ -623,33 +650,74 @@ def test_obsolete_alias_migration_stops_the_run_before_provider_session(
 
         return SimpleNamespace(observe=observe)
 
-    report = _coordinator(observer_factory, session_factory=_NeverOpen()).run(
+    def lifecycle_factory(**_kwargs: object) -> SimpleNamespace:
+        def execute(plan: PlannedInstrumentMonth) -> object:
+            lifecycle_plans.append(plan)
+            raise AssertionError("lifecycle must remain unused")
+
+        return SimpleNamespace(execute=execute)
+
+    report = _coordinator(
+        observer_factory,
+        session_factory=_NeverOpen(),
+        lifecycle_factory=lifecycle_factory,
+        limiter=_NeverLimit(),
+        sleeper=never_sleep,
+    ).run(
         IngestionCommand(
             _instrument(),
             date(2026, 1, 1),
-            date(2026, 1, 31),
+            date(2026, 2, 28),
             "1m",
             tmp_path,
             _wide_schedule(),
             "nse-equity-month@v1",
-            max_total_provider_attempts=1,
+            max_total_provider_attempts=2,
         )
     )
 
     assert report.outcome is IngestionRunOutcome.FAILED
     assert report.failure_code is RunFailureCode.MAPPING_MIGRATION_REQUIRED
-    assert report.planned_count == 1
-    assert report.failed_count == 1
-    assert report.skipped_count == report.locally_recovered_count == 0
-    assert report.not_attempted_count == report.cancelled_count == 0
+    assert report.planned_count == 2
+    assert report.skipped_count == 0
+    assert report.locally_recovered_count == 0
     assert report.provider_attempt_count == 0
+    assert report.verified_count == 0
+    assert report.failed_count == 1
+    assert report.not_attempted_count == 1
+    assert report.cancelled_count == 0
     assert session_opened == []
-    assert len(report.results) == 1
-    assert report.results[0].outcome is PartitionOutcome.FAILED
-    assert report.results[0].failure_category is None
-    assert report.results[0].error_code == "MAPPING_MIGRATION_REQUIRED"
-    assert report.results[0].final_manifest is not None
-    assert report.results[0].final_manifest.plan.instrument_key == "NSE_EQ|OLD"
+    assert limiter_calls == []
+    assert sleeper_calls == []
+    assert [plan.month for plan in recovery_plans] == [1]
+    assert lifecycle_plans == []
+    assert failed_manifest is not None
+    assert failed_manifest.plan.instrument_key == "NSE_EQ|OLD"
+    assert failed_manifest.state is ManifestState.FAILED
+    assert failed_manifest.failure_category is FailureCategory.EMPTY_RESPONSE
+    assert len(report.results) == 2
+
+    failed, not_attempted = report.results
+    assert failed.plan == recovery_plans[0]
+    assert failed.outcome is PartitionOutcome.FAILED
+    assert failed.reconciliation_reasons == (RequestReason.MISSING_EVIDENCE,)
+    assert failed.ingestion_run_id == "old-run"
+    assert failed.provider_attempts == 0
+    assert failed.final_manifest is failed_manifest
+    assert failed.failure_category is None
+    assert failed.error_code == "MAPPING_MIGRATION_REQUIRED"
+
+    assert not_attempted.plan.year == 2026
+    assert not_attempted.plan.month == 2
+    assert not_attempted.outcome is PartitionOutcome.NOT_ATTEMPTED
+    assert not_attempted.reconciliation_reasons == ()
+    assert not_attempted.ingestion_run_id is None
+    assert not_attempted.provider_attempts == 0
+    assert not_attempted.final_manifest is None
+    assert not_attempted.failure_category is None
+    assert not_attempted.error_code is None
+    assert "MAPPING_MIGRATION_REQUIRED" in repr(report)
+    assert "provider session must remain unopened" not in repr(report)
 
 
 def test_complete_local_reconciliation_precedes_one_lazy_sequential_session(
