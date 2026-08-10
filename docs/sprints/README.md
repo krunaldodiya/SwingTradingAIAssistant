@@ -21,3 +21,7 @@ increment and future process decisions.
   [closeout candidate](sprint-2-closeout.md) for 21/24 delivered tasks with
   ARK-92, ARK-93, and ARK-69 carried over; Milestone 2 remains blocked and is
   not accepted.
+- [Sprint 3 — Usable single-symbol downloader preview](sprint-3.md) — planning
+  candidate for an eight-Task persistent download, coverage, query, local-daily,
+  and clean-install vertical slice; no implementation or final v1 release claim
+  has started.
