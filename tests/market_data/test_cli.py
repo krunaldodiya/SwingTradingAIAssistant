@@ -34,6 +34,22 @@ def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
     )
 
 
+@pytest.mark.parametrize("value", ("20260701", "2026-W27-3"))
+def test_cli_rejects_noncanonical_iso_date_forms(value: str) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.build_parser().parse_args(
+            [
+                "probe-upstox",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                value,
+            ]
+        )
+
+
 def test_probe_help_distinguishes_the_diagnostic_from_the_downloader(capsys) -> None:
     with pytest.raises(SystemExit, match="0"):
         cli.build_parser().parse_args(["probe-upstox", "--help"])

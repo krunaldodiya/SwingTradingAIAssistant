@@ -54,6 +54,22 @@ class PreparationFailureCodeV1(StrEnum):
     INSTRUMENT_AMBIGUOUS = "INSTRUMENT_AMBIGUOUS"
 
 
+class _AttemptedSnapshotCorrupt(InstrumentSnapshotCorruptError):
+    pass
+
+
+class _AttemptedSnapshotNotFound(SnapshotInstrumentNotFoundError):
+    pass
+
+
+class _AttemptedSnapshotAmbiguous(SnapshotInstrumentAmbiguousError):
+    pass
+
+
+class _AttemptedSnapshotUnavailable(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class AuthoritativeScheduleInputV1:
     schedule: ExpectedSessionSchedule
@@ -114,12 +130,33 @@ class DownloadPreparationReportV1:
     outcome: PreparationOutcomeV1
     failure_code: PreparationFailureCodeV1
     prepared: PreparedDownloadV1 | None
+    snapshot_attempt_count: int = 0
 
     def __post_init__(self) -> None:
         success = self.outcome is PreparationOutcomeV1.SUCCEEDED
         if success != (self.failure_code is PreparationFailureCodeV1.NONE):
             raise ValueError("invalid preparation report")
         if success != (self.prepared is not None):
+            raise ValueError("invalid preparation report")
+        if (
+            type(self.snapshot_attempt_count) is not int
+            or not 0 <= self.snapshot_attempt_count <= 1
+            or (
+                self.snapshot_attempt_count > 0
+                and self.failure_code
+                not in {
+                    PreparationFailureCodeV1.NONE,
+                    PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+                    PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT,
+                    PreparationFailureCodeV1.INSTRUMENT_NOT_FOUND,
+                    PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
+                }
+            )
+            or (
+                self.prepared is not None
+                and self.prepared.snapshot_attempt_count != self.snapshot_attempt_count
+            )
+        ):
             raise ValueError("invalid preparation report")
 
 
@@ -191,26 +228,8 @@ class DownloadPreparationServiceV1:
                     )
                     store.recover_pending()
                     resolved, attempts = self._resolve_or_fetch(store, request)
-        except InstrumentSnapshotCorruptError:
-            return _failure(
-                PreparationOutcomeV1.FAILED,
-                PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT,
-            )
-        except SnapshotInstrumentNotFoundError:
-            return _failure(
-                PreparationOutcomeV1.REJECTED,
-                PreparationFailureCodeV1.INSTRUMENT_NOT_FOUND,
-            )
-        except SnapshotInstrumentAmbiguousError:
-            return _failure(
-                PreparationOutcomeV1.REJECTED,
-                PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
-            )
-        except Exception:
-            return _failure(
-                PreparationOutcomeV1.UNAVAILABLE,
-                PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
-            )
+        except Exception as error:
+            return _snapshot_failure(error)
         return DownloadPreparationReportV1(
             PreparationOutcomeV1.SUCCEEDED,
             PreparationFailureCodeV1.NONE,
@@ -223,6 +242,7 @@ class DownloadPreparationServiceV1:
                 resolved.metadata.retrieved_at,
                 attempts,
             ),
+            attempts,
         )
 
     def _resolve_or_fetch(
@@ -244,19 +264,26 @@ class DownloadPreparationServiceV1:
                 return resolved, 0
         except (InstrumentSnapshotNotFoundError, SnapshotInstrumentNotFoundError):
             pass
-        fetched = self._snapshot_source.fetch()
-        if fetched.retrieved_at > request.invocation_time:
-            raise ValueError("snapshot is newer than invocation")
-        store.retain(fetched)
-        return (
-            store.resolve_equity(
+        try:
+            fetched = self._snapshot_source.fetch()
+            if fetched.retrieved_at > request.invocation_time:
+                raise ValueError("snapshot is newer than invocation")
+            store.retain(fetched)
+            resolved = store.resolve_equity(
                 source="upstox-bod-nse",
                 segment=request.segment,
                 symbol=request.symbol,
                 as_of=request.invocation_time,
-            ),
-            1,
-        )
+            )
+        except InstrumentSnapshotCorruptError:
+            raise _AttemptedSnapshotCorrupt("instrument snapshot corrupt") from None
+        except SnapshotInstrumentNotFoundError:
+            raise _AttemptedSnapshotNotFound("instrument not found") from None
+        except SnapshotInstrumentAmbiguousError:
+            raise _AttemptedSnapshotAmbiguous("instrument ambiguous") from None
+        except Exception:
+            raise _AttemptedSnapshotUnavailable from None
+        return resolved, 1
 
 
 def _validate_schedule_input(
@@ -279,9 +306,50 @@ def _validate_schedule_input(
 
 
 def _failure(
-    outcome: PreparationOutcomeV1, code: PreparationFailureCodeV1
+    outcome: PreparationOutcomeV1,
+    code: PreparationFailureCodeV1,
+    *,
+    attempts: int = 0,
 ) -> DownloadPreparationReportV1:
-    return DownloadPreparationReportV1(outcome, code, None)
+    return DownloadPreparationReportV1(outcome, code, None, attempts)
+
+
+def _snapshot_failure(error: Exception) -> DownloadPreparationReportV1:
+    attempted = isinstance(
+        error,
+        (
+            _AttemptedSnapshotCorrupt,
+            _AttemptedSnapshotNotFound,
+            _AttemptedSnapshotAmbiguous,
+            _AttemptedSnapshotUnavailable,
+        ),
+    )
+    attempts = int(attempted)
+    if isinstance(error, (_AttemptedSnapshotCorrupt, InstrumentSnapshotCorruptError)):
+        return _failure(
+            PreparationOutcomeV1.FAILED,
+            PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT,
+            attempts=attempts,
+        )
+    if isinstance(error, (_AttemptedSnapshotNotFound, SnapshotInstrumentNotFoundError)):
+        return _failure(
+            PreparationOutcomeV1.REJECTED,
+            PreparationFailureCodeV1.INSTRUMENT_NOT_FOUND,
+            attempts=attempts,
+        )
+    if isinstance(
+        error, (_AttemptedSnapshotAmbiguous, SnapshotInstrumentAmbiguousError)
+    ):
+        return _failure(
+            PreparationOutcomeV1.REJECTED,
+            PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
+            attempts=attempts,
+        )
+    return _failure(
+        PreparationOutcomeV1.UNAVAILABLE,
+        PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+        attempts=attempts,
+    )
 
 
 def _valid_storage_root_syntax(value: object) -> bool:
