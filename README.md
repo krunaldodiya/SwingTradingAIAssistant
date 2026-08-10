@@ -1,31 +1,29 @@
 # Swing Trading Research Tool for AI Assistants
 
-An agent-agnostic research and analysis tool for Nifty 50 equity swing trading.
-It gives AI assistants trustworthy, structured market facts they can use to
-research opportunities, reason about setups, support development, monitor
-positions, and review outcomes.
+This repository is building a trustworthy, deterministic research and analysis
+tool for point-in-time Nifty 50 equity swing trading. It supplies structured,
+traceable market facts to an external AI assistant so the assistant can explain
+research, compare setups, monitor supported holdings, and return an explicit
+`NO_TRADE` result when evidence is insufficient.
 
-The system optimizes for capital preservation, consistency, low drawdown,
-high-quality setups, and repeatability. It is not an execution bot, a collection
-of fixed buy/sell scripts, or an AI-agent implementation. It does not cover
-intraday trading, derivatives, or long-term investing.
+The objective is capital preservation, consistency, low drawdown, explainable
+high-quality setups, and repeatability—not maximum returns or frequent trades.
 
-## Architecture
+## What this project is—and is not
 
-The wider product has two strict layers:
+The product has two strict layers:
 
-1. **This repository: Swing Trading Research Tool** — reads market data, performs
-   deterministic calculations, backtests and validates research rules, and
-   exposes versioned structured facts with evidence and provenance.
-2. **External AI agent harness** — consumes those facts to research, reason,
-   explain, recommend, monitor, review, or help develop trading logic.
+1. **This repository: deterministic research tool.** It owns point-in-time data,
+   validation, calculations, backtesting, risk evidence, timestamps, and
+   provenance.
+2. **External AI assistant.** It consumes versioned structured facts and owns
+   contextual reasoning and explanation. It must not invent missing facts or
+   silently recompute them from raw OHLC data.
 
-The tool must not place orders or turn deterministic facts into an autonomous
-buy/sell decision. The consuming AI must not recalculate facts from raw OHLC data
-or invent missing evidence.
-
-The eventual integration surface may be an API, CLI, MCP server, or a combination.
-That choice remains open until the data and domain contracts are specified.
+This repository is not an autonomous trading bot. It does not place broker
+orders, guarantee returns, or currently support intraday trading, futures,
+options, crypto, long-term investing, or stocks outside the point-in-time Nifty
+50 universe.
 
 ## Locked research pipeline
 
@@ -48,58 +46,108 @@ Structured research facts
   -> Explainable recommendation or no-trade decision
 ```
 
-See [docs/architecture-freeze-v1.md](docs/architecture-freeze-v1.md) for the
-authoritative scope, [docs/reference-repositories.md](docs/reference-repositories.md)
-for prior-work references, and [docs/roadmap.md](docs/roadmap.md) for the initial
-roadmap. The first executable workstream is documented in
-[Plan 01: Data Foundation and Upstox Ingestion](docs/plans/01-data-foundation-and-upstox-ingestion.md).
-Useful brainstorming, design rationale, alternatives, and open questions are
-curated in the [project notes](docs/notes/README.md). The [development
-workflow](docs/development-workflow.md) defines Agile issue handling, strict
-TDD, model routing, and review gates.
+The planned product includes reproducible market-data ingestion, deterministic
+research modules, bias-aware backtesting, risk validation, structured facts,
+and read-only monitoring of supported Nifty 50 equity holdings. Each module is
+specified, implemented, and validated separately in pipeline order.
 
-Development is organized into one-week sprints with a Linear-backed hierarchy
-of saga → epic → story → atomic task. Sprint goals and retrospectives are
-preserved under [docs/sprints](docs/sprints/README.md); all work completed or
-actively worked so far spans Sprint 0 and Sprint 1.
+## Current implementation status
 
-## Current status
+The repository is still in the market-data foundation phase. It contains
+deterministic building blocks for Upstox instrument resolution and historical
+requests, monthly planning, bounded retries and rate limiting, schedule-aware
+validation, immutable Parquet publication, DuckDB cataloging and direct-Parquet
+queries, recovery, idempotent resume, and provenance.
 
-The repository is in its data-foundation phase. Sprint 0 completed a
-credential-safe, non-persistent instrument capability probe against Upstox
-Historical Candle V3. Sprint 1 then implemented the deliberately narrow
-persistent one-minute candle storage increment. The caller supplies a segment
-and symbol, which are resolved through the Upstox master instrument catalog.
-Indicators, strategies, and trading rules remain later roadmap work.
+Sprint 2 closed at **21/24 executable tasks (87.5%)**. Its offline correctness
+and recovery evidence is substantial, but Milestone 2 remains **blocked / not
+accepted** until the carried-over benchmark artifact, threshold decision, and
+one authorized live comparison are completed. See the
+[Sprint 2 closeout](docs/sprints/sprint-2-closeout.md) for the exact evidence and
+remaining work.
 
-The live RELIANCE proof of capability returned 375 one-minute candles for
-2026-08-03 (09:15 through 15:29 Asia/Kolkata) with a valid seven-field schema.
-The runtime accepts Upstox's one-year read-only Analytics Token through the same
-portable environment variable as a standard OAuth token; production code has
-no browser, TOTP, or operating-system Keychain dependency.
+The public `market-data` CLI currently exposes only `probe-upstox`, a
+credential-safe, non-persistent provider diagnostic. It does **not** expose the
+planned persistent `market-data download` workflow yet. Therefore a successful
+probe proves catalog resolution, authentication, endpoint access, and response
+shape—not downloader completion or stored-data correctness.
 
-Run deterministic checks with:
+Research modules, strategy rules, recommendations, and broker execution are not
+implemented.
+
+## Run the Upstox diagnostic
+
+Requirements:
+
+- Python 3.11 or newer;
+- [`uv`](https://docs.astral.sh/uv/); and
+- a current Upstox access token or read-only Analytics Token.
+
+Install the locked environment:
 
 ```bash
-uv run pytest
+uv sync --extra dev
 ```
 
-Create a local `.env` from `.env.example`, set a current Upstox token, and run
-the diagnostic:
+Create a local `.env` from `.env.example` and set the token:
 
 ```dotenv
 UPSTOX_ACCESS_TOKEN=your-current-token
 ```
 
+Run the diagnostic with its default recent date window:
+
+```bash
+uv run market-data probe-upstox \
+  --segment NSE_EQ \
+  --symbol RELIANCE
+```
+
+Or supply real ISO dates explicitly:
+
 ```bash
 uv run market-data probe-upstox \
   --segment NSE_EQ \
   --symbol RELIANCE \
-  --from YYYY-MM-DD \
-  --to YYYY-MM-DD
+  --from 2026-08-03 \
+  --to 2026-08-03
 ```
 
-The command keeps all candles in memory and emits only HTTP status, row count,
+`YYYY-MM-DD` describes the required format; do not pass those letters literally.
+Use `uv run market-data probe-upstox --help` for the current options.
+
+The diagnostic keeps candles in memory and emits only HTTP status, row count,
 first/last timestamp, and schema validity. It never prints the token or writes
-candle data. `.env` is ignored by Git; `.env.example` contains variable names
-only. The application has no operating-system keychain dependency.
+candle data. Provider and credential failures are intentionally reduced to a
+sanitized `probe_failed:<ErrorType>` message.
+
+## Development
+
+Run the deterministic quality gate from the repository root:
+
+```bash
+uv run --extra dev ruff format --check . && \
+uv run --extra dev ruff check . && \
+uv run --extra dev pyright && \
+uv run --extra dev vulture src --min-confidence 80 && \
+uv run --extra dev pytest
+```
+
+Project work follows strict TDD, focused smoke checks before expensive suites,
+independent review, and hosted CI. Credentials, broker sessions, generated
+datasets, and private market data must never be committed.
+
+## Project documentation
+
+- [Architecture freeze](docs/architecture-freeze-v1.md): authoritative mission,
+  module boundaries, and exclusions.
+- [Roadmap](docs/roadmap.md): phased product direction.
+- [Data foundation and Upstox ingestion plan](docs/plans/01-data-foundation-and-upstox-ingestion.md):
+  downloader milestones and acceptance gates.
+- [Development workflow](docs/development-workflow.md): Agile, TDD, review, and
+  publication controls.
+- [Engineering standards](docs/engineering-standards.md): correctness,
+  performance, security, and testing rules.
+- [Sprint records](docs/sprints/README.md): committed work and retrospectives.
+- [Project notes](docs/notes/README.md): curated decisions, hypotheses, and
+  external-reference assessments.

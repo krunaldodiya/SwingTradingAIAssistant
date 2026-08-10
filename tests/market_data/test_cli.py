@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data.http import (
     DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES,
@@ -8,6 +10,37 @@ from swing_trading_ai_assistant.market_data.instruments import (
     DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
 )
 from swing_trading_ai_assistant.market_data.probe import ProbeReport
+
+
+def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
+    capsys,
+) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.build_parser().parse_args(
+            [
+                "probe-upstox",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "YYYY-MM-DD",
+            ]
+        )
+
+    assert (
+        "replace YYYY-MM-DD with an actual date, for example 2026-08-03"
+        in capsys.readouterr().err
+    )
+
+
+def test_probe_help_distinguishes_the_diagnostic_from_the_downloader(capsys) -> None:
+    with pytest.raises(SystemExit, match="0"):
+        cli.build_parser().parse_args(["probe-upstox", "--help"])
+
+    help_text = capsys.readouterr().out
+    assert "does not run the persistent downloader or write market data" in help_text
+    assert "actual date, for example 2026-08-03" in help_text
 
 
 def test_cli_prints_approved_report_and_returns_success(monkeypatch, capsys) -> None:

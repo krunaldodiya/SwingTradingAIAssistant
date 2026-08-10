@@ -1,4 +1,4 @@
-"""Regression contracts for the historical Sprint 0 and Sprint 1 merge record."""
+"""Regression contracts for historical sprint merges and current README status."""
 
 from pathlib import Path
 
@@ -16,15 +16,13 @@ def _normalized(path: Path) -> str:
     return " ".join(_read(path).split())
 
 
-def test_readme_connects_completed_sprints_to_the_storage_increment() -> None:
-    readme = _read(README)
+def test_readme_connects_sprint_two_to_the_current_storage_increment() -> None:
+    readme = _normalized(README)
 
-    assert "Sprint 0 and Sprint 1" in readme
-    assert "persistent one-minute candle storage" in readme
-    assert (
-        "Persistent candle storage, indicators, strategies, and trading rules have not been implemented."
-        not in readme
-    )
+    assert "Sprint 2 closed at **21/24 executable tasks (87.5%)**" in readme
+    assert "immutable Parquet publication" in readme
+    assert "Milestone 2 remains **blocked / not accepted**" in readme
+    assert "does **not** expose the planned persistent `market-data download`" in readme
 
 
 def test_sprint_zero_records_its_merged_baseline_and_time_bounded_carryover() -> None:
