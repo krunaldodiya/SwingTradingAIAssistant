@@ -132,28 +132,21 @@ def test_ark_48_handoffs_are_traceable_and_read_only_reviews_are_enforced() -> N
     assert "otherwise route" not in high_risk_reviewer
 
 
-def test_ark_63_workflow_supersedes_the_luna_implementation_pilot() -> None:
-    workflow = (ROOT / "docs" / "development-workflow.md").read_text().lower()
-    assert "evidence ledger" in workflow
-    assert "approval is withheld" in workflow
-    assert "through the parent" in workflow
-    assert "| default worker | terra, high" in workflow
-    assert "terra high is the sole implementation and repair writer" in workflow
-    assert "luna is limited to explicitly delegated, low-risk, read-only" in workflow
-
-    note = " ".join(
-        (ROOT / "docs" / "notes" / "2026-08-06-quota-efficient-agent-routing-pilot.md")
-        .read_text()
-        .lower()
-        .split()
+def test_workflow_routes_reasoning_effort_by_task_risk() -> None:
+    workflow = " ".join(
+        (ROOT / "docs" / "development-workflow.md").read_text().lower().split()
     )
     for required in (
-        "superseded by ark-63 quality-first routing",
-        "historical pilot evidence only",
-        "terra high as the sole implementation and repair writer",
-        "luna is limited to explicitly delegated low-risk, read-only",
+        "high reasoning effort for market-logic implementation",
+        "architecture",
+        "unresolved-failure debugging",
+        "every review",
+        "medium for mechanical edits",
+        "test scaffolding",
+        "straightforward adapters",
     ):
-        assert required in note
+        assert required in workflow
+    assert "default worker | terra, high" not in workflow
 
 
 def test_ark_95_delivery_publisher_is_the_only_external_mutation_actor() -> None:
@@ -169,46 +162,20 @@ def test_ark_95_delivery_publisher_is_the_only_external_mutation_actor() -> None
     assert all(requirement in instructions for requirement in PUBLISHER_REQUIREMENTS)
 
 
-def test_ark_95_role_contract_separates_root_writer_review_and_publication() -> None:
+def test_workflow_has_one_actor_by_default_and_risk_based_review() -> None:
     workflow = " ".join(
         (ROOT / "docs" / "development-workflow.md").read_text().lower().split()
     )
     for required in (
-        "root is always responsive, non-mutating, and nonblocking",
-        "root never edits repository or metadata",
-        "only already-committed unblocked children within an active accepted finite goal",
-        "root yields immediately after delegation",
-        "completion events reactivate root asynchronously",
-        "same-goal continuation only",
-        "proposed, backlog, and cross-sprint work are never executable",
-        "live ark-69 authority remains owner-specific",
-        "normal task receives one terra high verification",
-        "high-risk task receives one sol high review",
+        "the default path has one actor",
+        "implement → full gate → commit/pr → done",
+        "published contract or schema change",
+        "scoring, signal, or market-logic rule change",
+        "credentials or their security boundary",
+        "second failed verification",
     ):
         assert required in workflow
-
-    terra = " ".join(
-        str(read_toml(AGENTS / "terra-implementer.toml")["developer_instructions"])
-        .lower()
-        .split()
-    )
-    for required in (
-        "sole content writer",
-        "exact candidate commit",
-        "no pr, linear, or publication",
-    ):
-        assert required in terra
-
-    for filename in (
-        "lead-architect.toml",
-        "terra-verifier.toml",
-        "high-risk-reviewer.toml",
-    ):
-        instructions = " ".join(
-            str(read_toml(AGENTS / filename)["developer_instructions"]).lower().split()
-        )
-        assert "read-only" in instructions
-        assert "must not publish" in instructions
+    assert "normal task receives one terra high verification" not in workflow
 
 
 def test_ark_95_publisher_lifecycle_authority_stays_narrow_and_review_isolation_is_external() -> (
