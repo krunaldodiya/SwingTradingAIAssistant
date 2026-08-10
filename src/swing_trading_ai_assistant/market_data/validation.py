@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import cast
+from typing import Final, cast
 
 from .monthly_request_planner import PlannedInstrumentMonth
 from .schedule_evidence import (
@@ -21,9 +21,13 @@ from .schedule_evidence import (
 from .schemas import CanonicalCandle
 
 MAX_CANONICAL_EQUITY_CANDLES = 65_536
+EQUITY_MONTH_VALIDATION_POLICY_V1: Final = "nse-equity-month@v1"
+SUPPORTED_EQUITY_MONTH_VALIDATION_POLICIES: Final = (EQUITY_MONTH_VALIDATION_POLICY_V1,)
 _SCHEDULE_POLICY_SEPARATOR = "+sessions-sha256:"
-_UNBOUND_POLICY_RE = re.compile(r"[^@+\s]+@[^@+\s]+\Z")
-_BOUND_POLICY_RE = re.compile(r"[^@+\s]+@[^@+\s]+\+sessions-sha256:([0-9a-f]{64})\Z")
+_BOUND_POLICY_RE = re.compile(
+    rf"{re.escape(EQUITY_MONTH_VALIDATION_POLICY_V1)}"
+    r"\+sessions-sha256:([0-9a-f]{64})\Z"
+)
 
 
 class ValidationReason(StrEnum):
@@ -470,16 +474,21 @@ def _quality_result(
 
 def _valid_policy_version(value: object) -> bool:
     return type(value) is str and (
-        _UNBOUND_POLICY_RE.fullmatch(value) is not None
-        or _BOUND_POLICY_RE.fullmatch(value) is not None
+        value in SUPPORTED_EQUITY_MONTH_VALIDATION_POLICIES
+        or supported_equity_month_policy_digest(value) is not None
     )
 
 
-def _policy_digest(value: object) -> str | None:
+def supported_equity_month_policy_digest(value: object) -> str | None:
+    """Return the digest only for the frozen supported bound policy."""
     if type(value) is not str:
         return None
     match = _BOUND_POLICY_RE.fullmatch(value)
     return match.group(1) if match is not None else None
+
+
+def _policy_digest(value: object) -> str | None:
+    return supported_equity_month_policy_digest(value)
 
 
 def _reason_matches_outcome(

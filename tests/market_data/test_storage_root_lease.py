@@ -66,6 +66,39 @@ def test_acquired_lease_is_exclusive_until_released_and_keeps_lock_file(
     assert lock_path.exists()
 
 
+def test_existing_only_lease_never_creates_root_or_lock(tmp_path: Path) -> None:
+    missing_root = tmp_path / "missing"
+
+    missing = StorageRootLease.try_acquire_existing(missing_root)
+    assert missing.outcome is LeaseOutcome.FAILED
+    assert missing.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    assert not missing_root.exists()
+
+    existing_root = tmp_path / "existing"
+    existing_root.mkdir()
+    before = tuple(existing_root.iterdir())
+    absent_lock = StorageRootLease.try_acquire_existing(existing_root)
+    assert absent_lock.outcome is LeaseOutcome.FAILED
+    assert absent_lock.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    assert tuple(existing_root.iterdir()) == before == ()
+
+
+def test_existing_only_lease_acquires_the_preexisting_safe_lock(tmp_path: Path) -> None:
+    seeded = StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    lock_path = tmp_path / ".ingestion.lock"
+    identity = (lock_path.stat().st_dev, lock_path.stat().st_ino)
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+
+    assert acquired.outcome is LeaseOutcome.ACQUIRED
+    assert acquired.failure_code is LeaseFailureCode.NONE
+    assert acquired.lease is not None
+    assert (lock_path.stat().st_dev, lock_path.stat().st_ino) == identity
+    acquired.lease.close()
+
+
 @pytest.mark.skipif(
     "spawn" not in multiprocessing.get_all_start_methods(),
     reason="requires spawn process semantics",

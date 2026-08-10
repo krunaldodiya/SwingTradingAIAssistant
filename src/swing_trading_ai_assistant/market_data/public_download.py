@@ -38,10 +38,10 @@ from .range_ingestion import (
     PartitionResult,
     RunFailureCode,
 )
-from .validation import ValidationReason
+from .validation import EQUITY_MONTH_VALIDATION_POLICY_V1, ValidationReason
 
 MAX_TOUCHED_MONTHS_V1 = 12
-_POLICY_PREFIX = "nse-equity-month@v1+sessions-sha256:"
+_POLICY_PREFIX = EQUITY_MONTH_VALIDATION_POLICY_V1 + "+sessions-sha256:"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _COMPLETED = frozenset(
     {

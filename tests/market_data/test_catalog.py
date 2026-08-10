@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import stat
+import time
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import duckdb
@@ -25,6 +29,7 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
 )
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 
 def _time(minute: int) -> datetime:
@@ -153,6 +158,143 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
 
     with DuckDBCatalog(tmp_path) as reopened:
         assert reopened.get_manifest(_plan()) == initial
+
+
+def test_read_only_catalog_requires_existing_v2_and_permits_only_reads(
+    tmp_path,
+) -> None:
+    initial = _in_progress()
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(initial)
+    database_path = tmp_path / "catalog.duckdb"
+    before = database_path.read_bytes()
+
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with (
+        acquired.lease,
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease) as catalog,
+    ):
+        assert catalog.get_manifest(_plan()) == initial
+        with pytest.raises(CatalogPersistenceError):
+            catalog.create_manifest(replace(initial, ingestion_run_id="other"))
+
+    assert database_path.read_bytes() == before
+
+
+def test_read_only_catalog_never_creates_or_migrates(tmp_path) -> None:
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    with pytest.raises(CatalogStorageError), DuckDBCatalog(missing, read_only=True):
+        pass
+    assert tuple(missing.iterdir()) == ()
+
+    database_path = tmp_path / "catalog.duckdb"
+    connection = duckdb.connect(str(database_path))
+    for statement in catalog_module._SCHEMA_SQL.split(";\n"):
+        connection.execute(statement)
+    connection.execute(
+        "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+        (
+            catalog_module._SCHEMA_MIGRATION_ID,
+            catalog_module._SCHEMA_MIGRATION_VERSION,
+            catalog_module._SCHEMA_CHECKSUM,
+        ),
+    )
+    connection.close()
+    before = database_path.read_bytes()
+
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with (
+        acquired.lease,
+        pytest.raises(CatalogSchemaError),
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
+
+    assert database_path.read_bytes() == before
+
+
+def test_catalog_mode_requires_an_exact_boolean(tmp_path) -> None:
+    with pytest.raises(CatalogStorageError):
+        DuckDBCatalog(tmp_path, read_only=1)  # type: ignore[arg-type]
+
+
+def test_read_only_catalog_requires_live_inode_identity_throughout_use(
+    tmp_path,
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+        with pytest.raises(CatalogStorageError):
+            writable.ensure_read_identity()
+
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+    with acquired.lease, catalog:
+        database = tmp_path / "catalog.duckdb"
+        held = tmp_path / "held-catalog.duckdb"
+        database.replace(held)
+        database.symlink_to(held)
+        with pytest.raises(CatalogPersistenceError):
+            catalog.get_manifest(_plan())
+
+    with pytest.raises(CatalogStorageError):
+        catalog.ensure_read_identity()
+
+
+def test_read_only_catalog_rejects_group_writable_database(tmp_path) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+
+
+def test_read_only_catalog_bounds_fifo_swap_before_duckdb_connect(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    database = tmp_path / "catalog.duckdb"
+    held = tmp_path / "held-catalog.duckdb"
+    connected_paths = []
+    real_connect = catalog_module.duckdb.connect
+
+    def swap_to_fifo(path: str, *, read_only: bool = False):
+        if not connected_paths and read_only:
+            database.replace(held)
+            os.mkfifo(database, mode=0o600)
+        connected_paths.append(type(database)(path))
+        if type(database)(path) == database:
+            raise AssertionError("mutable catalog pathname reached DuckDB")
+        return real_connect(path, read_only=read_only)
+
+    monkeypatch.setattr(catalog_module.duckdb, "connect", swap_to_fifo)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    started = time.monotonic()
+
+    with (
+        acquired.lease,
+        pytest.raises(CatalogStorageError),
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
+
+    assert time.monotonic() - started < 1.0
+    assert connected_paths
+    assert all(path != database for path in connected_paths)
+    assert stat.S_ISFIFO(database.lstat().st_mode)
+    database = tmp_path / "catalog.duckdb"
+    database.chmod(0o660)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+
+    with (
+        acquired.lease,
+        pytest.raises(CatalogStorageError),
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
 
 
 def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
