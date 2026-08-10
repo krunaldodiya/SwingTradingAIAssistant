@@ -472,9 +472,11 @@ case:
 Gate: do not build the downloader until authentication, entitlement, URL shape,
 and actual response schema are confirmed.
 
-No production constant may embed RELIANCE, its ISIN, or a provider instrument
-key. Symbols and provider identifiers are mutable catalog data, not application
-configuration.
+No provider, storage, ingestion, or domain constant may embed RELIANCE, its
+ISIN, security ID, provider instrument key, or lookup alias. A bounded public
+preview may inject an exact user-visible segment/symbol admission policy at the
+package composition root; that product policy never substitutes for retained
+point-in-time instrument resolution.
 
 ## Milestone 1: RELIANCE vertical slice
 
@@ -554,7 +556,8 @@ million one-minute rows. That scale is modest for Parquet plus DuckDB.
 Complete the equity downloader as a reusable installable Python package:
 
 1. expose versioned Python download, coverage, and query interfaces over the
-   same application contracts used by the CLI;
+   same application contracts used by the CLI, beginning with the
+   [public-preview contract](04-public-preview-contract.md);
 2. support an explicit point-in-time Nifty 50 universe and bounded date ranges;
 3. keep the canonical storage root configurable outside one project checkout so
    authorized related tools can reuse verified partitions;

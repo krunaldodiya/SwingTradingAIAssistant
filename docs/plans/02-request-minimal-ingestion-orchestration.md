@@ -432,8 +432,13 @@ The range coordinator executes these steps in order:
 The lease covers observation, cleanup, recovery, provider work, publication,
 and terminal catalog persistence. Crash releases it through the OS; restart
 then classifies earlier `IN_PROGRESS` and abandoned temporary files safely.
-Every package user and future adapter must enter persistent ingestion through
-this coordinator; bypassing the lease is unsupported.
+The [public-preview contract](04-public-preview-contract.md) may use the same
+protected root for a schedule-first preparation phase: it completely validates
+the acquired schedule bytes in memory before lease acquisition or mutation,
+then retains those exact bytes and snapshot evidence under the lease; the
+coordinator later reacquires the lease and revalidates the retained schedule.
+Every package user and future adapter must enter persistent candle ingestion
+through this coordinator; bypassing it is unsupported.
 
 Budget exhaustion preserves completed work and marks every untouched plan
 `NOT_ATTEMPTED`. It never rolls back completed partitions and never causes the

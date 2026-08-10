@@ -1,187 +1,133 @@
 # Sprint 3 — Usable single-symbol downloader preview
 
-Status: **PLANNING CANDIDATE — NO IMPLEMENTATION STARTED**
+Status: **ACTIVE**
 
-## Sprint goal
+## Goal
 
-Deliver an installable, persistent, end-to-end downloader preview that lets a
-non-developer use the public CLI to download one supported `NSE_EQ` symbol
-(initially RELIANCE) into an explicit storage root, inspect verified coverage,
-repeat the same range without an unnecessary provider request, and query both
-canonical one-minute candles and locally derived daily OHLCV.
+Deliver an installable, persistent CLI preview that downloads one admitted
+`NSE_EQ` symbol, initially RELIANCE, to an explicit external storage root;
+proves stored coverage; repeats without an unnecessary historical request; and
+queries verified one-minute and locally derived daily OHLCV.
 
-This is the smallest coherent user-usable vertical slice. It is not the final
-Nifty 50 downloader v1 release: point-in-time multi-symbol scaling, accepted
-benchmark thresholds, and the separately authorized live-release gate remain
-explicit later work.
+The preview preserves the deterministic tool/AI boundary and is not the final
+multi-symbol Nifty 50 downloader release. It adds no signal, score, advice,
+portfolio/account connection, autonomous decision, or broker execution.
 
-## Timebox, capacity, and WIP
+## Delivery plan
 
-- Planned execution timebox: **2026-08-10 through 2026-08-16**
-  (`Asia/Kolkata`), one week.
-- Implementation WIP: one executable Task. Planning and backlog refinement do
-  not authorize parallel implementation.
-- Committed denominator: **8 executable Tasks** carrying the `Sprint 3` and
-  `Task` labels. Duplicate ARK-120/121 records are excluded.
-- Capacity basis: Sprint 2 delivered 21/24 tasks, but ARK-92 demonstrated that
-  large evidence surfaces and repeated full gates can dominate elapsed time.
-  Sprint 3 therefore commits to one user-visible path, uses smoke-first checks,
-  and does not bundle multi-instrument scaling or the benchmark redesign.
-- Prospective ranges below are elapsed wall-clock planning ranges, not labor
-  hours or Linear-point conversions. Before each Task starts, its current range
-  and assumptions must be recorded in Linear.
+The sprint executes as seven coherent PR-sized slices. The earlier issue graph
+remains historical tracking detail and does not force per-issue handoffs,
+approvals, gates, or commits.
 
-| Order | ID | Atomic outcome | Prospective wall-clock range |
-| --- | --- | --- | --- |
-| 1 | ARK-112 | approved public download, coverage, and query contract | 45--90 minutes |
-| 2 | ARK-113 | authoritative point-in-time NSE session input | 2--4 hours |
-| 3 | ARK-114 | versioned single-symbol application facade | 2--4 hours |
-| 4 | ARK-115 | persistent `market-data download` CLI | 1.5--3 hours |
-| 5 | ARK-116 | stored coverage and bounded direct-Parquet query interfaces | 2--4 hours |
-| 6 | ARK-117 | approved daily OHLCV derivation contract | 45--90 minutes |
-| 7 | ARK-118 | zero-provider daily OHLCV query implementation | 2--4 hours |
-| 8 | ARK-119 | clean-install single-symbol quickstart proof | 1.5--3 hours |
+| Slice | Coherent outcome | Dependencies |
+| --- | --- | --- |
+| 1. Public contract | Admission, common report/serializer, snapshot provenance, catalog migration, preparation handoff | Plans 01–02 |
+| 2. Authoritative preparation | Injected admission; provenance-complete NSE schedule; bounded BOD fetch; immutable snapshot store; offline resolver; schedule-first preparation | 1 |
+| 3. Persistent download | Shared public conversion, download service, JSON renderer, and `market-data download` CLI | 2 |
+| 4. Stored coverage | Read-only root admission, verified selection, coverage service/report, and `market-data coverage` CLI | 3 |
+| 5. One-minute query | Bounded direct-Parquet query service/report and `1m` CLI adapter | 4 |
+| 6. Daily query | Session-aware daily derivation contract/service and `1d` CLI adapter, with zero provider calls | 5 |
+| 7. Usability proof | Clean install, disposable-root end-to-end workflow, docs, and sprint-close evidence | 6 |
 
-The sequential planning envelope is approximately **12.5--25 hours** before an
-unplanned reviewer repair, provider wait, or environment outage. Reaching an
-item's upper bound triggers the workflow's concise overrun checkpoint and
-value-aware hold decision; it does not authorize weaker evidence or repeated
-unchanged gates.
+The current contract is
+[Plan 04](../plans/04-public-preview-contract.md). Each implementation slice
+gets a short implementer-owned spec in its tests and public contract, follows
+red-green-refactor, runs the fast changed-file gate during work, and runs the
+unchanged five-tool full gate once before merge. Published contract/schema,
+market-logic, credential-boundary, or twice-failed slices receive one
+independent high-effort review; ordinary plumbing does not.
 
-## Dependency order
+One writer owns a file path. Disjoint paths may proceed concurrently in
+separate worktrees; shared contracts, schemas, migrations, and configuration
+remain serialized.
 
-```text
-ARK-112 -> ARK-113 -> ARK-114 -> ARK-115
-                         |          |
-                         v          v
-                       ARK-116 -> ARK-117 -> ARK-118
-                         |                       |
-                         +----------+------------+
-                                    v
-                                  ARK-119
-```
+## User-visible workflow
 
-Linear blocker relations are authoritative. This ordering prioritizes a
-persistent public download command before optional polish while preserving the
-schedule and storage safety boundaries.
-
-## User-visible acceptance
-
-The exact approved specification may refine argument names, but the completed
-preview must support the following bounded workflow with real ISO dates and an
-explicit storage root outside the repository:
+The completed preview supports closed ISO date ranges and explicit JSON output:
 
 ```bash
 uv run market-data download \
-  --segment NSE_EQ \
-  --symbol RELIANCE \
-  --from 2026-07-01 \
-  --to 2026-07-31 \
-  --storage-root /absolute/path/to/market-data
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 \
+  --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data coverage \
-  --segment NSE_EQ \
-  --symbol RELIANCE \
-  --from 2026-07-01 \
-  --to 2026-07-31 \
-  --storage-root /absolute/path/to/market-data
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 \
+  --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data query \
-  --segment NSE_EQ \
-  --symbol RELIANCE \
-  --from 2026-07-03 \
-  --to 2026-07-03 \
-  --timeframe 1d \
-  --storage-root /absolute/path/to/market-data
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-03 --to 2026-07-03 --timeframe 1m \
+  --fields ts,open,high,low,close,volume --max-rows 1000 \
+  --storage-root /var/tmp/swing-market-data --output json
+
+uv run market-data query \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 --timeframe 1d \
+  --fields ts,open,high,low,close,volume --max-rows 31 \
+  --storage-root /var/tmp/swing-market-data --output json
 ```
 
-Completion requires:
+July 2026 is an example closed month, not authority to make a live request.
+The daily path is local derivation from verified canonical one-minute data; it
+never calls a provider.
 
-- canonical provider acquisition at one-minute granularity;
-- immutable monthly Parquet plus metadata-only DuckDB catalog ownership under
-  the caller-selected storage root;
-- an authoritative, immutable, point-in-time NSE session schedule with source,
-  as-of/release time, timezone, closures, covered range, and digest retained
-  before provider or storage mutation;
-- verified coverage, bounded selected-field query output, and typed
-  missing/stale/corrupt/insufficient outcomes;
-- repeated verified ranges making zero historical provider requests;
-- daily OHLCV derived locally from verified one-minute data with zero provider
-  requests and explicit incomplete-session handling;
-- credentials supplied outside the repository, sanitized diagnostics, no
-  committed private market data, and a clean-install quickstart; and
-- task-appropriate TDD/review/gates plus hosted CI on each accepted code change.
+## Evidence ladder
 
-If no authoritative calendar source is ready, the smallest acceptable Sprint 3
-fallback is a caller-supplied, immutable, validated schedule artifact with full
-provenance. Inferring weekdays or silently treating exchange holidays as open is
-not acceptable.
+Use the cheapest proof that exposes the next risk, in this order:
 
-## Definition of Ready
+1. focused offline tests for the changed contract, pure rule, failure, and
+   boundary;
+2. affected integration tests for catalog, storage, provider adapter, or CLI;
+3. one disposable-root end-to-end smoke using deterministic inputs;
+4. the full repository gate before merge; and
+5. one authenticated provider smoke only when credentials are supplied and
+   live-provider authority is explicit for that bounded attempt.
 
-A committed Task may start only when:
+Mocks never substitute for the final authenticated provider smoke, because the
+earlier Upstox probe showed that transport defaults can fail despite passing
+unit tests. Conversely, a live smoke never substitutes for deterministic
+failure, integrity, or recovery tests.
 
-- all Linear blockers are Done and the Task remains inside this sprint goal;
-- an approved specification or predecessor contract freezes its typed inputs,
-  outputs, edge cases, stop conditions, and observable completion predicate;
-- the prospective wall-clock range and assumptions are recorded before
-  `In Progress`;
-- credentials, live-provider authority, calendar evidence, and disposable
-  storage requirements are explicit; and
-- its smallest smoke test and final risk-tier evidence are known.
+## Completion evidence
 
-`Todo` is the team's operational Ready state. Only one Task may be
-`In Progress`.
+Sprint 3 is complete only when all of the following are demonstrated:
 
-## Definition of Done
+- exact public admission occurs before side effects and resolves identity from
+  retained point-in-time snapshot evidence;
+- authoritative immutable NSE session evidence is retained with source,
+  release/as-of time, timezone, coverage, closures, and digest;
+- immutable monthly Parquet and metadata-only DuckDB remain the canonical
+  storage design, with atomic writes and explicit corruption outcomes;
+- coverage proves every required scheduled minute rather than using `MAX(ts)`,
+  a row count, weekday inference, or forward fill;
+- an identical verified download makes zero historical provider requests;
+- query selects only catalog-owned verified partitions, uses bounded fields,
+  rows, paths, time, memory, and output, and accepts no arbitrary SQL;
+- daily OHLCV is session-aware, explicit about incomplete data, and makes zero
+  provider requests;
+- credentials remain environment-only and no token, session, private market
+  data, or generated dataset enters source control, logs, fixtures, or error
+  text;
+- focused tests, disposable-root smoke, the full gate, hosted CI, installation,
+  and documentation pass on the accepted revisions; and
+- missing, stale, corrupt, insufficient, `NO_TRADE`, cancellation, and partial
+  outcomes remain visible and typed rather than becoming success.
 
-A Task is Done only when its exact completion predicate is met, focused smoke
-and affected tests are green, the risk-tier-required sealed-revision gate and
-independent review pass, hosted security/quality checks pass, the exact accepted
-revision is merged, documentation matches user behavior, and Linear is
-synchronized. A blocked, simulated, or partially demonstrated row remains
-incomplete.
+## Deferred boundaries
 
-## Carryover and hold decisions
+- Point-in-time multi-symbol Nifty 50 scheduling and bounded concurrency remain
+  later downloader-v1 work.
+- Benchmark threshold redesign and final performance-release claims remain
+  deferred; Sprint 3 still preserves bounded resources and detects material
+  regressions.
+- The authenticated closed-range release probe remains separately authorized;
+  offline completion cannot be described as live release readiness.
+- Weekly/monthly aggregation, indicators, signals, scoring, backtesting,
+  regimes, recommendations, F&O, crypto, account linking, and execution are out
+  of scope.
 
-- **ARK-111, ARK-92, and ARK-93: hold in Backlog.** Their benchmark-persistence
-  chain remains required before a performance-threshold or final release claim,
-  but it does not block the everyday single-symbol download/query preview. This
-  applies the value-aware hold policy after ARK-92 consumed disproportionate
-  time. The work is deferred, not canceled or accepted.
-- **ARK-69: Backlog pending fresh owner authority.** It remains the one bounded
-  authenticated closed-range live validation. Sprint 3 may not execute it or
-  reuse credentials without explicit authorization immediately before the
-  attempt. Without ARK-69, ARK-119 may prove an offline/installable preview but
-  cannot claim live release readiness.
-- **ARK-12 multi-instrument scaling: deferred.** Prepare atomic children during
-  backlog refinement only after the committed preview is stable; do not add
-  them to Sprint 3 silently.
-- **ARK-13 final Nifty 50 downloader v1 release: deferred.** It requires the
-  multi-instrument, benchmark/threshold, live-provider, packaging, and release
-  gates that this sprint deliberately does not claim.
-
-If a held item later becomes the highest-value unblocked work, it may be
-replanned through an explicit scope exchange. No item is skipped, marked Done,
-or removed from its historical Sprint 2 record.
-
-## Explicit exclusions
-
-- full point-in-time Nifty 50 multi-symbol scheduling or bounded concurrency;
-- weekly/monthly aggregation, indicators, signals, scoring, backtesting, market
-  regime research, recommendations, or AI reasoning;
-- F&O, intraday trading, portfolio/account linking, broker order placement, or
-  autonomous execution;
-- credential persistence, TOTP/login automation, committed market data, or
-  arbitrary SQL; and
-- calling the preview the final Downloader v1 release while any required
-  release gate is incomplete.
-
-## Sprint review outcome
-
-At review, demonstrate the exact clean-install workflow, the external storage
-layout, verified coverage, zero-request resume, one-minute query, and local daily
-OHLCV. Report the executable completion count out of 8, every held or blocked
-row, and whether the preview is usable. Do not translate preview usability into
-multi-symbol, performance-threshold, live-release, strategy, or trading
-approval.
+Write the sprint record once at close with the seven-slice result, gate/smoke
+evidence, held boundaries, and any incomplete work. Do not create per-issue
+sprint records or unchanged-state reports.
