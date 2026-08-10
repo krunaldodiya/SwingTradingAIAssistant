@@ -196,6 +196,12 @@ def _finish_publication(
     return result
 
 
+def canonical_partition_relative_path(plan: PlannedInstrumentMonth) -> str:
+    """Return the sole catalog-owned relative path for one physical partition."""
+    validated_plan = _validated_plan(plan)
+    return _relative_path(validated_plan)
+
+
 def _validated_plan(plan: object) -> PlannedInstrumentMonth:
     if type(plan) is not PlannedInstrumentMonth:
         raise PartitionValidationError("invalid partition input")

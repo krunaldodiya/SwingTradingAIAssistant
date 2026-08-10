@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
+import tempfile
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, date, datetime
@@ -23,6 +26,12 @@ from .manifest_lifecycle import (
     verify_manifest,
 )
 from .monthly_request_planner import PlannedInstrumentMonth
+from .storage_root_lease import StorageRootLease
+
+MAX_READ_ONLY_CATALOG_BYTES: Final = 64 * 1024 * 1024
+_READ_ONLY_DATABASE_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+_SNAPSHOT_WRITE_FLAGS: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+_CATALOG_COPY_CHUNK_BYTES: Final = 1024 * 1024
 
 _SCHEMA_MIGRATION_ID: Final = "swing-trading-catalog-v1"
 _SCHEMA_MIGRATION_VERSION: Final = 1
@@ -212,9 +221,29 @@ class CatalogPersistenceError(CatalogError):
 class DuckDBCatalog:
     """Own one context-managed DuckDB connection for catalog metadata."""
 
-    def __init__(self, storage_root: object) -> None:
+    def __init__(
+        self,
+        storage_root: object,
+        *,
+        read_only: bool = False,
+        lease: StorageRootLease | None = None,
+    ) -> None:
+        if type(read_only) is not bool:
+            raise CatalogStorageError("invalid catalog mode")
+        if (read_only and type(lease) is not StorageRootLease) or (
+            not read_only and lease is not None
+        ):
+            raise CatalogStorageError("invalid catalog admission")
         self._storage_root = storage_root
+        self._read_only = read_only
+        self._lease = lease
         self._connection: Any | None = None
+        self._database_descriptor: int | None = None
+        self._connection_descriptor: int | None = None
+        self._database_identity: tuple[int, ...] | None = None
+        self._snapshot_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._snapshot_path: Path | None = None
+        self._snapshot_identity: tuple[int, ...] | None = None
 
     @property
     def database_path(self) -> Path:
@@ -228,13 +257,24 @@ class DuckDBCatalog:
         """Expose the owned connection for bounded catalog queries and tests."""
         if self._connection is None:
             raise CatalogStorageError("catalog is closed")
+        if self._read_only:
+            self.ensure_read_identity()
         return self._connection
 
     def __enter__(self) -> DuckDBCatalog:
         self._validate_storage_root()
         try:
-            self._connection = duckdb.connect(str(self.database_path))
-            self._initialize_schema()
+            if self._read_only:
+                self._open_read_only_connection()
+                if self._user_relations() != {
+                    ("table", "main", table) for table in _EXPECTED_TABLES
+                }:
+                    raise CatalogSchemaError("catalog schema is invalid")
+                self._validate_schema()
+                self.ensure_read_identity()
+            else:
+                self._connection = duckdb.connect(str(self.database_path))
+                self._initialize_schema()
         except CatalogError:
             self.close()
             raise
@@ -251,9 +291,152 @@ class DuckDBCatalog:
             with suppress(Exception):
                 self._connection.close()
             self._connection = None
+        self._connection_descriptor = None
+        if self._database_descriptor is not None:
+            with suppress(OSError):
+                os.close(self._database_descriptor)
+            self._database_descriptor = None
+        self._database_identity = None
+        self._snapshot_path = None
+        self._snapshot_identity = None
+        if self._snapshot_directory is not None:
+            with suppress(Exception):
+                self._snapshot_directory.cleanup()
+            self._snapshot_directory = None
+
+    def ensure_read_identity(self) -> None:
+        """Prove the live read-only connection still owns the admitted inode."""
+        if not self._read_only:
+            raise CatalogStorageError("catalog is not read only")
+        if (
+            self._connection is None
+            or self._database_descriptor is None
+            or self._connection_descriptor is None
+            or self._database_identity is None
+            or self._snapshot_path is None
+            or self._snapshot_identity is None
+            or self._lease is None
+            or not isinstance(self._storage_root, Path)
+        ):
+            raise CatalogStorageError("catalog identity is unavailable")
+        try:
+            with self._lease.root_operation(self._storage_root) as operation:
+                entry = os.stat(
+                    "catalog.duckdb",
+                    dir_fd=operation.descriptor,
+                    follow_symlinks=False,
+                )
+                held = os.fstat(self._database_descriptor)
+                connected = os.fstat(self._connection_descriptor)
+                snapshot = os.stat(self._snapshot_path, follow_symlinks=False)
+                operation.ensure_live()
+        except Exception:
+            raise CatalogStorageError("catalog identity is invalid") from None
+        if (
+            _catalog_identity(entry) != _catalog_identity(held)
+            or _catalog_identity(held) != self._database_identity
+            or _catalog_identity(snapshot) != _catalog_identity(connected)
+            or _catalog_identity(connected) != self._snapshot_identity
+        ):
+            raise CatalogStorageError("catalog identity is invalid")
+
+    def _open_read_only_connection(self) -> None:
+        if self._lease is None or not isinstance(self._storage_root, Path):
+            raise CatalogStorageError("catalog admission is unavailable")
+        try:
+            with self._lease.root_operation(self._storage_root) as operation:
+                descriptor = os.open(
+                    "catalog.duckdb",
+                    _READ_ONLY_DATABASE_FLAGS,
+                    dir_fd=operation.descriptor,
+                )
+                identity = _catalog_identity(os.fstat(descriptor))
+                _validate_read_only_catalog_identity(identity)
+                snapshot_path, snapshot_identity = self._copy_catalog_snapshot(
+                    descriptor, identity
+                )
+                entry = os.stat(
+                    "catalog.duckdb",
+                    dir_fd=operation.descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    _catalog_identity(entry) != identity
+                    or _catalog_identity(os.fstat(descriptor)) != identity
+                ):
+                    raise CatalogStorageError("catalog identity is invalid")
+                before = _open_file_descriptors()
+                self._database_descriptor = descriptor
+                self._database_identity = identity
+                self._snapshot_path = snapshot_path
+                self._snapshot_identity = snapshot_identity
+                self._connection = duckdb.connect(str(snapshot_path), read_only=True)
+                candidates = tuple(
+                    file_descriptor
+                    for file_descriptor in _open_file_descriptors() - before
+                    if _descriptor_identity(file_descriptor) == snapshot_identity
+                )
+                if not candidates:
+                    raise CatalogStorageError("catalog connection is not inode bound")
+                self._connection_descriptor = min(candidates)
+                operation.ensure_live()
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogStorageError("catalog identity is invalid") from None
+        self.ensure_read_identity()
+
+    def _copy_catalog_snapshot(
+        self, descriptor: int, source_identity: tuple[int, ...]
+    ) -> tuple[Path, tuple[int, ...]]:
+        self._snapshot_directory = tempfile.TemporaryDirectory(
+            prefix="swing-trading-catalog-"
+        )
+        snapshot_path = Path(self._snapshot_directory.name) / "catalog.duckdb"
+        snapshot_descriptor: int | None = None
+        try:
+            snapshot_descriptor = os.open(snapshot_path, _SNAPSHOT_WRITE_FLAGS, 0o600)
+            offset = 0
+            expected_size = source_identity[2]
+            while offset < expected_size:
+                chunk = os.pread(
+                    descriptor,
+                    min(_CATALOG_COPY_CHUNK_BYTES, expected_size - offset),
+                    offset,
+                )
+                if not chunk:
+                    raise CatalogStorageError("catalog identity is invalid")
+                written = 0
+                while written < len(chunk):
+                    count = os.write(snapshot_descriptor, chunk[written:])
+                    if count <= 0:
+                        raise CatalogStorageError("catalog identity is invalid")
+                    written += count
+                offset += len(chunk)
+            if os.pread(descriptor, 1, expected_size):
+                raise CatalogStorageError("catalog identity is invalid")
+            os.fsync(snapshot_descriptor)
+            os.fchmod(snapshot_descriptor, 0o400)
+            snapshot_identity = _catalog_identity(os.fstat(snapshot_descriptor))
+            _validate_read_only_catalog_identity(snapshot_identity)
+            if (
+                snapshot_identity[2] != expected_size
+                or _catalog_identity(os.fstat(descriptor)) != source_identity
+            ):
+                raise CatalogStorageError("catalog identity is invalid")
+            return snapshot_path, snapshot_identity
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogStorageError("catalog identity is invalid") from None
+        finally:
+            if snapshot_descriptor is not None:
+                with suppress(OSError):
+                    os.close(snapshot_descriptor)
 
     def create_manifest(self, manifest: PartitionManifest) -> None:
         """Insert a new physical identity, which must begin IN_PROGRESS."""
+        self._assert_writable()
         self._validate_manifest(manifest)
         if manifest.state is not ManifestState.IN_PROGRESS:
             raise CatalogConflictError("new manifests must start in progress")
@@ -281,6 +464,7 @@ class DuckDBCatalog:
         self, current: PartitionManifest, target: PartitionManifest
     ) -> None:
         """Persist one exact ARK-40 transition with atomic terminal history."""
+        self._assert_writable()
         self._validate_manifest(current)
         self._validate_manifest(target)
         if current.plan != target.plan or not _is_exact_transition(current, target):
@@ -345,6 +529,7 @@ class DuckDBCatalog:
 
     def save_instrument_snapshot(self, metadata: InstrumentSnapshotMetadataV1) -> None:
         """Append one immutable snapshot observation, idempotently."""
+        self._assert_writable()
         if type(metadata) is not InstrumentSnapshotMetadataV1:
             raise CatalogConflictError("invalid instrument snapshot")
 
@@ -428,12 +613,18 @@ class DuckDBCatalog:
             )
             database = self.database_path
             valid_database = not database.is_symlink() and (
-                not database.exists() or database.is_file()
+                database.is_file()
+                if self._read_only
+                else not database.exists() or database.is_file()
             )
         except Exception:
             raise CatalogStorageError("invalid storage root") from None
         if not valid_root or not valid_database:
             raise CatalogStorageError("invalid storage root")
+
+    def _assert_writable(self) -> None:
+        if self._read_only:
+            raise CatalogPersistenceError("catalog is read only")
 
     def _initialize_schema(self) -> None:
         connection = self.connection
@@ -1184,3 +1375,54 @@ def _required_datetime(value: object) -> datetime:
     if parsed is None:
         raise ValueError("invalid catalog timestamp")
     return parsed
+
+
+def _catalog_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_uid,
+        stat.S_IFMT(value.st_mode),
+        stat.S_IMODE(value.st_mode),
+    )
+
+
+def _validate_read_only_catalog_identity(identity: tuple[int, ...]) -> None:
+    if (
+        identity[2] <= 0
+        or identity[2] > MAX_READ_ONLY_CATALOG_BYTES
+        or identity[5] != os.geteuid()
+        or identity[6] != stat.S_IFREG
+        or identity[7] & 0o022
+    ):
+        raise CatalogStorageError("catalog identity is invalid")
+
+
+def _open_file_descriptors() -> set[int]:
+    result: set[int] = set()
+    try:
+        names = os.listdir("/dev/fd")
+    except OSError:
+        raise CatalogStorageError(
+            "catalog descriptor inventory is unavailable"
+        ) from None
+    for name in names:
+        if not name.isdigit():
+            continue
+        descriptor = int(name)
+        try:
+            os.fstat(descriptor)
+        except OSError:
+            continue
+        result.add(descriptor)
+    return result
+
+
+def _descriptor_identity(descriptor: int) -> tuple[int, ...] | None:
+    try:
+        return _catalog_identity(os.fstat(descriptor))
+    except OSError:
+        return None

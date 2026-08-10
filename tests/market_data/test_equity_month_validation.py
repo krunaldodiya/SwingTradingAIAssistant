@@ -211,6 +211,8 @@ def test_failed_schedule_resolution_without_digest_is_missing_evidence() -> None
         "@v1",
         "nse-equity-month@",
         "nse-equity-month@@v1",
+        "credential@secret",
+        "credential@secret+sessions-sha256:" + "a" * 64,
         "nse-equity-month@v1+sessions-sha256:" + "a" * 63,
         "nse-equity-month@v1+sessions-sha256:" + "A" * 64,
         "nse-equity-month@v1++sessions-sha256:" + "a" * 64,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Final, Self, cast
 
 import pyarrow as _pyarrow
+import pyarrow.compute as _pyarrow_compute
 import pyarrow.parquet as _pyarrow_parquet
 
 from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
@@ -14,6 +15,7 @@ from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 # PyArrow 25 has no complete PEP 561 type surface. Restrict its untyped API to
 # these adapter aliases instead of suppressing diagnostics for this whole module.
 pa: Any = cast(Any, _pyarrow)
+pc: Any = cast(Any, _pyarrow_compute)
 pq: Any = cast(Any, _pyarrow_parquet)
 
 CANDLE_SCHEMA_VERSION_METADATA_KEY: Final[bytes] = (
@@ -23,6 +25,20 @@ _CANDLE_SCHEMA_VERSION_METADATA_VALUE: Final[bytes] = b"1"
 MAX_PARQUET_BATCH_SIZE: Final[int] = 65_536
 _DEFAULT_BATCH_SIZE: Final[int] = 8_192
 _MAX_INT64: Final[int] = 9_223_372_036_854_775_807
+_TEXT_FIELDS: Final = (
+    "provider",
+    "instrument_key",
+    "security_id",
+    "symbol",
+    "exchange",
+    "segment",
+    "instrument_type",
+    "underlying_id",
+    "option_type",
+    "interval",
+    "source_version",
+    "adjustment_state",
+)
 
 CANDLE_ARROW_SCHEMA: Any = pa.schema(
     [
@@ -83,12 +99,35 @@ class CandleParquetReader(Iterator[tuple[CanonicalCandle, ...]]):
     explicitly call ``reader.close()``.
     """
 
-    def __init__(self, path: str | Path | BinaryIO, batch_size: int) -> None:
+    def __init__(
+        self,
+        path: str | Path | BinaryIO,
+        batch_size: int,
+        *,
+        max_rows: int | None = None,
+        max_uncompressed_bytes: int | None = None,
+        max_batch_decoded_bytes: int | None = None,
+        max_text_field_bytes: int | None = None,
+    ) -> None:
         _validate_batch_size(batch_size)
+        for name, value in (
+            ("max_rows", max_rows),
+            ("max_uncompressed_bytes", max_uncompressed_bytes),
+            ("max_batch_decoded_bytes", max_batch_decoded_bytes),
+            ("max_text_field_bytes", max_text_field_bytes),
+        ):
+            _validate_optional_resource_bound(name, value)
         self._closed = False
+        self._max_batch_decoded_bytes = max_batch_decoded_bytes
+        self._max_text_field_bytes = max_text_field_bytes
         self._parquet_file: Any = pq.ParquetFile(path)
         try:
             _validate_arrow_schema(self._parquet_file.schema_arrow)
+            _validate_parquet_resource_bounds(
+                self._parquet_file.metadata,
+                max_rows=max_rows,
+                max_uncompressed_bytes=max_uncompressed_bytes,
+            )
             self._record_batches: Iterator[Any] = iter(
                 self._parquet_file.iter_batches(batch_size=batch_size)
             )
@@ -120,6 +159,11 @@ class CandleParquetReader(Iterator[tuple[CanonicalCandle, ...]]):
             raise StopIteration
         try:
             record_batch = next(self._record_batches)
+            _validate_decoded_batch_bounds(
+                record_batch,
+                max_decoded_bytes=self._max_batch_decoded_bytes,
+                max_text_field_bytes=self._max_text_field_bytes,
+            )
             return _canonical_candles_from_record_batch(record_batch)
         except StopIteration:
             self.close()
@@ -179,10 +223,23 @@ def write_candles_parquet(
 
 
 def iter_candles_from_parquet(
-    path: str | Path | BinaryIO, *, batch_size: int = _DEFAULT_BATCH_SIZE
+    path: str | Path | BinaryIO,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    max_rows: int | None = None,
+    max_uncompressed_bytes: int | None = None,
+    max_batch_decoded_bytes: int | None = None,
+    max_text_field_bytes: int | None = None,
 ) -> CandleParquetReader:
     """Return a closeable reader that validates the schema before yielding rows."""
-    return CandleParquetReader(path, batch_size)
+    return CandleParquetReader(
+        path,
+        batch_size,
+        max_rows=max_rows,
+        max_uncompressed_bytes=max_uncompressed_bytes,
+        max_batch_decoded_bytes=max_batch_decoded_bytes,
+        max_text_field_bytes=max_text_field_bytes,
+    )
 
 
 def _validate_batch_size(batch_size: int) -> None:
@@ -190,6 +247,65 @@ def _validate_batch_size(batch_size: int) -> None:
         raise ValueError(
             f"batch_size must be a built-in integer from 1 to {MAX_PARQUET_BATCH_SIZE}"
         )
+
+
+def _validate_optional_resource_bound(name: str, value: int | None) -> None:
+    if value is not None and (type(value) is not int or value <= 0):
+        raise ValueError(f"{name} must be a positive built-in integer when supplied")
+
+
+def _validate_parquet_resource_bounds(
+    metadata: Any,
+    *,
+    max_rows: int | None,
+    max_uncompressed_bytes: int | None,
+) -> None:
+    try:
+        if max_rows is not None and metadata.num_rows > max_rows:
+            raise CandleParquetConversionError("Parquet row ceiling exceeded")
+        if max_uncompressed_bytes is not None:
+            total = sum(
+                metadata.row_group(row_group).column(column).total_uncompressed_size
+                for row_group in range(metadata.num_row_groups)
+                for column in range(metadata.num_columns)
+            )
+            if total < 0 or total > max_uncompressed_bytes:
+                raise CandleParquetConversionError(
+                    "Parquet uncompressed byte ceiling exceeded"
+                )
+    except CandleParquetConversionError:
+        raise
+    except Exception as exc:
+        raise CandleParquetConversionError(
+            "Parquet resource metadata is invalid"
+        ) from exc
+
+
+def _validate_decoded_batch_bounds(
+    record_batch: Any,
+    *,
+    max_decoded_bytes: int | None,
+    max_text_field_bytes: int | None,
+) -> None:
+    try:
+        if max_decoded_bytes is not None and record_batch.nbytes > max_decoded_bytes:
+            raise CandleParquetConversionError(
+                "Parquet decoded batch byte ceiling exceeded"
+            )
+        if max_text_field_bytes is not None:
+            for field in _TEXT_FIELDS:
+                index = record_batch.schema.get_field_index(field)
+                maximum = pc.max(pc.binary_length(record_batch.column(index))).as_py()
+                if maximum is not None and maximum > max_text_field_bytes:
+                    raise CandleParquetConversionError(
+                        "Parquet text field byte ceiling exceeded"
+                    )
+    except CandleParquetConversionError:
+        raise
+    except Exception as exc:
+        raise CandleParquetConversionError(
+            "Parquet decoded resource bounds are invalid"
+        ) from exc
 
 
 def _validate_candle_representability(candle: object) -> None:

@@ -23,9 +23,16 @@ from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalog
 from .preview_admission import PreviewAdmissionPolicyV1
 from .probe import ProbeRequest, run_capability_probe
 from .public_contract import (
+    CoverageReportV1,
     DownloadReportV1,
     public_exit_code,
+    render_coverage_report_json,
     render_download_report_json,
+)
+from .public_coverage import (
+    CoverageRequestV1,
+    StoredCoverageEvaluatorV1,
+    StoredCoverageServiceV1,
 )
 from .public_download import (
     SingleSymbolDownloadRequestV1,
@@ -38,6 +45,10 @@ _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 class PublicDownloadPortV1(Protocol):
     def download(self, request: object) -> DownloadReportV1: ...
+
+
+class PublicCoveragePortV1(Protocol):
+    def coverage(self, request: object) -> CoverageReportV1: ...
 
 
 class _SystemClock:
@@ -78,18 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
         "download",
         help="persist one admitted closed-range one-minute download",
     )
-    download.add_argument("--segment", required=True)
-    download.add_argument("--symbol", required=True)
-    download.add_argument(
-        "--from", dest="from_date", type=_date, required=True, metavar="YYYY-MM-DD"
+    _add_persistent_range_arguments(download)
+    coverage = commands.add_parser(
+        "coverage",
+        help="prove retained scheduled-minute coverage without provider access",
     )
-    download.add_argument(
-        "--to", dest="to_date", type=_date, required=True, metavar="YYYY-MM-DD"
-    )
-    download.add_argument(
-        "--storage-root", type=Path, required=True, metavar="ABSOLUTE_PATH"
-    )
-    download.add_argument("--output", choices=("json",), required=True)
+    _add_persistent_range_arguments(coverage)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -124,6 +129,7 @@ def main(
     argv: list[str] | None = None,
     *,
     download_service: PublicDownloadPortV1 | None = None,
+    coverage_service: PublicCoveragePortV1 | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download":
@@ -141,6 +147,21 @@ def main(
         report = service.download(request)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
         return public_exit_code(report.status)
+    if args.command == "coverage":
+        service = coverage_service or _default_coverage_service()
+        try:
+            request = CoverageRequestV1(
+                args.segment,
+                args.symbol,
+                args.from_date,
+                args.to_date,
+                args.storage_root,
+            )
+        except ValueError:
+            request = object()
+        report = service.coverage(request)
+        sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
     if args.command == "probe-upstox":
         return _run_probe(args)
     raise AssertionError("unreachable command")
@@ -157,6 +178,29 @@ def _default_download_service() -> SingleSymbolDownloadServiceV1:
     return SingleSymbolDownloadServiceV1(
         preparation, IngestionCoordinator(), clock=clock
     )
+
+
+def _default_coverage_service() -> StoredCoverageServiceV1:
+    return StoredCoverageServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StoredCoverageEvaluatorV1(),
+        clock=_SystemClock(),
+    )
+
+
+def _add_persistent_range_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--segment", required=True)
+    command.add_argument("--symbol", required=True)
+    command.add_argument(
+        "--from", dest="from_date", type=_date, required=True, metavar="YYYY-MM-DD"
+    )
+    command.add_argument(
+        "--to", dest="to_date", type=_date, required=True, metavar="YYYY-MM-DD"
+    )
+    command.add_argument(
+        "--storage-root", type=Path, required=True, metavar="ABSOLUTE_PATH"
+    )
+    command.add_argument("--output", choices=("json",), required=True)
 
 
 def _run_probe(args: argparse.Namespace) -> int:

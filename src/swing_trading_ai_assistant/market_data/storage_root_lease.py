@@ -15,9 +15,8 @@ from typing import Final
 _LOCK_NAME: Final = ".ingestion.lock"
 _LOCK_MODE: Final = 0o600
 _ROOT_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-_LOCK_FLAGS: Final = (
-    os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
-)
+_LOCK_EXISTING_FLAGS: Final = os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+_LOCK_FLAGS: Final = _LOCK_EXISTING_FLAGS | os.O_CREAT
 _CONTENTION_ERRNOS: Final = frozenset({errno.EACCES, errno.EAGAIN})
 
 
@@ -108,6 +107,15 @@ class StorageRootLease:
     @classmethod
     def try_acquire(cls, root: object) -> LeaseResult:
         """Acquire the protected root lease without waiting or deleting files."""
+        return cls._try_acquire(root, create_lock=True)
+
+    @classmethod
+    def try_acquire_existing(cls, root: object) -> LeaseResult:
+        """Acquire only a pre-existing safe lock without creating filesystem state."""
+        return cls._try_acquire(root, create_lock=False)
+
+    @classmethod
+    def _try_acquire(cls, root: object, *, create_lock: bool) -> LeaseResult:
         if not isinstance(root, Path):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
 
@@ -129,6 +137,7 @@ class StorageRootLease:
             result, lock_descriptor = _acquire_lock(
                 root_descriptor,
                 (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
+                create=create_lock,
             )
         except OSError:
             result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
@@ -206,13 +215,16 @@ def _failed(code: LeaseFailureCode, *, already_running: bool = False) -> LeaseRe
 
 
 def _acquire_lock(
-    root_descriptor: int, root_identity: tuple[int, int]
+    root_descriptor: int,
+    root_identity: tuple[int, int],
+    *,
+    create: bool,
 ) -> tuple[LeaseResult, int | None]:
     lock_descriptor: int | None = None
     try:
         lock_descriptor = os.open(
             _LOCK_NAME,
-            _LOCK_FLAGS,
+            _LOCK_FLAGS if create else _LOCK_EXISTING_FLAGS,
             _LOCK_MODE,
             dir_fd=root_descriptor,
         )
