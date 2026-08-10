@@ -108,6 +108,17 @@ def _artifact_record(
         if workload_id == "B03" and outcome == "SUCCEEDED"
         else None
     )
+    partition_outcomes, reconciliation_reasons, counts = {
+        "B01": (("VERIFIED",), (), (1, 1, 0, 0, 0)),
+        "B02": (
+            ("SKIPPED_VERIFIED", "SKIPPED_VERIFIED", "RECOVERED_LOCALLY"),
+            (),
+            (0, 0, 0, 3, 0),
+        ),
+        "B03": (("VERIFIED",), ("CHECKSUM_INVALID_OR_MISMATCHED",), (1, 1, 0, 0, 1)),
+        "B04": ((), (), (0, 0, 0, 0, 0)),
+        "B05": ((), (), (0, 0, 0, 0, 0)),
+    }[workload_id]
     return B01MeasurementRecord(
         workload_id,
         iteration_kind,
@@ -139,11 +150,11 @@ def _artifact_record(
         1,
         1,
         1.0,
-        0,
-        0,
-        0,
-        0,
-        0,
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+        counts[4],
         1_024,
         3,
         3,
@@ -160,8 +171,8 @@ def _artifact_record(
         None,
         outcome,
         failure_code,
-        ("VERIFIED",),
-        (),
+        partition_outcomes,
+        reconciliation_reasons,
         control,
         replace(
             _identity(),
@@ -206,6 +217,16 @@ def _artifact_report() -> BaselineCollectionReport:
                     outcome="FAILED",
                     failure_code="CHILD_PROTOCOL_INVALID",
                     control_partition_evidence=None,
+                    resource_evidence_status=ResourceEvidenceStatus.INVALID,
+                    resource_blocker="CHILD_PROTOCOL_INVALID",
+                    peak_rss_bytes=None,
+                    open_fd_start=None,
+                    open_fd_peak=None,
+                    open_fd_end=None,
+                    partition_checksums=(),
+                    comparability_key=replace(
+                        measured[3].comparability_key, partition_checksums=()
+                    ),
                 ),
                 measured[4],
             )
@@ -1110,6 +1131,248 @@ def test_non_b01_child_terminal_failures_are_retained_with_its_own_provenance(
     assert malformed.resource_evidence_status.value == "INVALID"
     assert malformed.resource_blocker == malformed.failure_code
     assert malformed.partition_checksums == ()
+
+
+@pytest.mark.parametrize(
+    ("workload_id", "months"),
+    (
+        ("B01", ((2024, 2),)),
+        ("B02", ((2024, 1), (2024, 2), (2024, 3))),
+        ("B03", ((2024, 2),)),
+        ("B04", ((2024, 2),)),
+        ("B05", tuple((2023, month) for month in range(1, 13))),
+    ),
+)
+def test_write_baseline_artifact_requires_exact_plan03_checksum_months(
+    tmp_path: Path, workload_id: str, months: tuple[tuple[int, int], ...]
+) -> None:
+    report = _artifact_report()
+    index = ("B01", "B02", "B03", "B04", "B05").index(workload_id)
+    record = report.results[index].warmup
+    checksums = tuple((year, month, "f" * 64) for year, month in months)
+    wrong_month = (checksums[0][0], checksums[0][1] % 12 + 1, "e" * 64)
+    malformed_checksums = (wrong_month, *checksums[1:])
+    malformed = replace(
+        record,
+        partition_checksums=malformed_checksums,
+        comparability_key=replace(
+            record.comparability_key, partition_checksums=malformed_checksums
+        ),
+    )
+
+    with pytest.raises(ValueError, match="physical workload"):
+        baseline_collection._serialize_record(malformed)
+
+
+def test_successful_b03_control_keeps_its_own_manifest_bound_digest(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[2].warmup
+    control = replace(
+        record.control_partition_evidence,
+        manifest_bound_schedule_digest="c" * 64,
+    )
+    b03 = replace(
+        report.results[2], warmup=replace(record, control_partition_evidence=control)
+    )
+
+    write_baseline_artifact(
+        replace(report, results=(*report.results[:2], b03, *report.results[3:])),
+        tmp_path / "baseline.json",
+    )
+
+
+@pytest.mark.parametrize("field_name", ("fixture_id", "platform", "cpu_model"))
+def test_write_baseline_artifact_rejects_opaque_uri_text(
+    tmp_path: Path, field_name: str
+) -> None:
+    report = _artifact_report()
+    record = report.results[0].warmup
+    identity = record.comparability_key
+    if field_name == "fixture_id":
+        identity = replace(identity, fixture_id="https:opaque")
+    if field_name == "cpu_model":
+        identity = replace(identity, cpu_architecture="https:opaque")
+    unsafe = replace(
+        record,
+        comparability_key=identity,
+        **{field_name: "https:opaque"},
+    )
+
+    with pytest.raises(ValueError, match="unsanitized"):
+        baseline_collection._serialize_record(unsafe)
+
+
+def test_child_protocol_invalid_is_retained_with_closed_invalid_resource_evidence(
+    tmp_path: Path,
+) -> None:
+    report = _artifact_report()
+    record = report.results[2].measured[3]
+    invalid = replace(
+        record,
+        resource_evidence_status=ResourceEvidenceStatus.INVALID,
+        resource_blocker="CHILD_PROTOCOL_INVALID",
+        peak_rss_bytes=None,
+        open_fd_start=None,
+        open_fd_peak=None,
+        open_fd_end=None,
+    )
+    b03 = replace(
+        report.results[2],
+        measured=(
+            *report.results[2].measured[:3],
+            invalid,
+            report.results[2].measured[4],
+        ),
+    )
+
+    write_baseline_artifact(
+        replace(report, results=(*report.results[:2], b03, *report.results[3:])),
+        tmp_path / "baseline.json",
+    )
+
+    payload = json.loads((tmp_path / "baseline.json").read_text())
+    retained = payload["results"][2]["measured"][3]
+    assert retained["outcome"] == "FAILED"
+    assert (
+        retained["failure_code"]
+        == retained["resource_blocker"]
+        == "CHILD_PROTOCOL_INVALID"
+    )
+    assert retained["resource_evidence_status"] == "INVALID"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda record: replace(record, partition_outcomes=("VERIFIED",)),
+        lambda record: replace(record, resume_count=2),
+        lambda record: replace(
+            record, reconciliation_reasons=("CHECKSUM_INVALID_OR_MISMATCHED",)
+        ),
+    ),
+)
+def test_successful_workload_requires_exact_partition_and_count_cardinality(
+    mutate: object,
+) -> None:
+    record = _artifact_record("B02", "measured", 1)
+
+    with pytest.raises(ValueError, match="successful workload"):
+        baseline_collection._serialize_record(mutate(record))  # type: ignore[operator]
+
+
+def test_successful_b03_requires_its_exact_repair_cardinality() -> None:
+    record = _artifact_record("B03", "measured", 1)
+
+    with pytest.raises(ValueError, match="successful workload"):
+        baseline_collection._serialize_record(replace(record, repair_count=0))
+
+
+def test_write_baseline_artifact_rejects_symlinked_ancestor_without_creating_outside(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        write_baseline_artifact(_artifact_report(), linked / "nested" / "baseline.json")
+
+    assert tuple(outside.iterdir()) == ()
+
+
+def test_collect_then_serialize_keeps_distinct_b03_control_digest(
+    tmp_path: Path,
+) -> None:
+    def measure(workload_id: str, kind: str, index: int) -> B01MeasurementRecord:
+        record = _artifact_record(workload_id, kind, index)
+        if workload_id == "B03":
+            return replace(
+                record,
+                control_partition_evidence=replace(
+                    record.control_partition_evidence,
+                    manifest_bound_schedule_digest="c" * 64,
+                ),
+            )
+        return record
+
+    report = collect_baseline_samples(tmp_path / "work", measure)
+    write_baseline_artifact(report, tmp_path / "baseline.json")
+
+    payload = json.loads((tmp_path / "baseline.json").read_text())
+    b03 = payload["results"][2]["warmup"]
+    assert (
+        b03["control_partition_evidence"]["manifest_bound_schedule_digest"]
+        != b03["schedule_digest"]
+    )
+
+
+@pytest.mark.parametrize("field_name", ("cpu_count", "physical_month_count"))
+def test_write_baseline_artifact_rejects_bool_as_integer_measurement(
+    field_name: str,
+) -> None:
+    record = _artifact_report().results[0].warmup
+
+    with pytest.raises(ValueError):
+        baseline_collection._serialize_record(replace(record, **{field_name: True}))
+
+
+@pytest.mark.parametrize("exception", (KeyboardInterrupt, SystemExit))
+def test_persistence_entry_point_propagates_process_control_exceptions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exception: type[BaseException]
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir()
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    def abort(_root: Path) -> BaselineCollectionReport:
+        raise exception()
+
+    monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", abort)
+
+    with pytest.raises(exception):
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(artifact_root / "baseline.json"),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
+
+
+def test_persistence_rejects_work_root_substitution_before_publication(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output = artifact_root / "baseline.json"
+    work_root = artifact_root / "work"
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    def substitute(root: Path) -> BaselineCollectionReport:
+        root.rename(tmp_path / "held-work")
+        root.symlink_to(outside, target_is_directory=True)
+        return _artifact_report()
+
+    monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", substitute)
+
+    assert (
+        persist_baseline_artifact(
+            ["--output", str(output), "--work-root", str(work_root)]
+        )
+        == 2
+    )
+    assert (
+        capsys.readouterr().err
+        == "baseline artifact collection failed: WORK_ROOT_SUBSTITUTED\n"
+    )
+    assert not output.exists()
+    assert tuple(outside.iterdir()) == ()
 
 
 def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(

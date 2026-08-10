@@ -66,6 +66,24 @@ _REQUESTED_RANGE = re.compile(r"\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}")
 _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _PHYSICAL_MONTH_COUNTS = {"B01": 1, "B02": 3, "B03": 1, "B04": 1, "B05": 12}
+_PHYSICAL_MONTHS = {
+    "B01": ((2024, 2),),
+    "B02": ((2024, 1), (2024, 2), (2024, 3)),
+    "B03": ((2024, 2),),
+    "B04": ((2024, 2),),
+    "B05": tuple((2023, month) for month in range(1, 13)),
+}
+_SUCCESS_WORKLOAD_EVIDENCE = {
+    "B01": (("VERIFIED",), (), (1, 1, 0, 0, 0)),
+    "B02": (
+        ("SKIPPED_VERIFIED", "SKIPPED_VERIFIED", "RECOVERED_LOCALLY"),
+        (),
+        (0, 0, 0, 3, 0),
+    ),
+    "B03": (("VERIFIED",), ("CHECKSUM_INVALID_OR_MISMATCHED",), (1, 1, 0, 0, 1)),
+    "B04": ((), (), (0, 0, 0, 0, 0)),
+    "B05": ((), (), (0, 0, 0, 0, 0)),
+}
 _FAILURE_CODES = frozenset(
     (
         "B01_CHILD_FAILED",
@@ -85,8 +103,10 @@ _RESOURCE_BLOCKERS = frozenset(
         "too_few_samples",
         "max_gap_exceeded",
         "open_fd_not_closed",
+        "CHILD_PROTOCOL_INVALID",
     )
 )
+_URI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 class BaselineIterationRecord(Protocol):
@@ -152,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _ArtifactArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
+    work_root_fd: int | None = None
     try:
         arguments = parser.parse_args(argv)
         output = _artifact_path(arguments.output, "output")
@@ -162,8 +183,10 @@ def main(argv: list[str] | None = None) -> int:
             raise _ArtifactCliFailure("OUTPUT_WORK_ROOT_OVERLAP")
         if work_root.exists():
             raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
-
+        work_root_fd = _open_artifact_directory(work_root)
         report = collect_benchmark_baselines(work_root)
+        if not _path_matches_directory_descriptor(work_root, work_root_fd):
+            raise _ArtifactCliFailure("WORK_ROOT_SUBSTITUTED")
         write_baseline_artifact(report, output)
     except _ArtifactCliFailure as error:
         print(f"baseline artifact collection failed: {error.code}", file=sys.stderr)
@@ -178,6 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("baseline artifact collection failed: COLLECTION_FAILED", file=sys.stderr)
         return 2
+    finally:
+        if work_root_fd is not None:
+            os.close(work_root_fd)
     return 0
 
 
@@ -486,9 +512,10 @@ def _validate_physical_shape(record: B01MeasurementRecord) -> None:
         raise ValueError("invalid physical workload evidence")
     if len(set(months)) != len(months):
         raise ValueError("invalid physical workload evidence")
-    if record.outcome == "SUCCEEDED" and len(checksums) != expected_count:
-        raise ValueError("incomplete successful workload evidence")
-    if record.outcome != "SUCCEEDED" and len(checksums) > expected_count:
+    expected_months = _PHYSICAL_MONTHS[record.workload_id]
+    if record.outcome == "SUCCEEDED" and months != expected_months:
+        raise ValueError("invalid physical workload evidence")
+    if record.outcome != "SUCCEEDED" and months not in ((), expected_months):
         raise ValueError("invalid terminal workload evidence")
 
 
@@ -545,6 +572,21 @@ def _validate_terminal_evidence(record: B01MeasurementRecord) -> None:
         )
     ):
         raise ValueError("invalid terminal evidence")
+    if record.outcome == "SUCCEEDED":
+        outcomes, reasons, counts = _SUCCESS_WORKLOAD_EVIDENCE[record.workload_id]
+        if (
+            record.partition_outcomes != outcomes
+            or record.reconciliation_reasons != reasons
+            or (
+                record.request_count,
+                record.provider_attempt_count,
+                record.retry_count,
+                record.resume_count,
+                record.repair_count,
+            )
+            != counts
+        ):
+            raise ValueError("invalid successful workload evidence")
 
 
 def _validate_control_evidence(record: B01MeasurementRecord) -> None:
@@ -568,7 +610,6 @@ def _validate_control_evidence(record: B01MeasurementRecord) -> None:
         or type(identity[7]) is not int
         or evidence.pre_physical_checksum != evidence.post_physical_checksum
         or evidence.pre_manifest_fingerprint != evidence.post_manifest_fingerprint
-        or evidence.manifest_bound_schedule_digest != record.schedule_digest
     ):
         raise ValueError("invalid B03 control evidence")
 
@@ -629,7 +670,8 @@ def _reject_sensitive_text(
     lowered = value.lower()
     normalized = re.sub(r"[^a-z0-9]", "", lowered)
     if (
-        ("/" in value and not allow_timezone_separator)
+        _URI_SCHEME.search(value) is not None
+        or ("/" in value and not allow_timezone_separator)
         or "\\" in value
         or "|" in value
         or any(marker in lowered for marker in _SENSITIVE_TEXT)
@@ -874,7 +916,6 @@ def _serialize_schedule_closures(value: object) -> list[list[str]]:
 
 
 def _write_no_overwrite(output: Path, encoded: bytes) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
     directory_fd = _open_artifact_directory(output.parent)
     temporary_name = f".{output.name}.{uuid.uuid4().hex}.tmp"
     try:
@@ -904,8 +945,31 @@ def _write_no_overwrite(output: Path, encoded: bytes) -> None:
 
 
 def _open_artifact_directory(directory: Path) -> int:
+    absolute = Path(os.path.abspath(directory))
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    return os.open(directory, flags)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for component in absolute.parts[1:]:
+            try:
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _path_matches_directory_descriptor(path: Path, descriptor: int) -> bool:
+    try:
+        current = os.stat(path)
+    except OSError:
+        return False
+    held = os.fstat(descriptor)
+    return (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino)
 
 
 def _ensure_absent(name: str, directory_fd: int) -> None:
