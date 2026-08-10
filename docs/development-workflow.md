@@ -114,6 +114,16 @@ Each sprint has:
 5. **Retrospective:** record what worked, what did not, corrective actions, and
    any evidence-based change to capacity or process.
 
+Sprint cadence and usable-release cadence are separate. Plan toward one
+coherent, demonstrably usable vertical slice every two to three completed
+sprints when the evidence and dependencies support it. A slice may be a
+read-only deterministic research capability; it is not automatically a trading
+signal, paper-trading approval, real-money approval, package release, or order
+execution feature. Do not force a nominal release by weakening gates, hiding
+carryover, or marking incomplete work Done. Retrospective evidence sets the
+next capacity assumption; a short early sprint does not establish a permanent
+two-sprints-per-week velocity.
+
 Do not add work to an active sprint without explicitly recording why it is an
 urgent scope exchange. Incomplete work remains incomplete and is explicitly
 carried into a later sprint during planning; never silently change its sprint
@@ -203,6 +213,52 @@ the next child. A blocked issue moves to `Blocked` and does not authorize
 parallel implementation unless the main agent explicitly re-routes the work
 while preserving the one-issue limit. Prefer correct, proportionate evidence
 over throughput, batching, or partially completed work.
+
+### Value-aware hold and WIP rerouting
+
+Starting first does not give an issue permanent priority. When an active issue
+materially exceeds its prospective range, becomes disproportionately complex,
+or reaches a genuine blocker, reassess it against:
+
+1. direct owner/user value and expected usage frequency;
+2. urgency, deadlines, and operational or regulatory consequence;
+3. dependency centrality: which valuable Ready outcomes truly cannot proceed;
+4. security, data-integrity, provenance, and risk-reduction value;
+5. learning value and whether continuing resolves important uncertainty; and
+6. remaining effort, confidence, and the value of an independent alternative.
+
+The coordinator may place the issue on hold and reroute the single WIP only
+when all of these conditions hold:
+
+- no currently higher-value executable task has a real dependency on it;
+- at least one independent Ready task has materially greater value, urgency, or
+  risk-reduction benefit;
+- the active work is at a safe, reproducible checkpoint with no writer, runner,
+  provider action, partial publication, or unsafe shared-data operation left
+  active; and
+- holding it does not defer immediate containment of a security, privacy,
+  licensing, data-integrity, regulatory, or production incident and does not
+  bypass a mandatory release or acceptance gate.
+
+Before rerouting, preserve the exact revision and evidence, current blocker,
+elapsed/repair state, unfinished acceptance criteria, residual risks, and one
+explicit resume trigger. Move the issue to the available `Blocked` or Backlog
+state, retain its historical sprint/scope labels, and record any affected
+carryover. A hold is never `Done`, cancellation, denominator removal, scope
+waiver, or permission to abandon dependent work.
+
+If valuable tasks really depend on the active issue, either continue it within
+its budget or make an explicit owner-approved decision about the whole dependent
+chain; do not pretend the dependents are independent. Re-evaluate every held
+issue during backlog refinement and sprint planning. Resume it when its value,
+urgency, dependency impact, evidence, or available simpler approach justifies
+returning it to the one-WIP queue.
+
+At material task and sprint boundaries, reconcile accepted conversation
+decisions with the authoritative workflow, specification, sprint record, and
+notes index. Add only missing durable capture; link to existing sources instead
+of duplicating them. Opinions, rough forecasts, and planning ranges remain
+explicitly open unless the owner promotes them to an accepted commitment.
 
 ## Root execution coordinator and recovery
 

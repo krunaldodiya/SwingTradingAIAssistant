@@ -64,6 +64,17 @@ the observed blocker or next action; do not infer labor hours from estimates or
 Linear points. Status updates are concise and material; do not create agents
 solely to relay status.
 
+When an active task materially overruns, becomes disproportionately complex, or
+is blocked, evaluate its user value, usage frequency, urgency, dependency
+centrality, risk reduction, and remaining effort before continuing. It may be
+placed on hold only when no currently valuable executable task truly depends on
+it, a higher-value independent Ready task exists, and the current work can be
+preserved at a safe evidence-backed checkpoint. Never use a hold to bypass a
+security, data-integrity, regulatory, release, or mandatory acceptance blocker;
+never mark held work Done or silently remove it from scope. Record its blocker,
+state, evidence, residual work, and explicit resume trigger before rerouting the
+single WIP.
+
 ## Mission
 
 Build a trustworthy, agent-agnostic research and analysis tool for swing trading
@@ -155,6 +166,10 @@ already contain the decision.
   idea.
 - Avoid duplicating notes. Extend an existing topical note when that preserves a
   coherent history; create a dated note when the discussion starts a new topic.
+- At a material task or sprint boundary, audit accepted conversation decisions
+  against their authoritative documents and the notes index. Capture any gap,
+  but use a short traceability map instead of restating decisions that are
+  already recorded correctly.
 - Never record credentials, tokens, account identifiers, private market data, or
   other secrets in notes.
 

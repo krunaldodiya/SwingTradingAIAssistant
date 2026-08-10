@@ -70,6 +70,30 @@ epoch; no successor acts until stop proof identifies the active actor, exact
 state, and safe next action. Two materially identical review rejections or gate
 failures still open the circuit breaker and route the incomplete work to Sol.
 
+## Value-aware hold and reprioritization
+
+Accepted on 2026-08-10: an issue that was started first does not keep priority
+indefinitely. When work materially overruns, becomes disproportionately
+complex, or is blocked, the coordinator evaluates user value, expected usage
+frequency, urgency, dependency centrality, risk reduction, learning value, and
+remaining effort.
+
+The issue may be held only when no currently valuable executable task truly
+depends on it, a materially higher-value independent Ready task exists, and the
+work can be preserved at a safe reproducible checkpoint. The hold records the
+exact state and evidence, blocker, residual acceptance work, risks, and an
+explicit resume trigger. It remains incomplete and visible in Backlog or the
+available blocked representation; its sprint history and scope are not erased.
+
+This rule prevents an isolated, low-frequency feature from holding the whole
+project hostage merely because it is difficult. It does not authorize avoiding
+security, privacy, licensing, data-integrity, regulatory, production, release,
+or mandatory acceptance work. When other valuable work depends on the issue,
+the whole dependency chain must be handled explicitly rather than relabeled as
+independent. Held work is reconsidered during refinement and planning and is
+resumed when its value, urgency, dependency impact, or a simpler validated
+approach warrants it.
+
 ## Supersessions
 
 This accepted note supersedes the root-as-mutating-coordinator assumptions in
