@@ -38,6 +38,7 @@ update those documents as well as the note.
 
 ## Notes index
 
+- [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
 - [2026-08-10 — Conversation decision capture audit](2026-08-10-conversation-decision-capture-audit.md)
 - [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
 - [2026-08-09 — Code-smell and refactoring workflow assessment](2026-08-09-code-smell-and-refactoring-workflow-assessment.md)
