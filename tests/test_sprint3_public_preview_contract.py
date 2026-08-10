@@ -422,8 +422,9 @@ def test_observation_sidecar_and_crash_matrix_are_deterministic() -> None:
         "COMPLETE",
         "MISMATCH",
     )
-    assert "new permitted bod response" in rows["OBJECT_ONLY"]
-    assert "return typed unavailable" in rows["OBJECT_ONLY"]
+    assert "canonical journal" in rows["OBJECT_ONLY"]
+    assert "without refetch" in rows["OBJECT_ONLY"]
+    assert "never scanned or adopted" in rows["OBJECT_ONLY"]
     assert "exact sidecar-derived row" in rows["OBJECT_AND_SIDECAR"]
     assert "reopen" in rows["COMMIT_UNKNOWN"]
     assert "do not read, remove, replace, fetch, or mutate" in rows["UNSAFE_TEMP"]

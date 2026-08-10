@@ -6,12 +6,13 @@ import hashlib
 import json
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import duckdb
 
+from .instrument_snapshot import InstrumentSnapshotMetadataV1
 from .manifest_lifecycle import (
     FailureCategory,
     ManifestState,
@@ -66,7 +67,8 @@ _PHYSICAL_KEY_COLUMNS: Final = (
     "year",
     "month",
 )
-_EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
+_V1_EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
+_EXPECTED_TABLES: Final = (*_V1_EXPECTED_TABLES, "instrument_snapshots")
 _SOURCE_MANIFEST_IDENTITY_COLUMN: Final = "source_manifest_identity"
 
 _SCHEMA_SQL: Final = """
@@ -140,6 +142,51 @@ CREATE TABLE ingestion_runs (
 );
 """.strip()
 _SCHEMA_CHECKSUM: Final = hashlib.sha256(_SCHEMA_SQL.encode("utf-8")).hexdigest()
+_SNAPSHOT_MIGRATION_ID: Final = "swing-trading-catalog-v2-instrument-snapshots"
+_SNAPSHOT_MIGRATION_VERSION: Final = 2
+_SNAPSHOT_SCHEMA_SQL: Final = """
+CREATE TABLE instrument_snapshots (
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    source VARCHAR NOT NULL CHECK (
+        regexp_full_match(source, '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
+    ),
+    observation_date DATE NOT NULL,
+    retrieved_at TIMESTAMPTZ NOT NULL,
+    observation_sha256 VARCHAR NOT NULL CHECK (
+        regexp_full_match(observation_sha256, '[0-9a-f]{64}')
+    ),
+    compressed_sha256 VARCHAR NOT NULL CHECK (
+        regexp_full_match(compressed_sha256, '[0-9a-f]{64}')
+    ),
+    decompressed_sha256 VARCHAR NOT NULL CHECK (
+        regexp_full_match(decompressed_sha256, '[0-9a-f]{64}')
+    ),
+    compressed_byte_count BIGINT NOT NULL CHECK (
+        compressed_byte_count BETWEEN 0 AND 4000000
+    ),
+    decompressed_byte_count BIGINT NOT NULL CHECK (
+        decompressed_byte_count BETWEEN 0 AND 50000000
+    ),
+    relative_object_path VARCHAR NOT NULL CHECK (
+        relative_object_path = 'instrument_snapshots/sha256=' || compressed_sha256 || '/snapshot.json.gz'
+        AND length(relative_object_path) <= 128
+    ),
+    relative_metadata_path VARCHAR NOT NULL CHECK (
+        relative_metadata_path = 'instrument_snapshots/sha256=' || compressed_sha256 || '/observations/sha256=' || observation_sha256 || '.json'
+        AND length(relative_metadata_path) <= 256
+    ),
+    etag VARCHAR CHECK (
+        etag IS NULL OR regexp_full_match(etag, '[ -~]{1,512}')
+    ),
+    last_modified VARCHAR CHECK (
+        last_modified IS NULL OR regexp_full_match(last_modified, '[ -~]{1,512}')
+    ),
+    PRIMARY KEY (source, retrieved_at, observation_sha256)
+);
+""".strip()
+_SNAPSHOT_SCHEMA_CHECKSUM: Final = hashlib.sha256(
+    _SNAPSHOT_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
 
 
 class CatalogError(RuntimeError):
@@ -296,8 +343,79 @@ class DuckDBCatalog:
         """Compatibility spelling for callers describing persistence explicitly."""
         self.save_manifest(target, expected_current)
 
+    def save_instrument_snapshot(self, metadata: InstrumentSnapshotMetadataV1) -> None:
+        """Append one immutable snapshot observation, idempotently."""
+        if type(metadata) is not InstrumentSnapshotMetadataV1:
+            raise CatalogConflictError("invalid instrument snapshot")
+
+        def operation() -> None:
+            values = tuple(
+                getattr(metadata, name)
+                for name in InstrumentSnapshotMetadataV1.__dataclass_fields__
+            )
+            existing = self.connection.execute(
+                """
+                SELECT schema_version, source, observation_date, CAST(retrieved_at AS VARCHAR),
+                       observation_sha256, compressed_sha256, decompressed_sha256,
+                       compressed_byte_count, decompressed_byte_count,
+                       relative_object_path, relative_metadata_path, etag, last_modified
+                FROM instrument_snapshots
+                WHERE source = ? AND retrieved_at = ? AND observation_sha256 = ?
+                """,
+                (metadata.source, metadata.retrieved_at, metadata.observation_sha256),
+            ).fetchone()
+            if existing is not None:
+                if _snapshot_metadata_from_row(existing) != metadata:
+                    raise CatalogConflictError("instrument snapshot conflicts")
+                return
+            self.connection.execute(
+                "INSERT INTO instrument_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+
+        self._transaction(operation)
+
+    def list_instrument_snapshots(
+        self, source: str, *, retrieved_at_lte: datetime | None = None
+    ) -> tuple[InstrumentSnapshotMetadataV1, ...]:
+        """Return bounded snapshot metadata newest first for one source."""
+        if type(source) is not str or not source:
+            raise CatalogConflictError("invalid instrument snapshot source")
+        parameters: tuple[object, ...] = (source,)
+        predicate = "source = ?"
+        if retrieved_at_lte is not None:
+            if (
+                type(retrieved_at_lte) is not datetime
+                or retrieved_at_lte.tzinfo is None
+                or retrieved_at_lte.utcoffset() is None
+            ):
+                raise CatalogConflictError("invalid instrument snapshot time")
+            predicate += " AND retrieved_at <= ?"
+            parameters += (retrieved_at_lte,)
+        try:
+            rows = self.connection.execute(
+                f"""
+                SELECT schema_version, source, observation_date, CAST(retrieved_at AS VARCHAR),
+                       observation_sha256, compressed_sha256, decompressed_sha256,
+                       compressed_byte_count, decompressed_byte_count,
+                       relative_object_path, relative_metadata_path, etag, last_modified
+                FROM instrument_snapshots WHERE {predicate}
+                ORDER BY retrieved_at DESC, observation_sha256 ASC
+                LIMIT 1000
+                """,  # noqa: S608 - predicate is fixed above
+                parameters,
+            ).fetchall()
+            return tuple(_snapshot_metadata_from_row(row) for row in rows)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
     def _after_history_insert(self) -> None:
         """Fault-injection seam used to prove transaction rollback."""
+
+    def _after_snapshot_migration(self) -> None:
+        """Fault-injection seam used to prove v1 migration rollback."""
 
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
@@ -336,6 +454,31 @@ class DuckDBCatalog:
                         _SCHEMA_CHECKSUM,
                     ),
                 )
+                connection.execute(_SNAPSHOT_SCHEMA_SQL)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+                    (
+                        _SNAPSHOT_MIGRATION_ID,
+                        _SNAPSHOT_MIGRATION_VERSION,
+                        _SNAPSHOT_SCHEMA_CHECKSUM,
+                    ),
+                )
+                self._validate_schema()
+            elif relations == {
+                ("table", "main", table) for table in _V1_EXPECTED_TABLES
+            }:
+                self._validate_schema(version=1)
+                connection.execute(_SNAPSHOT_SCHEMA_SQL)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+                    (
+                        _SNAPSHOT_MIGRATION_ID,
+                        _SNAPSHOT_MIGRATION_VERSION,
+                        _SNAPSHOT_SCHEMA_CHECKSUM,
+                    ),
+                )
+                self._after_snapshot_migration()
+                self._validate_schema()
             elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
             else:
@@ -374,8 +517,13 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
-    def _validate_schema(self) -> None:
-        for table in _EXPECTED_TABLES:
+    def _validate_schema(self, *, version: int = 2) -> None:
+        if self.connection.execute(
+            "SELECT count(*) FROM duckdb_indexes()"
+        ).fetchone() != (0,):
+            raise CatalogSchemaError("catalog schema is invalid")
+        expected_tables = _V1_EXPECTED_TABLES if version == 1 else _EXPECTED_TABLES
+        for table in expected_tables:
             actual_rows = self.connection.execute(
                 f"PRAGMA table_info('{table}')"
             ).fetchall()
@@ -408,11 +556,21 @@ class DuckDBCatalog:
                 raise CatalogSchemaError("catalog schema is invalid")
 
         migration = self.connection.execute(
-            "SELECT migration_id, version, checksum_sha256 FROM schema_migrations"
+            "SELECT migration_id, version, checksum_sha256 FROM schema_migrations "
+            "ORDER BY version, migration_id"
         ).fetchall()
-        if migration != [
+        expected_migrations = [
             (_SCHEMA_MIGRATION_ID, _SCHEMA_MIGRATION_VERSION, _SCHEMA_CHECKSUM)
-        ]:
+        ]
+        if version == 2:
+            expected_migrations.append(
+                (
+                    _SNAPSHOT_MIGRATION_ID,
+                    _SNAPSHOT_MIGRATION_VERSION,
+                    _SNAPSHOT_SCHEMA_CHECKSUM,
+                )
+            )
+        if migration != expected_migrations:
             raise CatalogSchemaError("catalog migration is unsupported")
 
     def _transaction(self, operation: Callable[[], None]) -> None:
@@ -591,6 +749,7 @@ DuckDbCatalog = DuckDBCatalog
 
 def _column_type(name: str) -> str:
     if name in {
+        "schema_version",
         "manifest_schema_version",
         "version",
         "year",
@@ -598,10 +757,12 @@ def _column_type(name: str) -> str:
         "candle_schema_version",
     }:
         return "INTEGER"
-    if name == "row_count":
+    if name in {"row_count", "compressed_byte_count", "decompressed_byte_count"}:
         return "BIGINT"
-    if name in {"from_date", "to_date"}:
+    if name in {"from_date", "to_date", "observation_date"}:
         return "DATE"
+    if name == "retrieved_at":
+        return "TIMESTAMP WITH TIME ZONE"
     return "VARCHAR"
 
 
@@ -646,6 +807,10 @@ def _expected_table_columns(
                 "failure_category",
             }
         }
+    elif table == "instrument_snapshots":
+        names = tuple(InstrumentSnapshotMetadataV1.__dataclass_fields__)
+        primary_key = {"source", "retrieved_at", "observation_sha256"}
+        not_null = set(names) - {"etag", "last_modified"}
     else:
         raise CatalogSchemaError("catalog schema is invalid")
     return tuple(
@@ -682,12 +847,104 @@ def _expected_constraints(
         for index, column in enumerate(columns)
         if column[2]
     ]
+    if table == "instrument_snapshots":
+        checks = (
+            ("CHECK", "(schema_version = 1)", (0,), ("schema_version",), None, ()),
+            (
+                "CHECK",
+                "regexp_full_match(\"source\", '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')",
+                (1,),
+                ("source",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "regexp_full_match(observation_sha256, '[0-9a-f]{64}')",
+                (4,),
+                ("observation_sha256",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "regexp_full_match(compressed_sha256, '[0-9a-f]{64}')",
+                (5,),
+                ("compressed_sha256",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "regexp_full_match(decompressed_sha256, '[0-9a-f]{64}')",
+                (6,),
+                ("decompressed_sha256",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "(compressed_byte_count BETWEEN 0 AND 4000000)",
+                (7,),
+                ("compressed_byte_count",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "(decompressed_byte_count BETWEEN 0 AND 50000000)",
+                (8,),
+                ("decompressed_byte_count",),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "((relative_object_path = (('instrument_snapshots/sha256=' || compressed_sha256) || '/snapshot.json.gz')) AND (length(relative_object_path) <= 128))",
+                (9, 5, 9),
+                ("relative_object_path", "compressed_sha256", "relative_object_path"),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "((relative_metadata_path = (((('instrument_snapshots/sha256=' || compressed_sha256) || '/observations/sha256=') || observation_sha256) || '.json')) AND (length(relative_metadata_path) <= 256))",
+                (10, 5, 4, 10),
+                (
+                    "relative_metadata_path",
+                    "compressed_sha256",
+                    "observation_sha256",
+                    "relative_metadata_path",
+                ),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "((etag IS NULL) OR regexp_full_match(etag, '[ -~]{1,512}'))",
+                (11, 11),
+                ("etag", "etag"),
+                None,
+                (),
+            ),
+            (
+                "CHECK",
+                "((last_modified IS NULL) OR regexp_full_match(last_modified, '[ -~]{1,512}'))",
+                (12, 12),
+                ("last_modified", "last_modified"),
+                None,
+                (),
+            ),
+        )
+        signatures.extend(checks)
     primary_key = (
         _PHYSICAL_KEY_COLUMNS
         if table == "partitions"
         else ("migration_id",)
         if table == "schema_migrations"
         else ("ingestion_run_id",)
+        if table == "ingestion_runs"
+        else ("source", "retrieved_at", "observation_sha256")
     )
     indexes = tuple(
         next(index for index, column in enumerate(columns) if column[0] == name)
@@ -709,6 +966,38 @@ def _constraint_signature(
         tuple(str(name) for name in (row[3] or ())),
         row[4],
         tuple(str(name) for name in (row[5] or ())),
+    )
+
+
+def _snapshot_metadata_from_row(
+    row: tuple[object, ...],
+) -> InstrumentSnapshotMetadataV1:
+    values = list(row)
+    if (
+        len(values) != 13
+        or type(values[0]) is not int
+        or type(values[1]) is not str
+        or type(values[2]) is not date
+        or type(values[3]) is not str
+        or any(type(values[index]) is not str for index in (4, 5, 6, 9, 10))
+        or any(type(values[index]) is not int for index in (7, 8))
+        or any(value is not None and type(value) is not str for value in values[11:13])
+    ):
+        raise ValueError
+    return InstrumentSnapshotMetadataV1(
+        values[0],
+        values[1],
+        values[2],
+        datetime.fromisoformat(values[3]).astimezone(UTC),
+        cast(str, values[4]),
+        cast(str, values[5]),
+        cast(str, values[6]),
+        cast(int, values[7]),
+        cast(int, values[8]),
+        cast(str, values[9]),
+        cast(str, values[10]),
+        cast(str | None, values[11]),
+        cast(str | None, values[12]),
     )
 
 

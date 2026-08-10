@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 import duckdb
 import pytest
 
+import swing_trading_ai_assistant.market_data.catalog as catalog_module
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogConflictError,
     CatalogPersistenceError,
@@ -122,6 +123,13 @@ def _verified(
 def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
     initial = _in_progress()
     database_path = tmp_path / "catalog.duckdb"
+    assert catalog_module._SCHEMA_CHECKSUM == (
+        "1bf5a64839169e61cdb839bc778131b2c0876da2d818537644677af861da006d"
+    )
+    assert len(catalog_module._SNAPSHOT_SCHEMA_SQL.encode()) == 1606
+    assert catalog_module._SNAPSHOT_SCHEMA_CHECKSUM == (
+        "b457af377ccc986b47ca006a385ea538911dd03d1be8d066317fa09cfbbd9878"
+    )
 
     with DuckDBCatalog(tmp_path) as catalog:
         assert catalog.database_path == database_path
@@ -130,10 +138,100 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
         tables = {
             row[0] for row in catalog.connection.execute("SHOW TABLES").fetchall()
         }
-        assert tables == {"schema_migrations", "partitions", "ingestion_runs"}
+        assert tables == {
+            "schema_migrations",
+            "partitions",
+            "ingestion_runs",
+            "instrument_snapshots",
+        }
+        assert catalog.connection.execute(
+            "SELECT migration_id, version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [
+            ("swing-trading-catalog-v1", 1),
+            ("swing-trading-catalog-v2-instrument-snapshots", 2),
+        ]
 
     with DuckDBCatalog(tmp_path) as reopened:
         assert reopened.get_manifest(_plan()) == initial
+
+
+def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
+    tmp_path,
+) -> None:
+    initial = _in_progress()
+    database_path = tmp_path / "catalog.duckdb"
+    connection = duckdb.connect(str(database_path))
+    for statement in catalog_module._SCHEMA_SQL.split(";\n"):
+        connection.execute(statement)
+    connection.execute(
+        "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+        (
+            catalog_module._SCHEMA_MIGRATION_ID,
+            catalog_module._SCHEMA_MIGRATION_VERSION,
+            catalog_module._SCHEMA_CHECKSUM,
+        ),
+    )
+    values = catalog_module._manifest_values(initial) + ("",)
+    columns = catalog_module._MANIFEST_COLUMNS + (
+        catalog_module._SOURCE_MANIFEST_IDENTITY_COLUMN,
+    )
+    connection.execute(
+        f"INSERT INTO partitions ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",  # noqa: S608 - identifiers are frozen test constants
+        values,
+    )
+    connection.close()
+
+    catalog = DuckDBCatalog(tmp_path)
+    catalog._after_snapshot_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("injected migration failure")
+    )
+    with pytest.raises(CatalogSchemaError):
+        catalog.__enter__()
+    connection = duckdb.connect(str(database_path))
+    assert connection.execute("SHOW TABLES").fetchall() == [
+        ("ingestion_runs",),
+        ("partitions",),
+        ("schema_migrations",),
+    ]
+    connection.close()
+
+    with DuckDBCatalog(tmp_path) as migrated:
+        assert migrated.connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,)]
+        assert migrated.get_manifest(_plan()) == initial
+
+
+def test_schema_rejects_user_indexes(tmp_path) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    connection = duckdb.connect(str(tmp_path / "catalog.duckdb"))
+    connection.execute("CREATE INDEX user_index ON partitions(month)")
+    connection.close()
+    with pytest.raises(CatalogSchemaError):
+        DuckDBCatalog(tmp_path).__enter__()
+
+
+def test_snapshot_catalog_boundaries_fail_closed(tmp_path) -> None:
+    with DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(CatalogConflictError):
+            catalog.save_instrument_snapshot(object())  # type: ignore[arg-type]
+        with pytest.raises(CatalogConflictError):
+            catalog.list_instrument_snapshots("")
+        with pytest.raises(CatalogConflictError):
+            catalog.list_instrument_snapshots(
+                "upstox-bod-nse", retrieved_at_lte=datetime(2026, 8, 10)
+            )
+    closed_root = tmp_path / "closed"
+    closed_root.mkdir()
+    with DuckDBCatalog(closed_root) as catalog:
+        catalog.connection.close()
+        with pytest.raises(CatalogPersistenceError):
+            catalog.list_instrument_snapshots("upstox-bod-nse")
+    with pytest.raises(CatalogSchemaError):
+        catalog_module._expected_table_columns("unsupported")
+    with pytest.raises(ValueError):
+        catalog_module._snapshot_metadata_from_row((1,))
 
 
 def test_terminal_transition_is_atomic_and_exact_replay_is_a_no_op(tmp_path) -> None:
