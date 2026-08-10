@@ -33,8 +33,9 @@ implementation tasks be committed to the one-week Sprint 2 timebox.
 
 This is a tracking-only accountability record. It preserves the historical
 Sprint 2 timebox and does not change the committed work, its order, its WIP
-limit, or any Definition-of-Done requirement. It is deliberately pending until
-the cutoff so it does not precompute future completion or blocker evidence.
+limit, or any Definition-of-Done requirement. It was deliberately pending until
+the cutoff so it did not precompute future completion or blocker evidence. The
+captured cutoff state below is not Sprint closure.
 Deadline expiry never marks work Done, closes the sprint, or waives any gate;
 committed work continues after the cutoff until its normal completion evidence
 exists.
@@ -92,20 +93,22 @@ exists.
     }
   ],
   "cutoff_snapshot": {
-    "status": "pending_until_cutoff",
-    "captured_at": null,
-    "completed_baseline_ids": null,
-    "completed_baseline_count": null,
-    "unfinished_baseline_ids": null,
-    "unfinished_baseline_count": null,
-    "observed_state_or_blocker": null,
-    "added_work_rows": null,
+    "status": "captured_incomplete",
+    "captured_at": "2026-08-10T08:25:09+05:30",
+    "source_revision": "84d681de73e34459a791afbd76af80d04c7e8255",
+    "source_timezone": "Asia/Kolkata",
+    "completed_baseline_ids": ["ARK-74", "ARK-75", "ARK-76", "ARK-77", "ARK-78", "ARK-79", "ARK-80", "ARK-81", "ARK-82", "ARK-83", "ARK-84", "ARK-85", "ARK-86", "ARK-87", "ARK-88", "ARK-89", "ARK-90", "ARK-91", "ARK-70", "ARK-73"],
+    "completed_baseline_count": 20,
+    "unfinished_baseline_ids": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"],
+    "unfinished_baseline_count": 4,
+    "observed_state_or_blocker": {"ARK-92": "In Progress; circuit-frozen after ordinary repair budget; no offline collection consumed", "ARK-93": "Todo/unstarted; blocked by ARK-92", "ARK-69": "Todo/unstarted", "ARK-72": "Todo/unstarted"},
+    "added_work_rows": {"completed_count": 13, "unfinished_count": 3, "completed_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo/unstarted", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason": "Accepted governance, documentation, planning, and ARK-92 corrective work outside the frozen denominator; per-item reasons are retained in the ledger and never change the 20/4 baseline partition."},
     "baseline_partition_rules": [
       "completed_baseline_ids and unfinished_baseline_ids are disjoint",
       "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
       "completed_baseline_count + unfinished_baseline_count == original_denominator_count"
     ],
-    "snapshot_rule": "Populate only at or after cutoff from raw authoritative evidence; added-work rows retain reason, approval reference, accepted/created/started/completed timestamps, and included_in_original_denominator=false."
+    "snapshot_rule": "Captured after cutoff from Linear stateHistory and exact GitHub PR/CI/merge evidence. Unsupported timestamps and workflow durations remain UNSET; no labor is inferred."
   },
   "completion_classification_rules": {
     "required_events": [
@@ -125,10 +128,10 @@ exists.
     "human_variance": "may be rounded; never infer labor-hours"
   },
   "post_cutoff_ledger": {
-    "completed_after_ids": null,
-    "carryover": null,
+    "completed_after_ids": [],
+    "carryover": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"],
     "final_completion_at": null,
-    "elapsed_overrun_as_of": null,
+    "elapsed_overrun_as_of": "UNSET; cutoff is not the 2026-08-14 Sprint end and no closure projection is permitted",
     "final_schedule_variance": null,
     "final_schedule_variance_rule": "null until all 24 baseline tasks have Definition-of-Done evidence"
   },
@@ -156,17 +159,17 @@ The [structured time-accountability ledger](sprint-2-time-accountability-ledger.
 standardizes the prospective range, raw lifecycle/publication timestamps,
 derived elapsed fields, and separately measured workflow waits and gates for
 the frozen 24-item baseline plus ARK-95 through ARK-110 additions. Its current
-snapshot is a **pre-cutoff candidate**: this page's cutoff report remains
-`pending_until_cutoff` and no completed/unfinished partition has been
-populated before **2026-08-09T22:00:00+05:30**.
+snapshot is **post-cutoff and incomplete**: Linear stateHistory yields a
+disjoint 20 Done / 4 unfinished frozen-baseline partition at
+**2026-08-09T22:00:00+05:30**. ARK-92 is In Progress and circuit-frozen;
+ARK-93, ARK-69, and ARK-72 are Todo. This does not close Sprint 2 or project
+the remaining work.
 
-At or after the cutoff, an authorized recorder must: capture the exact Linear
-issue and state-history fields; capture the matching PR, required CI, and merge
-timestamps for the exact candidate SHA; record their sources and timezones;
-validate the frozen baseline partition; and calculate only elapsed fields whose
-two authoritative operands are present. Missing values remain `UNSET`; do not
-backfill estimates for completed work, derive labor hours from Linear points,
-or use issue age or `updatedAt` as lifecycle evidence.
+The ledger records the raw Linear state-history fields and matching exact GitHub
+PR, Quality and build CI, and merge evidence where an explicit association is
+available. Missing values remain `UNSET`; it does not backfill estimates,
+derive labor hours from Linear points, use issue age or `updatedAt`, or treat a
+deadline as a completed acceptance gate.
 
 ## Completed pre-sprint specification
 

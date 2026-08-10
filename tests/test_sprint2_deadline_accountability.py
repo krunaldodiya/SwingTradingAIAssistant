@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 
 SPRINT_RECORD = Path(__file__).parents[1] / "docs" / "sprints" / "sprint-2.md"
+LEDGER = (
+    Path(__file__).parents[1]
+    / "docs"
+    / "sprints"
+    / "sprint-2-time-accountability-ledger.json"
+)
 EXPECTED_DENOMINATOR = [
     "ARK-74",
     "ARK-75",
@@ -82,7 +88,7 @@ def test_original_denominator_is_frozen_and_tracking_additions_are_excluded() ->
     assert not set(denominator).intersection(addition["id"] for addition in additions)
 
 
-def test_record_preserves_provenance_and_pending_snapshot_structure() -> None:
+def test_record_preserves_provenance_and_captured_incomplete_snapshot() -> None:
     record = _record()
 
     assert record["decision_recorded_at_utc"] == "2026-08-08T07:16:18.133Z"
@@ -103,7 +109,10 @@ def test_record_preserves_provenance_and_pending_snapshot_structure() -> None:
         assert required_added_fields <= set(addition)
 
     snapshot = record["cutoff_snapshot"]
-    assert snapshot["status"] == "pending_until_cutoff"
+    assert snapshot["status"] == "captured_incomplete"
+    assert snapshot["captured_at"] == "2026-08-10T08:25:09+05:30"
+    assert snapshot["source_revision"] == "84d681de73e34459a791afbd76af80d04c7e8255"
+    assert snapshot["source_timezone"] == "Asia/Kolkata"
     assert set(snapshot) >= {
         "captured_at",
         "completed_baseline_ids",
@@ -113,13 +122,23 @@ def test_record_preserves_provenance_and_pending_snapshot_structure() -> None:
         "observed_state_or_blocker",
         "added_work_rows",
     }
-    assert snapshot["captured_at"] is None
-    assert snapshot["completed_baseline_ids"] is None
-    assert snapshot["completed_baseline_count"] is None
-    assert snapshot["unfinished_baseline_ids"] is None
-    assert snapshot["unfinished_baseline_count"] is None
-    assert snapshot["observed_state_or_blocker"] is None
-    assert snapshot["added_work_rows"] is None
+    assert snapshot["completed_baseline_ids"] == EXPECTED_DENOMINATOR[:20]
+    assert snapshot["completed_baseline_count"] == 20
+    assert snapshot["unfinished_baseline_ids"] == EXPECTED_DENOMINATOR[20:]
+    assert snapshot["unfinished_baseline_count"] == 4
+    assert snapshot["observed_state_or_blocker"] == {
+        "ARK-92": "In Progress; circuit-frozen after ordinary repair budget; no offline collection consumed",
+        "ARK-93": "Todo/unstarted; blocked by ARK-92",
+        "ARK-69": "Todo/unstarted",
+        "ARK-72": "Todo/unstarted",
+    }
+    assert snapshot["added_work_rows"]["completed_count"] == 13
+    assert snapshot["added_work_rows"]["unfinished_count"] == 3
+    assert snapshot["added_work_rows"]["unfinished"] == {
+        "ARK-106": "Todo/unstarted",
+        "ARK-107": "In Progress",
+        "ARK-110": "In Progress",
+    }
     assert set(snapshot["baseline_partition_rules"]) == {
         "completed_baseline_ids and unfinished_baseline_ids are disjoint",
         "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
@@ -162,10 +181,10 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
         "final_schedule_variance",
     }
     assert ledger["final_schedule_variance"] is None
-    assert ledger["completed_after_ids"] is None
-    assert ledger["carryover"] is None
+    assert ledger["completed_after_ids"] == []
+    assert ledger["carryover"] == ["ARK-92", "ARK-93", "ARK-69", "ARK-72"]
     assert ledger["final_completion_at"] is None
-    assert ledger["elapsed_overrun_as_of"] is None
+    assert ledger["elapsed_overrun_as_of"].startswith("UNSET;")
     assert ledger["final_schedule_variance_rule"] == (
         "null until all 24 baseline tasks have Definition-of-Done evidence"
     )
@@ -186,3 +205,29 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
         "ARK-69 owner live authority",
         "Sprint Done/closure",
     }
+
+
+def test_ledger_preserves_authoritative_cutoff_evidence_and_unset_honesty() -> None:
+    ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
+
+    assert ledger["record_status"] == "POST_CUTOFF_SNAPSHOT"
+    assert ledger["snapshot"]["timezone"] == "Asia/Kolkata"
+    assert (
+        ledger["snapshot"]["repository_revision"]
+        == "84d681de73e34459a791afbd76af80d04c7e8255"
+    )
+    assert ledger["cutoff"]["completed_baseline_ids"] == EXPECTED_DENOMINATOR[:20]
+    assert ledger["cutoff"]["unfinished_baseline_ids"] == EXPECTED_DENOMINATOR[20:]
+
+    evidence = ledger["authoritative_cutoff_evidence"]
+    rows = {row[0]: row for row in evidence["linear_rows"]}
+    assert set(rows) == set(EXPECTED_DENOMINATOR) | {
+        *(f"ARK-{issue}" for issue in range(95, 111)),
+    }
+    assert rows["ARK-92"][-1] == "In Progress"
+    assert rows["ARK-92"][-2] == "UNSET"
+    assert rows["ARK-93"][-1] == rows["ARK-69"][-1] == rows["ARK-72"][-1] == "Todo"
+    assert rows["ARK-106"][-1] == "Todo"
+    assert rows["ARK-107"][-1] == rows["ARK-110"][-1] == "In Progress"
+    assert evidence["workflow_breakdown"]["active_gate_seconds"] == "UNSET"
+    assert evidence["workflow_breakdown"]["owner_or_external_wait_seconds"] == "UNSET"

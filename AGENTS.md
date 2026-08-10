@@ -48,6 +48,16 @@ required Sol review. Process or runner-launch failures that make no content
 change do not consume a content repair budget, and an unchanged revision does
 not justify duplicate runners or repeated gates.
 
+Use a smoke-first escalation ladder without weakening those final requirements:
+run seconds-long static, unit, or small representative deterministic smoke
+checks before the affected suite; reproduce and repair a failure at its
+smallest case rather than re-running an expensive gate. Freeze the high-risk
+acceptance matrix before any costly run. Run a full suite, backtest, or
+benchmark only after smoke and relevant tests are green, only once for the
+sealed revision, and never treat smoke-window performance or trading output as
+statistical or strategy evidence. Mandatory final gates, independent review,
+and hosted CI remain unchanged.
+
 Record a prospective wall-clock range and assumptions before delivery starts.
 At the expected-range upper bound, issue one concise overrun checkpoint with
 the observed blocker or next action; do not infer labor hours from estimates or

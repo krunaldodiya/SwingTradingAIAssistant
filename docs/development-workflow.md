@@ -36,6 +36,16 @@ relevant tests, one deterministic full gate per sealed revision, independent
 normal review, and PR/CI. High-risk work uses the same code evidence plus the
 required Sol review and any compatibility proof.
 
+Use this smoke-first escalation ladder before the risk-tier final evidence:
+run seconds-long static, unit, or small representative deterministic smoke
+checks before the affected suite; reproduce and repair any failure at the
+smallest case, rather than repeating a full gate. Freeze the high-risk
+acceptance matrix before a costly run. Run an expensive full suite, backtest,
+or benchmark only after smoke and relevant checks are green and only once for a
+sealed revision. Smoke-window performance or trading output is never
+statistical, backtest, or strategy evidence. This ordering never waives the
+mandatory final gate, independent review, or hosted CI.
+
 Use one runner for one intended gate. Do not repeat a completed gate on an
 unchanged revision, and do not create agents merely to relay status. A failed
 process or runner launch that makes no content change does not consume a
@@ -504,6 +514,15 @@ rule change. A test does not substitute for an approved module specification.
 Low-risk documentation and inventory work instead requires focused validation
 of claimed facts, links, structure, and scope; it does not manufacture a
 failing code test.
+
+For normal and high-risk code, apply the smoke-first escalation ladder within
+red-green-refactor: use seconds-long static, unit, or small representative
+deterministic smoke before the affected suite; reproduce and repair failure at
+the smallest case; and freeze the high-risk acceptance matrix before a costly
+run. Run a full suite, backtest, or benchmark only after smoke and relevant
+checks are green and once per sealed revision. Smoke-window performance or
+trading output is never statistical or strategy evidence. The final
+risk-tier-required gate, independent review, and hosted CI remain mandatory.
 
 ## Quality gates and Sol escalation
 
