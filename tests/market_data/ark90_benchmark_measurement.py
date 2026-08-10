@@ -1829,7 +1829,12 @@ def _assert_metadata_relations_only(catalog: DuckDBCatalog) -> None:
         "SELECT table_name FROM information_schema.tables "
         "WHERE table_schema = 'main' ORDER BY table_name"
     ).fetchall()
-    if relations != [("ingestion_runs",), ("partitions",), ("schema_migrations",)]:
+    if relations != [
+        ("ingestion_runs",),
+        ("instrument_snapshots",),
+        ("partitions",),
+        ("schema_migrations",),
+    ]:
         raise RuntimeError("benchmark catalog contains non-metadata relations")
 
 

@@ -383,24 +383,39 @@ Thus identical content can retain multiple truthful point-in-time retrievals.
 
 Under the exclusive preparation lease, the only temporary files are
 `.snapshot.json.gz.tmp` beside the object and
-`.sha256=<observation_sha256>.json.tmp` beside the sidecar. On retry, an exact
-temporary path is removed only after descriptor-relative no-follow checks prove
-it is a regular, root-owned, restrictive file within the expected directory;
-unsafe evidence fails closed. Temporary files are never provenance. Both final
-files use exclusive creation, bounded write, fsync, close, reopen/hash
-verification, same-filesystem no-clobber publication, and parent-directory
-fsync. No glob, random suffix, directory scan, broad cleanup, overwrite, or
-silent repair is allowed.
+`.sha256=<observation_sha256>.json.tmp` beside the sidecar, plus
+`.pending-observation-v1.json.tmp` beside the fixed recovery journal
+`instrument_snapshots/pending-observation-v1.json`. On retry, an exact temporary
+path is removed only after descriptor-relative no-follow checks prove it is a
+regular, root-owned, restrictive file within the expected directory; unsafe
+evidence fails closed. Temporary files are never provenance. Final files use
+exclusive creation, bounded write, fsync, close, reopen/hash verification,
+same-filesystem no-clobber publication, and parent-directory fsync. No glob,
+random suffix, directory scan, broad cleanup, overwrite, or silent repair is
+allowed.
+
+The recovery journal is the single bounded discovery mechanism for a catalog
+commit interrupted after a validated response. It is canonical JSON with the
+exact `InstrumentSnapshotMetadataV1` field order, encoding rules, and 4,096-byte
+ceiling; it contains no response body or secret. The journal is published and
+fsynced before the object. Its exact paths are then the only paths recovery may
+inspect. After the identical catalog row commits, recovery unlinks the journal
+and fsyncs `instrument_snapshots`. A journal with no durable object is cleared
+before the one permitted fresh response; a journal with a valid object may
+publish or validate its canonical sidecar without refetch; a journal-identified
+unsafe temp or mismatch fails before provider activity. This fixed journal is
+required because an absent catalog row cannot reveal content-addressed paths
+without an otherwise-forbidden directory scan.
 
 The crash/retry matrix is exhaustive:
 
 | Durable state | Retry behavior |
 | --- | --- |
-| `EMPTY` | after one permitted fresh BOD response, publish object, sidecar, then row |
+| `EMPTY` | after one permitted fresh BOD response, publish journal, object, sidecar, row, then clear journal |
 | `SAFE_TEMP_ONLY` | remove only the exact proven-safe temps, fsync, then follow `EMPTY` |
 | `UNSAFE_TEMP` | typed corruption; do not read, remove, replace, fetch, or mutate |
-| `OBJECT_ONLY` | the object is content, not retrieval provenance; without a new permitted BOD response return typed unavailable and leave it untouched; with one new response, validate its bytes and metadata, reuse the orphan only when its compressed digest/bytes match, then publish a sidecar for that new retrieval and insert its row; a different valid response publishes its own content path |
-| `OBJECT_AND_SIDECAR` | validate canonical sidecar, both digests/counts/paths, and insert the exact sidecar-derived row without refetch or rewrite |
+| `OBJECT_ONLY` | when identified by the canonical journal, validate the object and publish the journal-derived canonical sidecar and row without refetch; an undiscoverable orphan without a journal is never scanned or adopted |
+| `OBJECT_AND_SIDECAR` | when identified by the canonical journal, validate canonical sidecar, both digests/counts/paths, and insert the exact sidecar-derived row without refetch or rewrite |
 | `COMMIT_UNKNOWN` | reopen; identical row is success, absent row follows `OBJECT_AND_SIDECAR`, divergent row is corruption |
 | `COMPLETE` | valid files and identical row are idempotent success |
 | `MISMATCH` | row/file missing, corrupt, unsafe, or mismatched, or sidecar/object disagreement: typed corruption; no refetch, delete, overwrite, or silent repair |

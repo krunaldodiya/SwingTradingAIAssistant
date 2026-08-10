@@ -1,0 +1,297 @@
+"""Side-effect ordered preparation for the public download command."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta, timezone
+from enum import StrEnum
+from pathlib import Path
+from typing import Protocol
+
+from .catalog import DuckDBCatalog
+from .instrument_snapshot import (
+    FetchedInstrumentSnapshotV1,
+    InstrumentSnapshotCorruptError,
+    InstrumentSnapshotNotFoundError,
+    InstrumentSnapshotStoreV1,
+    ResolvedInstrumentSnapshotV1,
+    SnapshotInstrumentAmbiguousError,
+    SnapshotInstrumentNotFoundError,
+)
+from .instruments import Instrument
+from .preview_admission import PreviewAdmissionPolicyV1
+from .schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleEvidenceStore,
+    ScheduleOutcome,
+    canonical_schedule_bytes,
+    schedule_covers_full_calendar_range,
+    schedule_digest,
+)
+from .storage_root_lease import LeaseOutcome, StorageRootLease
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+MAX_TOUCHED_MONTHS_V1 = 12
+
+
+class PreparationOutcomeV1(StrEnum):
+    SUCCEEDED = "SUCCEEDED"
+    REJECTED = "REJECTED"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    UNAVAILABLE = "UNAVAILABLE"
+    FAILED = "FAILED"
+
+
+class PreparationFailureCodeV1(StrEnum):
+    NONE = "NONE"
+    INVALID_INPUT = "INVALID_INPUT"
+    UNSUPPORTED_PREVIEW_INSTRUMENT = "UNSUPPORTED_PREVIEW_INSTRUMENT"
+    SCHEDULE_UNAVAILABLE = "SCHEDULE_UNAVAILABLE"
+    STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
+    INSTRUMENT_SNAPSHOT_UNAVAILABLE = "INSTRUMENT_SNAPSHOT_UNAVAILABLE"
+    INSTRUMENT_SNAPSHOT_CORRUPT = "INSTRUMENT_SNAPSHOT_CORRUPT"
+    INSTRUMENT_NOT_FOUND = "INSTRUMENT_NOT_FOUND"
+    INSTRUMENT_AMBIGUOUS = "INSTRUMENT_AMBIGUOUS"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritativeScheduleInputV1:
+    schedule: ExpectedSessionSchedule
+    canonical_bytes: bytes
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.schedule) is not ExpectedSessionSchedule
+            or self.schedule.schema_version != 2
+            or type(self.canonical_bytes) is not bytes
+            or canonical_schedule_bytes(self.schedule) != self.canonical_bytes
+        ):
+            raise ValueError("invalid authoritative schedule")
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadPreparationRequestV1:
+    segment: str
+    symbol: str
+    from_date: date
+    to_date: date
+    storage_root: Path
+    invocation_time: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.segment) is not str
+            or type(self.symbol) is not str
+            or type(self.from_date) is not date
+            or type(self.to_date) is not date
+            or self.from_date > self.to_date
+            or self.from_date < date(2022, 1, 1)
+            or not _valid_storage_root_syntax(self.storage_root)
+            or type(self.invocation_time) is not datetime
+            or self.invocation_time.tzinfo is None
+            or self.invocation_time.utcoffset() is None
+            or _touched_months(self.from_date, self.to_date) > MAX_TOUCHED_MONTHS_V1
+        ):
+            raise ValueError("invalid download preparation request")
+        object.__setattr__(
+            self, "invocation_time", self.invocation_time.astimezone(UTC)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDownloadV1:
+    schedule: ExpectedSessionSchedule
+    schedule_canonical_bytes: bytes
+    schedule_digest_sha256: str
+    instrument: Instrument
+    snapshot_digest_sha256: str
+    snapshot_retrieved_at: datetime
+    snapshot_attempt_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadPreparationReportV1:
+    outcome: PreparationOutcomeV1
+    failure_code: PreparationFailureCodeV1
+    prepared: PreparedDownloadV1 | None
+
+    def __post_init__(self) -> None:
+        success = self.outcome is PreparationOutcomeV1.SUCCEEDED
+        if success != (self.failure_code is PreparationFailureCodeV1.NONE):
+            raise ValueError("invalid preparation report")
+        if success != (self.prepared is not None):
+            raise ValueError("invalid preparation report")
+
+
+class AuthoritativeScheduleSourceV1(Protocol):
+    def load(self) -> AuthoritativeScheduleInputV1: ...
+
+
+class InstrumentSnapshotSourceV1(Protocol):
+    def fetch(self) -> FetchedInstrumentSnapshotV1: ...
+
+
+class DownloadPreparationServiceV1:
+    """Prepare one admitted request while preserving side-effect ordering."""
+
+    def __init__(
+        self,
+        policy: PreviewAdmissionPolicyV1,
+        schedule_source: AuthoritativeScheduleSourceV1,
+        snapshot_source: InstrumentSnapshotSourceV1,
+    ) -> None:
+        self._policy = policy
+        self._schedule_source = schedule_source
+        self._snapshot_source = snapshot_source
+
+    def prepare(
+        self, request: DownloadPreparationRequestV1
+    ) -> DownloadPreparationReportV1:
+        if type(request) is not DownloadPreparationRequestV1:
+            return _failure(
+                PreparationOutcomeV1.REJECTED,
+                PreparationFailureCodeV1.INVALID_INPUT,
+            )
+        if not self._policy.admits(request.segment, request.symbol):
+            return _failure(
+                PreparationOutcomeV1.REJECTED,
+                PreparationFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+            )
+        try:
+            supplied = self._schedule_source.load()
+            _validate_schedule_input(supplied, request)
+        except Exception:
+            return _failure(
+                PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
+                PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
+            )
+
+        lease_result = StorageRootLease.try_acquire(request.storage_root)
+        if (
+            lease_result.outcome is not LeaseOutcome.ACQUIRED
+            or lease_result.lease is None
+        ):
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
+        try:
+            with lease_result.lease as lease:
+                retained = ScheduleEvidenceStore(request.storage_root, lease).retain(
+                    supplied.schedule, supplied_bytes=supplied.canonical_bytes
+                )
+                if retained.outcome is ScheduleOutcome.FAILED:
+                    return _failure(
+                        PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
+                        PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
+                    )
+                with DuckDBCatalog(request.storage_root) as catalog:
+                    store = InstrumentSnapshotStoreV1(
+                        request.storage_root, lease, catalog
+                    )
+                    store.recover_pending()
+                    resolved, attempts = self._resolve_or_fetch(store, request)
+        except InstrumentSnapshotCorruptError:
+            return _failure(
+                PreparationOutcomeV1.FAILED,
+                PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT,
+            )
+        except SnapshotInstrumentNotFoundError:
+            return _failure(
+                PreparationOutcomeV1.REJECTED,
+                PreparationFailureCodeV1.INSTRUMENT_NOT_FOUND,
+            )
+        except SnapshotInstrumentAmbiguousError:
+            return _failure(
+                PreparationOutcomeV1.REJECTED,
+                PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
+            )
+        except Exception:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+            )
+        return DownloadPreparationReportV1(
+            PreparationOutcomeV1.SUCCEEDED,
+            PreparationFailureCodeV1.NONE,
+            PreparedDownloadV1(
+                supplied.schedule,
+                supplied.canonical_bytes,
+                schedule_digest(supplied.schedule),
+                resolved.instrument,
+                resolved.metadata.observation_sha256,
+                resolved.metadata.retrieved_at,
+                attempts,
+            ),
+        )
+
+    def _resolve_or_fetch(
+        self,
+        store: InstrumentSnapshotStoreV1,
+        request: DownloadPreparationRequestV1,
+    ) -> tuple[ResolvedInstrumentSnapshotV1, int]:
+        try:
+            resolved = store.resolve_equity(
+                source="upstox-bod-nse",
+                segment=request.segment,
+                symbol=request.symbol,
+                as_of=request.invocation_time,
+            )
+            if (
+                resolved.metadata.observation_date
+                == request.invocation_time.astimezone(_IST).date()
+            ):
+                return resolved, 0
+        except (InstrumentSnapshotNotFoundError, SnapshotInstrumentNotFoundError):
+            pass
+        fetched = self._snapshot_source.fetch()
+        if fetched.retrieved_at > request.invocation_time:
+            raise ValueError("snapshot is newer than invocation")
+        store.retain(fetched)
+        return (
+            store.resolve_equity(
+                source="upstox-bod-nse",
+                segment=request.segment,
+                symbol=request.symbol,
+                as_of=request.invocation_time,
+            ),
+            1,
+        )
+
+
+def _validate_schedule_input(
+    supplied: object, request: DownloadPreparationRequestV1
+) -> None:
+    if type(supplied) is not AuthoritativeScheduleInputV1:
+        raise ValueError
+    first = date(request.from_date.year, request.from_date.month, 1)
+    if request.to_date.month == 12:
+        next_month = date(request.to_date.year + 1, 1, 1)
+    else:
+        next_month = date(request.to_date.year, request.to_date.month + 1, 1)
+    last = next_month - timedelta(days=1)
+    if (
+        canonical_schedule_bytes(supplied.schedule) != supplied.canonical_bytes
+        or not schedule_covers_full_calendar_range(supplied.schedule, first, last)
+        or supplied.schedule.as_of > request.invocation_time
+    ):
+        raise ValueError
+
+
+def _failure(
+    outcome: PreparationOutcomeV1, code: PreparationFailureCodeV1
+) -> DownloadPreparationReportV1:
+    return DownloadPreparationReportV1(outcome, code, None)
+
+
+def _valid_storage_root_syntax(value: object) -> bool:
+    return (
+        isinstance(value, Path)
+        and value.is_absolute()
+        and ".." not in value.parts
+        and not any(character in part for part in value.parts for character in "~*?[]")
+    )
+
+
+def _touched_months(from_date: date, to_date: date) -> int:
+    return (to_date.year - from_date.year) * 12 + to_date.month - from_date.month + 1
