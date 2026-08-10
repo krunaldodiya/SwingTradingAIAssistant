@@ -17,6 +17,7 @@ increment and future process decisions.
   reconciliation followed in [PR #25](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/25),
   merged as `a3d2f0ccac641030f40c87076e55f5754d650b28`. PR #24 and PR #2 are
   closed, unmerged replacement/obsolete work and are not closure evidence.
-- [Sprint 2 — RELIANCE operational proof](sprint-2.md) — committed and active
-  at 4/24 completed tasks (ARK-74, ARK-82, ARK-70, ARK-85) when ARK-95 planning
-  began; hosted `main` base `a4a9e152ccf1569fff68ff8f1906609fe7f06885`.
+- [Sprint 2 — RELIANCE operational proof](sprint-2.md) —
+  [closeout candidate](sprint-2-closeout.md) for 21/24 delivered tasks with
+  ARK-92, ARK-93, and ARK-69 carried over; Milestone 2 remains blocked and is
+  not accepted.

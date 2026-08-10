@@ -392,8 +392,8 @@ def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> No
 
     assert "formal commitment pending ark-67" not in sprint_index
     assert (
-        "status: **active; execution follows the accepted finite-goal contract**"
-        in (sprint_two)
+        "status: **closeout candidate; 21/24 after ark-72 publication, with milestone 2 blocked**"
+        in sprint_two
     )
     assert "delivery publisher" in sprint_two
     assert "2026-08-08 — project autonomous orchestration" in note_index

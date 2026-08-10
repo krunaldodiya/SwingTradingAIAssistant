@@ -1,6 +1,13 @@
 # Sprint 2 — RELIANCE operational proof
 
-Status: **active; execution follows the accepted finite-goal contract**
+Status: **closeout candidate; 21/24 after ARK-72 publication, with Milestone 2 blocked**
+
+The owner-approved carryover route closes the Sprint 2 timebox without
+weakening Plan 03. See the
+[Sprint 2 closeout and Milestone 2 disposition](sprint-2-closeout.md) for the
+mandatory crosswalk, three incomplete carryover tasks, exact blocker evidence,
+and retrospective. Until that exact closeout candidate is reviewed, merged,
+and ARK-72 is synchronized to Done, the recorded result remains 20/24.
 
 ## Sprint goal
 
@@ -248,9 +255,13 @@ interrupt requires quiescing and stop proof before another epoch starts.
 Ordinary review findings inside an approved child return automatically to the
 same implementer while its budget remains.
 
-## Acceptance gate
+## Milestone 2 acceptance gate
 
-Sprint 2 is complete only when:
+This gate is not met by the Sprint 2 closeout. Closing the Agile timebox with
+explicit incomplete carryover is separate from accepting ARK-11 Milestone 2.
+Every unmet row remains blocked in the closeout crosswalk and later backlog.
+
+Milestone 2 is accepted only when:
 
 - deterministic validation remains runnable without credentials or private
   market data;
@@ -269,8 +280,8 @@ Sprint 2 is complete only when:
   duplicate and impossible-OHLC rejection; empty-success classification; raw
   file immutability; holiday, special-session, late-listing, and legitimate
   no-trade-minute handling; and no forward-filling;
-- any rejected or unproven mandatory rule keeps ARK-11 and Sprint 2 open and is
-  recorded as explicit blocker/carryover evidence;
+- any rejected or unproven mandatory rule keeps ARK-11 Milestone 2 unaccepted
+  and is recorded as explicit blocker/carryover evidence;
 - ingestion, query, resume, repair, memory, and file-descriptor baselines are
   reproducible and traceable to code, configuration, data scope, and machine;
 - regression thresholds are evidence-based and limitations are explicit;
