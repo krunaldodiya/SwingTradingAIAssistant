@@ -30,6 +30,40 @@ This delivery autonomy is a software-process control only. It does not authorize
 autonomous trading, broker activity, provider access, market-data changes, or
 any decision outside an accepted finite Goal. Live ARK-69 remains owner-authorized.
 
+## Conversation and delivery routing
+
+General questions, opinions, brainstorming, and unpromoted references receive
+a direct concise answer. They do not automatically create a Linear issue, note,
+agent, test, review, PR, or quality-gate run. Promote discussion into delivery
+only when the owner explicitly requests capture or when it establishes a
+durable accepted product, architecture, or workflow decision. Promotion creates
+one bounded outcome; do not fragment a single issue merely to create activity.
+
+Use proportionate evidence. Low-risk documentation or inventory work receives
+focused validation, normal review, and hosted CI after publication; it does not
+automatically require a local full suite or Sol review. Normal code work uses
+strict TDD, relevant tests, one full gate per sealed revision, independent
+normal review, and PR/CI. High-risk work uses the same code evidence plus the
+required Sol review. Process or runner-launch failures that make no content
+change do not consume a content repair budget, and an unchanged revision does
+not justify duplicate runners or repeated gates.
+
+Use a smoke-first escalation ladder without weakening those final requirements:
+run seconds-long static, unit, or small representative deterministic smoke
+checks before the affected suite; reproduce and repair a failure at its
+smallest case rather than re-running an expensive gate. Freeze the high-risk
+acceptance matrix before any costly run. Run a full suite, backtest, or
+benchmark only after smoke and relevant tests are green, only once for the
+sealed revision, and never treat smoke-window performance or trading output as
+statistical or strategy evidence. Mandatory final gates, independent review,
+and hosted CI remain unchanged.
+
+Record a prospective wall-clock range and assumptions before delivery starts.
+At the expected-range upper bound, issue one concise overrun checkpoint with
+the observed blocker or next action; do not infer labor hours from estimates or
+Linear points. Status updates are concise and material; do not create agents
+solely to relay status.
+
 ## Mission
 
 Build a trustworthy, agent-agnostic research and analysis tool for swing trading
@@ -105,10 +139,11 @@ decision and corresponding documentation update.
 
 ## Knowledge capture workflow
 
-Treat useful project conversations as research input. When a discussion produces
-durable ideas, trade-offs, assumptions, rejected alternatives, unresolved
-questions, or decisions that may help future work, record a concise note under
-`docs/notes/` during the same task.
+Promote useful project conversations to durable research input only when the
+owner explicitly requests capture or when an accepted product, architecture, or
+workflow decision must be retained. Then record a concise note under
+`docs/notes/` during the same task when the authoritative source does not
+already contain the decision.
 
 - Curate the insight; do not paste conversation transcripts.
 - State the context, idea, rationale, status, and consequences or next questions.

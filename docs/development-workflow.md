@@ -20,6 +20,40 @@ acceptance criteria. Keep architecture decisions in the authoritative docs and
 record durable, non-duplicative discussion outcomes under `docs/notes/` when
 required by `AGENTS.md`.
 
+## Conversation and delivery routing
+
+General questions, opinions, brainstorming, and unpromoted references are
+conversation work: answer them directly and concisely. They do not
+automatically create a Linear issue, note, agent, test, review, PR, or gate.
+Promote work into delivery only on explicit owner capture or a durable accepted
+product, architecture, or workflow decision. A promotion remains one bounded
+issue with one outcome; do not fragment it to manufacture activity.
+
+Evidence is binding by risk tier: low-risk documentation or factual inventory
+uses focused validation, normal review, and hosted CI after publication, without
+an automatic local full suite or Sol review. Normal code uses strict TDD,
+relevant tests, one deterministic full gate per sealed revision, independent
+normal review, and PR/CI. High-risk work uses the same code evidence plus the
+required Sol review and any compatibility proof.
+
+Use this smoke-first escalation ladder before the risk-tier final evidence:
+run seconds-long static, unit, or small representative deterministic smoke
+checks before the affected suite; reproduce and repair any failure at the
+smallest case, rather than repeating a full gate. Freeze the high-risk
+acceptance matrix before a costly run. Run an expensive full suite, backtest,
+or benchmark only after smoke and relevant checks are green and only once for a
+sealed revision. Smoke-window performance or trading output is never
+statistical, backtest, or strategy evidence. This ordering never waives the
+mandatory final gate, independent review, or hosted CI.
+
+Use one runner for one intended gate. Do not repeat a completed gate on an
+unchanged revision, and do not create agents merely to relay status. A failed
+process or runner launch that makes no content change does not consume a
+content repair round or trigger the circuit breaker. Before delivery starts,
+record a prospective wall-clock range and assumptions. At its upper bound,
+record one concise overrun checkpoint with the observed delay, blocker, and next
+action; estimates and Linear points are never labor hours.
+
 ## Knowledge-capture communication contract
 
 For a substantive discussion, agents must not leave capture unresolved with
@@ -109,6 +143,40 @@ tracking `Saga`/`Epic` items and canceled work from the completion denominator.
 Linear remains the live source of truth; repository sprint records are updated
 at meaningful milestones and sprint close.
 
+## Time-accountability contract
+
+Use a structured sprint ledger for time accountability. It is an evidence
+record, not an effort estimate, a performance score, or a replacement for the
+committed scope, Definition of Done, Linear, or the sprint denominator.
+
+Before an atomic lifecycle starts, record a prospective *wall-clock* range and
+the assumptions that make it plausible (for example: frozen scope, available
+environment, expected gate duration, and whether a reviewer repair is assumed).
+This range describes elapsed calendar time across the workflow; it must not be
+relabeled as labor hours or used to infer them. A completed item without a
+prospectively recorded range is `UNSET`: do not invent an estimate
+retroactively. Linear points remain planning-size units and must never be
+converted to hours.
+
+For every tracked row, retain the raw authoritative timestamps separately for
+Linear creation, first `In Progress`, Linear `Done`, pull-request creation,
+terminal required CI, and exact-SHA merge/publication. Record the source and
+timezone for each value. Git commit dates can corroborate a repository event,
+but do not substitute for missing Linear lifecycle or hosted PR/CI timestamps.
+Derive elapsed values only when both operands are authoritative, sufficiently
+precise timestamps; otherwise leave the derived value `UNSET` with its missing
+inputs. Keep active gate duration, owner/external wait, retries, repair rounds,
+and repeated gates as separate fields rather than folding them into a single
+unexplained elapsed value.
+
+Each ledger snapshot must identify its source revision and capture time. Before
+a declared cutoff, the cutoff report remains `pending_until_cutoff`; it must not
+project completion, blockers, or a final count. At or after the cutoff, the
+authorized recorder captures immutable raw Linear and hosted evidence, validates
+the frozen-denominator partition, calculates only supported derived durations,
+and records any missing evidence as `UNSET`. Deadline expiry never closes work,
+waives quality, or turns an unproven timestamp into a completion claim.
+
 ## Atomic incremental delivery
 
 Epics and parent issues are tracking containers only; do not implement them
@@ -129,12 +197,12 @@ long-running. Link children to their tracking parent and record blocking or
 ordering relationships explicitly; do not rely on issue numbering or prose to
 imply dependencies.
 
-The implementation WIP limit is one executable issue. Finish that child's TDD
-cycle, relevant test and coverage gates, required review, and `Done` evidence
-before starting the next child. A blocked issue moves to `Blocked` and does not
-authorize parallel implementation unless the main agent explicitly re-routes
-the work while preserving the one-issue limit. Prefer slow, steady, correct
-delivery over throughput, batching, or partially completed work.
+The implementation WIP limit is one executable issue. Finish that child's
+risk-tier-required TDD, validation, review, and `Done` evidence before starting
+the next child. A blocked issue moves to `Blocked` and does not authorize
+parallel implementation unless the main agent explicitly re-routes the work
+while preserving the one-issue limit. Prefer correct, proportionate evidence
+over throughput, batching, or partially completed work.
 
 ## Root execution coordinator and recovery
 
@@ -182,7 +250,7 @@ weakening scope, TDD, routing, review, or market-data safeguards.
   unresolved red-green-refactor cycle merely to reset context.
 - After mandatory instructions and approved specifications are read at their
   current revision, use targeted rereads and focused tests before broader
-  checks. Required full reads and quality gates remain mandatory.
+  checks. Run the quality gate required by the assigned risk tier.
 - Bound tool and log output to the command, exit status, and evidence needed for
   the next action. Do not infer billing, token, cache, or reasoning telemetry.
 - Delegate only independent, non-overlapping work. Parallel agents are
@@ -431,18 +499,30 @@ or rework without weakening quality, scope control, or reviewer independence.
 Adopting a graph framework or persistent workflow service requires a separate
 evidence-based owner decision.
 
-## Strict TDD
+## Strict TDD for code
 
-For every behavior change, use red-green-refactor:
+For normal- and high-risk code behavior changes, use red-green-refactor:
 
 1. Add one focused failing test that expresses the approved behavior, including
    a failure or bias case where applicable.
 2. Make the smallest implementation change that makes it pass.
 3. Refactor only while the relevant tests remain green.
-4. Run the relevant suite and any required project-wide checks before handoff.
+4. Run the relevant suite and risk-tier-required checks before handoff.
 
 Do not merge speculative implementation, test-after code, or an unapproved
 rule change. A test does not substitute for an approved module specification.
+Low-risk documentation and inventory work instead requires focused validation
+of claimed facts, links, structure, and scope; it does not manufacture a
+failing code test.
+
+For normal and high-risk code, apply the smoke-first escalation ladder within
+red-green-refactor: use seconds-long static, unit, or small representative
+deterministic smoke before the affected suite; reproduce and repair failure at
+the smallest case; and freeze the high-risk acceptance matrix before a costly
+run. Run a full suite, backtest, or benchmark only after smoke and relevant
+checks are green and once per sealed revision. Smoke-window performance or
+trading output is never statistical or strategy evidence. The final
+risk-tier-required gate, independent review, and hosted CI remain mandatory.
 
 ## Quality gates and Sol escalation
 
@@ -465,8 +545,9 @@ escalation condition is present.
 
 ## Deterministic Python quality gate
 
-Install the locked development tools with `uv sync --extra dev`. Before
-handoff, run this single gate from the repository root:
+Install the locked development tools with `uv sync --extra dev`. For normal and
+high-risk code tiers, run this single gate once per sealed revision from the
+repository root:
 
 ```sh
 uv run --extra dev ruff format --check . && uv run --extra dev ruff check . && uv run --extra dev pyright && uv run --extra dev vulture src --min-confidence 80 && uv run --extra dev pytest
@@ -477,5 +558,7 @@ correctness, complexity, performance, maintainability, and security patterns;
 Pyright strictly checks the production source; Vulture detects confidently dead
 production code; and pytest enforces branch coverage. Do not add overlapping
 formatters, import sorters, linters, or complexity tools without a demonstrated
-gap. The formatter may be run without `--check` only as a mechanical change;
-inspect its diff and run the full gate afterwards.
+gap. Low-risk documentation and inventory candidates use focused validation
+instead; hosted CI remains required after publication. The formatter may be run
+without `--check` only as a mechanical change; inspect its diff and run the full
+gate afterwards when that tier requires it.

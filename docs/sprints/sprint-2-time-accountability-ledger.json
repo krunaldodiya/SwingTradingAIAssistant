@@ -1,0 +1,149 @@
+{
+  "schema_version": "sprint-2-time-accountability-v1",
+  "record_status": "POST_CUTOFF_SNAPSHOT",
+  "snapshot": {
+    "captured_at": "2026-08-10T08:25:09+05:30",
+    "timezone": "Asia/Kolkata",
+    "repository_revision": "84d681de73e34459a791afbd76af80d04c7e8255",
+    "repository_tree": "97b5c3e2bfc743a0a5a99966aeae2ec8f854d43c",
+    "sources": [
+      "Live Linear get_issue stateHistory captured 2026-08-09 after 2026-08-09T16:30:00Z",
+      "Live GitHub REST/GraphQL pull-request, Quality and build CI, and exact merge evidence captured 2026-08-09 after 2026-08-09T16:30:00Z",
+      "Linear ARK-110 owner reroute comment fb747f77-f96a-4c02-bee9-e823a9c7bb56"
+    ],
+    "limits": "This is a cutoff-state snapshot, not Sprint closure. Exact state is reconstructed only from stateHistory at or before the cutoff; current capture is recorded separately. Unsupported workflow durations, retries, labor, and PR mappings remain UNSET."
+  },
+  "cutoff": {
+    "local": "2026-08-09T22:00:00+05:30",
+    "utc": "2026-08-09T16:30:00Z",
+    "report_status": "CAPTURED_INCOMPLETE",
+    "completed_baseline_ids": ["ARK-74", "ARK-75", "ARK-76", "ARK-77", "ARK-78", "ARK-79", "ARK-80", "ARK-81", "ARK-82", "ARK-83", "ARK-84", "ARK-85", "ARK-86", "ARK-87", "ARK-88", "ARK-89", "ARK-90", "ARK-91", "ARK-70", "ARK-73"],
+    "unfinished_baseline_ids": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"],
+    "completed_baseline_count": 20,
+    "unfinished_baseline_count": 4,
+    "rule": "This exact, disjoint 20+4 partition is a cutoff state only. It makes no completion, closure, or gate-waiver claim."
+  },
+  "row_contract": {
+    "prospective": {
+      "expected_wall_clock_minutes": {
+        "minimum": null,
+        "maximum": null,
+        "status": "UNSET"
+      },
+      "assumptions": [],
+      "rule": "Completed work without a pre-start prospectus remains UNSET; never invent an estimate retroactively."
+    },
+    "actual_timestamps": {
+      "created_at": {"value": null, "status": "UNSET", "source": "Linear createdAt"},
+      "started_at": {"value": null, "status": "UNSET", "source": "first Linear In Progress history event"},
+      "completed_at": {"value": null, "status": "UNSET", "source": "Linear Done history event"},
+      "pull_request_created_at": {"value": null, "status": "UNSET", "source": "hosted pull request createdAt"},
+      "required_ci_terminal_at": {"value": null, "status": "UNSET", "source": "terminal required hosted check for exact candidate SHA"},
+      "merged_at": {"value": null, "status": "UNSET", "source": "hosted exact-SHA merge/publication timestamp"}
+    },
+    "derived_elapsed": {
+      "started_to_completed_seconds": {"value": null, "status": "UNSET", "rule": "completed_at - started_at only when both are authoritative"},
+      "created_to_merged_seconds": {"value": null, "status": "UNSET", "rule": "merged_at - created_at only when both are authoritative"},
+      "pull_request_to_ci_seconds": {"value": null, "status": "UNSET", "rule": "required_ci_terminal_at - pull_request_created_at only when both are authoritative"}
+    },
+    "workflow_breakdown": {
+      "active_gate_seconds": {"value": null, "status": "UNSET"},
+      "owner_or_external_wait_seconds": {"value": null, "status": "UNSET"},
+      "retry_count": {"value": null, "status": "UNSET"},
+      "repair_round_count": {"value": null, "status": "UNSET"},
+      "repeated_gate_count": {"value": null, "status": "UNSET"}
+    },
+    "linear_points": {
+      "value": null,
+      "status": "UNSET",
+      "rule": "Linear points are planning-size units, never labor hours."
+    },
+    "repository_observation": {
+      "value": null,
+      "status": "UNSET",
+      "rule": "A local Git commit can corroborate repository history but does not replace Linear lifecycle or hosted PR/CI evidence."
+    }
+  },
+  "authoritative_cutoff_evidence": {
+    "cutoff_state_source": "Live Linear stateHistory; each state is the last history interval containing 2026-08-09T16:30:00Z. Timestamps are UTC.",
+    "linear_rows": [
+      ["ARK-74", "2026-08-08T03:09:11.354Z", "2026-08-08T03:19:38.451Z", "2026-08-08T04:01:34.723Z", "Done"], ["ARK-75", "2026-08-08T03:09:14.040Z", "2026-08-08T09:04:20.709Z", "2026-08-08T09:18:48.025Z", "Done"], ["ARK-76", "2026-08-08T03:09:16.968Z", "2026-08-08T09:19:26.110Z", "2026-08-08T09:46:49.719Z", "Done"], ["ARK-77", "2026-08-08T03:09:20.024Z", "2026-08-08T09:47:24.854Z", "2026-08-08T10:01:04.258Z", "Done"],
+      ["ARK-78", "2026-08-08T03:09:23.188Z", "2026-08-08T10:02:00.015Z", "2026-08-08T10:17:23.908Z", "Done"], ["ARK-79", "2026-08-08T03:09:26.171Z", "2026-08-08T11:27:35.438Z", "2026-08-08T11:46:33.568Z", "Done"], ["ARK-80", "2026-08-08T03:09:31.327Z", "2026-08-08T10:18:05.247Z", "2026-08-08T10:47:57.465Z", "Done"], ["ARK-81", "2026-08-08T03:09:34.188Z", "2026-08-08T11:46:50.039Z", "2026-08-08T12:11:43.890Z", "Done"],
+      ["ARK-82", "2026-08-08T03:09:37.496Z", "2026-08-08T04:02:14.000Z", "2026-08-08T04:17:46.879Z", "Done"], ["ARK-83", "2026-08-08T03:10:00.653Z", "2026-08-08T12:12:14.639Z", "2026-08-08T12:54:23.330Z", "Done"], ["ARK-84", "2026-08-08T03:10:03.424Z", "2026-08-08T10:48:11.555Z", "2026-08-08T11:01:21.247Z", "Done"], ["ARK-85", "2026-08-08T03:10:07.303Z", "2026-08-08T04:32:48.773Z", "2026-08-08T04:50:57.226Z", "Done"],
+      ["ARK-86", "2026-08-08T03:10:10.855Z", "2026-08-08T13:10:02.906Z", "2026-08-08T15:07:06.801Z", "Done"], ["ARK-87", "2026-08-08T03:10:13.449Z", "2026-08-09T01:31:24.209Z", "2026-08-09T02:26:08.838Z", "Done"], ["ARK-88", "2026-08-08T03:10:16.101Z", "2026-08-09T04:21:30.248Z", "2026-08-09T05:01:10.006Z", "Done"], ["ARK-89", "2026-08-08T03:10:21.161Z", "2026-08-09T05:58:10.726Z", "2026-08-09T06:50:09.627Z", "Done"],
+      ["ARK-90", "2026-08-08T03:10:23.963Z", "2026-08-08T08:04:00.668Z", "2026-08-08T08:44:24.317Z", "Done"], ["ARK-91", "2026-08-08T03:10:26.674Z", "2026-08-08T11:01:56.026Z", "2026-08-08T11:27:19.502Z", "Done"], ["ARK-70", "2026-08-07T17:00:12.062Z", "2026-08-08T04:18:33.494Z", "2026-08-08T04:30:04.787Z", "Done"], ["ARK-73", "2026-08-07T17:10:30.702Z", "2026-08-08T08:45:27.244Z", "2026-08-08T09:03:27.611Z", "Done"],
+      ["ARK-92", "2026-08-08T03:10:40.210Z", "2026-08-09T06:50:50.939Z", "UNSET", "In Progress"], ["ARK-93", "2026-08-08T03:10:43.960Z", "UNSET", "UNSET", "Todo"], ["ARK-69", "2026-08-07T16:59:54.195Z", "UNSET", "UNSET", "Todo"], ["ARK-72", "2026-08-07T17:00:55.152Z", "UNSET", "UNSET", "Todo"],
+      ["ARK-95", "2026-08-08T05:08:04.610Z", "2026-08-08T05:08:04.650Z", "2026-08-08T07:10:28.231Z", "Done"], ["ARK-96", "2026-08-08T05:17:13.778Z", "2026-08-08T07:49:31.903Z", "2026-08-08T08:01:28.328Z", "Done"], ["ARK-97", "2026-08-08T07:16:18.133Z", "2026-08-08T07:16:18.239Z", "2026-08-08T07:48:37.487Z", "Done"], ["ARK-98", "2026-08-08T12:23:05.867Z", "2026-08-08T12:54:35.109Z", "2026-08-08T13:09:47.145Z", "Done"],
+      ["ARK-99", "2026-08-09T02:15:21.243Z", "2026-08-09T02:27:08.633Z", "2026-08-09T02:47:03.593Z", "Done"], ["ARK-100", "2026-08-09T02:15:37.333Z", "2026-08-09T02:47:15.421Z", "2026-08-09T03:00:02.327Z", "Done"], ["ARK-101", "2026-08-09T02:29:48.951Z", "2026-08-09T03:00:20.817Z", "2026-08-09T03:37:41.921Z", "Done"], ["ARK-102", "2026-08-09T02:32:23.986Z", "2026-08-09T03:37:56.004Z", "2026-08-09T03:58:46.655Z", "Done"],
+      ["ARK-103", "2026-08-09T03:14:10.867Z", "2026-08-09T03:58:56.687Z", "2026-08-09T04:21:14.819Z", "Done"], ["ARK-104", "2026-08-09T04:42:39.639Z", "2026-08-09T05:01:21.163Z", "2026-08-09T05:31:01.238Z", "Done"], ["ARK-105", "2026-08-09T05:32:06.865Z", "2026-08-09T05:33:04.721Z", "2026-08-09T05:57:53.419Z", "Done"], ["ARK-106", "2026-08-09T08:53:44.667Z", "UNSET", "UNSET", "Todo"],
+      ["ARK-107", "2026-08-09T09:01:13.494Z", "2026-08-09T13:59:40.986Z", "UNSET", "In Progress"], ["ARK-108", "2026-08-09T11:35:56.360Z", "2026-08-09T11:36:11.471Z", "2026-08-09T13:10:41.782Z", "Done"], ["ARK-109", "2026-08-09T12:34:40.623Z", "2026-08-09T12:34:58.005Z", "2026-08-09T13:10:20.977Z", "Done"], ["ARK-110", "2026-08-09T13:11:53.456Z", "2026-08-09T13:13:00.153Z", "UNSET", "In Progress"]
+    ],
+    "linear_row_columns": ["id", "created_at", "first_in_progress_at", "terminal_done_at", "state_at_cutoff"],
+    "ark_92_state_history_note": "The temporary Done interval 2026-08-09T13:11:04.345Z..2026-08-09T13:50:51.563Z ended before cutoff. It is not terminal completion evidence; the cutoff state is In Progress and circuit-frozen per Linear comment fb747f77-f96a-4c02-bee9-e823a9c7bb56.",
+    "added_work_at_cutoff": {"done_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason_by_id": {"ARK-95": "accepted workflow-orchestration remediation", "ARK-96": "hosted merge-evidence reconciliation", "ARK-97": "tracking-only cutoff accountability", "ARK-98": "owner-requested research-note documentation", "ARK-99": "owner-requested research-note clarification", "ARK-100": "knowledge-capture workflow clarification", "ARK-101": "owner-requested research-note documentation", "ARK-102": "owner-requested research-note documentation", "ARK-103": "delivery-thread-boundary clarification", "ARK-104": "workflow assessment documentation", "ARK-105": "open connector-separation hypothesis documentation", "ARK-106": "future Sprint planning", "ARK-107": "owner and delivery responsibility charter", "ARK-108": "ARK-92 corrective evidence work", "ARK-109": "ARK-92 corrective evidence work", "ARK-110": "Sprint 2 time-accountability correction"}, "rule": "All are outside the frozen 24 denominator; none is counted as baseline completion."},
+    "hosted_rows": [
+      ["ARK-74", 31, "2026-08-08T03:59:45Z", "2026-08-08T04:00:49Z", "2026-08-08T04:01:01Z", "c48b4fffc149b7b0fa29f94bb92de5ddd26a372d"], ["ARK-82", 32, "2026-08-08T04:15:51Z", "2026-08-08T04:17:01Z", "2026-08-08T04:17:20Z", "e7fd9e35360fa25ab1074455efe47714bba62152"], ["ARK-70", 33, "2026-08-08T04:28:18Z", "2026-08-08T04:29:29Z", "2026-08-08T04:29:37Z", "8e68e61efebb6edf22777b71aabda15db02fdd24"], ["ARK-85", 34, "2026-08-08T04:49:01Z", "2026-08-08T04:50:16Z", "2026-08-08T04:50:26Z", "a4a9e152ccf1569fff68ff8f1906609fe7f06885"],
+      ["ARK-84", 45, "2026-08-08T10:59:00Z", "2026-08-08T11:00:31Z", "2026-08-08T11:00:49Z", "5bb41ab5b6cc493a195c4672533e8c166b2cda72"], ["ARK-91", 46, "2026-08-08T11:24:20Z", "2026-08-08T11:26:29Z", "2026-08-08T11:26:52Z", "be6242d89c1f5d4fbc8a699dd3e49e5b12dd2b07"], ["ARK-79", 47, "2026-08-08T11:43:35Z", "2026-08-08T11:45:38Z", "2026-08-08T11:45:56Z", "b0301dc27034db4b75c22a0d1f6d1d65d4a9760e"], ["ARK-81", 48, "2026-08-08T12:09:06Z", "2026-08-08T12:10:51Z", "2026-08-08T12:11:15Z", "3ef7103fde69d3f1b436ec90e79ad6e0d00c5440"],
+      ["ARK-83", 49, "2026-08-08T12:51:26Z", "2026-08-08T12:53:35Z", "2026-08-08T12:53:56Z", "c7d2f535d80c9f05fa3784c3a3fb97cce28db5ba"], ["ARK-98", 50, "2026-08-08T13:06:56Z", "2026-08-08T13:08:58Z", "2026-08-08T13:09:21Z", "26e852b0f660dfa1f6ddfc816882371f5b01c859"], ["ARK-86", 51, "2026-08-08T15:03:55Z", "2026-08-08T15:06:11Z", "2026-08-08T15:06:39Z", "8631564feb51a328fd3a90ad35d89f363af1a8db"], ["ARK-87", 52, "2026-08-09T02:22:59Z", "2026-08-09T02:25:20Z", "2026-08-09T02:25:39Z", "79181eacbd0f72988d97df63088fc06e494c4c78"],
+      ["ARK-99", 53, "2026-08-09T02:43:53Z", "2026-08-09T02:45:54Z", "2026-08-09T02:46:33Z", "4b6fad3d633ac36b0baf902ab6d9ed3f8b6527d1"], ["ARK-100", 54, "2026-08-09T02:56:41Z", "2026-08-09T02:59:10Z", "2026-08-09T02:59:30Z", "0d15e15816360ef33626b371b90dd0c64009a338"], ["ARK-101", 55, "2026-08-09T03:33:38Z", "2026-08-09T03:36:06Z", "2026-08-09T03:36:55Z", "2a8541aa2b16ca285105ac5cea79c53601a15ae3"], ["ARK-102", 56, "2026-08-09T03:55:26Z", "2026-08-09T03:57:56Z", "2026-08-09T03:58:21Z", "cf3de6887f6191363354bdcecd87e0c5a777cdc9"],
+      ["ARK-103", 57, "2026-08-09T04:17:50Z", "2026-08-09T04:20:15Z", "2026-08-09T04:20:49Z", "8ed78ee34c9710e86b071349b29a7361aab36fa2"], ["ARK-88", 58, "2026-08-09T04:57:37Z", "2026-08-09T05:00:05Z", "2026-08-09T05:00:42Z", "4d7ee03d7631184e2bcfa7b57283ddfdeefbf54f"], ["ARK-104", 59, "2026-08-09T05:27:51Z", "2026-08-09T05:30:02Z", "2026-08-09T05:30:33Z", "7b52349a9c6e802d19f4c88110d3a374a6c22814"], ["ARK-105", 60, "2026-08-09T05:54:34Z", "2026-08-09T05:56:57Z", "2026-08-09T05:57:23Z", "24971e808338c2237b9dc4791d1d217318681263"],
+      ["ARK-89", 61, "2026-08-09T06:46:24Z", "2026-08-09T06:49:02Z", "2026-08-09T06:49:42Z", "205ee394f0f5fa25ad9bd0170cc50718eb6ca1ed"], ["ARK-92", 62, "2026-08-09T13:04:08Z", "2026-08-09T13:09:14Z", "2026-08-09T13:09:42Z", "10cd59bc5edb7adf3fceccedb1ff67cccc040d42"]
+    ],
+    "hosted_row_columns": ["id", "pull_request_number", "pull_request_created_at", "quality_and_build_success_at", "merged_at", "merge_commit_sha"],
+    "hosted_source": "GitHub exact PR createdAt, successful Quality and build check completedAt, and mergedAt/merge commit. No PR mapping is inferred from local commits.",
+    "unmapped_hosted_rows": ["ARK-75", "ARK-76", "ARK-77", "ARK-78", "ARK-80", "ARK-90", "ARK-73", "ARK-93", "ARK-69", "ARK-72", "ARK-95", "ARK-96", "ARK-97", "ARK-106", "ARK-107", "ARK-108", "ARK-109", "ARK-110"],
+    "derived_elapsed_seconds": {"linear_started_to_terminal_done": {"ARK-74": 2516, "ARK-75": 867, "ARK-76": 1644, "ARK-77": 819, "ARK-78": 924, "ARK-79": 1138, "ARK-80": 1792, "ARK-81": 1494, "ARK-82": 933, "ARK-83": 2529, "ARK-84": 790, "ARK-85": 1088, "ARK-86": 7024, "ARK-87": 3285, "ARK-88": 2380, "ARK-89": 3119, "ARK-90": 2424, "ARK-91": 1523, "ARK-70": 691, "ARK-73": 1080, "ARK-95": 7344, "ARK-96": 716, "ARK-97": 1939, "ARK-98": 912, "ARK-99": 1195, "ARK-100": 767, "ARK-101": 2241, "ARK-102": 1251, "ARK-103": 1338, "ARK-104": 1780, "ARK-105": 1489, "ARK-108": 5670, "ARK-109": 2123}, "hosted_pr_to_quality_and_build": {"ARK-74": 64, "ARK-82": 70, "ARK-70": 71, "ARK-85": 75, "ARK-84": 91, "ARK-91": 129, "ARK-79": 123, "ARK-81": 105, "ARK-83": 129, "ARK-98": 122, "ARK-86": 136, "ARK-87": 141, "ARK-99": 121, "ARK-100": 149, "ARK-101": 148, "ARK-102": 150, "ARK-103": 145, "ARK-88": 148, "ARK-104": 131, "ARK-105": 143, "ARK-89": 158, "ARK-92": 306}, "rule": "Only exact named timestamps are subtracted. These are elapsed spans, never labor or active-gate duration; every unsupported per-row derived field is UNSET."},
+    "workflow_breakdown": {"active_gate_seconds": "UNSET", "owner_or_external_wait_seconds": "UNSET", "retry_count": "UNSET", "repair_round_count": "UNSET", "repeated_gate_count": "UNSET", "note": "The cutoff comment evidences ARK-92's circuit-frozen blocker and ARK-110's mandatory cutoff wait, but not a safely separable numerical duration or a universal repair/gate count."},
+    "schedule_and_carryover": {"Sprint_2_closure": "UNSET", "final_schedule_variance": "UNSET", "carryover_at_cutoff": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"], "reason": "The cutoff is not Sprint closure and the historical timebox ends 2026-08-14; no closure projection is permitted."}
+  },
+  "issues": [
+    {"id": "ARK-74", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:31:01+05:30", "status": "OBSERVED", "source": "origin/main merge commit c48b4fffc149b7b0fa29f94bb92de5ddd26a372d (PR #31)"}},
+    {"id": "ARK-75", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-76", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-77", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-78", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-79", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T17:15:56+05:30", "status": "OBSERVED", "source": "origin/main merge commit b0301dc27034db4b75c22a0d1f6d1d65d4a9760e (PR #47)"}},
+    {"id": "ARK-80", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-81", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T17:41:15+05:30", "status": "OBSERVED", "source": "origin/main merge commit 3ef7103fde69d3f1b436ec90e79ad6e0d00c5440 (PR #48)"}},
+    {"id": "ARK-82", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:47:19+05:30", "status": "OBSERVED", "source": "origin/main merge commit e7fd9e35360fa25ab1074455efe47714bba62152 (PR #32)"}},
+    {"id": "ARK-83", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T18:23:56+05:30", "status": "OBSERVED", "source": "origin/main merge commit c7d2f535d80c9f05fa3784c3a3fb97cce28db5ba (PR #49)"}},
+    {"id": "ARK-84", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T16:30:49+05:30", "status": "OBSERVED", "source": "origin/main merge commit 5bb41ab5b6cc493a195c4672533e8c166b2cda72 (PR #45)"}},
+    {"id": "ARK-85", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T10:20:26+05:30", "status": "OBSERVED", "source": "origin/main merge commit a4a9e152ccf1569fff68ff8f1906609fe7f06885 (PR #34)"}},
+    {"id": "ARK-86", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T20:36:38+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8631564feb51a328fd3a90ad35d89f363af1a8db (PR #51)"}},
+    {"id": "ARK-87", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T07:55:39+05:30", "status": "OBSERVED", "source": "origin/main merge commit 79181eacbd0f72988d97df63088fc06e494c4c78 (PR #52)"}},
+    {"id": "ARK-88", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T10:30:42+05:30", "status": "OBSERVED", "source": "origin/main merge commit 4d7ee03d7631184e2bcfa7b57283ddfdeefbf54f (PR #58)"}},
+    {"id": "ARK-89", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T12:19:41+05:30", "status": "OBSERVED", "source": "origin/main merge commit 205ee394f0f5fa25ad9bd0170cc50718eb6ca1ed (PR #61)"}},
+    {"id": "ARK-90", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-91", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T16:56:51+05:30", "status": "OBSERVED", "source": "origin/main merge commit be6242d89c1f5d4fbc8a699dd3e49e5b12dd2b07 (PR #46)"}},
+    {"id": "ARK-70", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-08T09:59:37+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8e68e61efebb6edf22777b71aabda15db02fdd24 (PR #33)"}},
+    {"id": "ARK-73", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-92", "cohort": "frozen_baseline", "included_in_original_denominator": true, "repository_observation": {"value": "2026-08-09T18:39:41+05:30", "status": "OBSERVED", "source": "origin/main merge commit 10cd59bc5edb7adf3fceccedb1ff67cccc040d42 (PR #62)"}},
+    {"id": "ARK-93", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-69", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-72", "cohort": "frozen_baseline", "included_in_original_denominator": true},
+    {"id": "ARK-95", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-96", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-97", "cohort": "addition", "included_in_original_denominator": false, "actual_timestamp_overrides": {"created_at": {"value": "2026-08-08T07:16:18.133Z", "status": "OBSERVED", "source": "Linear ARK-97 createdAt recorded in Sprint 2 deadline accountability"}}},
+    {"id": "ARK-98", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-08T18:39:21+05:30", "status": "OBSERVED", "source": "origin/main merge commit 26e852b0f660dfa1f6ddfc816882371f5b01c859 (PR #50)"}},
+    {"id": "ARK-99", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T08:16:32+05:30", "status": "OBSERVED", "source": "origin/main merge commit 4b6fad3d633ac36b0baf902ab6d9ed3f8b6527d1 (PR #53)"}},
+    {"id": "ARK-100", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T08:29:29+05:30", "status": "OBSERVED", "source": "origin/main merge commit 0d15e15816360ef33626b371b90dd0c64009a338 (PR #54)"}},
+    {"id": "ARK-101", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:06:55+05:30", "status": "OBSERVED", "source": "origin/main merge commit 2a8541aa2b16ca285105ac5cea79c53601a15ae3 (PR #55)"}},
+    {"id": "ARK-102", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:28:21+05:30", "status": "OBSERVED", "source": "origin/main merge commit cf3de6887f6191363354bdcecd87e0c5a777cdc9 (PR #56)"}},
+    {"id": "ARK-103", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T09:50:48+05:30", "status": "OBSERVED", "source": "origin/main merge commit 8ed78ee34c9710e86b071349b29a7361aab36fa2 (PR #57)"}},
+    {"id": "ARK-104", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T11:00:33+05:30", "status": "OBSERVED", "source": "origin/main merge commit 7b52349a9c6e802d19f4c88110d3a374a6c22814 (PR #59)"}},
+    {"id": "ARK-105", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T11:27:23+05:30", "status": "OBSERVED", "source": "origin/main merge commit 24971e808338c2237b9dc4791d1d217318681263 (PR #60)"}},
+    {"id": "ARK-106", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-107", "cohort": "addition", "included_in_original_denominator": false},
+    {"id": "ARK-108", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T17:20:51+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 3baf4fdae3a05dc2e92fe695cfed2aa45e4cde1d; hosted lifecycle evidence remains UNSET"}},
+    {"id": "ARK-109", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T18:21:27+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 100f4955d957a217837eaf7b4503cb69de09564b; hosted lifecycle evidence remains UNSET"}},
+    {"id": "ARK-110", "cohort": "addition", "included_in_original_denominator": false, "prospective_override": {"expected_wall_clock_minutes": {"minimum": 45, "maximum": 120, "status": "RECORDED_BEFORE_LIFECYCLE"}, "recorded_at": "2026-08-09T18:45:53+05:30", "assumptions": ["approved bounded documentation-only scope", "no external publication or Linear mutation", "local deterministic quality gate is available", "no reviewer-directed repair"], "rule": "This is a prospective wall-clock range, not labor hours."}}
+  ],
+  "post_cutoff_update_procedure": [
+    "Preserve this cutoff snapshot and its source revision; later captures must retain their own capture time rather than overwrite cutoff state.",
+    "Use Linear stateHistory, not updatedAt, to determine a state at the cutoff; reopened work is unfinished unless a Done interval remains terminal at the cutoff.",
+    "Use hosted PR createdAt, required CI terminal timestamps, and exact-SHA mergedAt only where the issue-to-PR association is explicit; do not infer a mapping from a local commit.",
+    "Calculate a derived elapsed value only when both named raw operands are authoritative and sufficiently precise; otherwise retain UNSET and identify the missing operand.",
+    "Record active gate, owner/external wait, retry, repair-round, and repeated-gate values in their dedicated fields without converting Linear points to labor hours.",
+    "Do not turn a cutoff snapshot, added work, or a deadline into Sprint closure, completed work, or a waived acceptance requirement."
+  ]
+}
