@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import os
 import platform as runtime_platform
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -66,6 +67,10 @@ _SAMPLING_INTERVAL_S = 0.01
 _MAX_SAMPLING_GAP_MS = 50
 _PSUTIL_VERSION = "7.2.2"
 _SAMPLER_METHOD = "psutil-parent-child-v1"
+_PROCESS_MEASUREMENT_METHOD = {
+    "fork": "monotonic-parent-child-fork-v3",
+    "spawn": "monotonic-parent-child-spawn-v3",
+}
 _PhaseElapsed = dict[str, int | None]
 _SamplerFailure = Literal[
     "sampling_exception",
@@ -75,6 +80,15 @@ _SamplerFailure = Literal[
     "gap_exceeded",
 ]
 _ChildTerminal = Literal["failure", "cancelled", "invalid"]
+
+
+@dataclass(slots=True)
+class _BenchmarkRuntimeState:
+    process_context: str = "spawn"
+    source_identity: tuple[str, str, str] | None = None
+
+
+_BENCHMARK_RUNTIME = _BenchmarkRuntimeState()
 
 
 class ResourceEvidenceStatus(StrEnum):
@@ -453,21 +467,28 @@ def measure_b01(
     iteration_index: int,
     sampler_failure: _SamplerFailure | None = None,
     child_failure: bool = False,
+    child_terminal: _ChildTerminal | None = None,
 ) -> B01MeasurementRecord:
     """Measure one real B01 ingestion in a fresh child with parent sampling."""
     if iteration_kind not in {"warmup", "measured"} or iteration_index < 1:
         raise ValueError("invalid iteration")
     if sampler_failure not in {None, *get_args_for_sampler_failure()}:
         raise ValueError("invalid sampler failure")
+    if child_terminal not in {None, "failure", "cancelled", "invalid"} or (
+        child_failure and child_terminal is not None
+    ):
+        raise ValueError("invalid child terminal")
     if psutil.__version__ != _PSUTIL_VERSION:
         raise RuntimeError("locked psutil version is unavailable")
 
     child_root = disposable_parent / f"b01-{iteration_kind}-{iteration_index}"
     child_root.mkdir()
-    parent_connection, child_connection = multiprocessing.get_context("spawn").Pipe()
-    child = multiprocessing.get_context("spawn").Process(
+    terminal = "failure" if child_failure else child_terminal
+    context = multiprocessing.get_context(_BENCHMARK_RUNTIME.process_context)
+    parent_connection, child_connection = context.Pipe()
+    child = context.Process(
         target=_run_b01_child,
-        args=(child_connection, str(child_root), child_failure),
+        args=(child_connection, str(child_root), terminal),
     )
     child.start()
     child_connection.close()
@@ -500,7 +521,7 @@ def measure_benchmark_workload(
         disposable_parent / f"{workload_id.lower()}-{iteration_kind}-{iteration_index}"
     )
     child_root.mkdir()
-    context = multiprocessing.get_context("spawn")
+    context = multiprocessing.get_context(_BENCHMARK_RUNTIME.process_context)
     parent_connection, child_connection = context.Pipe()
     child = context.Process(
         target=_run_benchmark_child,
@@ -530,17 +551,26 @@ def get_args_for_sampler_failure() -> tuple[_SamplerFailure, ...]:
 
 
 def _run_b01_child(
-    connection: Connection, root_text: str, child_failure: bool = False
+    connection: Connection,
+    root_text: str,
+    child_terminal: _ChildTerminal | None = None,
 ) -> None:
     prepared: _PreparedB01 | None = None
     try:
-        prepared = _prepare_b01(Path(root_text))
+        prepared = _prepare_b01(_child_storage_root(root_text))
         connection.send("READY")
         if connection.recv() != "START":
             return
-        if child_failure:
+        if child_terminal == "failure":
             result = _terminal_result(prepared, "B01_CHILD_FAILED", outcome="FAILED")
-        else:
+        elif child_terminal == "cancelled":
+            result = _terminal_result(
+                prepared, "BENCHMARK_CHILD_CANCELLED", outcome="CANCELLED"
+            )
+        if child_terminal == "invalid":
+            connection.send(("INVALID", "BENCHMARK_CHILD_PROTOCOL_INVALID"))
+            return
+        if child_terminal is None:
             try:
                 result = _execute_b01(prepared)
             except Exception:
@@ -564,7 +594,9 @@ def _run_benchmark_child(
 ) -> None:
     prepared: object | None = None
     try:
-        prepared = _prepare_benchmark_workload(workload_id, Path(root_text))
+        prepared = _prepare_benchmark_workload(
+            workload_id, _child_storage_root(root_text)
+        )
         connection.send("READY")
         if connection.recv() != "START":
             return
@@ -593,6 +625,11 @@ def _run_benchmark_child(
             connection.send(("ERROR", "BENCHMARK_CHILD_FAILED"))
     finally:
         connection.close()
+
+
+def _child_storage_root(root_text: str) -> Path:
+    root = Path(root_text)
+    return root if root.is_absolute() else root.absolute()
 
 
 def _prepare_b01(root: Path) -> _PreparedB01:
@@ -1074,13 +1111,14 @@ def _record_b01(
     iteration_index: int,
     root: Path,
 ) -> B01MeasurementRecord:
+    source_revision, source_tree, lock_identity = _source_identity()
     return B01MeasurementRecord(
         workload_id=result.workload_id,
         iteration_kind=iteration_kind,
         iteration_index=iteration_index,
-        source_revision=_git_identifier("HEAD"),
-        source_tree=_git_identifier("HEAD^{tree}"),
-        lock_identity=hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest(),
+        source_revision=source_revision,
+        source_tree=source_tree,
+        lock_identity=lock_identity,
         python_version=runtime_platform.python_version(),
         platform=runtime_platform.system(),
         cpu_model=runtime_platform.machine(),
@@ -1140,13 +1178,14 @@ def _record_b01(
 def _comparability_identity(
     result: _ChildB01Result, root: Path
 ) -> ComparabilityIdentity:
+    source_revision, source_tree, lock_identity = _source_identity()
     return ComparabilityIdentity(
         result.workload_id,
         result.fixture_id,
         result.fixture_id,
-        _git_identifier("HEAD"),
-        _git_identifier("HEAD^{tree}"),
-        hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest(),
+        source_revision,
+        source_tree,
+        lock_identity,
         result.schedule_digest,
         result.requested_range,
         result.schedule_as_of,
@@ -1165,7 +1204,7 @@ def _comparability_identity(
         ),
         _BENCHMARK_COMMAND_LIMITS,
         _BENCHMARK_RESOURCE_LIMITS,
-        "monotonic-parent-child-v2",
+        _PROCESS_MEASUREMENT_METHOD[_BENCHMARK_RUNTIME.process_context],
         runtime_platform.python_version().rsplit(".", 1)[0],
         pyarrow.__version__.rsplit(".", 1)[0],
         duckdb.__version__.rsplit(".", 1)[0],
@@ -1175,6 +1214,36 @@ def _comparability_identity(
         os.cpu_count() or 1,
         _filesystem_type(root),
     )
+
+
+def _source_identity() -> tuple[str, str, str]:
+    if _BENCHMARK_RUNTIME.source_identity is not None:
+        return _BENCHMARK_RUNTIME.source_identity
+    return (
+        _git_identifier("HEAD"),
+        _git_identifier("HEAD^{tree}"),
+        hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest(),
+    )
+
+
+def freeze_benchmark_source_identity(
+    source_revision: str, source_tree: str, lock_identity: str
+) -> None:
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+        or re.fullmatch(r"[0-9a-f]{40}", source_tree) is None
+        or re.fullmatch(r"[0-9a-f]{64}", lock_identity) is None
+        or _BENCHMARK_RUNTIME.source_identity is not None
+        or "fork" not in multiprocessing.get_all_start_methods()
+    ):
+        raise RuntimeError("invalid frozen benchmark source identity")
+    _BENCHMARK_RUNTIME.source_identity = (source_revision, source_tree, lock_identity)
+    _BENCHMARK_RUNTIME.process_context = "fork"
+
+
+def clear_benchmark_source_identity() -> None:
+    _BENCHMARK_RUNTIME.source_identity = None
+    _BENCHMARK_RUNTIME.process_context = "spawn"
 
 
 def _git_identifier(revision: str) -> str:
