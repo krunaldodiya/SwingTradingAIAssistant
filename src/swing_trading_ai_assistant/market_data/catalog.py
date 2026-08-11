@@ -28,6 +28,7 @@ from .manifest_lifecycle import (
 )
 from .monthly_request_planner import PlannedInstrumentMonth
 from .storage_root_lease import StorageRootLease
+from .universe_snapshot import UniverseSnapshotMetadataV1
 
 MAX_READ_ONLY_CATALOG_BYTES: Final = 64 * 1024 * 1024
 _READ_ONLY_DATABASE_FLAGS: Final = (
@@ -83,7 +84,8 @@ _PHYSICAL_KEY_COLUMNS: Final = (
     "month",
 )
 _V1_EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
-_EXPECTED_TABLES: Final = (*_V1_EXPECTED_TABLES, "instrument_snapshots")
+_V2_EXPECTED_TABLES: Final = (*_V1_EXPECTED_TABLES, "instrument_snapshots")
+_EXPECTED_TABLES: Final = (*_V2_EXPECTED_TABLES, "universe_snapshots")
 _SOURCE_MANIFEST_IDENTITY_COLUMN: Final = "source_manifest_identity"
 
 _SCHEMA_SQL: Final = """
@@ -201,6 +203,31 @@ CREATE TABLE instrument_snapshots (
 """.strip()
 _SNAPSHOT_SCHEMA_CHECKSUM: Final = hashlib.sha256(
     _SNAPSHOT_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
+_UNIVERSE_MIGRATION_ID: Final = "swing-trading-catalog-v3-universe-snapshots"
+_UNIVERSE_MIGRATION_VERSION: Final = 3
+_UNIVERSE_SCHEMA_SQL: Final = """
+CREATE TABLE universe_snapshots (
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    universe_id VARCHAR NOT NULL CHECK (universe_id = 'nifty-50'),
+    effective_from DATE NOT NULL,
+    effective_to DATE NOT NULL CHECK (effective_from <= effective_to),
+    membership_source VARCHAR NOT NULL,
+    membership_release VARCHAR NOT NULL,
+    membership_published_at TIMESTAMPTZ NOT NULL,
+    membership_retrieved_at TIMESTAMPTZ NOT NULL CHECK (membership_published_at <= membership_retrieved_at),
+    sector_source VARCHAR NOT NULL,
+    sector_release VARCHAR NOT NULL,
+    sector_published_at TIMESTAMPTZ NOT NULL,
+    sector_retrieved_at TIMESTAMPTZ NOT NULL CHECK (sector_published_at <= sector_retrieved_at),
+    snapshot_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(snapshot_sha256, '[0-9a-f]{64}')),
+    byte_count BIGINT NOT NULL CHECK (byte_count BETWEEN 1 AND 65536),
+    relative_object_path VARCHAR NOT NULL CHECK (relative_object_path = 'universe_snapshots/sha256=' || snapshot_sha256 || '/snapshot.json'),
+    PRIMARY KEY (snapshot_sha256)
+);
+""".strip()
+_UNIVERSE_SCHEMA_CHECKSUM: Final = hashlib.sha256(
+    _UNIVERSE_SCHEMA_SQL.encode("utf-8")
 ).hexdigest()
 
 
@@ -752,11 +779,142 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogPersistenceError("catalog read failed") from None
 
+    def save_universe_snapshot(
+        self,
+        metadata: UniverseSnapshotMetadataV1,
+        *,
+        precommit_validator: Callable[[], None] | None = None,
+    ) -> bool:
+        """Append immutable Nifty 50 universe evidence, idempotently."""
+        self._assert_writable()
+        if type(metadata) is not UniverseSnapshotMetadataV1:
+            raise CatalogConflictError("invalid universe snapshot")
+        if precommit_validator is not None and not callable(precommit_validator):
+            raise CatalogConflictError("invalid universe snapshot")
+
+        def operation() -> bool:
+            values = tuple(
+                getattr(metadata, name)
+                for name in UniverseSnapshotMetadataV1.__dataclass_fields__
+            )
+            existing = self.connection.execute(
+                "SELECT schema_version, universe_id, effective_from, effective_to, membership_source, membership_release, CAST(membership_published_at AS VARCHAR), CAST(membership_retrieved_at AS VARCHAR), sector_source, sector_release, CAST(sector_published_at AS VARCHAR), CAST(sector_retrieved_at AS VARCHAR), snapshot_sha256, byte_count, relative_object_path FROM universe_snapshots WHERE snapshot_sha256 = ?",
+                (metadata.snapshot_sha256,),
+            ).fetchone()
+            if existing is not None:
+                if _universe_metadata_from_row(existing) != metadata:
+                    raise CatalogConflictError("universe snapshot conflicts")
+                if precommit_validator is not None:
+                    precommit_validator()
+                return False
+            self.connection.execute(
+                "INSERT INTO universe_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            if precommit_validator is not None:
+                precommit_validator()
+            return True
+
+        return self._transaction(operation)
+
+    def remove_universe_snapshot_exact(
+        self, metadata: UniverseSnapshotMetadataV1
+    ) -> None:
+        """Compensate only the exact row produced by a failed post-commit check."""
+        self._assert_writable()
+        if type(metadata) is not UniverseSnapshotMetadataV1:
+            raise CatalogConflictError("invalid universe snapshot")
+
+        def operation() -> None:
+            existing = self.connection.execute(
+                "SELECT schema_version, universe_id, effective_from, effective_to, membership_source, membership_release, CAST(membership_published_at AS VARCHAR), CAST(membership_retrieved_at AS VARCHAR), sector_source, sector_release, CAST(sector_published_at AS VARCHAR), CAST(sector_retrieved_at AS VARCHAR), snapshot_sha256, byte_count, relative_object_path FROM universe_snapshots WHERE snapshot_sha256 = ?",
+                (metadata.snapshot_sha256,),
+            ).fetchone()
+            if existing is None:
+                return
+            if _universe_metadata_from_row(existing) != metadata:
+                raise CatalogConflictError("universe snapshot conflicts")
+            self.connection.execute(
+                "DELETE FROM universe_snapshots WHERE snapshot_sha256 = ?",
+                (metadata.snapshot_sha256,),
+            )
+            if (
+                self.connection.execute(
+                    "SELECT 1 FROM universe_snapshots WHERE snapshot_sha256 = ?",
+                    (metadata.snapshot_sha256,),
+                ).fetchone()
+                is not None
+            ):
+                raise CatalogPersistenceError("catalog compensation failed")
+
+        self._transaction(operation)
+
+    def list_universe_snapshots(self) -> tuple[UniverseSnapshotMetadataV1, ...]:
+        """Return immutable universe metadata in deterministic order."""
+        try:
+            rows = self.connection.execute(
+                "SELECT schema_version, universe_id, effective_from, effective_to, membership_source, membership_release, CAST(membership_published_at AS VARCHAR), CAST(membership_retrieved_at AS VARCHAR), sector_source, sector_release, CAST(sector_published_at AS VARCHAR), CAST(sector_retrieved_at AS VARCHAR), snapshot_sha256, byte_count, relative_object_path FROM universe_snapshots ORDER BY effective_from, effective_to, snapshot_sha256 LIMIT 1000"
+            ).fetchall()
+            return tuple(_universe_metadata_from_row(row) for row in rows)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
+    def resolve_universe_snapshots(
+        self, *, as_of: date, knowledge_cutoff: datetime
+    ) -> tuple[UniverseSnapshotMetadataV1, ...]:
+        """Return at most two cutoff-eligible PIT candidates, never a false empty page."""
+        if (
+            type(as_of) is not date
+            or type(knowledge_cutoff) is not datetime
+            or knowledge_cutoff.tzinfo is None
+            or knowledge_cutoff.utcoffset() is None
+        ):
+            raise CatalogConflictError("invalid universe snapshot query")
+        try:
+            rows = self.connection.execute(
+                "SELECT schema_version, universe_id, effective_from, effective_to, membership_source, membership_release, CAST(membership_published_at AS VARCHAR), CAST(membership_retrieved_at AS VARCHAR), sector_source, sector_release, CAST(sector_published_at AS VARCHAR), CAST(sector_retrieved_at AS VARCHAR), snapshot_sha256, byte_count, relative_object_path FROM universe_snapshots WHERE effective_from <= ? AND effective_to >= ? AND membership_published_at <= ? AND membership_retrieved_at <= ? AND sector_published_at <= ? AND sector_retrieved_at <= ? ORDER BY effective_from, effective_to, snapshot_sha256 LIMIT 2",
+                (
+                    as_of,
+                    as_of,
+                    knowledge_cutoff,
+                    knowledge_cutoff,
+                    knowledge_cutoff,
+                    knowledge_cutoff,
+                ),
+            ).fetchall()
+            return tuple(_universe_metadata_from_row(row) for row in rows)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
+    def has_universe_snapshot_coverage(self, *, as_of: date) -> bool:
+        """Check coverage with one bounded targeted query, never a list page."""
+        if type(as_of) is not date:
+            raise CatalogConflictError("invalid universe snapshot query")
+        try:
+            return (
+                self.connection.execute(
+                    "SELECT 1 FROM universe_snapshots WHERE effective_from <= ? AND effective_to >= ? LIMIT 1",
+                    (as_of, as_of),
+                ).fetchone()
+                is not None
+            )
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
     def _after_history_insert(self) -> None:
         """Fault-injection seam used to prove transaction rollback."""
 
     def _after_snapshot_migration(self) -> None:
         """Fault-injection seam used to prove v1 migration rollback."""
+
+    def _after_universe_migration(self) -> None:
+        """Fault-injection seam used to prove v3 migration rollback."""
 
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
@@ -817,6 +975,15 @@ class DuckDBCatalog:
                         _SNAPSHOT_SCHEMA_CHECKSUM,
                     ),
                 )
+                connection.execute(_UNIVERSE_SCHEMA_SQL)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+                    (
+                        _UNIVERSE_MIGRATION_ID,
+                        _UNIVERSE_MIGRATION_VERSION,
+                        _UNIVERSE_SCHEMA_CHECKSUM,
+                    ),
+                )
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V1_EXPECTED_TABLES
@@ -832,6 +999,31 @@ class DuckDBCatalog:
                     ),
                 )
                 self._after_snapshot_migration()
+                connection.execute(_UNIVERSE_SCHEMA_SQL)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+                    (
+                        _UNIVERSE_MIGRATION_ID,
+                        _UNIVERSE_MIGRATION_VERSION,
+                        _UNIVERSE_SCHEMA_CHECKSUM,
+                    ),
+                )
+                self._after_universe_migration()
+                self._validate_schema()
+            elif relations == {
+                ("table", "main", table) for table in _V2_EXPECTED_TABLES
+            }:
+                self._validate_schema(version=2)
+                connection.execute(_UNIVERSE_SCHEMA_SQL)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+                    (
+                        _UNIVERSE_MIGRATION_ID,
+                        _UNIVERSE_MIGRATION_VERSION,
+                        _UNIVERSE_SCHEMA_CHECKSUM,
+                    ),
+                )
+                self._after_universe_migration()
                 self._validate_schema()
             elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
@@ -871,12 +1063,18 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
-    def _validate_schema(self, *, version: int = 2) -> None:
+    def _validate_schema(self, *, version: int = 3) -> None:
         if self.connection.execute(
             "SELECT count(*) FROM duckdb_indexes()"
         ).fetchone() != (0,):
             raise CatalogSchemaError("catalog schema is invalid")
-        expected_tables = _V1_EXPECTED_TABLES if version == 1 else _EXPECTED_TABLES
+        expected_tables = (
+            _V1_EXPECTED_TABLES
+            if version == 1
+            else _V2_EXPECTED_TABLES
+            if version == 2
+            else _EXPECTED_TABLES
+        )
         for table in expected_tables:
             actual_rows = self.connection.execute(
                 f"PRAGMA table_info('{table}')"
@@ -916,7 +1114,7 @@ class DuckDBCatalog:
         expected_migrations = [
             (_SCHEMA_MIGRATION_ID, _SCHEMA_MIGRATION_VERSION, _SCHEMA_CHECKSUM)
         ]
-        if version == 2:
+        if version >= 2:
             expected_migrations.append(
                 (
                     _SNAPSHOT_MIGRATION_ID,
@@ -924,15 +1122,24 @@ class DuckDBCatalog:
                     _SNAPSHOT_SCHEMA_CHECKSUM,
                 )
             )
+        if version >= 3:
+            expected_migrations.append(
+                (
+                    _UNIVERSE_MIGRATION_ID,
+                    _UNIVERSE_MIGRATION_VERSION,
+                    _UNIVERSE_SCHEMA_CHECKSUM,
+                )
+            )
         if migration != expected_migrations:
             raise CatalogSchemaError("catalog migration is unsupported")
 
-    def _transaction(self, operation: Callable[[], None]) -> None:
+    def _transaction(self, operation: Callable[[], Any]) -> Any:
         connection = self.connection
         try:
             connection.execute("BEGIN")
-            operation()
+            result = operation()
             connection.execute("COMMIT")
+            return result
         except CatalogError:
             self._rollback()
             raise
@@ -1111,11 +1318,28 @@ def _column_type(name: str) -> str:
         "candle_schema_version",
     }:
         return "INTEGER"
-    if name in {"row_count", "compressed_byte_count", "decompressed_byte_count"}:
+    if name in {
+        "row_count",
+        "compressed_byte_count",
+        "decompressed_byte_count",
+        "byte_count",
+    }:
         return "BIGINT"
-    if name in {"from_date", "to_date", "observation_date"}:
+    if name in {
+        "from_date",
+        "to_date",
+        "observation_date",
+        "effective_from",
+        "effective_to",
+    }:
         return "DATE"
-    if name == "retrieved_at":
+    if name in {
+        "retrieved_at",
+        "membership_published_at",
+        "membership_retrieved_at",
+        "sector_published_at",
+        "sector_retrieved_at",
+    }:
         return "TIMESTAMP WITH TIME ZONE"
     return "VARCHAR"
 
@@ -1165,6 +1389,10 @@ def _expected_table_columns(
         names = tuple(InstrumentSnapshotMetadataV1.__dataclass_fields__)
         primary_key = {"source", "retrieved_at", "observation_sha256"}
         not_null = set(names) - {"etag", "last_modified"}
+    elif table == "universe_snapshots":
+        names = tuple(UniverseSnapshotMetadataV1.__dataclass_fields__)
+        primary_key = {"snapshot_sha256"}
+        not_null = set(names)
     else:
         raise CatalogSchemaError("catalog schema is invalid")
     return tuple(
@@ -1291,6 +1519,68 @@ def _expected_constraints(
             ),
         )
         signatures.extend(checks)
+    elif table == "universe_snapshots":
+        signatures.extend(
+            (
+                ("CHECK", "(schema_version = 1)", (0,), ("schema_version",), None, ()),
+                (
+                    "CHECK",
+                    "(universe_id = 'nifty-50')",
+                    (1,),
+                    ("universe_id",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(effective_from <= effective_to)",
+                    (2, 3),
+                    ("effective_from", "effective_to"),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(membership_published_at <= membership_retrieved_at)",
+                    (6, 7),
+                    ("membership_published_at", "membership_retrieved_at"),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(sector_published_at <= sector_retrieved_at)",
+                    (10, 11),
+                    ("sector_published_at", "sector_retrieved_at"),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "regexp_full_match(snapshot_sha256, '[0-9a-f]{64}')",
+                    (12,),
+                    ("snapshot_sha256",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(byte_count BETWEEN 1 AND 65536)",
+                    (13,),
+                    ("byte_count",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(relative_object_path = (('universe_snapshots/sha256=' || snapshot_sha256) || '/snapshot.json'))",
+                    (14, 12),
+                    ("relative_object_path", "snapshot_sha256"),
+                    None,
+                    (),
+                ),
+            )
+        )
     primary_key = (
         _PHYSICAL_KEY_COLUMNS
         if table == "partitions"
@@ -1298,6 +1588,8 @@ def _expected_constraints(
         if table == "schema_migrations"
         else ("ingestion_run_id",)
         if table == "ingestion_runs"
+        else ("snapshot_sha256",)
+        if table == "universe_snapshots"
         else ("source", "retrieved_at", "observation_sha256")
     )
     indexes = tuple(
@@ -1352,6 +1644,39 @@ def _snapshot_metadata_from_row(
         cast(str, values[10]),
         cast(str | None, values[11]),
         cast(str | None, values[12]),
+    )
+
+
+def _universe_metadata_from_row(row: tuple[object, ...]) -> UniverseSnapshotMetadataV1:
+    values = list(row)
+    if (
+        len(values) != 15
+        or type(values[0]) is not int
+        or type(values[2]) is not date
+        or type(values[3]) is not date
+        or type(values[13]) is not int
+        or any(
+            type(values[index]) is not str
+            for index in (1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14)
+        )
+    ):
+        raise ValueError
+    return UniverseSnapshotMetadataV1(
+        values[0],
+        cast(str, values[1]),
+        values[2],
+        values[3],
+        cast(str, values[4]),
+        cast(str, values[5]),
+        datetime.fromisoformat(cast(str, values[6])).astimezone(UTC),
+        datetime.fromisoformat(cast(str, values[7])).astimezone(UTC),
+        cast(str, values[8]),
+        cast(str, values[9]),
+        datetime.fromisoformat(cast(str, values[10])).astimezone(UTC),
+        datetime.fromisoformat(cast(str, values[11])).astimezone(UTC),
+        cast(str, values[12]),
+        values[13],
+        cast(str, values[14]),
     )
 
 

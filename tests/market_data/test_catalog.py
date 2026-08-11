@@ -149,12 +149,14 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             "partitions",
             "ingestion_runs",
             "instrument_snapshots",
+            "universe_snapshots",
         }
         assert catalog.connection.execute(
             "SELECT migration_id, version FROM schema_migrations ORDER BY version"
         ).fetchall() == [
             ("swing-trading-catalog-v1", 1),
             ("swing-trading-catalog-v2-instrument-snapshots", 2),
+            ("swing-trading-catalog-v3-universe-snapshots", 3),
         ]
 
     with DuckDBCatalog(tmp_path) as reopened:
@@ -426,8 +428,28 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     with DuckDBCatalog(tmp_path) as migrated:
         assert migrated.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (3,)]
         assert migrated.get_manifest(_plan()) == initial
+
+
+def test_v2_to_v3_migration_is_atomic(tmp_path) -> None:
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.connection.execute("DROP TABLE universe_snapshots")
+        catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+    with DuckDBCatalog(tmp_path) as upgraded:
+        assert upgraded.connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,), (3,)]
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.connection.execute("DROP TABLE universe_snapshots")
+        catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+    broken = DuckDBCatalog(tmp_path)
+    broken._after_universe_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("injected migration failure")
+    )
+    with pytest.raises(CatalogSchemaError):
+        broken.__enter__()
 
 
 def test_schema_rejects_user_indexes(tmp_path) -> None:

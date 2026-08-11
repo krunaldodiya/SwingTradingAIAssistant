@@ -169,6 +169,7 @@ def _assert_catalog_has_metadata_relations_only(catalog: DuckDBCatalog) -> None:
         ("instrument_snapshots",),
         ("partitions",),
         ("schema_migrations",),
+        ("universe_snapshots",),
     ]
 
 

@@ -474,6 +474,11 @@ mapped cause on partial work without turning partial work into failure.
 
 ## Instrument snapshot catalog migration
 
+This document owns the historical preview boundary through catalog v2 only.
+The frozen v3 point-in-time universe migration, including its DDL, checksum,
+compatibility and rollback rules, is owned by Plan 05; it is not a redesign of
+the public-preview contract.
+
 Catalog v1 remains immutable: migration ID `swing-trading-catalog-v1`, version
 `1`, checksum
 `1bf5a64839169e61cdb839bc778131b2c0876da2d818537644677af861da006d`.

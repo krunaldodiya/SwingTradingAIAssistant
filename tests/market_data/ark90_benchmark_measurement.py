@@ -1903,6 +1903,7 @@ def _assert_metadata_relations_only(catalog: DuckDBCatalog) -> None:
         ("instrument_snapshots",),
         ("partitions",),
         ("schema_migrations",),
+        ("universe_snapshots",),
     ]:
         raise RuntimeError("benchmark catalog contains non-metadata relations")
 
