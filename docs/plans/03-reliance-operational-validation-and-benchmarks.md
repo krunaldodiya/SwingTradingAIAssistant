@@ -700,9 +700,15 @@ uv run --extra dev python tests/market_data/ark93_benchmark_threshold_decision.p
   --output "$PWD/artifacts/benchmarks/ark93-threshold-decision-v1.json" \
   --base-artifact "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
   --b03-repair-artifact "$PWD/artifacts/benchmarks/ark92-b03-measurement-error-repair-v1.json" \
-  --expected-revision "<accepted-threshold-40-hex-revision>" \
-  --expected-tree "<accepted-threshold-40-hex-tree>"
+  --expected-revision "bbda5e94dbff2408aeab26f352c66e4b33be8bf5" \
+  --expected-tree "3315b27fb8c163b982174625263cf2d2ba2d01bc"
 ```
+
+The accepted decision receipt is `ark93-threshold-decision-receipt-v1`, byte
+count `8773`, SHA-256
+`8a961e9a0b940d80a11749c79da38ae326026bc5f34a89ffdeda5903936410f4`.
+All five workloads are `THRESHOLD_ACCEPTED` across 35 applicable metrics; this
+records local regression references, not a universal performance promise.
 
 ## 6. Failure, cancellation, safety, and provenance rules
 
