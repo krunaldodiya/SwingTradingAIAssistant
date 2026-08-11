@@ -615,8 +615,12 @@ retention/cataloging; and offline equity resolution. The orchestrator performs:
    schedule bytes.
 4. Reuse a valid current-date snapshot or make at most one bounded BOD request;
    retain the compressed response immutably and append its metadata row.
-5. Resolve the latest unambiguous snapshot with `retrieved_at <=` the injected
-   invocation time, release the preparation lease, and build one
+5. Resolve the latest unambiguous retained snapshot with `retrieved_at <=` the
+   injected invocation time. A snapshot fetched by this invocation may instead
+   use its exact acquisition timestamp only when it is no later than a trusted
+   post-fetch clock reading and its IST `observation_date` still equals the
+   invocation date; injected future evidence and midnight-crossing evidence fail
+   closed. Release the preparation lease and build one
    `IngestionCommand`.
 6. Call `IngestionCoordinator.run` exactly once. It reacquires the lease and
    re-proves the retained schedule before catalog, credential, limiter,
@@ -627,6 +631,12 @@ Schedule evidence retains source, source release, UTC release/as-of time,
 canonical bytes, and digest. Weekday inference, candle-derived calendars, and
 silent holiday assumptions are forbidden. Missing, stale, corrupt, or
 contradictory evidence fails closed.
+
+The default CLI application composition may accept these exact canonical bytes
+from an explicit absolute `--schedule-file`. It opens only a bounded, regular,
+non-symlink, non-group/world-writable file; validates the exact canonical
+representation before storage activity; and never embeds or infers a calendar.
+Omitting or invalidating the file preserves `SCHEDULE_EVIDENCE_UNAVAILABLE`.
 
 Snapshot metadata retains schema version, fixed bounded source ID,
 `observation_date`, UTC `retrieved_at`, compressed and decompressed SHA-256,

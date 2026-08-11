@@ -20,6 +20,7 @@ from .daily_ohlcv import (
 )
 from .download_preparation import (
     AuthoritativeScheduleInputV1,
+    CanonicalFileScheduleSourceV1,
     DownloadPreparationServiceV1,
 )
 from .historical import UpstoxV3HistoricalClient
@@ -94,7 +95,7 @@ def _date(value: str) -> date:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    yesterday = date.today() - timedelta(days=1)
+    probe_from, probe_to = _default_probe_range(date.today())
     parser = argparse.ArgumentParser(
         prog="market-data",
         description=(
@@ -107,6 +108,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="persist one admitted closed-range one-minute download",
     )
     _add_persistent_range_arguments(download)
+    download.add_argument(
+        "--schedule-file",
+        type=Path,
+        metavar="ABSOLUTE_PATH",
+        help="canonical authoritative schedule JSON for this download",
+    )
     coverage = commands.add_parser(
         "coverage",
         help="prove retained scheduled-minute coverage without provider access",
@@ -135,15 +142,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--from",
         dest="from_date",
         type=_date,
-        default=yesterday - timedelta(days=3),
+        default=probe_from,
         metavar="YYYY-MM-DD",
-        help="optional actual date, for example 2026-08-03; defaults to 4 days ago",
+        help=(
+            "optional actual date, for example 2026-08-03; defaults to up to "
+            "4 days ending yesterday within one calendar month"
+        ),
     )
     probe.add_argument(
         "--to",
         dest="to_date",
         type=_date,
-        default=yesterday,
+        default=probe_to,
         metavar="YYYY-MM-DD",
         help="optional actual date; defaults to yesterday",
     )
@@ -159,7 +169,7 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download":
-        service = download_service or _default_download_service()
+        service = download_service or _default_download_service(args.schedule_file)
         try:
             request: object = SingleSymbolDownloadRequestV1(
                 args.segment,
@@ -211,17 +221,30 @@ def main(
     raise AssertionError("unreachable command")
 
 
-def _default_download_service() -> SingleSymbolDownloadServiceV1:
+def _default_download_service(
+    schedule_file: Path | None = None,
+) -> SingleSymbolDownloadServiceV1:
     clock = _SystemClock()
     transport = UrllibHttpTransport(max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES)
     preparation = DownloadPreparationServiceV1(
         PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
-        _UnavailableAuthoritativeScheduleSource(),
+        (
+            _UnavailableAuthoritativeScheduleSource()
+            if schedule_file is None
+            else CanonicalFileScheduleSourceV1(schedule_file)
+        ),
         InstrumentSnapshotClientV1(transport, clock=clock.now),
+        clock=clock,
     )
     return SingleSymbolDownloadServiceV1(
         preparation, IngestionCoordinator(), clock=clock
     )
+
+
+def _default_probe_range(today: date) -> tuple[date, date]:
+    probe_to = today - timedelta(days=1)
+    month_start = date(probe_to.year, probe_to.month, 1)
+    return max(month_start, probe_to - timedelta(days=3)), probe_to
 
 
 def _default_coverage_service() -> StoredCoverageServiceV1:

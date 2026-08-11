@@ -398,6 +398,14 @@ def schedule_covers_full_calendar_range(
         return False
 
 
+def parse_canonical_schedule_bytes(value: object) -> ExpectedSessionSchedule:
+    """Parse only the exact bounded canonical schedule representation."""
+    try:
+        return _parse_canonical_bytes(value)
+    except ValueError:
+        raise ValueError("invalid canonical schedule evidence") from None
+
+
 def _parse_canonical_bytes(value: object) -> ExpectedSessionSchedule:
     if type(value) is not bytes or len(value) > MAX_SCHEDULE_BYTES:
         raise ValueError

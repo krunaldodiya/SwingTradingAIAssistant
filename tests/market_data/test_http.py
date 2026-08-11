@@ -3,7 +3,9 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import threading
 from email.message import Message
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -326,3 +328,52 @@ def test_cross_origin_redirect_drops_authorization_but_same_origin_keeps_it() ->
     assert cross_origin.get_header("Authorization") is None
     assert same_origin is not None
     assert same_origin.get_header("Authorization") == "Bearer secret"
+
+
+def test_real_cross_origin_redirect_never_forwards_authorization() -> None:
+    received_authorization: list[str | None] = []
+
+    class TargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received_authorization.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_: object) -> None:
+            return None
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_url = f"http://127.0.0.1:{target.server_port}/target"
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header("Location", target_url)
+            self.end_headers()
+
+        def log_message(self, *_: object) -> None:
+            return None
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    threads = tuple(
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in (source, target)
+    )
+    for thread in threads:
+        thread.start()
+    try:
+        response = UrllibHttpTransport(timeout_seconds=2).get(
+            f"http://127.0.0.1:{source.server_port}/source",
+            headers={"Authorization": "Bearer fake-test-token"},
+        )
+    finally:
+        for server in (source, target):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert response.status_code == 200
+    assert received_authorization == [None]

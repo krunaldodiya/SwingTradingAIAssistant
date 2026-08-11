@@ -24,6 +24,8 @@ def test_readme_connects_sprint_two_to_the_current_storage_increment() -> None:
     assert "Milestone 2 remains **blocked / not accepted**" in readme
     assert "`market-data download`, `coverage`, and bounded `query` commands" in readme
     assert "fails closed with `SCHEDULE_EVIDENCE_UNAVAILABLE`" in readme
+    assert "`--schedule-file`" in readme
+    assert "sprint is extended" in readme.lower()
 
 
 def test_sprint_zero_records_its_merged_baseline_and_time_bounded_carryover() -> None:

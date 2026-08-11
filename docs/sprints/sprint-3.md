@@ -49,6 +49,7 @@ The completed preview supports closed ISO date ranges and explicit JSON output:
 uv run market-data download \
   --segment NSE_EQ --symbol RELIANCE \
   --from 2026-07-01 --to 2026-07-31 \
+  --schedule-file /var/tmp/nse-schedule.json \
   --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data coverage \
@@ -160,10 +161,11 @@ suite contains **1,349 tests** and reaches **91.27% branch coverage**; Ruff
 format and lint, strict Pyright on production source, Vulture at 80%, the full
 pytest gate, and hosted CI are required on the accepted closeout revision.
 
-The sprint ships a controlled single-symbol preview, not live-release or
-multi-symbol readiness. The default package has no embedded exchange-calendar
-feed and fails closed until an application composition injects approved
-authoritative schedule evidence. The authenticated closed-range Upstox gate,
+The seven-slice closeout shipped a controlled single-symbol preview, not
+live-release or multi-symbol readiness. The package has no embedded exchange-
+calendar feed; Slice 8 adds explicit bounded canonical `--schedule-file`
+composition while continuing to fail closed without approved evidence. The
+authenticated closed-range Upstox gate,
 multi-symbol point-in-time scheduling, benchmark release thresholds, research
 logic, advice, and broker execution remain explicitly deferred.
 

@@ -18,6 +18,7 @@ from swing_trading_ai_assistant.market_data.catalog import (
 )
 from swing_trading_ai_assistant.market_data.download_preparation import (
     AuthoritativeScheduleInputV1,
+    CanonicalFileScheduleSourceV1,
     DownloadPreparationReportV1,
     DownloadPreparationRequestV1,
     DownloadPreparationServiceV1,
@@ -146,6 +147,176 @@ def _schedule() -> ExpectedSessionSchedule:
 def _schedule_input() -> AuthoritativeScheduleInputV1:
     schedule = _schedule()
     return AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+
+
+def test_canonical_file_schedule_source_loads_exact_bounded_evidence(
+    tmp_path: Path,
+) -> None:
+    canonical = canonical_schedule_bytes(_schedule())
+    source_path = tmp_path / "schedule.json"
+    source_path.write_bytes(canonical)
+    source_path.chmod(0o600)
+
+    loaded = CanonicalFileScheduleSourceV1(source_path).load()
+
+    assert loaded.schedule == _schedule()
+    assert loaded.canonical_bytes == canonical
+
+
+@pytest.mark.parametrize(
+    "unsafe", ("symlink", "group-writable", "oversized", "fifo", "noncanonical")
+)
+def test_canonical_file_schedule_source_rejects_unsafe_inputs(
+    tmp_path: Path, unsafe: str
+) -> None:
+    canonical = canonical_schedule_bytes(_schedule())
+    safe = tmp_path / "safe.json"
+    safe.write_bytes(canonical)
+    safe.chmod(0o600)
+    source_path = tmp_path / "schedule.json"
+    if unsafe == "symlink":
+        source_path.symlink_to(safe)
+    elif unsafe == "group-writable":
+        source_path.write_bytes(canonical)
+        source_path.chmod(0o620)
+    elif unsafe == "oversized":
+        source_path.write_bytes(b"x" * 1_000_001)
+        source_path.chmod(0o600)
+    elif unsafe == "fifo":
+        os.mkfifo(source_path, mode=0o600)
+    else:
+        source_path.write_bytes(b"{}")
+        source_path.chmod(0o600)
+
+    with pytest.raises(ValueError, match="authoritative schedule file"):
+        CanonicalFileScheduleSourceV1(source_path).load()
+
+
+def test_canonical_file_schedule_source_rejects_relative_path() -> None:
+    with pytest.raises(ValueError, match="authoritative schedule file"):
+        CanonicalFileScheduleSourceV1(Path("relative-schedule.json")).load()
+
+
+def test_canonical_file_schedule_source_rejects_short_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "schedule.json"
+    source_path.write_bytes(canonical_schedule_bytes(_schedule()))
+    source_path.chmod(0o600)
+    monkeypatch.setattr(preparation_module.os, "read", lambda *_: b"")
+
+    with pytest.raises(ValueError, match="authoritative schedule file"):
+        CanonicalFileScheduleSourceV1(source_path).load()
+
+
+def test_canonical_file_schedule_source_rejects_same_inode_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canonical = canonical_schedule_bytes(_schedule())
+    source_path = tmp_path / "schedule.json"
+    source_path.write_bytes(canonical)
+    source_path.chmod(0o600)
+    real_read = os.read
+    mutated = False
+
+    def mutate_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal mutated
+        chunk = real_read(descriptor, size)
+        if chunk and not mutated:
+            mutated = True
+            with source_path.open("r+b", buffering=0) as writer:
+                writer.seek(len(canonical) - 2)
+                original = writer.read(1)
+                writer.seek(len(canonical) - 2)
+                writer.write(b" " if original != b" " else b"\n")
+                os.fsync(writer.fileno())
+        return chunk
+
+    monkeypatch.setattr(preparation_module.os, "read", mutate_after_read)
+
+    with pytest.raises(ValueError, match="authoritative schedule file"):
+        CanonicalFileScheduleSourceV1(source_path).load()
+
+
+def test_canonical_file_schedule_source_rejects_path_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canonical = canonical_schedule_bytes(_schedule())
+    source_path = tmp_path / "schedule.json"
+    source_path.write_bytes(canonical)
+    source_path.chmod(0o600)
+    displaced_path = tmp_path / "displaced.json"
+    real_read = os.read
+    substituted = False
+
+    def substitute_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal substituted
+        chunk = real_read(descriptor, size)
+        if chunk and not substituted:
+            substituted = True
+            source_path.rename(displaced_path)
+            source_path.write_bytes(canonical)
+            source_path.chmod(0o600)
+        return chunk
+
+    monkeypatch.setattr(preparation_module.os, "read", substitute_after_read)
+
+    with pytest.raises(ValueError, match="authoritative schedule file"):
+        CanonicalFileScheduleSourceV1(source_path).load()
+
+
+@pytest.mark.parametrize("attack", ("same-inode", "path-substitution"))
+def test_schedule_file_race_stops_before_storage_snapshot_or_provider_activity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    canonical = canonical_schedule_bytes(_schedule())
+    source_path = tmp_path / "schedule.json"
+    source_path.write_bytes(canonical)
+    source_path.chmod(0o600)
+    displaced_path = tmp_path / "displaced.json"
+    real_read = os.read
+    attacked = False
+
+    def attack_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal attacked
+        chunk = real_read(descriptor, size)
+        if chunk and not attacked:
+            attacked = True
+            if attack == "same-inode":
+                with source_path.open("r+b", buffering=0) as writer:
+                    writer.seek(len(canonical) - 2)
+                    writer.write(b" ")
+                    os.fsync(writer.fileno())
+            else:
+                source_path.rename(displaced_path)
+                source_path.write_bytes(canonical)
+                source_path.chmod(0o600)
+        return chunk
+
+    monkeypatch.setattr(preparation_module.os, "read", attack_after_read)
+    snapshot = NoFetchSnapshotSource()
+    storage_root = tmp_path / "storage"
+    service = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        CanonicalFileScheduleSourceV1(source_path),
+        snapshot,
+    )
+
+    report = service.prepare(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            storage_root,
+            datetime(2026, 8, 10, tzinfo=UTC),
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.INSUFFICIENT_EVIDENCE
+    assert report.failure_code is PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE
+    assert snapshot.calls == 0
+    assert not storage_root.exists()
 
 
 def _snapshot_client(
@@ -1017,6 +1188,121 @@ def test_preparation_rejects_non_contract_schedule_and_future_snapshot(
     assert (
         future_report.failure_code
         is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE
+    )
+
+
+def test_preparation_accepts_only_fresh_same_day_snapshot_with_trusted_clock(
+    tmp_path: Path,
+) -> None:
+    invocation = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
+    fetched_at = invocation + timedelta(seconds=1)
+    observed_at = fetched_at + timedelta(seconds=1)
+    client, _ = _snapshot_client(fetched_at)
+
+    class PostFetchClock:
+        def now(self) -> datetime:
+            return observed_at
+
+    report = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(_schedule_input()),
+        CountingSnapshotSource(client),
+        clock=PostFetchClock(),
+    ).prepare(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            tmp_path,
+            invocation,
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.SUCCEEDED
+    assert report.prepared is not None
+    assert report.prepared.snapshot_retrieved_at == fetched_at
+
+
+@pytest.mark.parametrize(
+    ("invocation", "fetched_at", "observed_at"),
+    (
+        (
+            datetime(2026, 8, 10, 4, 0, tzinfo=UTC),
+            datetime(2026, 8, 10, 4, 0, 2, tzinfo=UTC),
+            datetime(2026, 8, 10, 4, 0, 1, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 8, 10, 18, 29, tzinfo=UTC),
+            datetime(2026, 8, 10, 18, 31, tzinfo=UTC),
+            datetime(2026, 8, 10, 18, 32, tzinfo=UTC),
+        ),
+    ),
+)
+def test_preparation_rejects_untrusted_or_midnight_crossing_fresh_snapshot(
+    tmp_path: Path,
+    invocation: datetime,
+    fetched_at: datetime,
+    observed_at: datetime,
+) -> None:
+    client, _ = _snapshot_client(fetched_at)
+
+    class PostFetchClock:
+        def now(self) -> datetime:
+            return observed_at
+
+    report = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(_schedule_input()),
+        CountingSnapshotSource(client),
+        clock=PostFetchClock(),
+    ).prepare(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            tmp_path,
+            invocation,
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.UNAVAILABLE
+    assert (
+        report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE
+    )
+
+
+@pytest.mark.parametrize("observed_at", (object(), datetime(2026, 8, 10, 4, 0)))
+def test_preparation_rejects_invalid_post_fetch_clock(
+    tmp_path: Path, observed_at: object
+) -> None:
+    invocation = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
+    client, _ = _snapshot_client(invocation + timedelta(seconds=1))
+
+    class InvalidPostFetchClock:
+        def now(self) -> object:
+            return observed_at
+
+    report = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(_schedule_input()),
+        CountingSnapshotSource(client),
+        clock=InvalidPostFetchClock(),  # type: ignore[arg-type]
+    ).prepare(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            tmp_path,
+            invocation,
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.UNAVAILABLE
+    assert (
+        report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE
     )
 
 
