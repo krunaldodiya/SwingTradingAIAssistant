@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import subprocess
 from dataclasses import dataclass, field, replace
@@ -28,13 +29,17 @@ from ark90_benchmark_measurement import (
 )
 from ark92_benchmark_baseline_collection import (
     ArtifactReceiptV1,
+    B03MeasurementErrorRepairV1,
     BaselineCollectionReport,
     BaselineCollectionStatus,
     BaselineWorkloadResult,
     _comparable_valid_count,
+    collect_b03_measurement_error_repair,
     collect_baseline_samples,
     collect_benchmark_baselines,
+    read_b03_measurement_error_repair,
     read_baseline_artifact,
+    write_b03_measurement_error_repair,
     write_baseline_artifact,
 )
 from ark92_benchmark_baseline_collection import main as persist_baseline_artifact
@@ -305,6 +310,226 @@ def _artifact_report() -> BaselineCollectionReport:
     return BaselineCollectionReport(tuple(results))
 
 
+def _b03_child_failure_report() -> BaselineCollectionReport:
+    report = _artifact_report()
+    failed = BaselineWorkloadResult(
+        "B03",
+        _terminal_artifact_record(
+            "B03", "warmup", 1, outcome="FAILED", failure_code="BENCHMARK_CHILD_FAILED"
+        ),
+        tuple(
+            _terminal_artifact_record(
+                "B03",
+                "measured",
+                index,
+                outcome="FAILED",
+                failure_code="BENCHMARK_CHILD_FAILED",
+            )
+            for index in range(1, 6)
+        ),
+        BaselineCollectionStatus.INSUFFICIENT,
+        5,
+        0,
+    )
+    return BaselineCollectionReport((*report.results[:2], failed, *report.results[3:]))
+
+
+def test_b03_measurement_error_supplement_retains_base_and_only_reruns_b03(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    base_path = tmp_path / "baseline.json"
+    supplement_path = tmp_path / "b03-repair.json"
+    base_receipt = write_baseline_artifact(_b03_child_failure_report(), base_path)
+    _allow_test_base_receipt(monkeypatch, base_receipt)
+    calls: list[tuple[str, str, int]] = []
+
+    def measure(workload_id: str, kind: str, index: int) -> B01MeasurementRecord:
+        calls.append((workload_id, kind, index))
+        return _artifact_record(workload_id, kind, index)
+
+    result = collect_b03_measurement_error_repair(tmp_path / "work", measure)
+    supplement = B03MeasurementErrorRepairV1(
+        "descriptor-bound-relative-root-v1", base_receipt, result
+    )
+    supplement_receipt = write_b03_measurement_error_repair(supplement, supplement_path)
+    reopened = read_b03_measurement_error_repair(
+        supplement_path,
+        supplement_receipt,
+        base_path,
+        base_receipt,
+    )
+
+    assert calls == [
+        ("B03", "warmup", 1),
+        *(("B03", "measured", index) for index in range(1, 6)),
+    ]
+    assert reopened.reason == "descriptor-bound-relative-root-v1"
+    assert reopened.base_receipt == base_receipt
+    assert reopened.result.status is BaselineCollectionStatus.RETAINED
+    assert reopened.result.valid_measurement_count == 5
+    assert (
+        base_path.read_bytes()
+    )  # the authenticated base remains present and unchanged
+    assert stat.S_IMODE(supplement_path.stat().st_mode) == 0o400
+
+
+def test_b03_measurement_error_reader_rejects_nonmatching_base_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    base_path = tmp_path / "baseline.json"
+    supplement_path = tmp_path / "b03-repair.json"
+    base_receipt = write_baseline_artifact(_artifact_report(), base_path)
+    _allow_test_base_receipt(monkeypatch, base_receipt)
+    result = BaselineWorkloadResult(
+        "B03",
+        _artifact_record("B03", "warmup", 1),
+        tuple(_artifact_record("B03", "measured", index) for index in range(1, 6)),
+        BaselineCollectionStatus.RETAINED,
+        5,
+        5,
+    )
+    supplement_receipt = write_b03_measurement_error_repair(
+        B03MeasurementErrorRepairV1(
+            "descriptor-bound-relative-root-v1", base_receipt, result
+        ),
+        supplement_path,
+    )
+
+    with pytest.raises(ValueError, match="measurement-error source"):
+        read_b03_measurement_error_repair(
+            supplement_path,
+            supplement_receipt,
+            base_path,
+            base_receipt,
+        )
+
+
+def test_b03_repair_cli_collects_once_and_prints_only_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    _allow_stable_source(monkeypatch)
+    base_path = tmp_path / "baseline.json"
+    output = tmp_path / "b03-repair.json"
+    work_root = tmp_path / "b03-work"
+    base_receipt = write_baseline_artifact(_b03_child_failure_report(), base_path)
+    _allow_test_base_receipt(monkeypatch, base_receipt)
+    result = BaselineWorkloadResult(
+        "B03",
+        _artifact_record("B03", "warmup", 1),
+        tuple(_artifact_record("B03", "measured", index) for index in range(1, 6)),
+        BaselineCollectionStatus.RETAINED,
+        5,
+        5,
+    )
+    monkeypatch.setattr(
+        baseline_collection,
+        "collect_b03_measurement_error_repair",
+        lambda _root: result,
+    )
+
+    exit_code = baseline_collection.b03_repair_main(
+        [
+            "--output",
+            str(output),
+            "--work-root",
+            str(work_root),
+            "--base-artifact",
+            str(base_path),
+            "--base-byte-count",
+            str(base_receipt.byte_count),
+            "--base-sha256",
+            base_receipt.sha256,
+            "--expected-revision",
+            "a" * 40,
+            "--expected-tree",
+            "b" * 40,
+        ]
+    )
+
+    assert exit_code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["schema_version"] == (
+        "ark92-b03-measurement-error-repair-receipt-v1"
+    )
+    receipt = baseline_collection.B03MeasurementErrorRepairReceiptV1(
+        printed["schema_version"], printed["byte_count"], printed["sha256"]
+    )
+    reopened = read_b03_measurement_error_repair(
+        output, receipt, base_path, base_receipt
+    )
+    assert reopened.result.valid_measurement_count == 5
+
+
+def test_b03_repair_rejects_other_authenticated_base_before_creating_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    _allow_stable_source(monkeypatch)
+    base_path = tmp_path / "alternate-baseline.json"
+    output = tmp_path / "repair.json"
+    work_root = tmp_path / "work"
+    alternate_receipt = write_baseline_artifact(_b03_child_failure_report(), base_path)
+
+    with pytest.raises(ValueError, match="frozen base receipt"):
+        baseline_collection._collect_b03_repair_once(
+            output,
+            work_root,
+            base_path,
+            alternate_receipt,
+            "a" * 40,
+            "b" * 40,
+        )
+
+    assert not output.exists()
+    assert not work_root.exists()
+
+
+def test_b03_measurement_error_source_requires_valid_sampling() -> None:
+    b03 = _b03_child_failure_report().results[2]
+    invalid = replace(
+        b03.warmup,
+        resource_evidence_status=ResourceEvidenceStatus.INVALID,
+        resource_blocker="sampling_exception",
+        peak_rss_bytes=None,
+        open_fd_start=None,
+        open_fd_peak=None,
+        open_fd_end=None,
+    )
+
+    with pytest.raises(ValueError, match="measurement-error source"):
+        baseline_collection._validate_b03_measurement_error_source(
+            replace(b03, warmup=invalid)
+        )
+
+
+def test_b03_failed_supplement_is_published_as_unset_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    base_path = tmp_path / "baseline.json"
+    output = tmp_path / "repair.json"
+    base_receipt = write_baseline_artifact(_b03_child_failure_report(), base_path)
+    _allow_test_base_receipt(monkeypatch, base_receipt)
+    failed = _b03_child_failure_report().results[2]
+
+    receipt = write_b03_measurement_error_repair(
+        B03MeasurementErrorRepairV1(
+            "descriptor-bound-relative-root-v1", base_receipt, failed
+        ),
+        output,
+    )
+    reopened = read_b03_measurement_error_repair(
+        output, receipt, base_path, base_receipt
+    )
+
+    assert reopened.result.status is BaselineCollectionStatus.INSUFFICIENT
+    assert reopened.result.valid_measurement_count == 0
+    assert len(reopened.result.measured) == 5
+
+
 def _allow_stable_source(monkeypatch: pytest.MonkeyPatch) -> None:
     identity = baseline_collection._SourceIdentityV1("a" * 40, "b" * 40, "c" * 64)
     monkeypatch.setattr(
@@ -323,6 +548,15 @@ def _allow_stable_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         baseline_collection, "_verify_loaded_module_snapshot", lambda _identity: None
     )
+
+
+def _allow_test_base_receipt(
+    monkeypatch: pytest.MonkeyPatch, receipt: ArtifactReceiptV1
+) -> None:
+    monkeypatch.setattr(
+        baseline_collection, "_FROZEN_B03_BASE_BYTE_COUNT", receipt.byte_count
+    )
+    monkeypatch.setattr(baseline_collection, "_FROZEN_B03_BASE_SHA256", receipt.sha256)
 
 
 def _pinned_cli_args(output: Path, work_root: Path) -> list[str]:
@@ -1295,6 +1529,43 @@ def test_b01_cancelled_and_protocol_invalid_iterations_are_retained(
     assert record.partition_outcomes == ()
     assert record.comparability_key.measurement_method == (
         "monotonic-parent-child-spawn-v3"
+    )
+
+
+def test_forked_b03_resolves_descriptor_bound_relative_root_to_absolute(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    held_root = tmp_path / "held"
+    held_root.mkdir(mode=0o700)
+    original_directory = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    held_descriptor = os.open(held_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    monkeypatch.setattr(
+        benchmark_measurement._BENCHMARK_RUNTIME, "process_context", "fork"
+    )
+    monkeypatch.setattr(
+        benchmark_measurement._BENCHMARK_RUNTIME,
+        "source_identity",
+        ("a" * 40, "b" * 40, "c" * 64),
+    )
+    os.fchdir(held_descriptor)
+    try:
+        record = measure_benchmark_workload(
+            Path("."),
+            workload_id="B03",
+            iteration_kind="measured",
+            iteration_index=1,
+        )
+    finally:
+        os.fchdir(original_directory)
+        os.close(original_directory)
+        os.close(held_descriptor)
+
+    assert record.outcome == "SUCCEEDED"
+    assert record.failure_code == "NONE"
+    assert record.repair_count == 1
+    assert record.reconciliation_reasons == ("CHECKSUM_INVALID_OR_MISMATCHED",)
+    assert record.comparability_key.measurement_method == (
+        "monotonic-parent-child-fork-v3"
     )
 
 

@@ -585,6 +585,18 @@ identical measurement failures after repair trigger the workflow circuit
 breaker.  Any correctness, checksum, request-count, lifecycle, or resource-bound
 failure stops immediately and is not averaged.
 
+The retained first B03 collection exposed the exact harness error
+`descriptor-bound-relative-root-v1`: its warm-up and five measured records are
+all `FAILED/BENCHMARK_CHILD_FAILED` with valid sampling and zero request,
+attempt, or repair activity because the forked child received `Path(".")` while
+the production repair boundary requires an absolute storage root. Those records
+and their artifact remain immutable evidence. The section 5.4 measurement-error
+allowance authorizes exactly one separate B03-only supplement after the child
+resolves that descriptor-bound relative root to its inherited absolute path.
+It does not authorize rerunning B01, B02, B04, or B05, replacing either file,
+or dropping any observation. Any different base failure shape or a failed,
+invalid, non-comparable, or incomplete supplement remains `UNSET` and stops.
+
 ### 5.5 Durable one-shot baseline artifact
 
 ARK-111 owns the persistence boundary and ARK-92 owns its single collection.
@@ -631,6 +643,36 @@ the complete workload/record schema, and all serializer semantics; it may not
 edit, replace, select, or rerun samples. A failed/insufficient collection
 remains evidence and does not authorize another collection without the section
 5.4 measurement-error rule.
+
+For the one authorized B03 measurement-error repair, the original receipt is
+`ark92-baseline-receipt-v1`, byte count `220934`, SHA-256
+`1b69e0f4b70983582e889ef22be4c5dcb9051985b001be46ac305a87c86bd755`.
+The supplement top level is exactly
+`schema_version=ark92-b03-measurement-error-repair-v1`,
+`reason=descriptor-bound-relative-root-v1`, that complete base receipt, and one
+B03 result containing one warm-up plus five measured records. It uses the same
+bounded canonical serialization, private directories, mode `0400`, no-overwrite
+publication, source pins, loaded-module verification, descriptor-bound work
+root, and immutable readback rules as the baseline. Its receipt schema is
+`ark92-b03-measurement-error-repair-receipt-v1`. Run exactly once from the
+repository root after the repair candidate is accepted:
+
+```bash
+uv run --extra dev python tests/market_data/ark92_b03_measurement_error_repair.py \
+  --output "$PWD/artifacts/benchmarks/ark92-b03-measurement-error-repair-v1.json" \
+  --work-root "$PWD/artifacts/benchmarks/ark92-b03-measurement-error-work-v1" \
+  --base-artifact "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
+  --base-byte-count 220934 \
+  --base-sha256 1b69e0f4b70983582e889ef22be4c5dcb9051985b001be46ac305a87c86bd755 \
+  --expected-revision "<accepted-repair-40-hex-revision>" \
+  --expected-tree "<accepted-repair-40-hex-tree>"
+```
+
+ARK-93 must authenticate and report both artifacts. It reports the original
+B03 set as `MEASUREMENT_ERROR_RETAINED`; only a five-of-five valid, comparable,
+stable supplement may supply B03's threshold reference. This explicit lineage
+is a correction of harness applicability, not post-hoc sample selection. The
+four unaffected workloads continue to use only the original artifact.
 
 ## 6. Failure, cancellation, safety, and provenance rules
 

@@ -557,7 +557,7 @@ def _run_b01_child(
 ) -> None:
     prepared: _PreparedB01 | None = None
     try:
-        prepared = _prepare_b01(Path(root_text))
+        prepared = _prepare_b01(_child_storage_root(root_text))
         connection.send("READY")
         if connection.recv() != "START":
             return
@@ -594,7 +594,9 @@ def _run_benchmark_child(
 ) -> None:
     prepared: object | None = None
     try:
-        prepared = _prepare_benchmark_workload(workload_id, Path(root_text))
+        prepared = _prepare_benchmark_workload(
+            workload_id, _child_storage_root(root_text)
+        )
         connection.send("READY")
         if connection.recv() != "START":
             return
@@ -623,6 +625,11 @@ def _run_benchmark_child(
             connection.send(("ERROR", "BENCHMARK_CHILD_FAILED"))
     finally:
         connection.close()
+
+
+def _child_storage_root(root_text: str) -> Path:
+    root = Path(root_text)
+    return root if root.is_absolute() else root.absolute()
 
 
 def _prepare_b01(root: Path) -> _PreparedB01:

@@ -38,6 +38,13 @@ _WORKLOAD_IDS = ("B01", "B02", "B03", "B04", "B05")
 _MEASURED_ITERATION_COUNT = 5
 _ARTIFACT_SCHEMA_VERSION = "ark92-baseline-artifact-v1"
 _RECEIPT_SCHEMA_VERSION = "ark92-baseline-receipt-v1"
+_B03_REPAIR_SCHEMA_VERSION = "ark92-b03-measurement-error-repair-v1"
+_B03_REPAIR_RECEIPT_SCHEMA_VERSION = "ark92-b03-measurement-error-repair-receipt-v1"
+_B03_REPAIR_REASON = "descriptor-bound-relative-root-v1"
+_FROZEN_B03_BASE_BYTE_COUNT = 220_934
+_FROZEN_B03_BASE_SHA256 = (
+    "1b69e0f4b70983582e889ef22be4c5dcb9051985b001be46ac305a87c86bd755"
+)
 _ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAX_ARTIFACT_BYTES = 4_000_000
@@ -217,6 +224,34 @@ class ArtifactReceiptV1:
 
 
 @dataclass(frozen=True, slots=True)
+class B03MeasurementErrorRepairReceiptV1:
+    """Identity for the one separately retained B03 measurement-error repair."""
+
+    schema_version: str
+    byte_count: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != _B03_REPAIR_RECEIPT_SCHEMA_VERSION
+            or type(self.byte_count) is not int
+            or not 0 < self.byte_count <= _MAX_ARTIFACT_BYTES
+            or type(self.sha256) is not str
+            or _HEX_64.fullmatch(self.sha256) is None
+        ):
+            raise ValueError("invalid B03 measurement-error repair receipt")
+
+
+@dataclass(frozen=True, slots=True)
+class B03MeasurementErrorRepairV1:
+    """A separate B03-only rerun bound to the retained failed baseline."""
+
+    reason: str
+    base_receipt: ArtifactReceiptV1
+    result: BaselineWorkloadResult
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceIdentityV1:
     revision: str
     tree: str
@@ -240,10 +275,106 @@ def write_baseline_artifact(
     return _write_no_overwrite(output, encoded)
 
 
+def collect_b03_measurement_error_repair(
+    disposable_parent: Path,
+    measure_iteration: MeasureIteration[RecordT] | None = None,
+) -> BaselineWorkloadResult:
+    """Run exactly one warm-up and five measured B03 iterations, and nothing else."""
+    disposable_parent.mkdir(parents=True, exist_ok=True)
+
+    def measure(workload_id: str, kind: str, index: int) -> object:
+        return measure_benchmark_workload(
+            disposable_parent,
+            workload_id=workload_id,
+            iteration_kind=kind,
+            iteration_index=index,  # type: ignore[arg-type]
+        )
+
+    return _collect_workload("B03", measure_iteration or measure)
+
+
+def write_b03_measurement_error_repair(
+    repair: B03MeasurementErrorRepairV1, output: Path
+) -> B03MeasurementErrorRepairReceiptV1:
+    """Persist the B03 supplement without replacing either artifact."""
+    _validate_artifact_leaf(output)
+    encoded = _serialize_b03_repair(repair)
+    byte_count, sha256 = _publish_no_overwrite(output, encoded)
+    return B03MeasurementErrorRepairReceiptV1(
+        _B03_REPAIR_RECEIPT_SCHEMA_VERSION, byte_count, sha256
+    )
+
+
+def read_b03_measurement_error_repair(
+    path: Path,
+    receipt: B03MeasurementErrorRepairReceiptV1,
+    base_path: Path,
+    base_receipt: ArtifactReceiptV1,
+) -> B03MeasurementErrorRepairV1:
+    """Authenticate the retained base and its separate B03 repair supplement."""
+    _require_frozen_b03_base_receipt(base_receipt)
+    base_payload = read_baseline_artifact(base_path, base_receipt)
+    base_report = _deserialize_report(base_payload)
+    _validate_b03_measurement_error_source(base_report.results[2])
+    if type(receipt) is not B03MeasurementErrorRepairReceiptV1:
+        raise ValueError("invalid B03 measurement-error repair")
+    encoded = _read_authenticated_artifact(path, receipt.byte_count, receipt.sha256)
+    try:
+        _validate_json_nesting(encoded)
+        payload = json.loads(
+            encoded.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        repair = _deserialize_b03_repair(payload)
+        if (
+            repair.base_receipt != base_receipt
+            or _serialize_b03_repair(repair) != encoded
+        ):
+            raise ValueError
+        return repair
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        RecursionError,
+        OverflowError,
+        MemoryError,
+    ):
+        raise ValueError("invalid B03 measurement-error repair") from None
+
+
 def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, object]:
     """Reopen one immutable artifact by descriptor and revalidate its receipt."""
     if type(receipt) is not ArtifactReceiptV1:
         raise ValueError("invalid immutable baseline artifact")
+    encoded = _read_authenticated_artifact(path, receipt.byte_count, receipt.sha256)
+    try:
+        _validate_json_nesting(encoded)
+        payload = json.loads(
+            encoded.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        validated = _deserialize_report(payload)
+        if _serialize_report(validated) != encoded:
+            raise ValueError("invalid immutable baseline artifact")
+        return payload
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        RecursionError,
+        OverflowError,
+        MemoryError,
+    ):
+        raise ValueError("invalid immutable baseline artifact") from None
+
+
+def _read_authenticated_artifact(path: Path, byte_count: int, sha256: str) -> bytes:
+    """Read immutable bytes while binding the directory entry to the held file."""
     directory_fd: int | None = None
     descriptor: int | None = None
     try:
@@ -259,20 +390,11 @@ def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, 
         entry_before = _artifact_identity(
             os.stat(canonical_path.name, dir_fd=directory_fd, follow_symlinks=False)
         )
-        _validate_final_artifact_identity(before, receipt.byte_count)
+        _validate_final_artifact_identity(before, byte_count)
         if entry_before != before:
             raise ValueError("invalid immutable baseline artifact")
-        encoded = _read_exact_artifact(descriptor, receipt.byte_count)
-        if hashlib.sha256(encoded).hexdigest() != receipt.sha256:
-            raise ValueError("invalid immutable baseline artifact")
-        _validate_json_nesting(encoded)
-        payload = json.loads(
-            encoded.decode("utf-8"),
-            object_pairs_hook=_unique_json_object,
-            parse_constant=_reject_json_constant,
-        )
-        validated = _deserialize_report(payload)
-        if _serialize_report(validated) != encoded:
+        encoded = _read_exact_artifact(descriptor, byte_count)
+        if hashlib.sha256(encoded).hexdigest() != sha256:
             raise ValueError("invalid immutable baseline artifact")
         after = _artifact_identity(os.fstat(descriptor))
         entry_after = _artifact_identity(
@@ -280,23 +402,92 @@ def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, 
         )
         if after != before or entry_after != before:
             raise ValueError("invalid immutable baseline artifact")
-        return payload
-    except (
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-        RecursionError,
-        OverflowError,
-        MemoryError,
-    ):
+        return encoded
+    except (OSError, ValueError, TypeError, OverflowError):
         raise ValueError("invalid immutable baseline artifact") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
         if directory_fd is not None:
             os.close(directory_fd)
+
+
+def _serialize_b03_repair(repair: B03MeasurementErrorRepairV1) -> bytes:
+    if (
+        type(repair) is not B03MeasurementErrorRepairV1
+        or repair.reason != _B03_REPAIR_REASON
+        or type(repair.base_receipt) is not ArtifactReceiptV1
+        or repair.result.workload_id != "B03"
+    ):
+        raise ValueError("invalid B03 measurement-error repair")
+    _require_frozen_b03_base_receipt(repair.base_receipt)
+    payload = {
+        "schema_version": _B03_REPAIR_SCHEMA_VERSION,
+        "reason": repair.reason,
+        "base_receipt": {
+            "schema_version": repair.base_receipt.schema_version,
+            "byte_count": repair.base_receipt.byte_count,
+            "sha256": repair.base_receipt.sha256,
+        },
+        "result": _serialize_workload(repair.result),
+    }
+    encoded = (
+        json.dumps(payload, allow_nan=False, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if len(encoded) > _MAX_ARTIFACT_BYTES:
+        raise ValueError("B03 measurement-error repair exceeds its bounded size")
+    return encoded
+
+
+def _deserialize_b03_repair(payload: object) -> B03MeasurementErrorRepairV1:
+    value = _exact_mapping(
+        payload, ("schema_version", "reason", "base_receipt", "result")
+    )
+    raw_receipt = _exact_mapping(
+        value["base_receipt"], ("schema_version", "byte_count", "sha256")
+    )
+    repair = B03MeasurementErrorRepairV1(
+        value["reason"],  # type: ignore[arg-type]
+        ArtifactReceiptV1(
+            raw_receipt["schema_version"],  # type: ignore[arg-type]
+            raw_receipt["byte_count"],  # type: ignore[arg-type]
+            raw_receipt["sha256"],  # type: ignore[arg-type]
+        ),
+        _deserialize_workload(value["result"], "B03"),
+    )
+    if value["schema_version"] != _B03_REPAIR_SCHEMA_VERSION:
+        raise ValueError("invalid B03 measurement-error repair")
+    return repair
+
+
+def _validate_b03_measurement_error_source(result: BaselineWorkloadResult) -> None:
+    records = (result.warmup, *result.measured)
+    if (
+        result.workload_id != "B03"
+        or result.status is not BaselineCollectionStatus.INSUFFICIENT
+        or result.valid_measurement_count != 0
+        or len(result.measured) != _MEASURED_ITERATION_COUNT
+        or any(
+            record.outcome != "FAILED"
+            or record.failure_code != "BENCHMARK_CHILD_FAILED"
+            or record.resource_evidence_status != ResourceEvidenceStatus.VALID
+            or record.request_count != 0
+            or record.provider_attempt_count != 0
+            or record.repair_count != 0
+            for record in records
+        )
+    ):
+        raise ValueError("baseline B03 is not the retained measurement-error source")
+
+
+def _require_frozen_b03_base_receipt(receipt: ArtifactReceiptV1) -> None:
+    if (
+        type(receipt) is not ArtifactReceiptV1
+        or receipt.schema_version != _RECEIPT_SCHEMA_VERSION
+        or receipt.byte_count != _FROZEN_B03_BASE_BYTE_COUNT
+        or receipt.sha256 != _FROZEN_B03_BASE_SHA256
+    ):
+        raise ValueError("B03 supplement is not bound to the frozen base receipt")
 
 
 def _deserialize_report(payload: object) -> BaselineCollectionReport:
@@ -494,6 +685,125 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def b03_repair_main(argv: list[str] | None = None) -> int:
+    """Retain one explicit B03-only measurement-error supplement."""
+    parser = _ArtifactArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--work-root", type=Path, required=True)
+    parser.add_argument("--base-artifact", type=Path, required=True)
+    parser.add_argument("--base-byte-count", type=int, required=True)
+    parser.add_argument("--base-sha256", required=True)
+    parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--expected-tree", required=True)
+    try:
+        arguments = parser.parse_args(argv)
+        output = _artifact_path(arguments.output, "output")
+        work_root = _artifact_path(arguments.work_root, "work root")
+        base_path = _artifact_path(arguments.base_artifact, "base artifact")
+        base_receipt = ArtifactReceiptV1(
+            _RECEIPT_SCHEMA_VERSION,
+            arguments.base_byte_count,
+            arguments.base_sha256,
+        )
+        receipt = _collect_b03_repair_once(
+            output,
+            work_root,
+            base_path,
+            base_receipt,
+            arguments.expected_revision,
+            arguments.expected_tree,
+        )
+        print(_serialize_receipt(receipt))
+    except _ArtifactCliFailure as error:
+        print(f"B03 measurement-error repair failed: {error.code}", file=sys.stderr)
+        return 2
+    except (ValueError, FileExistsError, OSError):
+        print(
+            "B03 measurement-error repair failed: PERSISTENCE_FAILED", file=sys.stderr
+        )
+        return 2
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        print("B03 measurement-error repair failed: COLLECTION_FAILED", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _collect_b03_repair_once(
+    output: Path,
+    work_root: Path,
+    base_path: Path,
+    base_receipt: ArtifactReceiptV1,
+    expected_revision: object,
+    expected_tree: object,
+) -> B03MeasurementErrorRepairReceiptV1:
+    _validate_b03_repair_paths(output, work_root, base_path)
+    _require_frozen_b03_base_receipt(base_receipt)
+    expected_source = _expected_source_identity(expected_revision, expected_tree)
+    source_identity = _capture_source_identity()
+    if source_identity != expected_source or not _source_identity_matches(
+        source_identity
+    ):
+        raise _ArtifactCliFailure("SOURCE_MISMATCH")
+    _verify_loaded_module_snapshot(source_identity)
+    base_payload = read_baseline_artifact(base_path, base_receipt)
+    _validate_b03_measurement_error_source(_deserialize_report(base_payload).results[2])
+    _preflight_output(output)
+    work_root_fd = _open_artifact_directory(work_root)
+    original_directory_fd: int | None = None
+    source_frozen = False
+    try:
+        work_root_identity = _directory_identity(os.fstat(work_root_fd))
+        freeze_benchmark_source_identity(
+            source_identity.revision,
+            source_identity.tree,
+            source_identity.lock_sha256,
+        )
+        source_frozen = True
+        original_directory_fd = os.open(
+            ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        os.fchdir(work_root_fd)
+        try:
+            result = collect_b03_measurement_error_repair(Path("."))
+        finally:
+            os.fchdir(original_directory_fd)
+        if not _path_matches_directory_descriptor(
+            work_root, work_root_fd, work_root_identity
+        ):
+            raise _ArtifactCliFailure("WORK_ROOT_SUBSTITUTED")
+        repair = B03MeasurementErrorRepairV1(_B03_REPAIR_REASON, base_receipt, result)
+        encoded = _serialize_b03_repair(repair)
+        if not _source_identity_matches(source_identity):
+            raise _ArtifactCliFailure("SOURCE_CHANGED")
+        byte_count, sha256 = _publish_no_overwrite(output, encoded)
+        return B03MeasurementErrorRepairReceiptV1(
+            _B03_REPAIR_RECEIPT_SCHEMA_VERSION, byte_count, sha256
+        )
+    finally:
+        if source_frozen:
+            clear_benchmark_source_identity()
+        if original_directory_fd is not None:
+            os.close(original_directory_fd)
+        os.close(work_root_fd)
+
+
+def _validate_b03_repair_paths(output: Path, work_root: Path, base_path: Path) -> None:
+    if not _path_entry_exists(base_path):
+        raise _ArtifactCliFailure("BASE_ARTIFACT_MISSING")
+    if _path_entry_exists(output):
+        raise _ArtifactCliFailure("OUTPUT_EXISTS")
+    if (
+        _paths_overlap(output, work_root)
+        or _paths_overlap(base_path, work_root)
+        or output == base_path
+    ):
+        raise _ArtifactCliFailure("ARTIFACT_WORK_ROOT_OVERLAP")
+    if _path_entry_exists(work_root):
+        raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
+
+
 def _collect_once(
     output: Path,
     work_root: Path,
@@ -553,7 +863,9 @@ def _validate_collection_paths(output: Path, work_root: Path) -> None:
         raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
 
 
-def _serialize_receipt(receipt: ArtifactReceiptV1) -> str:
+def _serialize_receipt(
+    receipt: ArtifactReceiptV1 | B03MeasurementErrorRepairReceiptV1,
+) -> str:
     return json.dumps(
         {
             "byte_count": receipt.byte_count,
@@ -1350,6 +1662,11 @@ def _serialize_schedule_closures(value: object) -> list[list[str]]:
 
 
 def _write_no_overwrite(output: Path, encoded: bytes) -> ArtifactReceiptV1:
+    byte_count, sha256 = _publish_no_overwrite(output, encoded)
+    return ArtifactReceiptV1(_RECEIPT_SCHEMA_VERSION, byte_count, sha256)
+
+
+def _publish_no_overwrite(output: Path, encoded: bytes) -> tuple[int, str]:
     if type(encoded) is not bytes or len(encoded) > _MAX_ARTIFACT_BYTES:
         raise ValueError("baseline artifact exceeds its bounded size")
     directory_fd = _open_artifact_directory(output.parent)
@@ -1390,12 +1707,7 @@ def _write_no_overwrite(output: Path, encoded: bytes) -> ArtifactReceiptV1:
         _validate_final_artifact_identity(identity, len(encoded))
         if entry != identity:
             raise ValueError("published baseline artifact identity changed")
-        receipt = ArtifactReceiptV1(
-            _RECEIPT_SCHEMA_VERSION,
-            len(encoded),
-            hashlib.sha256(encoded).hexdigest(),
-        )
-        return receipt
+        return len(encoded), hashlib.sha256(encoded).hexdigest()
     finally:
         if final_descriptor is not None:
             os.close(final_descriptor)
