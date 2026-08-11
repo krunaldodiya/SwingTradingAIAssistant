@@ -25,9 +25,11 @@ from .probe import ProbeRequest, run_capability_probe
 from .public_contract import (
     CoverageReportV1,
     DownloadReportV1,
+    QueryReportV1,
     public_exit_code,
     render_coverage_report_json,
     render_download_report_json,
+    render_query_report_json,
 )
 from .public_coverage import (
     CoverageRequestV1,
@@ -37,6 +39,11 @@ from .public_coverage import (
 from .public_download import (
     SingleSymbolDownloadRequestV1,
     SingleSymbolDownloadServiceV1,
+)
+from .public_query import (
+    DuckDBOneMinuteQueryEngineV1,
+    OneMinuteQueryServiceV1,
+    QueryRequestV1,
 )
 from .range_ingestion import IngestionCoordinator
 
@@ -49,6 +56,10 @@ class PublicDownloadPortV1(Protocol):
 
 class PublicCoveragePortV1(Protocol):
     def coverage(self, request: object) -> CoverageReportV1: ...
+
+
+class PublicQueryPortV1(Protocol):
+    def query(self, request: object) -> QueryReportV1: ...
 
 
 class _SystemClock:
@@ -95,6 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="prove retained scheduled-minute coverage without provider access",
     )
     _add_persistent_range_arguments(coverage)
+    query = commands.add_parser(
+        "query",
+        help="query bounded verified candles without provider access",
+    )
+    _add_persistent_range_arguments(query)
+    query.add_argument("--timeframe", required=True)
+    query.add_argument("--fields", required=True)
+    query.add_argument("--max-rows", type=int, required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -130,6 +149,7 @@ def main(
     *,
     download_service: PublicDownloadPortV1 | None = None,
     coverage_service: PublicCoveragePortV1 | None = None,
+    query_service: PublicQueryPortV1 | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download":
@@ -162,6 +182,24 @@ def main(
         report = service.coverage(request)
         sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
         return public_exit_code(report.status)
+    if args.command == "query":
+        service = query_service or _default_query_service()
+        try:
+            request = QueryRequestV1(
+                args.segment,
+                args.symbol,
+                args.from_date,
+                args.to_date,
+                args.timeframe,
+                tuple(args.fields.split(",")),
+                args.max_rows,
+                args.storage_root,
+            )
+        except ValueError:
+            request = object()
+        report = service.query(request)
+        sys.stdout.write(render_query_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
     if args.command == "probe-upstox":
         return _run_probe(args)
     raise AssertionError("unreachable command")
@@ -184,6 +222,15 @@ def _default_coverage_service() -> StoredCoverageServiceV1:
     return StoredCoverageServiceV1(
         PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
         StoredCoverageEvaluatorV1(),
+        clock=_SystemClock(),
+    )
+
+
+def _default_query_service() -> OneMinuteQueryServiceV1:
+    return OneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StoredCoverageEvaluatorV1(),
+        engine=DuckDBOneMinuteQueryEngineV1(),
         clock=_SystemClock(),
     )
 

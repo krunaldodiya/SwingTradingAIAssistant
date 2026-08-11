@@ -283,8 +283,9 @@ def test_coverage_renderer_fails_closed_for_wrong_outer_shape_and_overflow(
     assert json.loads(encoded)["failure"]["code"] == "UNCLASSIFIED_FAILURE"
 
     wrong_command = PublicCommandReportV1(
-        "v1", "query", PublicCommandStatusV1.SUCCEEDED, None, 0, _payload()
+        "v1", "coverage", PublicCommandStatusV1.SUCCEEDED, None, 0, _payload()
     )
+    object.__setattr__(wrong_command, "command", "query")
     encoded = render_coverage_report_json(wrong_command)  # type: ignore[arg-type]
     assert json.loads(encoded)["failure"]["code"] == "UNCLASSIFIED_FAILURE"
 
