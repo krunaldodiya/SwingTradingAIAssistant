@@ -11,7 +11,7 @@ from typing import Protocol
 
 from dotenv import load_dotenv
 
-from .credentials import EnvironmentAccessTokenProvider
+from .credentials import AccessToken, EnvironmentAccessTokenProvider
 from .daily_ohlcv import (
     DailyQueryServiceV1,
     DuckDBDailyOHLCVEngineV1,
@@ -23,10 +23,24 @@ from .download_preparation import (
     CanonicalFileScheduleSourceV1,
     DownloadPreparationServiceV1,
 )
-from .historical import UpstoxV3HistoricalClient
+from .historical import (
+    HistoricalRequest,
+    HistoricalResponse,
+    UpstoxV3HistoricalClient,
+)
 from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
 from .instrument_snapshot import InstrumentSnapshotClientV1
 from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalogClient
+from .intraday import UpstoxV3IntradayClient
+from .open_month_coverage import (
+    CurrentAwareCoverageServiceV1,
+    OpenMonthCoverageServiceV1,
+)
+from .open_month_download import OpenMonthDownloadServiceV1
+from .open_month_query import (
+    CurrentAwareQueryServiceV1,
+    OpenMonthOneMinuteQueryServiceV1,
+)
 from .preview_admission import PreviewAdmissionPolicyV1
 from .probe import ProbeRequest, run_capability_probe
 from .public_contract import (
@@ -44,6 +58,7 @@ from .public_coverage import (
     StoredCoverageServiceV1,
 )
 from .public_download import (
+    CurrentAwareSingleSymbolDownloadServiceV1,
     SingleSymbolDownloadRequestV1,
     SingleSymbolDownloadServiceV1,
 )
@@ -52,7 +67,10 @@ from .public_query import (
     OneMinuteQueryServiceV1,
     QueryRequestV1,
 )
-from .range_ingestion import IngestionCoordinator
+from .range_ingestion import (
+    IngestionCoordinator,
+    ProviderSessionAuthenticationError,
+)
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
@@ -77,6 +95,39 @@ class _SystemClock:
 class _UnavailableAuthoritativeScheduleSource:
     def load(self) -> AuthoritativeScheduleInputV1:
         raise RuntimeError("authoritative schedule source is not configured")
+
+
+class _LazyEnvironmentAccessTokenProvider:
+    """Read the process environment only when a provider call is actually needed."""
+
+    def get_access_token(self) -> AccessToken:
+        return EnvironmentAccessTokenProvider().get_access_token()
+
+
+class _HistoricalProviderSession:
+    def __init__(self, client: UpstoxV3HistoricalClient, token: AccessToken) -> None:
+        self._client = client
+        self._token = token
+
+    def fetch(self, request: HistoricalRequest) -> HistoricalResponse:
+        return self._client.fetch(request, self._token)
+
+
+class _HistoricalProviderSessionFactory:
+    def __init__(
+        self,
+        client: UpstoxV3HistoricalClient,
+        token_provider: _LazyEnvironmentAccessTokenProvider,
+    ) -> None:
+        self._client = client
+        self._token_provider = token_provider
+
+    def open(self) -> _HistoricalProviderSession:
+        try:
+            token = self._token_provider.get_access_token()
+        except Exception:
+            raise ProviderSessionAuthenticationError from None
+        return _HistoricalProviderSession(self._client, token)
 
 
 def _date(value: str) -> date:
@@ -113,6 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="ABSOLUTE_PATH",
         help="canonical authoritative schedule JSON for this download",
+    )
+    download.add_argument(
+        "--closed-schedule-file",
+        type=Path,
+        metavar="ABSOLUTE_PATH",
+        help=(
+            "canonical v2 schedule for closed months when the range also "
+            "touches the current month"
+        ),
     )
     coverage = commands.add_parser(
         "coverage",
@@ -169,7 +229,9 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download":
-        service = download_service or _default_download_service(args.schedule_file)
+        service = download_service or _default_download_service(
+            args.schedule_file, args.closed_schedule_file
+        )
         try:
             request: object = SingleSymbolDownloadRequestV1(
                 args.segment,
@@ -223,22 +285,55 @@ def main(
 
 def _default_download_service(
     schedule_file: Path | None = None,
-) -> SingleSymbolDownloadServiceV1:
+    closed_schedule_file: Path | None = None,
+) -> CurrentAwareSingleSymbolDownloadServiceV1:
     clock = _SystemClock()
-    transport = UrllibHttpTransport(max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES)
-    preparation = DownloadPreparationServiceV1(
+    catalog_transport = UrllibHttpTransport(
+        max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES
+    )
+    provider_transport = UrllibHttpTransport(
+        max_body_bytes=DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES
+    )
+    historical = UpstoxV3HistoricalClient(provider_transport)
+    token_provider = _LazyEnvironmentAccessTokenProvider()
+    open_preparation = DownloadPreparationServiceV1(
         PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
         (
             _UnavailableAuthoritativeScheduleSource()
             if schedule_file is None
             else CanonicalFileScheduleSourceV1(schedule_file)
         ),
-        InstrumentSnapshotClientV1(transport, clock=clock.now),
+        InstrumentSnapshotClientV1(catalog_transport, clock=clock.now),
         clock=clock,
     )
-    return SingleSymbolDownloadServiceV1(
-        preparation, IngestionCoordinator(), clock=clock
+    closed_path = closed_schedule_file or schedule_file
+    closed_preparation = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        (
+            _UnavailableAuthoritativeScheduleSource()
+            if closed_path is None
+            else CanonicalFileScheduleSourceV1(closed_path)
+        ),
+        InstrumentSnapshotClientV1(catalog_transport, clock=clock.now),
+        clock=clock,
     )
+    closed = SingleSymbolDownloadServiceV1(
+        closed_preparation,
+        IngestionCoordinator(
+            session_factory=_HistoricalProviderSessionFactory(
+                historical, token_provider
+            )
+        ),
+        clock=clock,
+    )
+    open_month = OpenMonthDownloadServiceV1(
+        open_preparation,
+        historical,
+        UpstoxV3IntradayClient(provider_transport),
+        token_provider,
+        clock=clock,
+    )
+    return CurrentAwareSingleSymbolDownloadServiceV1(closed, open_month, clock=clock)
 
 
 def _default_probe_range(today: date) -> tuple[date, date]:
@@ -247,19 +342,26 @@ def _default_probe_range(today: date) -> tuple[date, date]:
     return max(month_start, probe_to - timedelta(days=3)), probe_to
 
 
-def _default_coverage_service() -> StoredCoverageServiceV1:
-    return StoredCoverageServiceV1(
-        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+def _default_coverage_service() -> CurrentAwareCoverageServiceV1:
+    policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
+    clock = _SystemClock()
+    closed = StoredCoverageServiceV1(
+        policy,
         StoredCoverageEvaluatorV1(),
-        clock=_SystemClock(),
+        clock=clock,
+    )
+    return CurrentAwareCoverageServiceV1(
+        closed,
+        OpenMonthCoverageServiceV1(policy, clock=clock),
+        clock=clock,
     )
 
 
-def _default_query_service() -> TimeframeQueryServiceV1:
+def _default_query_service() -> CurrentAwareQueryServiceV1:
     policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     evaluator = StoredCoverageEvaluatorV1()
     clock = _SystemClock()
-    return TimeframeQueryServiceV1(
+    closed = TimeframeQueryServiceV1(
         OneMinuteQueryServiceV1(
             policy,
             evaluator,
@@ -273,6 +375,11 @@ def _default_query_service() -> TimeframeQueryServiceV1:
             engine=DuckDBDailyOHLCVEngineV1(),
             clock=clock,
         ),
+    )
+    return CurrentAwareQueryServiceV1(
+        closed,
+        OpenMonthOneMinuteQueryServiceV1(policy, clock=clock),
+        clock=clock,
     )
 
 

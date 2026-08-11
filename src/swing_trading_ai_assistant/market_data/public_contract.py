@@ -60,6 +60,7 @@ class PublicFailureCodeV1(StrEnum):
 
 class CoverageStateV1(StrEnum):
     VERIFIED = "VERIFIED"
+    PROVISIONAL = "PROVISIONAL"
     MISSING = "MISSING"
     INSUFFICIENT = "INSUFFICIENT"
     STALE = "STALE"
@@ -275,6 +276,93 @@ class DownloadPayloadV1:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenMonthDownloadPayloadV1:
+    """Public evidence for one immutable but advancing current-month snapshot."""
+
+    request: PublicDownloadRequestV1
+    started_at: datetime
+    completed_at: datetime
+    instrument_snapshot_digest_sha256: str
+    instrument_snapshot_retrieved_at: datetime
+    instrument_snapshot_attempt_count: int
+    historical_attempt_count: int
+    intraday_attempt_count: int
+    appended_count: int
+    missing_count: int
+    month: PublicCoverageMonthV1
+    closed_months: tuple[PublicMonthEvidenceV1, ...] = ()
+    closed_instrument_snapshot_digest_sha256: str | None = None
+    closed_instrument_snapshot_retrieved_at: datetime | None = None
+    closed_instrument_snapshot_attempt_count: int = 0
+    closed_historical_attempt_count: int = 0
+
+    def __post_init__(self) -> None:
+        try:
+            request = replace(self.request)
+            month = replace(self.month)
+            closed_months = tuple(replace(value) for value in self.closed_months)
+        except (TypeError, ValueError):
+            raise ValueError("invalid open-month download payload") from None
+        counts = (
+            self.instrument_snapshot_attempt_count,
+            self.historical_attempt_count,
+            self.intraday_attempt_count,
+            self.appended_count,
+            self.missing_count,
+            self.closed_instrument_snapshot_attempt_count,
+            self.closed_historical_attempt_count,
+        )
+        expected_closed = _month_labels_before_final(
+            self.request.from_date, self.request.to_date
+        )
+        has_closed = bool(closed_months)
+        if (
+            type(self.request) is not PublicDownloadRequestV1
+            or request != self.request
+            or not _utc(self.started_at)
+            or not _utc(self.completed_at)
+            or self.completed_at < self.started_at
+            or type(self.instrument_snapshot_digest_sha256) is not str
+            or _DIGEST.fullmatch(self.instrument_snapshot_digest_sha256) is None
+            or not _utc(self.instrument_snapshot_retrieved_at)
+            or any(type(value) is not int or value < 0 for value in counts)
+            or self.instrument_snapshot_attempt_count > 1
+            or self.historical_attempt_count > 1
+            or self.intraday_attempt_count > 1
+            or self.closed_instrument_snapshot_attempt_count > 1
+            or self.closed_historical_attempt_count > 33
+            or type(self.month) is not PublicCoverageMonthV1
+            or month != self.month
+            or self.month.coverage_state is not CoverageStateV1.PROVISIONAL
+            or self.month.month
+            != f"{self.request.to_date.year:04d}-{self.request.to_date.month:02d}"
+            or type(self.closed_months) is not tuple
+            or closed_months != self.closed_months
+            or tuple(value.month for value in closed_months) != expected_closed
+            or any(
+                value.partition_outcome
+                not in {
+                    PartitionOutcome.SKIPPED_VERIFIED,
+                    PartitionOutcome.RECOVERED_LOCALLY,
+                    PartitionOutcome.VERIFIED,
+                }
+                for value in closed_months
+            )
+            or self.closed_historical_attempt_count
+            != sum(value.provider_attempt_count for value in closed_months)
+            or has_closed
+            != (
+                self.closed_instrument_snapshot_digest_sha256 is not None
+                and self.closed_instrument_snapshot_retrieved_at is not None
+            )
+            or not _optional_digest(self.closed_instrument_snapshot_digest_sha256)
+            or not _optional_utc(self.closed_instrument_snapshot_retrieved_at)
+            or (not has_closed and self.closed_instrument_snapshot_attempt_count != 0)
+        ):
+            raise ValueError("invalid open-month download payload")
+
+
+@dataclass(frozen=True, slots=True)
 class PublicCoverageRequestV1:
     segment: str
     symbol: str
@@ -307,6 +395,8 @@ class PublicCoverageMonthV1:
     schedule_digest_sha256: str | None
     failure_category: FailureCategory | None
     validation_reason: ValidationReason | None
+    data_cutoff: datetime | None = None
+    session_complete: bool | None = None
 
     def __post_init__(self) -> None:
         policy_digest = supported_equity_month_policy_digest(
@@ -337,11 +427,19 @@ class PublicCoverageMonthV1:
             or not _optional_digest(self.checksum_sha256)
             or type(self.candle_schema_version) not in (int, type(None))
             or type(self.validation_policy_version) not in (str, type(None))
-            or not policy_supported
+            or (
+                self.coverage_state is not CoverageStateV1.PROVISIONAL
+                and not policy_supported
+            )
             or not _optional_digest(self.schedule_digest_sha256)
-            or self.schedule_digest_sha256 != policy_digest
+            or (
+                self.coverage_state is not CoverageStateV1.PROVISIONAL
+                and self.schedule_digest_sha256 != policy_digest
+            )
             or type(self.failure_category) not in (FailureCategory, type(None))
             or type(self.validation_reason) not in (ValidationReason, type(None))
+            or not _optional_utc(self.data_cutoff)
+            or type(self.session_complete) not in (bool, type(None))
         ):
             raise ValueError("invalid public coverage month")
         if self.coverage_state is CoverageStateV1.VERIFIED and (
@@ -354,6 +452,30 @@ class PublicCoverageMonthV1:
             any(value is not None for value in facts)
             or self.failure_category is not None
             or self.validation_reason is not None
+        ):
+            raise ValueError("invalid public coverage month")
+        if self.coverage_state is CoverageStateV1.PROVISIONAL and (
+            any(
+                value is None
+                for value in (
+                    self.actual_from_ts,
+                    self.actual_to_ts,
+                    self.row_count,
+                    self.checksum_sha256,
+                    self.candle_schema_version,
+                    self.schedule_digest_sha256,
+                    self.data_cutoff,
+                    self.session_complete,
+                )
+            )
+            or self.validation_policy_version is not None
+            or self.failure_category is not None
+            or self.validation_reason is not None
+            or self.data_cutoff != self.actual_to_ts
+        ):
+            raise ValueError("invalid public coverage month")
+        if self.coverage_state is not CoverageStateV1.PROVISIONAL and (
+            self.data_cutoff is not None or self.session_complete is not None
         ):
             raise ValueError("invalid public coverage month")
 
@@ -370,6 +492,7 @@ class CoveragePayloadV1:
     corrupt_count: int
     schedule_unproven_count: int
     months: tuple[PublicCoverageMonthV1, ...]
+    provisional_count: int = 0
 
     def __post_init__(self) -> None:
         try:
@@ -379,6 +502,7 @@ class CoveragePayloadV1:
             raise ValueError("invalid coverage payload") from None
         counts = {
             CoverageStateV1.VERIFIED: self.verified_count,
+            CoverageStateV1.PROVISIONAL: self.provisional_count,
             CoverageStateV1.MISSING: self.missing_count,
             CoverageStateV1.INSUFFICIENT: self.insufficient_count,
             CoverageStateV1.STALE: self.stale_count,
@@ -538,7 +662,8 @@ class QueryPayloadV1:
             )
             or (
                 any(
-                    value.coverage_state is not CoverageStateV1.VERIFIED
+                    value.coverage_state
+                    not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
                     for value in months
                 )
                 and bool(rows)
@@ -612,7 +737,8 @@ class DailyQueryPayloadV1:
             )
             or (
                 any(
-                    value.coverage_state is not CoverageStateV1.VERIFIED
+                    value.coverage_state
+                    not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
                     for value in months
                 )
                 and bool(rows)
@@ -648,12 +774,22 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
             raise ValueError("invalid public command report")
         if self.command == "download" and (
             self.provider_attempt_count > MAX_DOWNLOAD_PROVIDER_ATTEMPTS_V1
-            or type(self.payload) not in (DownloadPayloadV1, type(None))
+            or type(self.payload)
+            not in (DownloadPayloadV1, OpenMonthDownloadPayloadV1, type(None))
             or (
                 type(self.payload) is DownloadPayloadV1
                 and self.provider_attempt_count
                 != self.payload.instrument_snapshot_attempt_count
                 + self.payload.historical_attempt_count
+            )
+            or (
+                type(self.payload) is OpenMonthDownloadPayloadV1
+                and self.provider_attempt_count
+                != self.payload.instrument_snapshot_attempt_count
+                + self.payload.historical_attempt_count
+                + self.payload.intraday_attempt_count
+                + self.payload.closed_instrument_snapshot_attempt_count
+                + self.payload.closed_historical_attempt_count
             )
         ):
             raise ValueError("invalid public command report")
@@ -672,7 +808,7 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
             raise ValueError("invalid public command report")
 
 
-DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1]
+DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1 | OpenMonthDownloadPayloadV1]
 CoverageReportV1 = PublicCommandReportV1[CoveragePayloadV1]
 QueryReportV1 = PublicCommandReportV1[QueryPayloadV1 | DailyQueryPayloadV1]
 
@@ -690,12 +826,16 @@ def _valid_coverage_report(
         }
     if type(payload) is not CoveragePayloadV1:
         return False
-    if payload.overall_state is CoverageStateV1.VERIFIED:
+    if payload.overall_state in {
+        CoverageStateV1.VERIFIED,
+        CoverageStateV1.PROVISIONAL,
+    }:
         return status is PublicCommandStatusV1.SUCCEEDED and failure is None
     affected = tuple(
         item.month
         for item in payload.months
-        if item.coverage_state is not CoverageStateV1.VERIFIED
+        if item.coverage_state
+        not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
     )
     return (
         status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
@@ -750,7 +890,8 @@ def _valid_query_report(
     affected = tuple(
         value.month
         for value in typed_payload.months
-        if value.coverage_state is not CoverageStateV1.VERIFIED
+        if value.coverage_state
+        not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
     )
     if not affected:
         return status is PublicCommandStatusV1.SUCCEEDED and failure is None
@@ -865,15 +1006,22 @@ def _download_report_value(report: object) -> dict[str, object]:
     if type(report) is not PublicCommandReportV1:
         raise ValueError
     untyped = cast(PublicCommandReportV1[object], report)
-    if untyped.payload is not None and type(untyped.payload) is not DownloadPayloadV1:
+    if untyped.payload is not None and type(untyped.payload) not in (
+        DownloadPayloadV1,
+        OpenMonthDownloadPayloadV1,
+    ):
         raise ValueError
     failure: PublicFailureV1 | None = (
         replace(untyped.failure) if untyped.failure is not None else None
     )
     typed_payload = untyped.payload
-    payload: DownloadPayloadV1 | None = (
-        replace(typed_payload) if typed_payload is not None else None
-    )
+    payload: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None
+    if type(typed_payload) in (DownloadPayloadV1, OpenMonthDownloadPayloadV1):
+        payload = replace(
+            cast(DownloadPayloadV1 | OpenMonthDownloadPayloadV1, typed_payload)
+        )
+    else:
+        payload = None
     validated: DownloadReportV1 = PublicCommandReportV1(
         untyped.contract_version,
         untyped.command,
@@ -989,6 +1137,7 @@ def _coverage_payload_value(
         "overall_state": value.overall_state.value,
         "planned_count": value.planned_count,
         "verified_count": value.verified_count,
+        "provisional_count": value.provisional_count,
         "missing_count": value.missing_count,
         "insufficient_count": value.insufficient_count,
         "stale_count": value.stale_count,
@@ -1011,6 +1160,8 @@ def _coverage_month_value(value: PublicCoverageMonthV1) -> dict[str, object]:
         "schedule_digest_sha256": value.schedule_digest_sha256,
         "failure_category": _enum_value(value.failure_category),
         "validation_reason": _enum_value(value.validation_reason),
+        "data_cutoff": _optional_instant(value.data_cutoff),
+        "session_complete": value.session_complete,
     }
 
 
@@ -1082,9 +1233,41 @@ def _query_terminal_failure_value(code: PublicFailureCodeV1) -> dict[str, object
     return value
 
 
-def _payload_value(value: DownloadPayloadV1 | None) -> dict[str, object] | None:
+def _payload_value(
+    value: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None,
+) -> dict[str, object] | None:
     if value is None:
         return None
+    if type(value) is OpenMonthDownloadPayloadV1:
+        return {
+            "request": {
+                "segment": value.request.segment,
+                "symbol": value.request.symbol,
+                "from_date": value.request.from_date.isoformat(),
+                "to_date": value.request.to_date.isoformat(),
+            },
+            "started_at": _instant(value.started_at),
+            "completed_at": _instant(value.completed_at),
+            "instrument_snapshot_digest_sha256": value.instrument_snapshot_digest_sha256,
+            "instrument_snapshot_retrieved_at": _instant(
+                value.instrument_snapshot_retrieved_at
+            ),
+            "instrument_snapshot_attempt_count": value.instrument_snapshot_attempt_count,
+            "historical_attempt_count": value.historical_attempt_count,
+            "intraday_attempt_count": value.intraday_attempt_count,
+            "appended_count": value.appended_count,
+            "missing_count": value.missing_count,
+            "month": _coverage_month_value(value.month),
+            "closed_months": [_month_value(item) for item in value.closed_months],
+            "closed_instrument_snapshot_digest_sha256": value.closed_instrument_snapshot_digest_sha256,
+            "closed_instrument_snapshot_retrieved_at": _optional_instant(
+                value.closed_instrument_snapshot_retrieved_at
+            ),
+            "closed_instrument_snapshot_attempt_count": value.closed_instrument_snapshot_attempt_count,
+            "closed_historical_attempt_count": value.closed_historical_attempt_count,
+        }
+    if type(value) is not DownloadPayloadV1:
+        raise ValueError
     return {
         "request": {
             "segment": value.request.segment,
@@ -1200,6 +1383,11 @@ def _month_labels_from_dates(start: date, end: date) -> tuple[str, ...]:
         labels.append(f"{year:04d}-{month:02d}")
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return tuple(labels)
+
+
+def _month_labels_before_final(start: date, end: date) -> tuple[str, ...]:
+    labels = _month_labels_from_dates(start, end)
+    return labels[:-1]
 
 
 _IST = timezone(timedelta(hours=5, minutes=30))

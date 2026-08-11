@@ -398,7 +398,7 @@ class InstrumentSnapshotStoreV1:
             raise InstrumentSnapshotCorruptError("instrument snapshot ambiguous")
         metadata = latest[0]
         try:
-            with self._lease.root_operation(self._root) as operation:
+            with self._lease.read_operation(self._root) as operation:
                 object_fd, observations_fd = _open_snapshot_directories(
                     operation, metadata.compressed_sha256, create=False
                 )

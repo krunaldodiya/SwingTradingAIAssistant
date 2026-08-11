@@ -17,6 +17,7 @@ _LOCK_NAME: Final = ".ingestion.lock"
 _LOCK_MODE: Final = 0o600
 _ROOT_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _LOCK_EXISTING_FLAGS: Final = os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+_LOCK_READ_FLAGS: Final = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
 _LOCK_FLAGS: Final = _LOCK_EXISTING_FLAGS | os.O_CREAT
 _CONTENTION_ERRNOS: Final = frozenset({errno.EACCES, errno.EAGAIN})
 
@@ -99,11 +100,18 @@ class StorageRootLeaseOperation:
 
 
 class StorageRootLease:
-    """Own one locked ``.ingestion.lock`` descriptor until explicitly closed."""
+    """Own one root authority descriptor until explicitly closed."""
 
-    def __init__(self, descriptor: int, root_identity: tuple[int, int]) -> None:
+    def __init__(
+        self,
+        descriptor: int,
+        root_identity: tuple[int, int],
+        *,
+        read_only: bool = False,
+    ) -> None:
         self._descriptor: int | None = descriptor
         self._root_identity = root_identity
+        self._read_only = read_only
 
     @classmethod
     def try_acquire(cls, root: object) -> LeaseResult:
@@ -114,6 +122,62 @@ class StorageRootLease:
     def try_acquire_existing(cls, root: object) -> LeaseResult:
         """Acquire only a pre-existing safe lock without creating filesystem state."""
         return cls._try_acquire(root, create_lock=False)
+
+    @classmethod
+    def try_admit_read_existing(cls, root: object) -> LeaseResult:
+        """Pin an existing safe root for reads without waiting on its writer.
+
+        The returned authority cannot authorize a mutating ``root_operation``.
+        Immutable objects and a private catalog snapshot remain readable while
+        an exclusive writer prepares an atomic replacement.
+        """
+        if not isinstance(root, Path):
+            return _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        root_descriptor: int | None = None
+        lock_descriptor: int | None = None
+        result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        try:
+            root_path_stat = os.stat(root, follow_symlinks=False)
+            if not stat.S_ISDIR(root_path_stat.st_mode):
+                raise RuntimeError
+            root_descriptor = os.open(root, _ROOT_FLAGS)
+            root_descriptor_stat = os.fstat(root_descriptor)
+            if not _same_inode(root_path_stat, root_descriptor_stat):
+                raise RuntimeError
+            lock_descriptor = os.open(
+                _LOCK_NAME,
+                _LOCK_READ_FLAGS,
+                dir_fd=root_descriptor,
+            )
+            lock_descriptor_stat = os.fstat(lock_descriptor)
+            lock_path_stat = os.stat(
+                _LOCK_NAME, dir_fd=root_descriptor, follow_symlinks=False
+            )
+            if not _valid_lock_identity(lock_descriptor_stat, lock_path_stat):
+                raise RuntimeError
+            root_final_stat = os.stat(root, follow_symlinks=False)
+            if not _same_inode(root_descriptor_stat, root_final_stat):
+                raise RuntimeError
+            authority = cls(
+                lock_descriptor,
+                (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
+                read_only=True,
+            )
+            lock_descriptor = None
+            result = LeaseResult(
+                LeaseOutcome.ACQUIRED, LeaseFailureCode.NONE, authority
+            )
+        except Exception:
+            result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        finally:
+            lock_closed = _close_descriptor(lock_descriptor)
+            root_closed = _close_descriptor(root_descriptor)
+            if not lock_closed or not root_closed:
+                if result.lease is not None:
+                    with suppress(RuntimeError):
+                        result.lease.close()
+                result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        return result
 
     @classmethod
     def try_acquire_private_empty(cls, root: object) -> LeaseResult:
@@ -190,6 +254,12 @@ class StorageRootLease:
 
     def root_operation(self, root: object) -> StorageRootLeaseOperation:
         """Return a context that authorizes descriptor-relative root mutation."""
+        if self._read_only or not isinstance(root, Path):
+            raise RuntimeError("storage lease authority unavailable")
+        return StorageRootLeaseOperation(self, root)
+
+    def read_operation(self, root: object) -> StorageRootLeaseOperation:
+        """Return a context that authorizes descriptor-relative immutable reads."""
         if not isinstance(root, Path):
             raise RuntimeError("storage lease authority unavailable")
         return StorageRootLeaseOperation(self, root)

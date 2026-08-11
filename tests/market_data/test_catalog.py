@@ -150,6 +150,7 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             "ingestion_runs",
             "instrument_snapshots",
             "universe_snapshots",
+            "provisional_partitions",
         }
         assert catalog.connection.execute(
             "SELECT migration_id, version FROM schema_migrations ORDER BY version"
@@ -157,6 +158,7 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             ("swing-trading-catalog-v1", 1),
             ("swing-trading-catalog-v2-instrument-snapshots", 2),
             ("swing-trading-catalog-v3-universe-snapshots", 3),
+            ("swing-trading-catalog-v4-provisional-partitions", 4),
         ]
 
     with DuckDBCatalog(tmp_path) as reopened:
@@ -225,6 +227,7 @@ def test_leased_catalog_conditional_publish_never_overwrites_final_race(
     if not existing_source:
         catalog.create_manifest(_in_progress())
     real_link = catalog_module.os.link
+    real_exchange = catalog_module._atomic_exchange_catalog_entries
     injected = False
 
     def inject_before_link(
@@ -236,7 +239,7 @@ def test_leased_catalog_conditional_publish_never_overwrites_final_race(
         follow_symlinks: bool = True,
     ) -> None:
         nonlocal injected
-        if not injected and target == "catalog.duckdb":
+        if not existing_source and not injected and target == "catalog.duckdb":
             injected = True
             descriptor = os.open(
                 "catalog.duckdb",
@@ -254,13 +257,34 @@ def test_leased_catalog_conditional_publish_never_overwrites_final_race(
             follow_symlinks=follow_symlinks,
         )
 
+    def inject_before_exchange(
+        root_descriptor: int, left_name: str, right_name: str
+    ) -> None:
+        nonlocal injected
+        if existing_source and not injected:
+            injected = True
+            os.unlink(right_name, dir_fd=root_descriptor)
+            descriptor = os.open(
+                right_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=root_descriptor,
+            )
+            os.write(descriptor, b"foreign-concurrent-catalog")
+            os.close(descriptor)
+        real_exchange(root_descriptor, left_name, right_name)
+
     monkeypatch.setattr(catalog_module.os, "link", inject_before_link)
+    monkeypatch.setattr(
+        catalog_module, "_atomic_exchange_catalog_entries", inject_before_exchange
+    )
 
     with pytest.raises(CatalogPersistenceError):
         catalog.close()
 
     assert injected
     assert (root / "catalog.duckdb").read_bytes() == b"foreign-concurrent-catalog"
+    assert tuple(root.glob(".catalog.duckdb.*.tmp")) == ()
     retained = tuple(root.glob(".catalog.duckdb.*.retained"))
     if existing_source:
         assert len(retained) == 1
@@ -268,6 +292,48 @@ def test_leased_catalog_conditional_publish_never_overwrites_final_race(
     else:
         assert retained == ()
     acquired.lease.close()
+
+
+def test_leased_catalog_publish_keeps_previous_generation_readable_during_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    initial = _in_progress()
+    with DuckDBCatalog(root) as seeded:
+        seeded.create_manifest(initial)
+
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    writer = DuckDBCatalog(root, lease=acquired.lease)
+    writer.__enter__()
+    real_exchange = catalog_module._atomic_exchange_catalog_entries
+    observed: list[PartitionManifest] = []
+
+    def observe_exchange(root_descriptor: int, left_name: str, right_name: str) -> None:
+        for action in (
+            lambda: None,
+            lambda: real_exchange(root_descriptor, left_name, right_name),
+        ):
+            action()
+            reader = StorageRootLease.try_admit_read_existing(root)
+            assert reader.lease is not None
+            with (
+                reader.lease,
+                DuckDBCatalog(root, read_only=True, lease=reader.lease) as catalog,
+            ):
+                manifest = catalog.get_manifest(_plan())
+                assert manifest is not None
+                observed.append(manifest)
+
+    monkeypatch.setattr(
+        catalog_module, "_atomic_exchange_catalog_entries", observe_exchange
+    )
+
+    writer.close()
+    acquired.lease.close()
+
+    assert observed == [initial, initial]
 
 
 def test_read_only_catalog_never_creates_or_migrates(tmp_path) -> None:
@@ -428,22 +494,24 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     with DuckDBCatalog(tmp_path) as migrated:
         assert migrated.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
         assert migrated.get_manifest(_plan()) == initial
 
 
-def test_v2_to_v3_migration_is_atomic(tmp_path) -> None:
+def test_v2_to_current_migration_is_atomic(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as catalog:
+        catalog.connection.execute("DROP TABLE provisional_partitions")
         catalog.connection.execute("DROP TABLE universe_snapshots")
-        catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+        catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 3")
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
 
     with DuckDBCatalog(tmp_path) as catalog:
+        catalog.connection.execute("DROP TABLE provisional_partitions")
         catalog.connection.execute("DROP TABLE universe_snapshots")
-        catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+        catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 3")
     broken = DuckDBCatalog(tmp_path)
     broken._after_universe_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
         RuntimeError("injected migration failure")

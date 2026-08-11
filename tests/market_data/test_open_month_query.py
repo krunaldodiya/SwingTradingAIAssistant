@@ -1,0 +1,748 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+from swing_trading_ai_assistant.market_data.monthly_request_planner import (
+    PlannedInstrumentMonth,
+)
+from swing_trading_ai_assistant.market_data.open_month_query import (
+    CurrentAwareQueryServiceV1,
+    OpenMonthOneMinuteQueryServiceV1,
+    _combine_query_reports,
+    _public_row,
+)
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    publish_provisional_partition_under_lease,
+)
+from swing_trading_ai_assistant.market_data.preview_admission import (
+    PreviewAdmissionPolicyV1,
+)
+from swing_trading_ai_assistant.market_data.provisional_metadata import (
+    metadata_from_publication,
+)
+from swing_trading_ai_assistant.market_data.public_contract import (
+    CandleFieldV1,
+    CoverageStateV1,
+    PublicCommandReportV1,
+    PublicCommandStatusV1,
+    PublicCoverageMonthV1,
+    PublicFailureCodeV1,
+    PublicFailureV1,
+    PublicQueryRequestV1,
+    PublicQueryRowV1,
+    QueryPayloadV1,
+)
+from swing_trading_ai_assistant.market_data.public_query import QueryRequestV1
+from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+)
+from swing_trading_ai_assistant.market_data.validation import (
+    EQUITY_MONTH_VALIDATION_POLICY_V1,
+    ValidationReason,
+)
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _plan() -> PlannedInstrumentMonth:
+    return PlannedInstrumentMonth(
+        "upstox",
+        "NSE_EQ|INE002A01018",
+        "INE002A01018",
+        "RELIANCE",
+        "NSE",
+        "NSE_EQ",
+        "EQ",
+        "1m",
+        2026,
+        8,
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+    )
+
+
+def _row(minute: int) -> CanonicalCandle:
+    return CanonicalCandle(
+        provider="upstox",
+        instrument_key="NSE_EQ|INE002A01018",
+        security_id="INE002A01018",
+        symbol="RELIANCE",
+        exchange="NSE",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        underlying_id=None,
+        expiry=None,
+        strike=None,
+        option_type=None,
+        interval="1m",
+        ts=datetime(2026, 8, 11, 3, minute, tzinfo=UTC),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5 + minute / 100,
+        volume=1_000 + minute,
+        oi=None,
+        ingested_at=datetime(2026, 8, 11, 4, 0, tzinfo=UTC),
+        source_version="upstox-intraday-v3",
+        adjustment_state="raw",
+    )
+
+
+def _seed(root: Path) -> None:
+    lease_result = StorageRootLease.try_acquire(root)
+    assert lease_result.outcome is LeaseOutcome.ACQUIRED
+    assert lease_result.lease is not None
+    with lease_result.lease as lease:
+        rows = (_row(45), _row(46))
+        digest = "a" * 64
+        published = publish_provisional_partition_under_lease(
+            root, lease, _plan(), rows[-1].ts, digest, rows
+        )
+        metadata = metadata_from_publication(
+            plan=published.plan,
+            schedule_digest_sha256=digest,
+            cutoff=published.cutoff,
+            session_complete=False,
+            actual_from_ts=published.actual_from_ts,
+            actual_to_ts=published.actual_to_ts,
+            row_count=published.row_count,
+            checksum_sha256=published.checksum_sha256,
+            byte_size=published.byte_size,
+            relative_path=published.canonical_path,
+            instrument_snapshot_digest_sha256="b" * 64,
+            instrument_snapshot_retrieved_at=datetime(2026, 8, 11, 3, 0, tzinfo=UTC),
+            published_at=datetime(2026, 8, 11, 4, 0, tzinfo=UTC),
+            historical_attempt_count=1,
+            intraday_attempt_count=1,
+        )
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            catalog.save_provisional_partition(metadata)
+
+
+class _Clock:
+    def now(self) -> datetime:
+        return datetime(2026, 8, 11, 10, 0, tzinfo=IST)
+
+
+class _InvalidClock:
+    def now(self) -> datetime:
+        return datetime(2026, 8, 11, 10, 0)
+
+
+class _QueryStub:
+    def __init__(self, report: object) -> None:
+        self.report = report
+        self.requests: list[object] = []
+
+    def query(self, request: object):
+        self.requests.append(request)
+        return self.report
+
+
+class _RaisingQueryStub:
+    def query(self, request: object):
+        raise RuntimeError("dependency failed")
+
+
+def test_current_aware_query_routes_only_current_month_one_minute(
+    tmp_path: Path,
+) -> None:
+    open_service = _QueryStub("open")
+    closed_service = _QueryStub("closed")
+    service = CurrentAwareQueryServiceV1(closed_service, open_service, clock=_Clock())
+    current = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+    historical = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+
+    assert service.query(current) == "open"
+    assert service.query(historical) == "closed"
+    assert open_service.requests == [current]
+    assert closed_service.requests == [historical]
+
+
+def test_current_aware_query_routes_unknown_request_to_closed_service() -> None:
+    closed_service = _QueryStub("closed")
+    service = CurrentAwareQueryServiceV1(
+        closed_service, _QueryStub("open"), clock=_Clock()
+    )
+
+    assert service.query(object()) == "closed"
+
+
+@pytest.mark.parametrize(
+    ("closed_service", "open_service", "query_request"),
+    (
+        (
+            _QueryStub("closed"),
+            _RaisingQueryStub(),
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 1),
+                date(2026, 8, 11),
+                "1m",
+                ("ts",),
+                100,
+                Path.cwd(),
+            ),
+        ),
+        (
+            _RaisingQueryStub(),
+            _QueryStub("open"),
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 7, 31),
+                "1m",
+                ("ts",),
+                100,
+                Path.cwd(),
+            ),
+        ),
+        (
+            _RaisingQueryStub(),
+            _QueryStub("open"),
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 8, 11),
+                "1m",
+                ("ts",),
+                100,
+                Path.cwd(),
+            ),
+        ),
+    ),
+)
+def test_current_aware_query_fails_closed_on_dependency_exception(
+    closed_service: _QueryStub | _RaisingQueryStub,
+    open_service: _QueryStub | _RaisingQueryStub,
+    query_request: QueryRequestV1,
+) -> None:
+    service = CurrentAwareQueryServiceV1(closed_service, open_service, clock=_Clock())
+
+    report = service.query(query_request)
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+
+
+def test_current_aware_query_fails_closed_on_invalid_clock(tmp_path: Path) -> None:
+    service = CurrentAwareQueryServiceV1(
+        _QueryStub("closed"), _QueryStub("open"), clock=_InvalidClock()
+    )
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts",),
+        100,
+        tmp_path,
+    )
+
+    report = service.query(request)
+
+    assert report.status is PublicCommandStatusV1.FAILED
+
+
+def _query_report(month: int, provisional: bool) -> PublicCommandReportV1:
+    digest = f"{month:x}" * 64
+    ts = datetime(2026, month, 2, 3, 45, tzinfo=UTC)
+    request = PublicQueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, month, 1),
+        date(2026, month, 31 if month == 7 else 11),
+        "1m",
+        (CandleFieldV1.TS, CandleFieldV1.CLOSE),
+        100,
+    )
+    coverage = PublicCoverageMonthV1(
+        f"2026-{month:02d}",
+        CoverageStateV1.PROVISIONAL if provisional else CoverageStateV1.VERIFIED,
+        ts,
+        ts,
+        1,
+        "f" * 64,
+        1,
+        (
+            None
+            if provisional
+            else f"{EQUITY_MONTH_VALIDATION_POLICY_V1}+sessions-sha256:{digest}"
+        ),
+        digest,
+        None,
+        None if provisional else ValidationReason.NONE,
+        ts if provisional else None,
+        False if provisional else None,
+    )
+    payload = QueryPayloadV1(
+        request,
+        1,
+        (coverage,),
+        (PublicQueryRowV1(ts, None, None, None, 100.0 + month, None),),
+    )
+    return PublicCommandReportV1(
+        "v1", "query", PublicCommandStatusV1.SUCCEEDED, None, 0, payload
+    )
+
+
+def test_current_aware_query_combines_closed_and_provisional_rows(
+    tmp_path: Path,
+) -> None:
+    closed_service = _QueryStub(_query_report(7, False))
+    open_service = _QueryStub(_query_report(8, True))
+    service = CurrentAwareQueryServiceV1(closed_service, open_service, clock=_Clock())
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+
+    report = service.query(request)
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert report.payload is not None
+    assert report.payload.request.from_date == date(2026, 7, 1)
+    assert tuple(value.month for value in report.payload.months) == (
+        "2026-07",
+        "2026-08",
+    )
+    assert tuple(value.close for value in report.payload.rows) == (107.0, 108.0)
+    assert closed_service.requests[0].to_date == date(2026, 7, 31)
+    assert open_service.requests[0].from_date == date(2026, 8, 1)
+
+
+def test_open_month_query_returns_available_rows_and_provisional_cutoff(
+    tmp_path: Path,
+) -> None:
+    _seed(tmp_path)
+    service = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    )
+
+    report = service.query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts", "open", "high", "low", "close", "volume"),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert report.failure is None
+    assert report.payload is not None
+    assert report.payload.row_count == 2
+    assert report.payload.months[0].coverage_state.value == "PROVISIONAL"
+    assert report.payload.months[0].data_cutoff == datetime(
+        2026, 8, 11, 3, 46, tzinfo=UTC
+    )
+    assert report.payload.months[0].session_complete is False
+    assert report.payload.rows[-1].close == 100.96
+
+
+def test_open_month_query_reads_last_snapshot_during_active_refresh(
+    tmp_path: Path,
+) -> None:
+    _seed(tmp_path)
+    writer = StorageRootLease.try_acquire_existing(tmp_path)
+    assert writer.lease is not None
+    try:
+        report = OpenMonthOneMinuteQueryServiceV1(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+        ).query(
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 1),
+                date(2026, 8, 11),
+                "1m",
+                ("ts", "close"),
+                100,
+                tmp_path,
+            )
+        )
+    finally:
+        writer.lease.close()
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert report.payload is not None
+    assert report.payload.row_count == 2
+
+
+def test_open_month_query_retries_one_atomic_catalog_publication_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path)
+    calls = 0
+
+    def _catalog(*args: object, **kwargs: object) -> DuckDBCatalog:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("catalog changed during snapshot")
+        return DuckDBCatalog(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.open_month_query.DuckDBCatalog",
+        _catalog,
+    )
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts", "close"),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert calls == 2
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+
+
+def test_open_month_query_without_persisted_snapshot_is_insufficient(
+    tmp_path: Path,
+) -> None:
+    lease = StorageRootLease.try_acquire(tmp_path)
+    assert lease.lease is not None
+    lease.lease.close()
+    with DuckDBCatalog(tmp_path):
+        pass
+    service = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    )
+
+    report = service.query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts", "close"),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.COVERAGE_INSUFFICIENT
+    assert report.payload is not None and report.payload.rows == ()
+
+
+@pytest.mark.parametrize(
+    "request_value",
+    (
+        object(),
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            "1m",
+            ("ts",),
+            100,
+            Path.cwd(),
+        ),
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 12),
+            "1m",
+            ("ts",),
+            100,
+            Path.cwd(),
+        ),
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("unknown",),
+            100,
+            Path.cwd(),
+        ),
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            10_001,
+            Path.cwd(),
+        ),
+    ),
+)
+def test_open_month_query_rejects_invalid_requests(request_value: object) -> None:
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(request_value)
+
+    assert report.status is PublicCommandStatusV1.REJECTED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.INVALID_INPUT
+
+
+def test_open_month_query_rejects_unsupported_symbol(tmp_path: Path) -> None:
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "TCS",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.REJECTED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT
+
+
+def test_open_month_query_rejects_unsupported_timeframe(tmp_path: Path) -> None:
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1d",
+            ("ts",),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.REJECTED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNSUPPORTED_TIMEFRAME
+
+
+def test_open_month_query_reports_unavailable_storage(tmp_path: Path) -> None:
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            100,
+            tmp_path / "missing",
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.UNAVAILABLE
+
+
+def test_open_month_query_enforces_row_limit(tmp_path: Path) -> None:
+    _seed(tmp_path)
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            1,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.QUERY_RESOURCE_LIMIT_EXCEEDED
+
+
+def test_open_month_query_fails_closed_on_invalid_clock(tmp_path: Path) -> None:
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_InvalidClock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.REJECTED
+
+
+def test_open_month_query_fails_closed_on_corrupt_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path)
+
+    def _corrupt(*_args: object) -> object:
+        raise ValueError("corrupt")
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.open_month_query.load_provisional_partition",
+        _corrupt,
+    )
+    report = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts",),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.UNAVAILABLE
+
+
+def test_combine_query_propagates_typed_failure(tmp_path: Path) -> None:
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts",),
+        100,
+        tmp_path,
+    )
+    failed = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.UNAVAILABLE,
+        PublicFailureV1(
+            PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+            None,
+            None,
+            None,
+            None,
+            (),
+        ),
+        0,
+        None,
+    )
+
+    report = _combine_query_reports(request, failed, object())
+
+    assert report.status is PublicCommandStatusV1.UNAVAILABLE
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE
+
+
+def test_combine_query_rejects_duplicate_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+    july = _query_report(7, False)
+    august = _query_report(8, True)
+    assert july.payload is not None and august.payload is not None
+    object.__setattr__(august.payload.rows[0], "ts", july.payload.rows[0].ts)
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.open_month_query._successful_query_payload",
+        lambda source: july.payload if source is july else august.payload,
+    )
+
+    report = _combine_query_reports(request, july, august)
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.QUERY_RESOURCE_LIMIT_EXCEEDED
+
+
+def test_combine_query_fails_closed_on_malformed_sources(tmp_path: Path) -> None:
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts",),
+        100,
+        tmp_path,
+    )
+
+    report = _combine_query_reports(request, object(), object())
+
+    assert report.status is PublicCommandStatusV1.FAILED
+
+
+def test_public_row_rejects_noncanonical_value() -> None:
+    with pytest.raises(ValueError, match="invalid provisional row"):
+        _public_row(object(), (CandleFieldV1.TS,))

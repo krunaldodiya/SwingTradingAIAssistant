@@ -1,0 +1,102 @@
+# Plan 06: Current-month incremental equity data
+
+Status: **IMPLEMENTED CANDIDATE — RELEASE REVIEW PENDING**
+
+Extends [Plan 04](04-public-preview-contract.md) without changing the immutable
+closed-month contract.
+
+## Outcome
+
+The same `download`, `coverage`, and `query` commands accept a range ending on
+the current `Asia/Kolkata` date. Closed months remain fully verified immutable
+partitions. The current month is an immutable sequence of provisional snapshots
+identified by an exact completed-minute cutoff. No current-month request is
+reported as full-month verified coverage.
+
+Historical V3 remains the source for prior dates. Upstox Intraday V3 supplies
+the current date because the authenticated Historical V3 response does not
+include the current session. This is an internal provider-routing detail; the
+user still invokes one `download` command and all public contracts remain
+vendor-neutral.
+
+## Schedule and time boundary
+
+- A canonical schedule-v3 artifact must classify every date from local month
+  start through the requested current date.
+- The current date must be an explicitly sourced session or closure. Weekends,
+  holidays, and special sessions are never inferred by the downloader.
+- For an active session, the target is the last fully completed minute. At or
+  after the sourced close, the target is the final minute beginning one minute
+  before close and `session_complete=true`.
+- A range spanning closed and current months supplies a canonical v2 closed-
+  month schedule via `--closed-schedule-file` and the v3 current schedule via
+  `--schedule-file`. The CLI composes separate preparation services internally.
+
+The August 2026 operator evidence used for the bounded smoke came from NSE
+Capital Market circular `NSE/CMTR/71775` and NSE's published equity normal-
+market hours of 09:15–15:30 IST. Operator-supplied files remain the evidence;
+the program does not scrape or invent a calendar.
+
+## Incremental persistence
+
+The catalog v4 `provisional_partitions` table stores metadata only. Each
+snapshot is content-addressed by instrument, month, schedule digest, and UTC
+cutoff and points to an immutable Parquet object. Publication is atomic,
+descriptor-relative, no-follow, no-overwrite, and protected by the existing
+storage-root lease.
+
+For the first current-month invocation:
+
+1. fetch prior dates once with Historical V3 when required;
+2. fetch the current date once with Intraday V3 when a completed minute exists;
+3. normalize and validate the union against the exact schedule; and
+4. publish one immutable provisional snapshot plus metadata.
+
+For a repeated invocation:
+
+- if the retained cutoff equals the target, make zero candle-provider calls;
+- if the target advanced on the same date, call only Intraday V3;
+- require the retained prefix to remain byte-for-byte equal;
+- append only newly completed minutes and publish a new immutable snapshot; and
+- never overwrite or relabel the earlier snapshot.
+
+Every provider, row, byte, decoded field, output, retry, lock, and query path
+remains bounded. Credentials are read lazily from `UPSTOX_ACCESS_TOKEN` only
+after schedule, request, and storage admission requires a provider call.
+
+## Public evidence
+
+`CoverageStateV1.PROVISIONAL` means verified immutable evidence through
+`data_cutoff`; it never means full-month completeness. A provisional month
+reports the exact cutoff, session-complete flag, row count, checksum, schedule
+digest, and instrument-snapshot provenance. Closed-plus-current download
+payloads retain the closed month evidence and its snapshot provenance alongside
+the current provisional month.
+
+Coverage and one-minute query use zero provider calls. They reopen and verify
+the catalog-selected immutable provisional object under the existing root
+authority. A read admission never authorizes mutation and does not wait for the
+exclusive writer: while a refresh is running, coverage and query return the
+last atomically published snapshot. A catalog entry replacement race is retried
+at most three times without sleeping; persistent corruption still fails closed.
+Queries may combine verified closed months with the provisional current month,
+subject to the unchanged 10,000-row public limit.
+
+## Acceptance evidence
+
+- deterministic first, unchanged-repeat, later-cutoff append, conflicting-
+  prefix, missing-minute, unsafe-path, catalog, and serializer tests pass;
+- a live RELIANCE smoke persisted 2,625 August rows through
+  `2026-08-11T09:59:00Z`, with zero missing bars;
+- the next identical August request made zero snapshot, historical, and
+  intraday requests;
+- deterministic concurrent-reader tests return the last published snapshot
+  while the refresh writer holds the root lock;
+- adding July required one Historical V3 request, retained 8,625 verified July
+  rows, reused the August snapshot, and the full-range repeat made zero provider
+  requests; and
+- coverage reported one `VERIFIED` and one `PROVISIONAL` month with zero
+  provider attempts.
+
+The generated market-data root and schedule artifacts are external smoke
+evidence and are never committed.

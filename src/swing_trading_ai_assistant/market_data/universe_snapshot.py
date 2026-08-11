@@ -390,7 +390,7 @@ class Nifty50UniverseStoreV1:
             if len(eligible) != 1:
                 raise UniverseSnapshotAmbiguousError("universe snapshot ambiguous")
             metadata = eligible[0]
-            with self._lease.root_operation(self._root) as operation:
+            with self._lease.read_operation(self._root) as operation:
                 _assert_private_operation(operation)
                 object_fd = _open_object_directory(
                     operation, metadata.snapshot_sha256, create=False

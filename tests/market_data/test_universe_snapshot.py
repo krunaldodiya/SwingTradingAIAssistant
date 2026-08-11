@@ -556,7 +556,11 @@ def test_private_root_is_rechecked_inside_held_operation(
             root.chmod(0o700)
             store.retain(_snapshot())
         expected_rows = catalog.list_universe_snapshots()
-        monkeypatch.setattr(acquired.lease, "root_operation", chmod_before_operation)
+        monkeypatch.setattr(
+            acquired.lease,
+            "read_operation" if operation == "resolve" else "root_operation",
+            chmod_before_operation,
+        )
         with pytest.raises(UniverseSnapshotCorruptError):
             if operation == "retain":
                 store.retain(_snapshot())

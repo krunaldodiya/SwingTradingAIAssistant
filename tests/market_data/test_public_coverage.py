@@ -92,18 +92,23 @@ def _request() -> PublicCoverageRequestV1:
 
 def _month(state: CoverageStateV1 = CoverageStateV1.VERIFIED) -> PublicCoverageMonthV1:
     verified = state is CoverageStateV1.VERIFIED
+    provisional = state is CoverageStateV1.PROVISIONAL
+    available = verified or provisional
+    cutoff = datetime(2026, 7, 1, 9, 59, tzinfo=UTC)
     return PublicCoverageMonthV1(
         "2026-07",
         state,
-        datetime(2026, 7, 1, 3, 45, tzinfo=UTC) if verified else None,
-        datetime(2026, 7, 1, 9, 59, tzinfo=UTC) if verified else None,
-        375 if verified else None,
-        "b" * 64 if verified else None,
-        1 if verified else None,
+        datetime(2026, 7, 1, 3, 45, tzinfo=UTC) if available else None,
+        cutoff if available else None,
+        375 if available else None,
+        "b" * 64 if available else None,
+        1 if available else None,
         f"nse-equity-month@v1+sessions-sha256:{DIGEST}" if verified else None,
-        DIGEST if verified else None,
+        DIGEST if available else None,
         None,
         ValidationReason.NONE if verified else None,
+        cutoff if provisional else None,
+        False if provisional else None,
     )
 
 
@@ -120,6 +125,7 @@ def _payload(state: CoverageStateV1 = CoverageStateV1.VERIFIED) -> CoveragePaylo
         int(state is CoverageStateV1.CORRUPT),
         int(state is CoverageStateV1.SCHEDULE_UNPROVEN),
         (month,),
+        provisional_count=int(state is CoverageStateV1.PROVISIONAL),
     )
 
 
@@ -148,6 +154,7 @@ def test_verified_coverage_report_is_zero_provider_and_allowlisted() -> None:
         "overall_state",
         "planned_count",
         "verified_count",
+        "provisional_count",
         "missing_count",
         "insufficient_count",
         "stale_count",
@@ -307,6 +314,7 @@ def test_every_coverage_state_has_one_exact_counter(state: CoverageStateV1) -> N
     payload = _payload(state)
     counts = (
         payload.verified_count,
+        payload.provisional_count,
         payload.missing_count,
         payload.insufficient_count,
         payload.stale_count,

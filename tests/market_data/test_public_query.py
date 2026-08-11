@@ -170,6 +170,49 @@ def test_query_renderer_emits_every_allowlisted_candle_field() -> None:
     ]
 
 
+def test_query_report_returns_persisted_provisional_rows_with_explicit_cutoff() -> None:
+    request = PublicQueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        "1m",
+        tuple(CandleFieldV1),
+        1_000,
+    )
+    cutoff = datetime(2026, 8, 11, 8, 0, tzinfo=UTC)
+    month = PublicCoverageMonthV1(
+        "2026-08",
+        CoverageStateV1.PROVISIONAL,
+        datetime(2026, 8, 3, 3, 45, tzinfo=UTC),
+        cutoff,
+        2_000,
+        "b" * 64,
+        1,
+        None,
+        DIGEST,
+        None,
+        None,
+        cutoff,
+        False,
+    )
+    row = PublicQueryRowV1(cutoff, 100.0, 101.0, 99.0, 100.5, 1_000)
+    payload = QueryPayloadV1(request, 1, (month,), (row,))
+    report: QueryReportV1 = PublicCommandReportV1(
+        "v1", "query", PublicCommandStatusV1.SUCCEEDED, None, 0, payload
+    )
+
+    decoded = json.loads(render_query_report_json(report))
+
+    assert decoded["status"] == "SUCCEEDED"
+    assert decoded["payload"]["months"][0]["coverage_state"] == "PROVISIONAL"
+    assert decoded["payload"]["months"][0]["data_cutoff"] == (
+        "2026-08-11T08:00:00.000000Z"
+    )
+    assert decoded["payload"]["months"][0]["session_complete"] is False
+    assert decoded["payload"]["rows"][0]["close"] == 100.5
+
+
 def test_query_payload_preserves_insufficient_coverage_without_rows() -> None:
     payload = _payload(CoverageStateV1.MISSING)
     failure = PublicFailureV1(

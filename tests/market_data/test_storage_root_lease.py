@@ -99,6 +99,152 @@ def test_existing_only_lease_acquires_the_preexisting_safe_lock(tmp_path: Path) 
     acquired.lease.close()
 
 
+def test_read_admission_coexists_with_active_writer_without_mutation(
+    tmp_path: Path,
+) -> None:
+    writer = StorageRootLease.try_acquire(tmp_path)
+    assert writer.outcome is LeaseOutcome.ACQUIRED
+    assert writer.lease is not None
+    before = tuple((item.name, item.stat().st_ino) for item in tmp_path.iterdir())
+
+    reader = StorageRootLease.try_admit_read_existing(tmp_path)
+
+    assert reader.outcome is LeaseOutcome.ACQUIRED
+    assert reader.lease is not None
+    with reader.lease.read_operation(tmp_path) as operation:
+        operation.ensure_live()
+    with pytest.raises(RuntimeError, match="authority unavailable"):
+        reader.lease.root_operation(tmp_path)
+    reader.lease.close()
+    assert (
+        tuple((item.name, item.stat().st_ino) for item in tmp_path.iterdir()) == before
+    )
+    contention = StorageRootLease.try_acquire_existing(tmp_path)
+    assert contention.outcome is LeaseOutcome.ALREADY_RUNNING
+    writer.lease.close()
+
+
+@pytest.mark.parametrize("invalid", (object(), Path("missing")))
+def test_read_admission_rejects_invalid_or_missing_root_without_creation(
+    tmp_path: Path, invalid: object
+) -> None:
+    target = tmp_path / invalid if isinstance(invalid, Path) else invalid
+
+    result = StorageRootLease.try_admit_read_existing(target)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    assert result.lease is None
+    assert not (tmp_path / "missing").exists()
+
+
+def test_read_admission_rejects_absent_or_unsafe_lock_without_mutation(
+    tmp_path: Path,
+) -> None:
+    absent = tmp_path / "absent"
+    absent.mkdir()
+    before = tuple(absent.iterdir())
+    missing = StorageRootLease.try_admit_read_existing(absent)
+    assert missing.outcome is LeaseOutcome.FAILED
+    assert tuple(absent.iterdir()) == before == ()
+
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir()
+    seeded = StorageRootLease.try_acquire(unsafe)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    lock = unsafe / ".ingestion.lock"
+    lock.chmod(0o644)
+    original = (lock.stat().st_ino, lock.stat().st_mode, lock.read_bytes())
+
+    rejected = StorageRootLease.try_admit_read_existing(unsafe)
+
+    assert rejected.outcome is LeaseOutcome.FAILED
+    assert (lock.stat().st_ino, lock.stat().st_mode, lock.read_bytes()) == original
+
+
+def test_read_admission_rejects_root_swap_after_descriptor_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    seeded = StorageRootLease.try_acquire(root)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    original_open = lease_module.os.open
+    swapped = False
+
+    def swap_after_root_open(path: object, flags: int, *args: object, **kwargs: object):
+        nonlocal swapped
+        descriptor = original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == root and not swapped:
+            swapped = True
+            root.rename(tmp_path / "original")
+            root.mkdir()
+        return descriptor
+
+    monkeypatch.setattr(lease_module.os, "open", swap_after_root_open)
+
+    result = StorageRootLease.try_admit_read_existing(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert tuple(root.iterdir()) == ()
+    assert (tmp_path / "original" / ".ingestion.lock").is_file()
+
+
+def test_read_admission_rejects_non_directory_and_descriptor_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    regular = tmp_path / "regular"
+    regular.write_bytes(b"not-a-directory")
+    assert (
+        StorageRootLease.try_admit_read_existing(regular).outcome is LeaseOutcome.FAILED
+    )
+
+    root = tmp_path / "root"
+    root.mkdir()
+    seeded = StorageRootLease.try_acquire(root)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    original_same_inode = lease_module._same_inode
+    calls = 0
+
+    def mismatch_once(first: object, second: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return False if calls == 1 else original_same_inode(first, second)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lease_module, "_same_inode", mismatch_once)
+
+    assert StorageRootLease.try_admit_read_existing(root).outcome is LeaseOutcome.FAILED
+
+
+def test_read_admission_fails_closed_when_descriptor_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded = StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    original_close = lease_module._close_descriptor
+    failed_once = False
+
+    def fail_first_descriptor(descriptor: int | None) -> bool:
+        nonlocal failed_once
+        if descriptor is not None and not failed_once:
+            failed_once = True
+            original_close(descriptor)
+            return False
+        return original_close(descriptor)
+
+    monkeypatch.setattr(lease_module, "_close_descriptor", fail_first_descriptor)
+
+    result = StorageRootLease.try_admit_read_existing(tmp_path)
+
+    assert failed_once is True
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.lease is None
+
+
 @pytest.mark.parametrize("invalid", ("nonempty", "wrong_mode", "symlink"))
 def test_private_empty_admission_never_mutates_invalid_root(
     tmp_path: Path, invalid: str
