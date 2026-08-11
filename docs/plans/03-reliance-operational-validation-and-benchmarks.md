@@ -664,8 +664,8 @@ uv run --extra dev python tests/market_data/ark92_b03_measurement_error_repair.p
   --base-artifact "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
   --base-byte-count 220934 \
   --base-sha256 1b69e0f4b70983582e889ef22be4c5dcb9051985b001be46ac305a87c86bd755 \
-  --expected-revision "<accepted-repair-40-hex-revision>" \
-  --expected-tree "<accepted-repair-40-hex-tree>"
+  --expected-revision "f5585b58ae88bdc3664a9b6e70797906ff1721c6" \
+  --expected-tree "daeaa0b3e5bb8cf58bcc7881c02bfa306924b05b"
 ```
 
 ARK-93 must authenticate and report both artifacts. It reports the original
@@ -673,6 +673,36 @@ B03 set as `MEASUREMENT_ERROR_RETAINED`; only a five-of-five valid, comparable,
 stable supplement may supply B03's threshold reference. This explicit lineage
 is a correction of harness applicability, not post-hoc sample selection. The
 four unaffected workloads continue to use only the original artifact.
+
+### 5.6 Deterministic threshold-decision artifact
+
+The accepted B03 supplement receipt is
+`ark92-b03-measurement-error-repair-receipt-v1`, byte count `30641`, SHA-256
+`d64cf2e3a971c052e70975571efb60d336469e24ef1080f1ab441615e67f884c`.
+ARK-93 authenticates that receipt and the frozen baseline receipt, selects B01,
+B02, B04, and B05 only from the baseline and B03 only from the supplement, and
+emits `b03_original_status=MEASUREMENT_ERROR_RETAINED`. It applies section 5.4
+without tuning: every applicable metric retains the five sorted values,
+minimum, median, maximum, spread, stability result, direction, and threshold.
+Any incomplete, failed, invalid-resource, non-comparable, FD-unclosed,
+inconsistently optional, or unstable workload is `UNSET`; it is still emitted.
+
+The output is immutable canonical JSON, mode `0400`, with
+`schema_version=ark93-threshold-decision-v1`, the decision source revision/tree,
+both complete input receipts, the original B03 status, and ordered B01--B05
+results. Its receipt is `ark93-threshold-decision-receipt-v1`. Source admission
+and publication use the same clean-tree, expected revision/tree, loaded-module,
+no-overwrite, private-directory, and before/after identity controls as section
+5.5. Run exactly once after accepting the threshold evaluator candidate:
+
+```bash
+uv run --extra dev python tests/market_data/ark93_benchmark_threshold_decision.py \
+  --output "$PWD/artifacts/benchmarks/ark93-threshold-decision-v1.json" \
+  --base-artifact "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
+  --b03-repair-artifact "$PWD/artifacts/benchmarks/ark92-b03-measurement-error-repair-v1.json" \
+  --expected-revision "<accepted-threshold-40-hex-revision>" \
+  --expected-tree "<accepted-threshold-40-hex-tree>"
+```
 
 ## 6. Failure, cancellation, safety, and provenance rules
 
