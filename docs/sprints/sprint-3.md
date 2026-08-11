@@ -1,6 +1,6 @@
 # Sprint 3 — Usable single-symbol downloader preview
 
-Status: **ACTIVE**
+Status: **COMPLETE**
 
 ## Goal
 
@@ -131,3 +131,38 @@ Sprint 3 is complete only when all of the following are demonstrated:
 Write the sprint record once at close with the seven-slice result, gate/smoke
 evidence, held boundaries, and any incomplete work. Do not create per-issue
 sprint records or unchanged-state reports.
+
+## Closeout record
+
+All seven coherent slices were delivered in dependency order:
+
+| Slice | Accepted revision |
+| --- | --- |
+| 1. Public contract | [PR #69](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/69), merge `859a5bf` |
+| 2. Authoritative preparation | [PR #70](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/70), merge `3efe4cf` |
+| 3. Persistent download | [PR #71](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/71), merge `6f68a59` |
+| 4. Stored coverage | [PR #72](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/72), merge `dfd7cd3` |
+| 5. One-minute query | [PR #73](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/73), merge `d6dca86` |
+| 6. Daily query | [PR #74](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/74), merge `ff677c2` |
+| 7. Usability proof | this sprint-close revision |
+
+The final controlled smoke uses an external disposable root and actual public
+services. It supplies deterministic authoritative schedule, snapshot, and
+historical responses; verifies one persistent monthly Parquet publication; and
+then proves an identical download makes zero snapshot and historical requests.
+Coverage, bounded selected-field `1m`, and locally derived `1d` all succeed with
+zero provider attempts. Public JSON contains no storage path or credential.
+
+The source distribution and wheel build successfully. The wheel installs into
+a fresh temporary virtual environment, reports package version `0.1.0`, and
+exposes `download`, `coverage`, `query`, and `probe-upstox`. The final local
+suite contains **1,349 tests** and reaches **91.27% branch coverage**; Ruff
+format and lint, strict Pyright on production source, Vulture at 80%, the full
+pytest gate, and hosted CI are required on the accepted closeout revision.
+
+The sprint ships a controlled single-symbol preview, not live-release or
+multi-symbol readiness. The default package has no embedded exchange-calendar
+feed and fails closed until an application composition injects approved
+authoritative schedule evidence. The authenticated closed-range Upstox gate,
+multi-symbol point-in-time scheduling, benchmark release thresholds, research
+logic, advice, and broker execution remain explicitly deferred.

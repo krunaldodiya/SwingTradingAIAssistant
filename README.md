@@ -66,28 +66,106 @@ one authorized live comparison are completed. See the
 [Sprint 2 closeout](docs/sprints/sprint-2-closeout.md) for the exact evidence and
 remaining work.
 
-The public `market-data` CLI currently exposes only `probe-upstox`, a
-credential-safe, non-persistent provider diagnostic. It does **not** expose the
-planned persistent `market-data download` workflow yet. Therefore a successful
-probe proves catalog resolution, authentication, endpoint access, and response
-shape—not downloader completion or stored-data correctness.
+Sprint 3 is complete in seven coherent slices. It proves the controlled
+single-symbol persistent workflow, zero-request repeat, retained coverage,
+bounded `1m`, local session-aware `1d`, clean installation, and sanitized JSON.
+See the [Sprint 3 closeout](docs/sprints/sprint-3.md) for accepted revisions,
+gate evidence, and held release boundaries.
+
+Sprint 3 adds an installable single-symbol preview for `NSE_EQ` `RELIANCE`:
+`market-data download`, `coverage`, and bounded `query` commands for verified
+one-minute data and locally derived daily OHLCV. The canonical store remains
+immutable monthly Parquet with a metadata-only DuckDB catalog at an explicit
+external root. This is an offline/controlled preview, not a live-release or
+multi-symbol Nifty 50 claim.
+
+The package composition deliberately has no built-in exchange-calendar feed.
+The persistent download service accepts authoritative, provenance-complete NSE
+schedule evidence as an injected dependency; the default CLI fails closed with
+`SCHEDULE_EVIDENCE_UNAVAILABLE` until an approved application composition
+supplies it. Coverage and query are provider-free and use only retained
+point-in-time evidence.
 
 Research modules, strategy rules, recommendations, and broker execution are not
 implemented.
 
-## Run the Upstox diagnostic
+## Persistent RELIANCE preview quickstart
 
 Requirements:
 
 - Python 3.11 or newer;
 - [`uv`](https://docs.astral.sh/uv/); and
-- a current Upstox access token or read-only Analytics Token.
+- only for the diagnostic or a separately authorized live attempt, a current
+  Upstox access token or read-only Analytics Token. The controlled proof below
+  needs no credential.
 
-Install the locked environment:
+Install the locked development environment:
 
 ```bash
 uv sync --extra dev
 ```
+
+Run the credential-free controlled end-to-end proof. It creates an external
+disposable root, supplies deterministic authoritative schedule and provider
+responses, persists verified one-minute data, repeats with zero requests, and
+then exercises coverage plus `1m` and `1d` queries:
+
+```bash
+uv run --extra dev pytest \
+  tests/market_data/test_sprint3_quickstart.py \
+  --no-cov -q
+```
+
+Prove the distributable artifact independently of the source checkout:
+
+```bash
+uv build
+uv venv /var/tmp/swing-preview-venv
+uv pip install --python /var/tmp/swing-preview-venv/bin/python \
+  dist/swing_trading_ai_assistant-0.1.0-py3-none-any.whl
+/var/tmp/swing-preview-venv/bin/market-data --help
+```
+
+For an application composition that supplies the approved schedule source and
+environment-only provider credential, the closed-range workflow is:
+
+```bash
+uv run market-data download \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 \
+  --storage-root /var/tmp/swing-market-data --output json
+
+uv run market-data coverage \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 \
+  --storage-root /var/tmp/swing-market-data --output json
+
+uv run market-data query \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-01 --timeframe 1m \
+  --fields ts,open,high,low,close,volume --max-rows 1000 \
+  --storage-root /var/tmp/swing-market-data --output json
+
+uv run market-data query \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-07-01 --to 2026-07-31 --timeframe 1d \
+  --fields ts,open,high,low,close,volume --max-rows 31 \
+  --storage-root /var/tmp/swing-market-data --output json
+```
+
+Dates are inclusive and must describe closed months. The storage root must be
+an explicit absolute path outside the source tree. Read the JSON `status`,
+`failure`, and typed month evidence before retrying. Do not edit or delete
+catalog, manifest, schedule, snapshot, or Parquet files to repair an error;
+retain the root, correct the missing dependency or unsafe path, and rerun the
+same command. A verified repeat reports zero provider attempts. `1d` is derived
+only from complete authoritative sessions in verified `1m` data.
+
+The controlled proof contains no credential or private market data. A real
+closed-range Upstox attempt remains a separate, explicitly authorized gate, so
+passing this quickstart must not be described as live release readiness.
+
+## Run the Upstox diagnostic
 
 Create a local `.env` from `.env.example` and set the token:
 

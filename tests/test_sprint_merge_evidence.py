@@ -22,7 +22,8 @@ def test_readme_connects_sprint_two_to_the_current_storage_increment() -> None:
     assert "Sprint 2 closed at **21/24 executable tasks (87.5%)**" in readme
     assert "immutable Parquet publication" in readme
     assert "Milestone 2 remains **blocked / not accepted**" in readme
-    assert "does **not** expose the planned persistent `market-data download`" in readme
+    assert "`market-data download`, `coverage`, and bounded `query` commands" in readme
+    assert "fails closed with `SCHEDULE_EVIDENCE_UNAVAILABLE`" in readme
 
 
 def test_sprint_zero_records_its_merged_baseline_and_time_bounded_carryover() -> None:
