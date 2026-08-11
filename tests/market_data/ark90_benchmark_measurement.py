@@ -67,6 +67,10 @@ _SAMPLING_INTERVAL_S = 0.01
 _MAX_SAMPLING_GAP_MS = 50
 _PSUTIL_VERSION = "7.2.2"
 _SAMPLER_METHOD = "psutil-parent-child-v1"
+_PROCESS_MEASUREMENT_METHOD = {
+    "fork": "monotonic-parent-child-fork-v3",
+    "spawn": "monotonic-parent-child-spawn-v3",
+}
 _PhaseElapsed = dict[str, int | None]
 _SamplerFailure = Literal[
     "sampling_exception",
@@ -1193,7 +1197,7 @@ def _comparability_identity(
         ),
         _BENCHMARK_COMMAND_LIMITS,
         _BENCHMARK_RESOURCE_LIMITS,
-        "monotonic-parent-child-v2",
+        _PROCESS_MEASUREMENT_METHOD[_BENCHMARK_RUNTIME.process_context],
         runtime_platform.python_version().rsplit(".", 1)[0],
         pyarrow.__version__.rsplit(".", 1)[0],
         duckdb.__version__.rsplit(".", 1)[0],
@@ -1223,6 +1227,7 @@ def freeze_benchmark_source_identity(
         or re.fullmatch(r"[0-9a-f]{40}", source_tree) is None
         or re.fullmatch(r"[0-9a-f]{64}", lock_identity) is None
         or _BENCHMARK_RUNTIME.source_identity is not None
+        or "fork" not in multiprocessing.get_all_start_methods()
     ):
         raise RuntimeError("invalid frozen benchmark source identity")
     _BENCHMARK_RUNTIME.source_identity = (source_revision, source_tree, lock_identity)

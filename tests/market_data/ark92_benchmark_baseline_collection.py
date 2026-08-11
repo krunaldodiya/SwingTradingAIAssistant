@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -246,16 +247,17 @@ def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, 
     directory_fd: int | None = None
     descriptor: int | None = None
     try:
-        _validate_artifact_leaf(path)
-        directory_fd = _open_existing_private_directory(path.parent)
+        canonical_path = _artifact_path(path, "artifact")
+        _validate_artifact_leaf(canonical_path)
+        directory_fd = _open_existing_private_directory(canonical_path.parent)
         descriptor = os.open(
-            path.name,
+            canonical_path.name,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
             dir_fd=directory_fd,
         )
         before = _artifact_identity(os.fstat(descriptor))
         entry_before = _artifact_identity(
-            os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+            os.stat(canonical_path.name, dir_fd=directory_fd, follow_symlinks=False)
         )
         _validate_final_artifact_identity(before, receipt.byte_count)
         if entry_before != before:
@@ -263,27 +265,32 @@ def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, 
         encoded = _read_exact_artifact(descriptor, receipt.byte_count)
         if hashlib.sha256(encoded).hexdigest() != receipt.sha256:
             raise ValueError("invalid immutable baseline artifact")
+        _validate_json_nesting(encoded)
         payload = json.loads(
-            encoded,
+            encoded.decode("utf-8"),
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_json_constant,
         )
-        if (
-            type(payload) is not dict
-            or set(payload) != {"schema_version", "results"}
-            or payload["schema_version"] != _ARTIFACT_SCHEMA_VERSION
-            or type(payload["results"]) is not list
-            or len(payload["results"]) != len(_WORKLOAD_IDS)
-        ):
+        validated = _deserialize_report(payload)
+        if _serialize_report(validated) != encoded:
             raise ValueError("invalid immutable baseline artifact")
         after = _artifact_identity(os.fstat(descriptor))
         entry_after = _artifact_identity(
-            os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+            os.stat(canonical_path.name, dir_fd=directory_fd, follow_symlinks=False)
         )
         if after != before or entry_after != before:
             raise ValueError("invalid immutable baseline artifact")
         return payload
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        RecursionError,
+        OverflowError,
+        MemoryError,
+    ):
         raise ValueError("invalid immutable baseline artifact") from None
     finally:
         if descriptor is not None:
@@ -292,16 +299,184 @@ def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, 
             os.close(directory_fd)
 
 
+def _deserialize_report(payload: object) -> BaselineCollectionReport:
+    report = _exact_mapping(payload, ("schema_version", "results"))
+    if report["schema_version"] != _ARTIFACT_SCHEMA_VERSION:
+        raise ValueError("invalid immutable baseline artifact")
+    raw_results = report["results"]
+    if type(raw_results) is not list or len(raw_results) != len(_WORKLOAD_IDS):
+        raise ValueError("invalid immutable baseline artifact")
+    results = tuple(
+        _deserialize_workload(raw, workload_id)
+        for raw, workload_id in zip(raw_results, _WORKLOAD_IDS, strict=True)
+    )
+    return BaselineCollectionReport(results)
+
+
+def _deserialize_workload(raw: object, workload_id: str) -> BaselineWorkloadResult:
+    value = _exact_mapping(
+        raw,
+        (
+            "workload_id",
+            "warmup",
+            "measured",
+            "status",
+            "retained_measurement_count",
+            "valid_measurement_count",
+            "threshold_claim",
+        ),
+    )
+    measured_raw = value["measured"]
+    if (
+        value["workload_id"] != workload_id
+        or type(measured_raw) is not list
+        or len(measured_raw) != _MEASURED_ITERATION_COUNT
+        or value["threshold_claim"] is not None
+    ):
+        raise ValueError("invalid immutable baseline artifact")
+    warmup = _deserialize_record(value["warmup"])
+    measured = tuple(_deserialize_record(item) for item in measured_raw)
+    result = BaselineWorkloadResult(
+        workload_id,
+        warmup,
+        measured,
+        BaselineCollectionStatus(value["status"]),
+        value["retained_measurement_count"],  # type: ignore[arg-type]
+        value["valid_measurement_count"],  # type: ignore[arg-type]
+        None,
+    )
+    if _serialize_workload(result) != value:
+        raise ValueError("invalid immutable baseline artifact")
+    return result
+
+
+def _deserialize_record(raw: object) -> B01MeasurementRecord:
+    value = _exact_mapping(raw, tuple(B01MeasurementRecord.__dataclass_fields__))
+    converted = dict(value)
+    converted["partition_checksums"] = _nested_tuples(value["partition_checksums"], 3)
+    converted["phase_elapsed_ms"] = dict(
+        _exact_mapping(value["phase_elapsed_ms"], tuple(sorted(_PHASE_FIELDS)))
+    )
+    converted["resource_evidence_status"] = ResourceEvidenceStatus(
+        value["resource_evidence_status"]
+    )
+    converted["partition_outcomes"] = _flat_tuple(value["partition_outcomes"])
+    converted["reconciliation_reasons"] = _flat_tuple(value["reconciliation_reasons"])
+    converted["control_partition_evidence"] = _deserialize_control_evidence(
+        value["control_partition_evidence"]
+    )
+    converted["comparability_key"] = _deserialize_comparability_identity(
+        value["comparability_key"]
+    )
+    return B01MeasurementRecord(**converted)  # type: ignore[arg-type]
+
+
+def _deserialize_control_evidence(value: object) -> _ControlPartitionEvidence | None:
+    if value is None:
+        return None
+    raw = _exact_mapping(
+        value,
+        tuple(_ControlPartitionEvidence.__dataclass_fields__),
+    )
+    return _ControlPartitionEvidence(
+        _flat_tuple(raw["physical_identity"]),  # type: ignore[arg-type]
+        raw["pre_physical_checksum"],  # type: ignore[arg-type]
+        raw["post_physical_checksum"],  # type: ignore[arg-type]
+        raw["pre_manifest_fingerprint"],  # type: ignore[arg-type]
+        raw["post_manifest_fingerprint"],  # type: ignore[arg-type]
+        raw["manifest_bound_schedule_digest"],  # type: ignore[arg-type]
+    )
+
+
+def _deserialize_comparability_identity(value: object) -> ComparabilityIdentity:
+    raw = _exact_mapping(value, tuple(ComparabilityIdentity.__dataclass_fields__))
+    source_shape = _exact_mapping(
+        raw["source_data_shape"], tuple(SourceDataShape.__dataclass_fields__)
+    )
+    command_limits = _exact_mapping(
+        raw["command_limits"], tuple(BenchmarkCommandLimits.__dataclass_fields__)
+    )
+    resource_limits = _exact_mapping(
+        raw["resource_limits"], tuple(BenchmarkResourceLimits.__dataclass_fields__)
+    )
+    converted = dict(raw)
+    converted["schedule_kind_provenance"] = _flat_tuple(raw["schedule_kind_provenance"])
+    converted["schedule_closure_provenance"] = _nested_tuples(
+        raw["schedule_closure_provenance"], 2
+    )
+    converted["partition_checksums"] = _nested_tuples(raw["partition_checksums"], 3)
+    converted["source_data_shape"] = SourceDataShape(**source_shape)  # type: ignore[arg-type]
+    converted["command_limits"] = BenchmarkCommandLimits(**command_limits)  # type: ignore[arg-type]
+    converted["resource_limits"] = BenchmarkResourceLimits(**resource_limits)  # type: ignore[arg-type]
+    return ComparabilityIdentity(**converted)  # type: ignore[arg-type]
+
+
+def _exact_mapping(value: object, keys: tuple[str, ...]) -> dict[str, object]:
+    if type(value) is not dict or set(value) != set(keys):
+        raise ValueError("invalid immutable baseline artifact")
+    return value
+
+
+def _flat_tuple(value: object) -> tuple[object, ...]:
+    if type(value) is not list or len(value) > _MAX_SEQUENCE_ITEMS:
+        raise ValueError("invalid immutable baseline artifact")
+    return tuple(value)
+
+
+def _nested_tuples(value: object, width: int) -> tuple[tuple[object, ...], ...]:
+    outer = _flat_tuple(value)
+    if any(type(item) is not list or len(item) != width for item in outer):
+        raise ValueError("invalid immutable baseline artifact")
+    return tuple(tuple(item) for item in outer)  # type: ignore[arg-type]
+
+
+def _validate_json_nesting(encoded: bytes) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in encoded:
+        if in_string:
+            in_string, escaped = _json_string_state(byte, escaped)
+            continue
+        if byte == ord('"'):
+            in_string = True
+        elif byte in (ord("{"), ord("[")):
+            depth += 1
+            if depth > 16:
+                raise ValueError("invalid immutable baseline artifact")
+        elif byte in (ord("}"), ord("]")):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("invalid immutable baseline artifact")
+    if depth != 0 or in_string:
+        raise ValueError("invalid immutable baseline artifact")
+
+
+def _json_string_state(byte: int, escaped: bool) -> tuple[bool, bool]:
+    if escaped:
+        return True, False
+    if byte == ord("\\"):
+        return True, True
+    return byte != ord('"'), False
+
+
 def main(argv: list[str] | None = None) -> int:
     """Collect once into an explicit new artifact and disposable work root."""
     parser = _ArtifactArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
+    parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--expected-tree", required=True)
     try:
         arguments = parser.parse_args(argv)
         output = _artifact_path(arguments.output, "output")
         work_root = _artifact_path(arguments.work_root, "work root")
-        receipt = _collect_once(output, work_root)
+        receipt = _collect_once(
+            output,
+            work_root,
+            arguments.expected_revision,
+            arguments.expected_tree,
+        )
         print(_serialize_receipt(receipt))
     except _ArtifactCliFailure as error:
         print(f"baseline artifact collection failed: {error.code}", file=sys.stderr)
@@ -319,17 +494,26 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _collect_once(output: Path, work_root: Path) -> ArtifactReceiptV1:
+def _collect_once(
+    output: Path,
+    work_root: Path,
+    expected_revision: object,
+    expected_tree: object,
+) -> ArtifactReceiptV1:
     _validate_collection_paths(output, work_root)
+    expected_source = _expected_source_identity(expected_revision, expected_tree)
+    source_identity = _capture_source_identity()
+    if source_identity != expected_source or not _source_identity_matches(
+        source_identity
+    ):
+        raise _ArtifactCliFailure("SOURCE_MISMATCH")
+    _verify_loaded_module_snapshot(source_identity)
     _preflight_output(output)
     work_root_fd = _open_artifact_directory(work_root)
     original_directory_fd: int | None = None
     source_frozen = False
     try:
         work_root_identity = _directory_identity(os.fstat(work_root_fd))
-        source_identity = _capture_source_identity()
-        if not _source_identity_matches(source_identity):
-            raise _ArtifactCliFailure("SOURCE_CHANGED")
         freeze_benchmark_source_identity(
             source_identity.revision,
             source_identity.tree,
@@ -1114,6 +1298,8 @@ def _serialize_control_partition_evidence(
 def _serialize_comparability_identity(value: object) -> dict[str, object]:
     if type(value) is not ComparabilityIdentity:
         raise ValueError("measurement comparability identity is invalid")
+    if value.measurement_method != "monotonic-parent-child-fork-v3":
+        raise ValueError("measurement start method is not collection-safe")
     return {
         "workload_id": _serialize_workload_id(value.workload_id),
         "fixture_id": _serialize_label(value.fixture_id),
@@ -1195,8 +1381,6 @@ def _write_no_overwrite(output: Path, encoded: bytes) -> ArtifactReceiptV1:
         )
         if _read_exact_artifact(final_descriptor, len(encoded)) != encoded:
             raise ValueError("published baseline artifact bytes changed")
-        os.fchmod(final_descriptor, 0o400)
-        os.fsync(final_descriptor)
         os.unlink(temporary_name, dir_fd=directory_fd)
         os.fsync(directory_fd)
         identity = _artifact_identity(os.fstat(final_descriptor))
@@ -1303,6 +1487,7 @@ def _write_temporary_fd(descriptor: int, encoded: bytes) -> None:
     written = 0
     while written < len(encoded):
         written += os.write(descriptor, encoded[written:])
+    os.fchmod(descriptor, 0o400)
     os.fsync(descriptor)
 
 
@@ -1410,7 +1595,7 @@ def _preflight_output(output: Path) -> None:
 def _capture_source_identity() -> _SourceIdentityV1:
     try:
         status = subprocess.run(  # noqa: S603
-            ["git", "status", "--porcelain", "--untracked-files=no"],  # noqa: S607
+            ["git", "status", "--porcelain", "--untracked-files=all"],  # noqa: S607
             cwd=_REPOSITORY_ROOT,
             check=True,
             capture_output=True,
@@ -1418,6 +1603,8 @@ def _capture_source_identity() -> _SourceIdentityV1:
         )
         if status.stdout:
             raise _ArtifactCliFailure("SOURCE_UNCLEAN")
+        if os.environ.get("PYTHONPATH"):
+            raise _ArtifactCliFailure("SOURCE_UNTRUSTED_IMPORT_PATH")
         revision = _git_identifier("HEAD")
         tree = _git_identifier("HEAD^{tree}")
         lock_sha256 = hashlib.sha256(
@@ -1435,6 +1622,67 @@ def _source_identity_matches(expected: _SourceIdentityV1) -> bool:
         return _capture_source_identity() == expected
     except _ArtifactCliFailure:
         return False
+
+
+def _expected_source_identity(revision: object, tree: object) -> _SourceIdentityV1:
+    if (
+        type(revision) is not str
+        or _HEX_40.fullmatch(revision) is None
+        or type(tree) is not str
+        or _HEX_40.fullmatch(tree) is None
+    ):
+        raise _ArtifactCliFailure("INVALID_SOURCE_PIN")
+    try:
+        if (
+            _git_identifier(revision) != revision
+            or _git_identifier(f"{revision}^{{tree}}") != tree
+        ):
+            raise _ArtifactCliFailure("SOURCE_MISMATCH")
+        lock_bytes = subprocess.run(  # noqa: S603
+            ["git", "show", f"{revision}:uv.lock"],  # noqa: S607
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        return _SourceIdentityV1(
+            revision,
+            tree,
+            hashlib.sha256(lock_bytes).hexdigest(),
+        )
+    except _ArtifactCliFailure:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise _ArtifactCliFailure("SOURCE_UNAVAILABLE") from None
+
+
+def _verify_loaded_module_snapshot(expected: _SourceIdentityV1) -> None:
+    try:
+        for module in tuple(sys.modules.values()):
+            module_file = getattr(module, "__file__", None)
+            if type(module_file) is not str:
+                continue
+            path = Path(module_file)
+            if path.suffix in {".pyc", ".pyo"}:
+                path = Path(importlib.util.source_from_cache(str(path)))
+            absolute = Path(os.path.abspath(path))
+            try:
+                relative = absolute.relative_to(_REPOSITORY_ROOT)
+            except ValueError:
+                continue
+            if relative.parts and relative.parts[0] in {".venv", "artifacts"}:
+                continue
+            retained = subprocess.run(  # noqa: S603
+                ["git", "show", f"{expected.revision}:{relative.as_posix()}"],  # noqa: S607
+                cwd=_REPOSITORY_ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+            if absolute.read_bytes() != retained:
+                raise _ArtifactCliFailure("SOURCE_MODULE_MISMATCH")
+    except _ArtifactCliFailure:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise _ArtifactCliFailure("SOURCE_MODULE_MISMATCH") from None
 
 
 def _git_identifier(revision: str) -> str:

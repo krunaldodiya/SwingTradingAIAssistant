@@ -61,7 +61,7 @@ def _identity() -> ComparabilityIdentity:
         SourceDataShape(1, 1, 1, 1),
         BenchmarkCommandLimits("1m", 1, 1, 0, 0, 0, 0, 1, 1, 1),
         BenchmarkResourceLimits(1.0, 10, 50, 2, "closed"),
-        "method",
+        "monotonic-parent-child-fork-v3",
         "3.13",
         "25.0",
         "1.5",
@@ -308,6 +308,11 @@ def _artifact_report() -> BaselineCollectionReport:
 def _allow_stable_source(monkeypatch: pytest.MonkeyPatch) -> None:
     identity = baseline_collection._SourceIdentityV1("a" * 40, "b" * 40, "c" * 64)
     monkeypatch.setattr(
+        baseline_collection,
+        "_expected_source_identity",
+        lambda _revision, _tree: identity,
+    )
+    monkeypatch.setattr(
         baseline_collection, "_capture_source_identity", lambda: identity
     )
     monkeypatch.setattr(
@@ -315,12 +320,30 @@ def _allow_stable_source(monkeypatch: pytest.MonkeyPatch) -> None:
         "_source_identity_matches",
         lambda value: value == identity,
     )
+    monkeypatch.setattr(
+        baseline_collection, "_verify_loaded_module_snapshot", lambda _identity: None
+    )
+
+
+def _pinned_cli_args(output: Path, work_root: Path) -> list[str]:
+    return [
+        "--output",
+        str(output),
+        "--work-root",
+        str(work_root),
+        "--expected-revision",
+        "a" * 40,
+        "--expected-tree",
+        "b" * 40,
+    ]
 
 
 def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     output = tmp_path / "baseline.json"
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
 
     receipt = write_baseline_artifact(_artifact_report(), output)
 
@@ -351,9 +374,11 @@ def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically
 
 
 def test_ark93_reader_rejects_changed_or_replaced_artifact(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     output = tmp_path / "baseline.json"
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
     receipt = write_baseline_artifact(_artifact_report(), output)
     original = output.read_bytes()
     output.chmod(0o600)
@@ -369,6 +394,32 @@ def test_ark93_reader_rejects_changed_or_replaced_artifact(
     outside.chmod(0o400)
     output.symlink_to(outside)
     with pytest.raises(ValueError, match="immutable baseline artifact"):
+        read_baseline_artifact(output, receipt)
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    (
+        b'{"results":[1,2,3,4,5],"schema_version":"ark92-baseline-artifact-v1"}\n',
+        (b"[" * 100) + b"0" + (b"]" * 100),
+    ),
+)
+def test_ark93_reader_rejects_authenticated_noncontract_or_deep_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    encoded: bytes,
+) -> None:
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path)
+    output = tmp_path / "baseline.json"
+    output.write_bytes(encoded)
+    output.chmod(0o400)
+    receipt = ArtifactReceiptV1(
+        "ark92-baseline-receipt-v1",
+        len(encoded),
+        hashlib.sha256(encoded).hexdigest(),
+    )
+
+    with pytest.raises(ValueError, match="^invalid immutable baseline artifact$"):
         read_baseline_artifact(output, receipt)
 
 
@@ -804,6 +855,32 @@ def test_write_baseline_artifact_preserves_concurrent_destination_and_cleans_tem
     assert tuple(tmp_path.iterdir()) == (output,)
 
 
+def test_write_baseline_artifact_is_read_only_before_public_link(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed_modes: list[int] = []
+    actual_link = baseline_collection.os.link
+
+    def observe_link(source: str, destination: str, **kwargs: object) -> None:
+        source_directory = kwargs["src_dir_fd"]
+        observed_modes.append(
+            stat.S_IMODE(
+                baseline_collection.os.stat(
+                    source,
+                    dir_fd=source_directory,  # type: ignore[arg-type]
+                    follow_symlinks=False,
+                ).st_mode
+            )
+        )
+        actual_link(source, destination, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(baseline_collection.os, "link", observe_link)
+
+    write_baseline_artifact(_artifact_report(), tmp_path / "baseline.json")
+
+    assert observed_modes == [0o400]
+
+
 def test_write_baseline_artifact_keeps_linked_output_after_directory_fsync_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -898,12 +975,7 @@ def test_persistence_entry_point_uses_disposable_root_and_never_retries(
         collect_from_frozen_root,
     )
 
-    assert (
-        persist_baseline_artifact(
-            ["--output", str(output), "--work-root", str(work_root)]
-        )
-        == 0
-    )
+    assert persist_baseline_artifact(_pinned_cli_args(output, work_root)) == 0
     assert len(calls) == 1
     assert benchmark_measurement._BENCHMARK_RUNTIME.process_context == "spawn"
     assert benchmark_measurement._BENCHMARK_RUNTIME.source_identity is None
@@ -918,12 +990,7 @@ def test_persistence_entry_point_uses_disposable_root_and_never_retries(
         "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
     }
 
-    assert (
-        persist_baseline_artifact(
-            ["--output", str(output), "--work-root", str(work_root)]
-        )
-        == 2
-    )
+    assert persist_baseline_artifact(_pinned_cli_args(output, work_root)) == 2
     assert len(calls) == 1
 
 
@@ -940,15 +1007,7 @@ def test_persistence_rejects_dangling_output_symlink_without_redirecting(
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
 
     assert (
-        persist_baseline_artifact(
-            [
-                "--output",
-                str(output),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
-        )
-        == 2
+        persist_baseline_artifact(_pinned_cli_args(output, artifact_root / "work")) == 2
     )
     assert capsys.readouterr().err.endswith("OUTPUT_EXISTS\n")
     assert output.is_symlink()
@@ -963,15 +1022,11 @@ def test_persistence_rejects_public_output_directory(
     artifact_root = tmp_path / "artifact"
     artifact_root.mkdir(mode=0o777)
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
 
     assert (
         persist_baseline_artifact(
-            [
-                "--output",
-                str(artifact_root / "baseline.json"),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
+            _pinned_cli_args(artifact_root / "baseline.json", artifact_root / "work")
         )
         == 2
     )
@@ -989,15 +1044,11 @@ def test_persistence_rejects_private_child_below_public_artifact_root(
     private_child = artifact_root / "private"
     private_child.mkdir(mode=0o700)
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
 
     assert (
         persist_baseline_artifact(
-            [
-                "--output",
-                str(private_child / "baseline.json"),
-                "--work-root",
-                str(private_child / "work"),
-            ]
+            _pinned_cli_args(private_child / "baseline.json", private_child / "work")
         )
         == 2
     )
@@ -1014,11 +1065,17 @@ def test_persistence_rejects_dirty_reviewed_source_before_collection(
     artifact_root.mkdir(mode=0o700)
     calls: list[Path] = []
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    identity = baseline_collection._SourceIdentityV1("a" * 40, "b" * 40, "c" * 64)
+    monkeypatch.setattr(
+        baseline_collection,
+        "_expected_source_identity",
+        lambda _revision, _tree: identity,
+    )
     monkeypatch.setattr(
         baseline_collection.subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
-            args, 0, " M source.py\n", ""
+            args, 0, "?? duckdb.py\n", ""
         ),
     )
     monkeypatch.setattr(
@@ -1029,17 +1086,13 @@ def test_persistence_rejects_dirty_reviewed_source_before_collection(
 
     assert (
         persist_baseline_artifact(
-            [
-                "--output",
-                str(artifact_root / "baseline.json"),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
+            _pinned_cli_args(artifact_root / "baseline.json", artifact_root / "work")
         )
         == 2
     )
     assert capsys.readouterr().err.endswith("SOURCE_UNCLEAN\n")
     assert calls == []
+    assert tuple(artifact_root.iterdir()) == ()
 
 
 @pytest.mark.parametrize(
@@ -1080,12 +1133,7 @@ def test_persistence_entry_point_rejects_invalid_paths_without_traceback(
         lambda root: calls.append(root) or _artifact_report(),
     )
 
-    assert (
-        persist_baseline_artifact(
-            ["--output", str(output), "--work-root", str(work_root)]
-        )
-        == 2
-    )
+    assert persist_baseline_artifact(_pinned_cli_args(output, work_root)) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -1124,12 +1172,7 @@ def test_persistence_entry_point_sanitizes_unexpected_collection_exception(
 
     assert (
         persist_baseline_artifact(
-            [
-                "--output",
-                str(artifact_root / "baseline.json"),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
+            _pinned_cli_args(artifact_root / "baseline.json", artifact_root / "work")
         )
         == 2
     )
@@ -1250,6 +1293,9 @@ def test_b01_cancelled_and_protocol_invalid_iterations_are_retained(
     assert record.rows_raw == record.rows_normalized == record.rows_published == 0
     assert record.request_count == record.provider_attempt_count == 0
     assert record.partition_outcomes == ()
+    assert record.comparability_key.measurement_method == (
+        "monotonic-parent-child-spawn-v3"
+    )
 
 
 def test_comparability_identity_includes_each_frozen_plan03_dimension() -> None:
@@ -1595,12 +1641,7 @@ def test_persistence_entry_point_propagates_process_control_exceptions(
 
     with pytest.raises(exception):
         persist_baseline_artifact(
-            [
-                "--output",
-                str(artifact_root / "baseline.json"),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
+            _pinned_cli_args(artifact_root / "baseline.json", artifact_root / "work")
         )
 
 
@@ -1628,12 +1669,7 @@ def test_persistence_rejects_work_root_substitution_before_publication(
 
     monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", substitute)
 
-    assert (
-        persist_baseline_artifact(
-            ["--output", str(output), "--work-root", str(work_root)]
-        )
-        == 0
-    )
+    assert persist_baseline_artifact(_pinned_cli_args(output, work_root)) == 0
     assert json.loads(capsys.readouterr().out)["schema_version"] == (
         "ark92-baseline-receipt-v1"
     )
@@ -1657,6 +1693,14 @@ def test_persistence_stops_if_reviewed_source_identity_changes(
     )
     monkeypatch.setattr(
         baseline_collection,
+        "_expected_source_identity",
+        lambda _revision, _tree: identity,
+    )
+    monkeypatch.setattr(
+        baseline_collection, "_verify_loaded_module_snapshot", lambda _identity: None
+    )
+    monkeypatch.setattr(
+        baseline_collection,
         "_source_identity_matches",
         lambda _value: next(checks),
     )
@@ -1668,12 +1712,7 @@ def test_persistence_stops_if_reviewed_source_identity_changes(
 
     assert (
         persist_baseline_artifact(
-            [
-                "--output",
-                str(artifact_root / "baseline.json"),
-                "--work-root",
-                str(artifact_root / "work"),
-            ]
+            _pinned_cli_args(artifact_root / "baseline.json", artifact_root / "work")
         )
         == 2
     )
@@ -1936,12 +1975,7 @@ def test_persistence_rejects_work_root_permission_substitution(
 
     monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", substitute)
 
-    assert (
-        persist_baseline_artifact(
-            ["--output", str(output), "--work-root", str(work_root)]
-        )
-        == 2
-    )
+    assert persist_baseline_artifact(_pinned_cli_args(output, work_root)) == 2
     assert (
         capsys.readouterr().err
         == "baseline artifact collection failed: WORK_ROOT_SUBSTITUTED\n"

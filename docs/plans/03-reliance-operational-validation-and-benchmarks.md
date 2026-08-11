@@ -604,8 +604,13 @@ Output and disposable work root must be distinct, absent absolute paths below
 the repository's gitignored `artifacts/` directory. Directories are private,
 the final file is mode `0400`, and publication never overwrites. Collection
 starts only from a clean reviewed HEAD/tree/lock identity, freezes that identity
-in forked benchmark children, and stops if it changes before publication. The
-workload runs from the held work-root descriptor as its current directory;
+in forked benchmark children, records
+`measurement_method=monotonic-parent-child-fork-v3`, and stops if it changes
+before publication. The reviewed 40-hex revision and tree from the accepted
+handoff are mandatory CLI pins; untracked executable code, `PYTHONPATH`, or a
+loaded repository module whose bytes differ from that commit stops before any
+artifact/work directory is created. The workload runs from the held work-root
+descriptor as its current directory;
 pathname ABA, symlinks, a public directory, or permission changes cannot
 redirect writes.
 Run exactly once from the repository root:
@@ -613,15 +618,19 @@ Run exactly once from the repository root:
 ```bash
 uv run --extra dev python tests/market_data/ark92_benchmark_baseline_collection.py \
   --output "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
-  --work-root "$PWD/artifacts/benchmarks/ark92-b01-b05-work-v1"
+  --work-root "$PWD/artifacts/benchmarks/ark92-b01-b05-work-v1" \
+  --expected-revision "<accepted-40-hex-revision>" \
+  --expected-tree "<accepted-40-hex-tree>"
 ```
 
 Success prints only an `ark92-baseline-receipt-v1` receipt with the exact byte
 count and SHA-256. ARK-93 consumes that exact immutable file through the
 descriptor-relative reader, verifying type, owner, mode, size, identity, and
-receipt hash before and after parsing; it may not edit, replace, select, or
-rerun samples. A failed/insufficient collection remains evidence and does not
-authorize another collection without the section 5.4 measurement-error rule.
+receipt hash before and after parsing, plus bounded nesting, canonical UTF-8,
+the complete workload/record schema, and all serializer semantics; it may not
+edit, replace, select, or rerun samples. A failed/insufficient collection
+remains evidence and does not authorize another collection without the section
+5.4 measurement-error rule.
 
 ## 6. Failure, cancellation, safety, and provenance rules
 
