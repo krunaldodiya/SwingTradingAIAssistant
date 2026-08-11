@@ -175,6 +175,58 @@ def test_private_empty_admission_rolls_back_its_lock_on_concurrent_entry(
     assert (root / "user-owned.txt").read_bytes() == b"concurrent"
 
 
+def test_private_empty_rollback_preserves_final_window_lock_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original_acquire = lease_module._acquire_lock
+    original_rename = lease_module.os.rename
+
+    def inject_entry(*args: object, **kwargs: object):
+        (root / "user-owned.txt").write_bytes(b"concurrent")
+        return original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+
+    def substitute_before_quarantine(
+        source: object,
+        target: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        if source == ".ingestion.lock" and str(target).endswith(".rollback"):
+            original_rename(
+                source,
+                ".attacker-held-lock",
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+            descriptor = os.open(
+                ".ingestion.lock",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=src_dir_fd,
+            )
+            os.write(descriptor, b"foreign-lock")
+            os.close(descriptor)
+        original_rename(
+            source,
+            target,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(lease_module, "_acquire_lock", inject_entry)
+    monkeypatch.setattr(lease_module.os, "rename", substitute_before_quarantine)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert (root / ".ingestion.lock").read_bytes() == b"foreign-lock"
+    assert (root / ".attacker-held-lock").exists()
+    assert (root / "user-owned.txt").read_bytes() == b"concurrent"
+
+
 @pytest.mark.skipif(
     "spawn" not in multiprocessing.get_all_start_methods(),
     reason="requires spawn process semantics",

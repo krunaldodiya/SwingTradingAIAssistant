@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 _LOCK_NAME: Final = ".ingestion.lock"
 _LOCK_MODE: Final = 0o600
@@ -332,17 +333,45 @@ def _assert_private_locked_root(
 
 def _rollback_private_lock(root_descriptor: int, lease: StorageRootLease) -> None:
     lock_descriptor = lease._descriptor  # pyright: ignore[reportPrivateUsage]
-    with suppress(Exception):
+    quarantine_name = f".ingestion.lock.{uuid4().hex}.rollback"
+    try:
         if lock_descriptor is not None:
             held = os.fstat(lock_descriptor)
-            entry = os.stat(
+            os.rename(
                 _LOCK_NAME,
+                quarantine_name,
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+            )
+            quarantined = os.stat(
+                quarantine_name,
                 dir_fd=root_descriptor,
                 follow_symlinks=False,
             )
-            if _valid_lock_identity(held, entry):
-                os.unlink(_LOCK_NAME, dir_fd=root_descriptor)
-    lease.close()
+            if _valid_lock_identity(held, quarantined):
+                os.unlink(quarantine_name, dir_fd=root_descriptor)
+            else:
+                _restore_private_lock_quarantine(root_descriptor, quarantine_name)
+    except Exception:
+        _restore_private_lock_quarantine(root_descriptor, quarantine_name)
+    finally:
+        lease.close()
+
+
+def _restore_private_lock_quarantine(
+    root_descriptor: int, quarantine_name: str
+) -> None:
+    try:
+        os.link(
+            quarantine_name,
+            _LOCK_NAME,
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+    except (FileExistsError, FileNotFoundError):
+        return
+    os.unlink(quarantine_name, dir_fd=root_descriptor)
 
 
 def _close_descriptor(descriptor: int | None) -> bool:
