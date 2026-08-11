@@ -585,6 +585,38 @@ identical measurement failures after repair trigger the workflow circuit
 breaker.  Any correctness, checksum, request-count, lifecycle, or resource-bound
 failure stops immediately and is not averaged.
 
+### 5.5 Durable one-shot baseline artifact
+
+ARK-111 owns the persistence boundary and ARK-92 owns its single collection.
+The artifact is canonical UTF-8 JSON with `ensure_ascii=True`, sorted keys, one
+trailing newline, and a hard maximum of 4,000,000 bytes. Its top level is
+exactly `schema_version=ark92-baseline-artifact-v1` plus the ordered B01--B05
+`results`. Each result retains exactly one warm-up, five measured records, the
+typed retained/insufficient status and counts, and `threshold_claim=null`.
+Records contain only the section 5.2 fields and their complete comparability
+identity; strings are at most 512 bytes, ordered evidence at most 366 items,
+and integer evidence at most signed 64-bit maximum. Failed, cancelled, and
+protocol-invalid records retain zero activity/success evidence and use the
+closed outcome/failure/resource matrix. No path, SQL, provider alias,
+instrument key, credential, raw payload, or live market value is serializable.
+
+Output and disposable work root must be distinct, absent absolute paths below
+the repository's gitignored `artifacts/` directory. Directories are private,
+the final file is mode `0600`, publication never overwrites, and a substituted
+work-root identity or permission change stops before publication. Run exactly
+once from the repository root:
+
+```bash
+uv run --extra dev python tests/market_data/ark92_benchmark_baseline_collection.py \
+  --output "$PWD/artifacts/benchmarks/ark92-b01-b05-baseline-v1.json" \
+  --work-root "$PWD/artifacts/benchmarks/ark92-b01-b05-work-v1"
+```
+
+After successful collection, record the artifact byte count and SHA-256.
+ARK-93 consumes that exact immutable file; it may not edit, replace, select, or
+rerun samples. A failed/insufficient collection remains evidence and does not
+authorize another collection without the section 5.4 measurement-error rule.
+
 ## 6. Failure, cancellation, safety, and provenance rules
 
 The harness and live gate inherit Plan 02’s stop conditions.  The following

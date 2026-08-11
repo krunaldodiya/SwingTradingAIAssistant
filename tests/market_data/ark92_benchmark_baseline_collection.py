@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import uuid
 from collections.abc import Callable
@@ -32,6 +33,10 @@ _WORKLOAD_IDS = ("B01", "B02", "B03", "B04", "B05")
 _MEASURED_ITERATION_COUNT = 5
 _ARTIFACT_SCHEMA_VERSION = "ark92-baseline-artifact-v1"
 _ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts"
+_MAX_ARTIFACT_BYTES = 4_000_000
+_MAX_TEXT_BYTES = 512
+_MAX_SEQUENCE_ITEMS = 366
+_MAX_NUMERIC_EVIDENCE = 2**63 - 1
 _PHASE_FIELDS = frozenset(("normalize", "validate", "publish", "catalog", "query"))
 _SENSITIVE_TEXT = (
     "authorization",
@@ -89,9 +94,32 @@ _FAILURE_CODES = frozenset(
         "B01_CHILD_FAILED",
         "BENCHMARK_CHILD_CANCELLED",
         "BENCHMARK_CHILD_FAILED",
-        "BENCHMARK_CHILD_PROTOCOL_INVALID",
         "CHILD_PROTOCOL_INVALID",
     )
+)
+_TERMINAL_FAILURE_MATRIX = {
+    "B01_CHILD_FAILED": ("FAILED", frozenset(("B01",))),
+    "BENCHMARK_CHILD_FAILED": ("FAILED", frozenset(("B02", "B03", "B04", "B05"))),
+    "BENCHMARK_CHILD_CANCELLED": (
+        "CANCELLED",
+        frozenset(("B02", "B03", "B04", "B05")),
+    ),
+    "CHILD_PROTOCOL_INVALID": ("FAILED", frozenset(_WORKLOAD_IDS)),
+}
+_SQL_MARKERS = (
+    "select",
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "create",
+    "attach",
+    "detach",
+    "pragma",
+    "vacuum",
+    "copy",
+    "union",
 )
 _PARTITION_OUTCOMES = frozenset(("VERIFIED", "SKIPPED_VERIFIED", "RECOVERED_LOCALLY"))
 _RECONCILIATION_REASONS = frozenset(("CHECKSUM_INVALID_OR_MISMATCHED",))
@@ -173,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
     work_root_fd: int | None = None
+    work_root_identity: tuple[int, ...] | None = None
     try:
         arguments = parser.parse_args(argv)
         output = _artifact_path(arguments.output, "output")
@@ -184,8 +213,11 @@ def main(argv: list[str] | None = None) -> int:
         if work_root.exists():
             raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
         work_root_fd = _open_artifact_directory(work_root)
+        work_root_identity = _directory_identity(os.fstat(work_root_fd))
         report = collect_benchmark_baselines(work_root)
-        if not _path_matches_directory_descriptor(work_root, work_root_fd):
+        if not _path_matches_directory_descriptor(
+            work_root, work_root_fd, work_root_identity
+        ):
             raise _ArtifactCliFailure("WORK_ROOT_SUBSTITUTED")
         write_baseline_artifact(report, output)
     except _ArtifactCliFailure as error:
@@ -312,9 +344,12 @@ def _serialize_report(report: BaselineCollectionReport) -> bytes:
         "schema_version": _ARTIFACT_SCHEMA_VERSION,
         "results": [_serialize_workload(result) for result in report.results],
     }
-    return (
+    encoded = (
         json.dumps(payload, allow_nan=False, ensure_ascii=True, sort_keys=True) + "\n"
     ).encode("utf-8")
+    if len(encoded) > _MAX_ARTIFACT_BYTES:
+        raise ValueError("baseline artifact exceeds its bounded size")
+    return encoded
 
 
 def _serialize_workload(result: BaselineWorkloadResult) -> dict[str, object]:
@@ -560,8 +595,15 @@ def _validate_terminal_evidence(record: B01MeasurementRecord) -> None:
         raise ValueError("invalid terminal outcome")
     if (record.outcome == "SUCCEEDED") != (record.failure_code == "NONE"):
         raise ValueError("invalid terminal outcome")
-    if record.outcome != "SUCCEEDED" and record.failure_code not in _FAILURE_CODES:
-        raise ValueError("invalid terminal outcome")
+    if record.outcome != "SUCCEEDED":
+        expected = _TERMINAL_FAILURE_MATRIX.get(record.failure_code)
+        if (
+            record.failure_code not in _FAILURE_CODES
+            or expected is None
+            or record.outcome != expected[0]
+            or record.workload_id not in expected[1]
+        ):
+            raise ValueError("invalid terminal outcome")
     if (
         type(record.partition_outcomes) is not tuple
         or any(value not in _PARTITION_OUTCOMES for value in record.partition_outcomes)
@@ -587,6 +629,53 @@ def _validate_terminal_evidence(record: B01MeasurementRecord) -> None:
             != counts
         ):
             raise ValueError("invalid successful workload evidence")
+        return
+    _validate_non_success_evidence(record)
+
+
+def _validate_non_success_evidence(record: B01MeasurementRecord) -> None:
+    phase_elapsed = record.phase_elapsed_ms
+    if type(phase_elapsed) is not dict or set(phase_elapsed) != _PHASE_FIELDS:
+        raise ValueError("invalid terminal workload evidence")
+    if (
+        any(value is not None for value in phase_elapsed.values())
+        or any(
+            value != 0
+            for value in (
+                record.rows_raw,
+                record.rows_normalized,
+                record.rows_published,
+                record.bytes_parquet,
+                record.request_count,
+                record.provider_attempt_count,
+                record.retry_count,
+                record.resume_count,
+                record.repair_count,
+            )
+        )
+        or record.throughput_rows_per_s is not None
+        or record.partition_outcomes
+        or record.reconciliation_reasons
+        or any(
+            value is not None
+            for value in (
+                record.query_result_count,
+                record.query_min_ts,
+                record.query_max_ts,
+                record.query_elapsed_ms,
+            )
+        )
+    ):
+        raise ValueError("invalid terminal workload evidence")
+    protocol_invalid = record.failure_code == "CHILD_PROTOCOL_INVALID"
+    if protocol_invalid and (
+        record.resource_evidence_status is not ResourceEvidenceStatus.INVALID
+        or record.resource_blocker != "CHILD_PROTOCOL_INVALID"
+        or record.partition_checksums
+    ):
+        raise ValueError("invalid protocol terminal evidence")
+    if not protocol_invalid and record.resource_blocker == "CHILD_PROTOCOL_INVALID":
+        raise ValueError("invalid protocol terminal evidence")
 
 
 def _validate_control_evidence(record: B01MeasurementRecord) -> None:
@@ -638,27 +727,43 @@ def _serialize_iteration_kind(value: object) -> str:
 
 
 def _serialize_outcome(value: object) -> str:
-    if type(value) is not str or not re.fullmatch(r"[A-Z0-9_]+", value):
+    if (
+        type(value) is not str
+        or not 0 < len(value) <= _MAX_TEXT_BYTES
+        or not re.fullmatch(r"[A-Z0-9_]+", value)
+    ):
         raise ValueError("unsanitized outcome evidence")
     return value
 
 
 def _serialize_label(value: object) -> str:
-    if type(value) is not str or not _SAFE_LABEL.fullmatch(value):
+    if (
+        type(value) is not str
+        or not 0 < len(value) <= _MAX_TEXT_BYTES
+        or not _SAFE_LABEL.fullmatch(value)
+    ):
         raise ValueError("unsanitized label evidence")
     _reject_sensitive_text(value)
     return value
 
 
 def _serialize_timezone(value: object) -> str:
-    if type(value) is not str or not _SAFE_TIMEZONE.fullmatch(value):
+    if (
+        type(value) is not str
+        or not 0 < len(value) <= _MAX_TEXT_BYTES
+        or not _SAFE_TIMEZONE.fullmatch(value)
+    ):
         raise ValueError("unsanitized timezone evidence")
     _reject_sensitive_text(value, allow_timezone_separator=True)
     return value
 
 
 def _serialize_environment_text(value: object) -> str:
-    if type(value) is not str or not _SAFE_ENVIRONMENT_TEXT.fullmatch(value):
+    if (
+        type(value) is not str
+        or not 0 < len(value) <= _MAX_TEXT_BYTES
+        or not _SAFE_ENVIRONMENT_TEXT.fullmatch(value)
+    ):
         raise ValueError("unsanitized environment evidence")
     _reject_sensitive_text(value)
     return value
@@ -694,6 +799,7 @@ def _reject_sensitive_text(
             )
         )
         or _SQL_TEXT.search(value) is not None
+        or any(marker in normalized for marker in _SQL_MARKERS)
     ):
         raise ValueError("unsanitized path or secret evidence")
 
@@ -721,13 +827,13 @@ def _serialize_optional_timestamp(value: object) -> str | None:
 
 
 def _serialize_nonnegative_int(value: object) -> int:
-    if type(value) is not int or value < 0:
+    if type(value) is not int or not 0 <= value <= _MAX_NUMERIC_EVIDENCE:
         raise ValueError("invalid numeric measurement evidence")
     return value
 
 
 def _serialize_positive_int(value: object) -> int:
-    if type(value) is not int or value < 1:
+    if type(value) is not int or not 1 <= value <= _MAX_NUMERIC_EVIDENCE:
         raise ValueError("invalid numeric measurement evidence")
     return value
 
@@ -755,19 +861,19 @@ def _serialize_optional_label(value: object) -> str | None:
 
 
 def _serialize_labels(value: object) -> list[str]:
-    if type(value) is not tuple:
+    if type(value) is not tuple or len(value) > _MAX_SEQUENCE_ITEMS:
         raise ValueError("unsanitized ordered evidence")
     return [_serialize_outcome(item) for item in value]
 
 
 def _serialize_label_tuple(value: object) -> list[str]:
-    if type(value) is not tuple:
+    if type(value) is not tuple or len(value) > _MAX_SEQUENCE_ITEMS:
         raise ValueError("unsanitized ordered evidence")
     return [_serialize_label(item) for item in value]
 
 
 def _serialize_partition_checksums(value: object) -> list[list[int | str]]:
-    if type(value) is not tuple:
+    if type(value) is not tuple or len(value) > _MAX_SEQUENCE_ITEMS:
         raise ValueError("unsanitized partition checksum evidence")
     serialized: list[list[int | str]] = []
     for item in value:
@@ -905,7 +1011,7 @@ def _serialize_comparability_identity(value: object) -> dict[str, object]:
 
 
 def _serialize_schedule_closures(value: object) -> list[list[str]]:
-    if type(value) is not tuple:
+    if type(value) is not tuple or len(value) > _MAX_SEQUENCE_ITEMS:
         raise ValueError("unsanitized schedule closure evidence")
     serialized: list[list[str]] = []
     for item in value:
@@ -916,6 +1022,8 @@ def _serialize_schedule_closures(value: object) -> list[list[str]]:
 
 
 def _write_no_overwrite(output: Path, encoded: bytes) -> None:
+    if type(encoded) is not bytes or len(encoded) > _MAX_ARTIFACT_BYTES:
+        raise ValueError("baseline artifact exceeds its bounded size")
     directory_fd = _open_artifact_directory(output.parent)
     temporary_name = f".{output.name}.{uuid.uuid4().hex}.tmp"
     try:
@@ -963,13 +1071,31 @@ def _open_artifact_directory(directory: Path) -> int:
         raise
 
 
-def _path_matches_directory_descriptor(path: Path, descriptor: int) -> bool:
+def _directory_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        stat.S_IMODE(value.st_mode),
+        value.st_uid,
+    )
+
+
+def _path_matches_directory_descriptor(
+    path: Path, descriptor: int, expected: tuple[int, ...]
+) -> bool:
     try:
-        current = os.stat(path)
+        current = os.stat(path, follow_symlinks=False)
     except OSError:
         return False
     held = os.fstat(descriptor)
-    return (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino)
+    return (
+        stat.S_ISDIR(current.st_mode)
+        and stat.S_ISDIR(held.st_mode)
+        and _directory_identity(current) == expected
+        and _directory_identity(held) == expected
+        and not stat.S_IMODE(held.st_mode) & 0o077
+    )
 
 
 def _ensure_absent(name: str, directory_fd: int) -> None:

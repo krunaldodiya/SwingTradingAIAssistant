@@ -196,6 +196,64 @@ def _artifact_record(
     )
 
 
+def _terminal_artifact_record(
+    workload_id: str,
+    iteration_kind: str,
+    iteration_index: int,
+    *,
+    outcome: str,
+    failure_code: str,
+) -> B01MeasurementRecord:
+    base = _artifact_record(workload_id, iteration_kind, iteration_index)
+    protocol_invalid = failure_code == "CHILD_PROTOCOL_INVALID"
+    checksums = () if protocol_invalid else base.partition_checksums
+    return replace(
+        base,
+        outcome=outcome,
+        failure_code=failure_code,
+        phase_elapsed_ms={
+            "normalize": None,
+            "validate": None,
+            "publish": None,
+            "catalog": None,
+            "query": None,
+        },
+        rows_raw=0,
+        rows_normalized=0,
+        rows_published=0,
+        bytes_parquet=0,
+        throughput_rows_per_s=None,
+        request_count=0,
+        provider_attempt_count=0,
+        retry_count=0,
+        resume_count=0,
+        repair_count=0,
+        resource_evidence_status=(
+            ResourceEvidenceStatus.INVALID
+            if protocol_invalid
+            else ResourceEvidenceStatus.VALID
+        ),
+        resource_blocker="CHILD_PROTOCOL_INVALID" if protocol_invalid else None,
+        peak_rss_bytes=None if protocol_invalid else base.peak_rss_bytes,
+        open_fd_start=None if protocol_invalid else base.open_fd_start,
+        open_fd_peak=None if protocol_invalid else base.open_fd_peak,
+        open_fd_end=None if protocol_invalid else base.open_fd_end,
+        partition_outcomes=(),
+        reconciliation_reasons=(),
+        control_partition_evidence=None,
+        query_result_count=None,
+        query_min_ts=None,
+        query_max_ts=None,
+        query_elapsed_ms=None,
+        partition_checksums=checksums,
+        comparability_key=replace(
+            base.comparability_key,
+            partition_checksums=checksums,
+            source_data_shape=SourceDataShape(0, 0, 0, 0),
+        ),
+    )
+
+
 def _artifact_report() -> BaselineCollectionReport:
     results = []
     for workload_id in ("B01", "B02", "B03", "B04", "B05"):
@@ -206,27 +264,19 @@ def _artifact_report() -> BaselineCollectionReport:
             measured = (
                 measured[0],
                 measured[1],
-                replace(
-                    measured[2],
+                _terminal_artifact_record(
+                    "B03",
+                    "measured",
+                    3,
                     outcome="CANCELLED",
                     failure_code="BENCHMARK_CHILD_CANCELLED",
-                    control_partition_evidence=None,
                 ),
-                replace(
-                    measured[3],
+                _terminal_artifact_record(
+                    "B03",
+                    "measured",
+                    4,
                     outcome="FAILED",
                     failure_code="CHILD_PROTOCOL_INVALID",
-                    control_partition_evidence=None,
-                    resource_evidence_status=ResourceEvidenceStatus.INVALID,
-                    resource_blocker="CHILD_PROTOCOL_INVALID",
-                    peak_rss_bytes=None,
-                    open_fd_start=None,
-                    open_fd_peak=None,
-                    open_fd_end=None,
-                    partition_checksums=(),
-                    comparability_key=replace(
-                        measured[3].comparability_key, partition_checksums=()
-                    ),
                 ),
                 measured[4],
             )
@@ -1373,6 +1423,273 @@ def test_persistence_rejects_work_root_substitution_before_publication(
     )
     assert not output.exists()
     assert tuple(outside.iterdir()) == ()
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        replace(
+            _terminal_artifact_record(
+                "B01",
+                "measured",
+                1,
+                outcome="FAILED",
+                failure_code="B01_CHILD_FAILED",
+            ),
+            outcome="FAILED",
+            failure_code="BENCHMARK_CHILD_FAILED",
+        ),
+        replace(
+            _terminal_artifact_record(
+                "B02",
+                "measured",
+                1,
+                outcome="FAILED",
+                failure_code="BENCHMARK_CHILD_FAILED",
+            ),
+            outcome="FAILED",
+            failure_code="B01_CHILD_FAILED",
+        ),
+        replace(
+            _terminal_artifact_record(
+                "B02",
+                "measured",
+                1,
+                outcome="FAILED",
+                failure_code="BENCHMARK_CHILD_FAILED",
+            ),
+            outcome="CANCELLED",
+            failure_code="BENCHMARK_CHILD_FAILED",
+        ),
+        replace(
+            _terminal_artifact_record(
+                "B02",
+                "measured",
+                1,
+                outcome="FAILED",
+                failure_code="BENCHMARK_CHILD_FAILED",
+            ),
+            outcome="FAILED",
+            failure_code="BENCHMARK_CHILD_CANCELLED",
+        ),
+        replace(
+            _terminal_artifact_record(
+                "B02",
+                "measured",
+                1,
+                outcome="FAILED",
+                failure_code="BENCHMARK_CHILD_FAILED",
+            ),
+            outcome="FAILED",
+            failure_code="BENCHMARK_CHILD_PROTOCOL_INVALID",
+        ),
+    ),
+)
+def test_terminal_failure_code_matrix_is_closed(record: B01MeasurementRecord) -> None:
+    with pytest.raises(ValueError, match="terminal outcome"):
+        baseline_collection._serialize_record(record)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"request_count": 1},
+        {"provider_attempt_count": 1},
+        {"retry_count": 1},
+        {"resume_count": 1},
+        {"repair_count": 1},
+        {"rows_raw": 1},
+        {"rows_normalized": 1},
+        {"rows_published": 1},
+        {"bytes_parquet": 1},
+        {"throughput_rows_per_s": 1.0},
+        {"partition_outcomes": ("VERIFIED",)},
+        {"reconciliation_reasons": ("CHECKSUM_INVALID_OR_MISMATCHED",)},
+        {
+            "phase_elapsed_ms": {
+                "normalize": 1,
+                "validate": None,
+                "publish": None,
+                "catalog": None,
+                "query": None,
+            }
+        },
+        {"query_result_count": 1},
+        {"query_min_ts": "2024-02-01T03:45:00.000000Z"},
+        {"query_max_ts": "2024-02-01T03:45:00.000000Z"},
+        {"query_elapsed_ms": 1},
+    ),
+)
+def test_non_success_records_reject_success_or_activity_evidence(
+    changes: dict[str, object],
+) -> None:
+    base = _terminal_artifact_record(
+        "B02",
+        "measured",
+        1,
+        outcome="FAILED",
+        failure_code="BENCHMARK_CHILD_FAILED",
+    )
+    shape_values = {
+        "rows_raw": changes.get("rows_raw", base.rows_raw),
+        "rows_normalized": changes.get("rows_normalized", base.rows_normalized),
+        "rows_published": changes.get("rows_published", base.rows_published),
+        "bytes_parquet": changes.get("bytes_parquet", base.bytes_parquet),
+    }
+    record = replace(
+        base,
+        comparability_key=replace(
+            base.comparability_key,
+            source_data_shape=SourceDataShape(**shape_values),  # type: ignore[arg-type]
+        ),
+        **changes,
+    )
+
+    with pytest.raises(ValueError, match="terminal workload"):
+        baseline_collection._serialize_record(record)
+
+
+@pytest.mark.parametrize(
+    "phase_evidence",
+    (object(), {"normalize": None}),
+)
+def test_non_success_phase_shape_fails_closed_as_value_error(
+    phase_evidence: object,
+) -> None:
+    record = replace(
+        _terminal_artifact_record(
+            "B02",
+            "measured",
+            1,
+            outcome="FAILED",
+            failure_code="BENCHMARK_CHILD_FAILED",
+        ),
+        phase_elapsed_ms=phase_evidence,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="terminal workload"):
+        baseline_collection._serialize_record(record)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {
+            "resource_evidence_status": ResourceEvidenceStatus.VALID,
+            "resource_blocker": None,
+            "peak_rss_bytes": 1,
+            "open_fd_start": 1,
+            "open_fd_peak": 1,
+            "open_fd_end": 1,
+        },
+        {"resource_blocker": "sampling_exception"},
+    ),
+)
+def test_protocol_invalid_requires_exact_closed_resource_pairing(
+    changes: dict[str, object],
+) -> None:
+    values = {
+        "resource_evidence_status": ResourceEvidenceStatus.INVALID,
+        "resource_blocker": "CHILD_PROTOCOL_INVALID",
+        "peak_rss_bytes": None,
+        "open_fd_start": None,
+        "open_fd_peak": None,
+        "open_fd_end": None,
+        **changes,
+    }
+    record = replace(
+        _terminal_artifact_record(
+            "B02",
+            "measured",
+            1,
+            outcome="FAILED",
+            failure_code="CHILD_PROTOCOL_INVALID",
+        ),
+        **values,
+    )
+
+    with pytest.raises(ValueError, match="protocol"):
+        baseline_collection._serialize_record(record)
+
+
+@pytest.mark.parametrize("text", ("s.e.l.e.c.t", "u n i o n", "pr-ag-ma"))
+def test_obfuscated_sql_text_is_rejected(text: str) -> None:
+    record = replace(_artifact_record("B01", "measured", 1), platform=text)
+
+    with pytest.raises(ValueError, match="unsanitized"):
+        baseline_collection._serialize_record(record)
+
+
+def test_artifact_evidence_has_explicit_text_sequence_numeric_and_byte_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _artifact_record("B01", "measured", 1)
+    oversized_text = replace(base, platform="A" * 513)
+    oversized_number = replace(base, memory_total_bytes=2**63)
+    oversized_sequence = replace(
+        base,
+        comparability_key=replace(
+            base.comparability_key,
+            schedule_closure_provenance=tuple(
+                ("closure", "source") for _ in range(367)
+            ),
+        ),
+    )
+
+    for record in (oversized_text, oversized_number, oversized_sequence):
+        with pytest.raises(ValueError, match="bounded|unsanitized|numeric"):
+            baseline_collection._serialize_record(record)
+
+    monkeypatch.setattr(baseline_collection, "_MAX_ARTIFACT_BYTES", 10)
+    with pytest.raises(ValueError, match="artifact.*bound"):
+        baseline_collection._serialize_report(_artifact_report())
+
+
+def test_plan_pre_registers_the_one_shot_durable_artifact_boundary() -> None:
+    plan = (
+        Path(__file__).resolve().parents[2]
+        / "docs/plans/03-reliance-operational-validation-and-benchmarks.md"
+    ).read_text()
+
+    assert "### 5.5 Durable one-shot baseline artifact" in plan
+    assert "hard maximum of 4,000,000 bytes" in plan
+    assert "ark92-baseline-artifact-v1" in plan
+    assert "one warm-up, five measured records" in plan
+    assert "threshold_claim=null" in plan
+    assert "strings are at most 512 bytes" in plan
+    assert "ordered evidence at most 366 items" in plan
+    assert "integer evidence at most signed 64-bit maximum" in plan
+    assert "tests/market_data/ark92_benchmark_baseline_collection.py" in plan
+    assert "ark92-b01-b05-baseline-v1.json" in plan
+    assert "ARK-93 consumes that exact immutable file" in plan
+
+
+def test_persistence_rejects_work_root_permission_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir()
+    output = artifact_root / "baseline.json"
+    work_root = artifact_root / "work"
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    def substitute(root: Path) -> BaselineCollectionReport:
+        root.chmod(0o777)
+        return _artifact_report()
+
+    monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", substitute)
+
+    assert (
+        persist_baseline_artifact(
+            ["--output", str(output), "--work-root", str(work_root)]
+        )
+        == 2
+    )
+    assert (
+        capsys.readouterr().err
+        == "baseline artifact collection failed: WORK_ROOT_SUBSTITUTED\n"
+    )
+    assert not output.exists()
 
 
 def test_valid_measurement_with_mismatched_comparability_key_is_insufficient(
