@@ -466,6 +466,7 @@ class IngestionCoordinator:
         self._run_id_factory = run_id_factory or (lambda: uuid4().hex)
         self._lease_acquirer = lease_acquirer
         self._catalog_factory = catalog_factory
+        self._uses_default_catalog_factory = catalog_factory is DuckDBCatalog
         self._schedule_store_factory = schedule_store_factory
         self._recovery_observer_factory = recovery_observer_factory
         self._lifecycle_executor_factory = lifecycle_executor_factory
@@ -504,6 +505,29 @@ class IngestionCoordinator:
         try:
             with lease:
                 return self._run_leased(command, plans, lease, policy, started)
+        except Exception:
+            return self._report(
+                IngestionRunOutcome.FAILED,
+                RunFailureCode.CATALOG_UNAVAILABLE,
+                _not_attempted_results(plans),
+                started,
+            )
+
+    def run_under_lease(
+        self, command: IngestionCommand, lease: StorageRootLease
+    ) -> IngestionReport:
+        """Run while a caller-owned root lease remains live after return."""
+        started = self._now()
+        prepared = self._prepare_run(command, started)
+        if isinstance(prepared, IngestionReport):
+            return prepared
+        plans, policy = prepared
+        try:
+            if type(lease) is not StorageRootLease:
+                raise RuntimeError
+            with lease.root_operation(command.storage_root) as operation:
+                operation.ensure_live()
+            return self._run_leased(command, plans, lease, policy, started)
         except Exception:
             return self._report(
                 IngestionRunOutcome.FAILED,
@@ -600,7 +624,12 @@ class IngestionCoordinator:
                 recovery_run_ids.add(value)
             return value
 
-        with self._catalog_factory(command.storage_root) as catalog:
+        catalog_context = (
+            DuckDBCatalog(command.storage_root, lease=lease)
+            if self._uses_default_catalog_factory
+            else self._catalog_factory(command.storage_root)
+        )
+        with catalog_context as catalog:
             observer = self._recovery_observer_factory(
                 lease=lease,
                 storage_root=command.storage_root,

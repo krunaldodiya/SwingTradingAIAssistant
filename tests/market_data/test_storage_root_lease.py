@@ -99,6 +99,134 @@ def test_existing_only_lease_acquires_the_preexisting_safe_lock(tmp_path: Path) 
     acquired.lease.close()
 
 
+@pytest.mark.parametrize("invalid", ("nonempty", "wrong_mode", "symlink"))
+def test_private_empty_admission_never_mutates_invalid_root(
+    tmp_path: Path, invalid: str
+) -> None:
+    root = tmp_path / "root"
+    if invalid == "symlink":
+        target = tmp_path / "target"
+        target.mkdir(mode=0o700)
+        root.symlink_to(target, target_is_directory=True)
+    else:
+        root.mkdir(mode=0o700 if invalid == "nonempty" else 0o755)
+        if invalid == "nonempty":
+            (root / "user-owned.txt").write_bytes(b"preserve-me")
+    entry_before = os.lstat(root)
+    contents_before = (
+        tuple((item.name, item.read_bytes()) for item in root.iterdir())
+        if invalid == "nonempty"
+        else ()
+    )
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    entry_after = os.lstat(root)
+    assert (entry_after.st_dev, entry_after.st_ino, entry_after.st_mode) == (
+        entry_before.st_dev,
+        entry_before.st_ino,
+        entry_before.st_mode,
+    )
+    if invalid == "nonempty":
+        assert tuple((item.name, item.read_bytes()) for item in root.iterdir()) == (
+            contents_before
+        )
+    elif invalid == "wrong_mode":
+        assert tuple(root.iterdir()) == ()
+    else:
+        assert root.is_symlink()
+        assert tuple(root.resolve().iterdir()) == ()
+
+
+def test_private_empty_admission_creates_only_locked_private_file(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.ACQUIRED
+    assert result.lease is not None
+    assert [item.name for item in root.iterdir()] == [".ingestion.lock"]
+    result.lease.close()
+
+
+def test_private_empty_admission_rolls_back_its_lock_on_concurrent_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original = lease_module._acquire_lock
+
+    def inject_entry(*args: object, **kwargs: object):
+        (root / "user-owned.txt").write_bytes(b"concurrent")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lease_module, "_acquire_lock", inject_entry)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.lease is None
+    assert tuple(item.name for item in root.iterdir()) == ("user-owned.txt",)
+    assert (root / "user-owned.txt").read_bytes() == b"concurrent"
+
+
+def test_private_empty_rollback_preserves_final_window_lock_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original_acquire = lease_module._acquire_lock
+    original_rename = lease_module.os.rename
+
+    def inject_entry(*args: object, **kwargs: object):
+        (root / "user-owned.txt").write_bytes(b"concurrent")
+        return original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+
+    def substitute_before_quarantine(
+        source: object,
+        target: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        if source == ".ingestion.lock" and str(target).endswith(".rollback"):
+            original_rename(
+                source,
+                ".attacker-held-lock",
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+            descriptor = os.open(
+                ".ingestion.lock",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=src_dir_fd,
+            )
+            os.write(descriptor, b"foreign-lock")
+            os.close(descriptor)
+        original_rename(
+            source,
+            target,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(lease_module, "_acquire_lock", inject_entry)
+    monkeypatch.setattr(lease_module.os, "rename", substitute_before_quarantine)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert (root / ".ingestion.lock").read_bytes() == b"foreign-lock"
+    assert (root / ".attacker-held-lock").exists()
+    assert (root / "user-owned.txt").read_bytes() == b"concurrent"
+
+
 @pytest.mark.skipif(
     "spawn" not in multiprocessing.get_all_start_methods(),
     reason="requires spawn process semantics",

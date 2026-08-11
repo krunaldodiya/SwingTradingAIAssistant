@@ -5,6 +5,7 @@ import stat
 import time
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import duckdb
 import pytest
@@ -182,6 +183,91 @@ def test_read_only_catalog_requires_existing_v2_and_permits_only_reads(
     assert database_path.read_bytes() == before
 
 
+def test_leased_writable_catalog_never_writes_replacement_root(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(root, lease=acquired.lease)
+    catalog.__enter__()
+    catalog.create_manifest(_in_progress())
+    held = tmp_path / "held"
+    root.rename(held)
+    root.mkdir(mode=0o700)
+
+    with pytest.raises(CatalogPersistenceError):
+        catalog.close()
+
+    assert tuple(root.iterdir()) == ()
+    assert not (root / "catalog.duckdb").exists()
+    acquired.lease.close()
+
+
+@pytest.mark.parametrize("existing_source", (False, True))
+def test_leased_catalog_conditional_publish_never_overwrites_final_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_source: bool,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original_bytes: bytes | None = None
+    if existing_source:
+        with DuckDBCatalog(root) as seeded:
+            seeded.create_manifest(_in_progress())
+        original_bytes = (root / "catalog.duckdb").read_bytes()
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(root, lease=acquired.lease)
+    catalog.__enter__()
+    if not existing_source:
+        catalog.create_manifest(_in_progress())
+    real_link = catalog_module.os.link
+    injected = False
+
+    def inject_before_link(
+        source: object,
+        target: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal injected
+        if not injected and target == "catalog.duckdb":
+            injected = True
+            descriptor = os.open(
+                "catalog.duckdb",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=dst_dir_fd,
+            )
+            os.write(descriptor, b"foreign-concurrent-catalog")
+            os.close(descriptor)
+        real_link(
+            source,
+            target,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(catalog_module.os, "link", inject_before_link)
+
+    with pytest.raises(CatalogPersistenceError):
+        catalog.close()
+
+    assert injected
+    assert (root / "catalog.duckdb").read_bytes() == b"foreign-concurrent-catalog"
+    retained = tuple(root.glob(".catalog.duckdb.*.retained"))
+    if existing_source:
+        assert len(retained) == 1
+        assert retained[0].read_bytes() == original_bytes
+    else:
+        assert retained == ()
+    acquired.lease.close()
+
+
 def test_read_only_catalog_never_creates_or_migrates(tmp_path) -> None:
     missing = tmp_path / "missing"
     missing.mkdir()
@@ -247,6 +333,17 @@ def test_read_only_catalog_requires_live_inode_identity_throughout_use(
 def test_read_only_catalog_rejects_group_writable_database(tmp_path) -> None:
     with DuckDBCatalog(tmp_path):
         pass
+    database = tmp_path / "catalog.duckdb"
+    database.chmod(0o660)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+
+    with (
+        acquired.lease,
+        pytest.raises(CatalogStorageError),
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
 
 
 def test_read_only_catalog_bounds_fifo_swap_before_duckdb_connect(
@@ -284,17 +381,6 @@ def test_read_only_catalog_bounds_fifo_swap_before_duckdb_connect(
     assert connected_paths
     assert all(path != database for path in connected_paths)
     assert stat.S_ISFIFO(database.lstat().st_mode)
-    database = tmp_path / "catalog.duckdb"
-    database.chmod(0o660)
-    acquired = StorageRootLease.try_acquire(tmp_path)
-    assert acquired.lease is not None
-
-    with (
-        acquired.lease,
-        pytest.raises(CatalogStorageError),
-        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
-    ):
-        pass
 
 
 def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(

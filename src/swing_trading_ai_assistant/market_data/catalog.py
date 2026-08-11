@@ -12,6 +12,7 @@ from contextlib import suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Final, cast
+from uuid import uuid4
 
 import duckdb
 
@@ -29,8 +30,13 @@ from .monthly_request_planner import PlannedInstrumentMonth
 from .storage_root_lease import StorageRootLease
 
 MAX_READ_ONLY_CATALOG_BYTES: Final = 64 * 1024 * 1024
-_READ_ONLY_DATABASE_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+_READ_ONLY_DATABASE_FLAGS: Final = (
+    os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+)
 _SNAPSHOT_WRITE_FLAGS: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+_CATALOG_PUBLISH_FLAGS: Final = (
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+)
 _CATALOG_COPY_CHUNK_BYTES: Final = 1024 * 1024
 
 _SCHEMA_MIGRATION_ID: Final = "swing-trading-catalog-v1"
@@ -231,7 +237,7 @@ class DuckDBCatalog:
         if type(read_only) is not bool:
             raise CatalogStorageError("invalid catalog mode")
         if (read_only and type(lease) is not StorageRootLease) or (
-            not read_only and lease is not None
+            lease is not None and type(lease) is not StorageRootLease
         ):
             raise CatalogStorageError("invalid catalog admission")
         self._storage_root = storage_root
@@ -244,6 +250,8 @@ class DuckDBCatalog:
         self._snapshot_directory: tempfile.TemporaryDirectory[str] | None = None
         self._snapshot_path: Path | None = None
         self._snapshot_identity: tuple[int, ...] | None = None
+        self._source_catalog_identity: tuple[int, ...] | None = None
+        self._write_publish_ready = False
 
     @property
     def database_path(self) -> Path:
@@ -272,6 +280,10 @@ class DuckDBCatalog:
                     raise CatalogSchemaError("catalog schema is invalid")
                 self._validate_schema()
                 self.ensure_read_identity()
+            elif self._lease is not None:
+                self._open_leased_writable_connection()
+                self._initialize_schema()
+                self._write_publish_ready = True
             else:
                 self._connection = duckdb.connect(str(self.database_path))
                 self._initialize_schema()
@@ -287,10 +299,18 @@ class DuckDBCatalog:
         self.close()
 
     def close(self) -> None:
+        publish = self._write_publish_ready
+        self._write_publish_ready = False
+        publication_error: CatalogError | None = None
         if self._connection is not None:
             with suppress(Exception):
                 self._connection.close()
             self._connection = None
+        if publish:
+            try:
+                self._publish_leased_catalog()
+            except CatalogError as error:
+                publication_error = error
         self._connection_descriptor = None
         if self._database_descriptor is not None:
             with suppress(OSError):
@@ -299,10 +319,13 @@ class DuckDBCatalog:
         self._database_identity = None
         self._snapshot_path = None
         self._snapshot_identity = None
+        self._source_catalog_identity = None
         if self._snapshot_directory is not None:
             with suppress(Exception):
                 self._snapshot_directory.cleanup()
             self._snapshot_directory = None
+        if publication_error is not None:
+            raise publication_error
 
     def ensure_read_identity(self) -> None:
         """Prove the live read-only connection still owns the admitted inode."""
@@ -386,8 +409,141 @@ class DuckDBCatalog:
             raise CatalogStorageError("catalog identity is invalid") from None
         self.ensure_read_identity()
 
+    def _open_leased_writable_connection(self) -> None:
+        if self._lease is None or not isinstance(self._storage_root, Path):
+            raise CatalogStorageError("catalog admission is unavailable")
+        descriptor: int | None = None
+        try:
+            with self._lease.root_operation(self._storage_root) as operation:
+                try:
+                    descriptor = os.open(
+                        "catalog.duckdb",
+                        _READ_ONLY_DATABASE_FLAGS,
+                        dir_fd=operation.descriptor,
+                    )
+                except FileNotFoundError:
+                    descriptor = None
+                if descriptor is None:
+                    self._snapshot_directory = tempfile.TemporaryDirectory(
+                        prefix="swing-trading-catalog-write-"
+                    )
+                    snapshot_path = (
+                        Path(self._snapshot_directory.name) / "catalog.duckdb"
+                    )
+                    source_identity = None
+                else:
+                    source_identity = _catalog_identity(os.fstat(descriptor))
+                    _validate_read_only_catalog_identity(source_identity)
+                    snapshot_path, snapshot_identity = self._copy_catalog_snapshot(
+                        descriptor, source_identity, writable=True
+                    )
+                    self._snapshot_identity = snapshot_identity
+                    entry = os.stat(
+                        "catalog.duckdb",
+                        dir_fd=operation.descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _catalog_identity(entry) != source_identity
+                        or _catalog_identity(os.fstat(descriptor)) != source_identity
+                    ):
+                        raise CatalogStorageError("catalog identity is invalid")
+                operation.ensure_live()
+            self._source_catalog_identity = source_identity
+            self._snapshot_path = snapshot_path
+            self._connection = duckdb.connect(str(snapshot_path))
+            snapshot_stat = os.stat(snapshot_path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(snapshot_stat.st_mode)
+                or snapshot_stat.st_uid != os.geteuid()
+                or snapshot_stat.st_size > MAX_READ_ONLY_CATALOG_BYTES
+            ):
+                raise CatalogStorageError("catalog identity is invalid")
+            os.chmod(snapshot_path, 0o600, follow_symlinks=False)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogStorageError("catalog identity is invalid") from None
+        finally:
+            if descriptor is not None:
+                with suppress(OSError):
+                    os.close(descriptor)
+
+    def _publish_leased_catalog(self) -> None:
+        if (
+            self._lease is None
+            or not isinstance(self._storage_root, Path)
+            or self._snapshot_path is None
+        ):
+            raise CatalogPersistenceError("catalog publication failed")
+        temporary_name = f".catalog.duckdb.{uuid4().hex}.tmp"
+        quarantine_name = f".catalog.duckdb.{uuid4().hex}.retained"
+        target_descriptor: int | None = None
+        try:
+            snapshot_descriptor = os.open(
+                self._snapshot_path, _READ_ONLY_DATABASE_FLAGS
+            )
+            try:
+                snapshot_identity = _catalog_identity(os.fstat(snapshot_descriptor))
+                _validate_read_only_catalog_identity(snapshot_identity)
+                with self._lease.root_operation(self._storage_root) as operation:
+                    _assert_catalog_source_unchanged(
+                        operation.descriptor, self._source_catalog_identity
+                    )
+                    operation.ensure_live()
+                    target_descriptor = os.open(
+                        temporary_name,
+                        _CATALOG_PUBLISH_FLAGS,
+                        0o600,
+                        dir_fd=operation.descriptor,
+                    )
+                    _copy_exact_catalog(
+                        snapshot_descriptor,
+                        target_descriptor,
+                        snapshot_identity[2],
+                    )
+                    os.fsync(target_descriptor)
+                    _validate_read_only_catalog_identity(
+                        _catalog_identity(os.fstat(target_descriptor))
+                    )
+                    _assert_catalog_source_unchanged(
+                        operation.descriptor, self._source_catalog_identity
+                    )
+                    operation.ensure_live()
+                    _publish_catalog_entry_conditionally(
+                        operation.descriptor,
+                        temporary_name,
+                        quarantine_name,
+                        self._source_catalog_identity,
+                        target_descriptor,
+                    )
+                    os.close(target_descriptor)
+                    target_descriptor = None
+                    os.fsync(operation.descriptor)
+                    operation.ensure_live()
+            finally:
+                os.close(snapshot_descriptor)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog publication failed") from None
+        finally:
+            if target_descriptor is not None:
+                with suppress(OSError):
+                    os.close(target_descriptor)
+            with (
+                suppress(Exception),
+                self._lease.root_operation(self._storage_root) as operation,
+                suppress(FileNotFoundError),
+            ):
+                os.unlink(temporary_name, dir_fd=operation.descriptor)
+
     def _copy_catalog_snapshot(
-        self, descriptor: int, source_identity: tuple[int, ...]
+        self,
+        descriptor: int,
+        source_identity: tuple[int, ...],
+        *,
+        writable: bool = False,
     ) -> tuple[Path, tuple[int, ...]]:
         self._snapshot_directory = tempfile.TemporaryDirectory(
             prefix="swing-trading-catalog-"
@@ -416,7 +572,7 @@ class DuckDBCatalog:
             if os.pread(descriptor, 1, expected_size):
                 raise CatalogStorageError("catalog identity is invalid")
             os.fsync(snapshot_descriptor)
-            os.fchmod(snapshot_descriptor, 0o400)
+            os.fchmod(snapshot_descriptor, 0o600 if writable else 0o400)
             snapshot_identity = _catalog_identity(os.fstat(snapshot_descriptor))
             _validate_read_only_catalog_identity(snapshot_identity)
             if (
@@ -605,6 +761,13 @@ class DuckDBCatalog:
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
             raise CatalogStorageError("invalid storage root")
+        if self._lease is not None:
+            try:
+                with self._lease.root_operation(self._storage_root) as operation:
+                    operation.ensure_live()
+            except Exception:
+                raise CatalogStorageError("invalid storage root") from None
+            return
         try:
             valid_root = (
                 self._storage_root.exists()
@@ -1399,6 +1562,133 @@ def _validate_read_only_catalog_identity(identity: tuple[int, ...]) -> None:
         or identity[7] & 0o022
     ):
         raise CatalogStorageError("catalog identity is invalid")
+
+
+def _assert_catalog_source_unchanged(
+    root_descriptor: int, expected: tuple[int, ...] | None
+) -> None:
+    try:
+        actual = _catalog_identity(
+            os.stat(
+                "catalog.duckdb",
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        )
+    except FileNotFoundError:
+        actual = None
+    if actual != expected:
+        raise CatalogPersistenceError("catalog publication failed")
+
+
+def _publish_catalog_entry_conditionally(
+    root_descriptor: int,
+    temporary_name: str,
+    quarantine_name: str,
+    expected_source: tuple[int, ...] | None,
+    temporary_descriptor: int,
+) -> None:
+    quarantined = False
+    try:
+        if expected_source is not None:
+            os.rename(
+                "catalog.duckdb",
+                quarantine_name,
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+            )
+            quarantined = True
+            retained = _catalog_identity(
+                os.stat(
+                    quarantine_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            if not _catalog_identity_survives_rename(retained, expected_source):
+                raise CatalogPersistenceError("catalog publication failed")
+        else:
+            _assert_catalog_source_unchanged(root_descriptor, None)
+
+        os.link(
+            temporary_name,
+            "catalog.duckdb",
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        published_identity = _catalog_identity(os.fstat(temporary_descriptor))
+        entry_identity = _catalog_identity(
+            os.stat(
+                "catalog.duckdb",
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        )
+        if entry_identity != published_identity:
+            raise CatalogPersistenceError("catalog publication failed")
+        if expected_source is not None:
+            retained_identity = _catalog_identity(
+                os.stat(
+                    quarantine_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            if not _catalog_identity_survives_rename(
+                retained_identity, expected_source
+            ):
+                raise CatalogPersistenceError("catalog publication failed")
+            os.unlink(quarantine_name, dir_fd=root_descriptor)
+            quarantined = False
+        os.unlink(temporary_name, dir_fd=root_descriptor)
+    except Exception:
+        if quarantined:
+            _restore_catalog_quarantine(root_descriptor, quarantine_name)
+        raise
+
+
+def _restore_catalog_quarantine(root_descriptor: int, quarantine_name: str) -> None:
+    try:
+        os.link(
+            quarantine_name,
+            "catalog.duckdb",
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+    except FileExistsError:
+        return
+    os.unlink(quarantine_name, dir_fd=root_descriptor)
+
+
+def _catalog_identity_survives_rename(
+    actual: tuple[int, ...], expected: tuple[int, ...]
+) -> bool:
+    return actual[:4] == expected[:4] and actual[5:] == expected[5:]
+
+
+def _copy_exact_catalog(source: int, target: int, expected_size: int) -> None:
+    if expected_size <= 0 or expected_size > MAX_READ_ONLY_CATALOG_BYTES:
+        raise CatalogPersistenceError("catalog publication failed")
+    offset = 0
+    while offset < expected_size:
+        chunk = os.pread(
+            source,
+            min(_CATALOG_COPY_CHUNK_BYTES, expected_size - offset),
+            offset,
+        )
+        if not chunk:
+            raise CatalogPersistenceError("catalog publication failed")
+        written = 0
+        while written < len(chunk):
+            count = os.write(target, chunk[written:])
+            if count <= 0:
+                raise CatalogPersistenceError("catalog publication failed")
+            written += count
+        offset += len(chunk)
+    if os.pread(source, 1, expected_size):
+        raise CatalogPersistenceError("catalog publication failed")
 
 
 def _open_file_descriptors() -> set[int]:

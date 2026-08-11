@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 _LOCK_NAME: Final = ".ingestion.lock"
 _LOCK_MODE: Final = 0o600
@@ -115,7 +116,22 @@ class StorageRootLease:
         return cls._try_acquire(root, create_lock=False)
 
     @classmethod
-    def _try_acquire(cls, root: object, *, create_lock: bool) -> LeaseResult:
+    def try_acquire_private_empty(cls, root: object) -> LeaseResult:
+        """Acquire an owner-private empty root before creating its lock.
+
+        This narrow admission is for one-shot workflows whose caller-owned root
+        must remain byte-for-byte unchanged when it is not admissible.
+        """
+        return cls._try_acquire(root, create_lock=True, require_private_empty=True)
+
+    @classmethod
+    def _try_acquire(  # noqa: C901 - one hostile storage admission boundary
+        cls,
+        root: object,
+        *,
+        create_lock: bool,
+        require_private_empty: bool = False,
+    ) -> LeaseResult:
         if not isinstance(root, Path):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
 
@@ -134,11 +150,23 @@ class StorageRootLease:
             if not stat.S_ISDIR(root_descriptor_stat.st_mode):
                 raise RuntimeError
 
+            if require_private_empty:
+                _assert_private_empty_root(root, root_descriptor, root_descriptor_stat)
+
             result, lock_descriptor = _acquire_lock(
                 root_descriptor,
                 (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
                 create=create_lock,
+                exclusive=require_private_empty,
             )
+            if require_private_empty and result.lease is not None:
+                try:
+                    _assert_private_locked_root(
+                        root, root_descriptor, root_descriptor_stat
+                    )
+                except Exception:
+                    _rollback_private_lock(root_descriptor, result.lease)
+                    result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         except OSError:
             result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         except Exception:
@@ -219,12 +247,17 @@ def _acquire_lock(
     root_identity: tuple[int, int],
     *,
     create: bool,
+    exclusive: bool = False,
 ) -> tuple[LeaseResult, int | None]:
     lock_descriptor: int | None = None
     try:
         lock_descriptor = os.open(
             _LOCK_NAME,
-            _LOCK_FLAGS if create else _LOCK_EXISTING_FLAGS,
+            (_LOCK_FLAGS | os.O_EXCL)
+            if create and exclusive
+            else _LOCK_FLAGS
+            if create
+            else _LOCK_EXISTING_FLAGS,
             _LOCK_MODE,
             dir_fd=root_descriptor,
         )
@@ -272,6 +305,73 @@ def _valid_lock_identity(
         and descriptor_stat.st_uid == os.geteuid()
         and stat.S_IMODE(descriptor_stat.st_mode) == _LOCK_MODE
     )
+
+
+def _assert_private_empty_root(
+    root: Path, descriptor: int, descriptor_stat: os.stat_result
+) -> None:
+    if (
+        descriptor_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(descriptor_stat.st_mode) != 0o700
+        or os.listdir(descriptor)
+    ):
+        raise RuntimeError
+    path_stat = os.stat(root, follow_symlinks=False)
+    if not _same_inode(path_stat, descriptor_stat):
+        raise RuntimeError
+
+
+def _assert_private_locked_root(
+    root: Path, descriptor: int, descriptor_stat: os.stat_result
+) -> None:
+    path_stat = os.stat(root, follow_symlinks=False)
+    if not _same_inode(path_stat, descriptor_stat) or os.listdir(descriptor) != [
+        _LOCK_NAME
+    ]:
+        raise RuntimeError
+
+
+def _rollback_private_lock(root_descriptor: int, lease: StorageRootLease) -> None:
+    lock_descriptor = lease._descriptor  # pyright: ignore[reportPrivateUsage]
+    quarantine_name = f".ingestion.lock.{uuid4().hex}.rollback"
+    try:
+        if lock_descriptor is not None:
+            held = os.fstat(lock_descriptor)
+            os.rename(
+                _LOCK_NAME,
+                quarantine_name,
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+            )
+            quarantined = os.stat(
+                quarantine_name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if _valid_lock_identity(held, quarantined):
+                os.unlink(quarantine_name, dir_fd=root_descriptor)
+            else:
+                _restore_private_lock_quarantine(root_descriptor, quarantine_name)
+    except Exception:
+        _restore_private_lock_quarantine(root_descriptor, quarantine_name)
+    finally:
+        lease.close()
+
+
+def _restore_private_lock_quarantine(
+    root_descriptor: int, quarantine_name: str
+) -> None:
+    try:
+        os.link(
+            quarantine_name,
+            _LOCK_NAME,
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+    except (FileExistsError, FileNotFoundError):
+        return
+    os.unlink(quarantine_name, dir_fd=root_descriptor)
 
 
 def _close_descriptor(descriptor: int | None) -> bool:
