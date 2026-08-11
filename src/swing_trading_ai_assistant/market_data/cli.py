@@ -12,6 +12,12 @@ from typing import Protocol
 from dotenv import load_dotenv
 
 from .credentials import EnvironmentAccessTokenProvider
+from .daily_ohlcv import (
+    DailyQueryServiceV1,
+    DuckDBDailyOHLCVEngineV1,
+    RetainedDailyScheduleResolverV1,
+    TimeframeQueryServiceV1,
+)
 from .download_preparation import (
     AuthoritativeScheduleInputV1,
     DownloadPreparationServiceV1,
@@ -226,12 +232,24 @@ def _default_coverage_service() -> StoredCoverageServiceV1:
     )
 
 
-def _default_query_service() -> OneMinuteQueryServiceV1:
-    return OneMinuteQueryServiceV1(
-        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
-        StoredCoverageEvaluatorV1(),
-        engine=DuckDBOneMinuteQueryEngineV1(),
-        clock=_SystemClock(),
+def _default_query_service() -> TimeframeQueryServiceV1:
+    policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
+    evaluator = StoredCoverageEvaluatorV1()
+    clock = _SystemClock()
+    return TimeframeQueryServiceV1(
+        OneMinuteQueryServiceV1(
+            policy,
+            evaluator,
+            engine=DuckDBOneMinuteQueryEngineV1(),
+            clock=clock,
+        ),
+        DailyQueryServiceV1(
+            policy,
+            evaluator,
+            resolver=RetainedDailyScheduleResolverV1(),
+            engine=DuckDBDailyOHLCVEngineV1(),
+            clock=clock,
+        ),
     )
 
 

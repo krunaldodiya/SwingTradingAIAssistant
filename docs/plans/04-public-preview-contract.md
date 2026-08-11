@@ -45,14 +45,19 @@ MAX_TOUCHED_MONTHS_V1 = 12
 MAX_CATALOG_PARTITIONS_V1 = 12
 MAX_QUERY_PARQUET_PATHS_V1 = 12
 MAX_QUERY_ROWS_V1 = 10_000
+MAX_DAILY_QUERY_ROWS_V1 = 366
+MAX_DAILY_SESSION_MINUTES_V1 = 600
+MAX_DAILY_INPUT_ROWS_V1 = 219_600
+MAX_DAILY_VOLUME_V1 = 9_223_372_036_854_775_807
 MAX_PUBLIC_JSON_BYTES_V1 = 8_388_608
 MAX_BOD_SNAPSHOT_FETCH_ATTEMPTS_V1 = 1
 ```
 
 Month count is computed before path or plan allocation. Query accepts only
-`1m` and one to six distinct fields in declaration order from `ts`, `open`,
-`high`, `low`, `close`, `volume`. Daily OHLCV is a later local-only Sprint 3
-slice, not a hidden `1m` option.
+exact `1m` or `1d` and one to six distinct fields in declaration order from
+`ts`, `open`, `high`, `low`, `close`, `volume`. The `1d` path is local
+derivation from verified `1m` and retained schedule evidence, never a provider
+daily-candle dependency or a hidden `1m` option.
 
 ## Shared application contract
 
@@ -173,8 +178,8 @@ class PublicCommandReportV1(Generic[PayloadT]):
 DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1]
 ```
 
-Coverage freezes its payload in the stored-coverage slice. The one-minute query
-freezes the following vendor-neutral public types:
+Coverage freezes its payload in the stored-coverage slice. Query freezes the
+following vendor-neutral public types:
 
 ```python
 class CandleFieldV1(StrEnum):
@@ -192,7 +197,7 @@ class PublicQueryRequestV1:
     symbol: str
     from_date: date
     to_date: date
-    timeframe: Literal["1m"]
+    timeframe: Literal["1m", "1d"]
     fields: tuple[CandleFieldV1, ...]
     max_rows: int
 
@@ -215,7 +220,17 @@ class QueryPayloadV1:
     rows: tuple[PublicQueryRowV1, ...]
 
 
-QueryReportV1 = PublicCommandReportV1[QueryPayloadV1]
+@dataclass(frozen=True, slots=True)
+class DailyQueryPayloadV1:
+    request: PublicQueryRequestV1
+    calculation_version: Literal["nse-session-ohlcv@v1"]
+    adjustment_state: Literal["raw"]
+    row_count: int
+    months: tuple[PublicCoverageMonthV1, ...]
+    rows: tuple[PublicQueryRowV1, ...]
+
+
+QueryReportV1 = PublicCommandReportV1[QueryPayloadV1 | DailyQueryPayloadV1]
 ```
 
 The generic parameter is the sole extension point; the common envelope,
@@ -242,6 +257,7 @@ omitted. Exact nested key order is:
 | `DownloadPayloadV1` | `request`, `started_at`, `completed_at`, `planned_count`, `skipped_count`, `locally_recovered_count`, `verified_count`, `failed_count`, `not_attempted_count`, `cancelled_count`, `instrument_snapshot_digest_sha256`, `instrument_snapshot_retrieved_at`, `instrument_snapshot_attempt_count`, `historical_attempt_count`, `months` |
 | `PublicQueryRequestV1` | `segment`, `symbol`, `from_date`, `to_date`, `timeframe`, `fields`, `max_rows` |
 | `QueryPayloadV1` | `request`, `row_count`, `months`, `rows` |
+| `DailyQueryPayloadV1` | `request`, `calculation_version`, `adjustment_state`, `row_count`, `months`, `rows` |
 | `PublicQueryRowV1` | only requested fields, in `CandleFieldV1` declaration order |
 
 The internal `SingleSymbolDownloadRequestV1.storage_root` is never copied into
@@ -311,6 +327,63 @@ engine reads timestamps as integer epoch microseconds, orders strictly by
 `ts`, materializes only numeric candle values, and renders only requested
 fields. Caller SQL, expressions, aliases, globs, arbitrary paths, provider
 fallback, spilling, and unbounded output are forbidden.
+
+## Session-aware daily OHLCV derivation
+
+`TimeframeQueryServiceV1` reconstructs the internal request and invokes exactly
+one service: exact `1d` routes to `DailyQueryServiceV1`; every other value is
+handled by the existing one-minute service and therefore retains its typed
+unsupported-timeframe behavior. The CLI calls this router once and passes its
+report only to the shared query renderer and exit helper.
+
+The daily service admits the product before root activity, validates a maximum
+of 12 touched months and `max_rows <= 366`, then holds one existing-root
+coverage admission through coverage evaluation, schedule resolution,
+descriptor-pinned aggregation, and complete row materialization. It makes zero
+provider calls. Incomplete coverage returns the exact ordered month evidence,
+zero rows, and `INSUFFICIENT_EVIDENCE/COVERAGE_INSUFFICIENT` without resolving a
+schedule or opening Parquet.
+
+Every requested calendar date is classified by the exact retained authoritative
+schedule as either a sourced session or closure. Schedule resolution requires
+the selection's exact digest, canonical bytes, and `as_of <=` the invocation
+cutoff. A session has UTC minute-aligned half-open bounds, maps to the same
+`Asia/Kolkata` trade date at both endpoints, and contains at most 600 minutes.
+Sessions are strictly ordered, non-overlapping, and bound to the matching
+monthly selection digest. Weekday inference, candle-derived calendars,
+forward-fill, and an unproven or future schedule are forbidden.
+
+`DuckDBDailyOHLCVEngineV1` consumes at most 12 verified Parquet descriptors,
+366 sessions, and 219,600 scheduled input minutes under the same admission. It
+uses one fixed parameterized in-memory DuckDB statement with the one-thread,
+`256MB`, zero-spill, no-extension, and five-second deadline controls of the
+one-minute engine. Every yielded handle is reconstructed as the exact descriptor
+type and must carry the corresponding admitted selection in order before its
+path is consumed. Each session must contain exactly one distinct candle at every
+scheduled minute, including the first minute and the minute immediately before
+close. Exact count, distinct count, endpoints, and zero off-grid timestamps
+together prove the complete one-minute grid. Missing, duplicate, or off-grid
+minutes, contradictory provenance, malformed rows, or inconsistent OHLC values
+fail closed and never produce an incomplete daily row.
+
+For each proven complete session, `open` is the first minute open ordered by
+timestamp, `high` is the maximum high, `low` is the minimum low, `close` is the
+last minute close, and `volume` is the exact integer sum. DuckDB accumulates
+volume as `HUGEINT`; a negative or greater-than-signed-64-bit result is
+`FAILED/QUERY_RESOURCE_LIMIT_EXCEEDED`, never wraparound or float coercion. The
+daily row timestamp is the authoritative session open in UTC. Public payloads
+freeze `calculation_version="nse-session-ohlcv@v1"`,
+`adjustment_state="raw"`, the verified month provenance, and only requested
+fields. Before payload construction the service reconstructs the engine output
+and requires exactly one ordered row per authoritative session with
+`row.ts == session.open_at`; fewer, extra, shifted, or reordered rows fail
+closed. Adjusted-price implementation, indicators, strategies, and additional
+timeframes remain out of scope.
+
+Daily reports reuse the exhaustive query status/failure matrix. Deadline
+interrupt is `FAILED/QUERY_TIMEOUT`; resource exhaustion is the exact resource
+failure; malformed schedule, coverage, or row dependencies fail as bounded
+`FAILED/UNCLASSIFIED_FAILURE`. Query never returns `PARTIAL` or `CANCELLED`.
 
 ## Exhaustive conversion and exit behavior
 
@@ -586,3 +659,7 @@ orphan recovery, corrupt refusal, content-addressed no-clobber retention,
 schedule-first mutation order, point-in-time offline resolution, lazy
 credentials, zero provider attempts on repeat/read paths, bounded failures, no
 provider identity leakage, and no broker execution.
+Daily acceptance additionally proves authoritative regular and special-session
+grouping, timezone boundaries, complete/missing/duplicate minutes, integer
+volume overflow, raw/calculation provenance, deadline cleanup, exact `1d` CLI
+routing, zero provider attempts, and a read-only disposable-root smoke.
