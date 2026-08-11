@@ -598,5 +598,6 @@ The data phase is complete only when:
 
 Linear and the current sprint document determine the next approved atomic task;
 this plan does not authorize work merely because it appears in a later
-milestone. Preserve the single executable-item WIP limit and complete the equity
-downloader-v1 milestone before starting research-module implementation.
+milestone. Deliver coherent independently verifiable slices with one writer per
+file path, and complete the equity downloader-v1 milestone before starting
+research-module implementation.

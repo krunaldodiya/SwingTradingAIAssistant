@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "docs" / "plans" / "04-public-preview-contract.md"
 PLAN_ONE = ROOT / "docs" / "plans" / "01-data-foundation-and-upstox-ingestion.md"
 SPRINT = ROOT / "docs" / "sprints" / "sprint-3.md"
+FUTURE_TODO = ROOT / "docs" / "plans" / "data-downloader-v1-future-todo.md"
 SOURCE_ROOT = ROOT / "src" / "swing_trading_ai_assistant" / "market_data"
 
 SOURCE_ENUMS = {
@@ -160,10 +161,49 @@ def test_contract_is_linked_and_replaces_microtask_execution() -> None:
     sprint = SPRINT.read_text()
 
     assert "[public-preview contract](04-public-preview-contract.md)" in plan_one
-    assert "Status: **COMPLETE**" in sprint
+    assert "Status: **EXTENDED — DOWNLOADER V1 COMPLETION IN PROGRESS**" in sprint
     assert "seven coherent PR-sized slices" in sprint
     assert "ARK-112" in contract and "superseded" in contract.lower()
     assert "23-task" not in sprint
+
+
+def test_sprint_extension_separates_release_blockers_from_future_improvements() -> None:
+    sprint = SPRINT.read_text()
+    future = FUTURE_TODO.read_text()
+
+    for blocker in (
+        "ARK-139",
+        "ARK-111",
+        "ARK-92",
+        "ARK-93",
+        "ARK-69",
+        "ARK-140",
+        "ARK-141",
+        "ARK-142",
+        "ARK-143",
+        "ARK-144",
+    ):
+        assert blocker in sprint
+
+    assert "research-module implementation remains blocked" in " ".join(
+        sprint.lower().split()
+    )
+    assert "do not block downloader v1" in future.lower()
+    for optional in (
+        "PyPI",
+        "weekly and monthly",
+        "additional market-data provider",
+        "performance tuning",
+    ):
+        assert optional.lower() in future.lower()
+
+    for required in (
+        "authoritative schedule",
+        "point-in-time Nifty 50",
+        "multi-instrument",
+        "corporate-action",
+    ):
+        assert required.lower() not in future.lower()
 
 
 def test_public_conversion_inventory_matches_current_domain_enums() -> None:

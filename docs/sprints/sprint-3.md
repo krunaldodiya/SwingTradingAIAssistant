@@ -1,6 +1,6 @@
 # Sprint 3 — Usable single-symbol downloader preview
 
-Status: **COMPLETE**
+Status: **EXTENDED — DOWNLOADER V1 COMPLETION IN PROGRESS**
 
 ## Goal
 
@@ -166,3 +166,32 @@ feed and fails closed until an application composition injects approved
 authoritative schedule evidence. The authenticated closed-range Upstox gate,
 multi-symbol point-in-time scheduling, benchmark release thresholds, research
 logic, advice, and broker execution remain explicitly deferred.
+
+## Downloader-v1 completion extension
+
+The seven-slice preview closeout above remains accepted historical evidence.
+Sprint 3 is extended because Plan 01 requires the complete equity downloader-v1
+milestone before research-module implementation begins. The remaining work is
+therefore a release prerequisite, not feature polish or speculative
+optimization.
+
+The extension proceeds as six coherent, independently verifiable slices:
+
+| Slice | Required outcome | Linear scope | Depends on |
+| --- | --- | --- | --- |
+| 8. Runtime trust boundary | Compose authoritative schedule evidence in production and close the probe date, provider-envelope, and redirect credential gaps | ARK-139, ARK-19, ARK-20, ARK-23 | Preview closeout |
+| 9. Milestone 2 proof | Persist comparable benchmarks, derive thresholds, run the one authorized same-response RELIANCE gate, and close correctness/recovery acceptance | ARK-111, ARK-92, ARK-93, ARK-69, ARK-11 | 8 |
+| 10. Point-in-time universe | Retain versioned Nifty 50 membership and sector snapshots with effective dates and provenance | ARK-140 | 8 |
+| 11. Bounded multi-instrument workflows | Download, resume, inspect coverage, and query one or many admitted instruments under shared bounded resources | ARK-141, ARK-12 | 9–10 |
+| 12. Local views and adjustment boundary | Derive approved higher intraday views from verified `1m` data and represent corporate-action/raw-adjusted provenance without rewriting raw bars | ARK-142, ARK-143 | 10–11 |
+| 13. Downloader-v1 release proof | Prove clean install, Python/CLI parity, compatibility, bounded performance, documentation, full gate, and release readiness | ARK-144, ARK-13 | 9–12 |
+
+The dependency chain is deliberate: research-module implementation remains
+blocked until Slice 13 closes. Work may proceed concurrently only where file
+ownership and dependencies are disjoint; contracts, schemas, migrations, and
+configuration stay serialized. An unavailable credential or authoritative
+external source may block only its bounded live proof, not unrelated offline
+implementation.
+
+Optional post-v1 work is kept out of this completion chain in the
+[data downloader future TODO](../plans/data-downloader-v1-future-todo.md).
