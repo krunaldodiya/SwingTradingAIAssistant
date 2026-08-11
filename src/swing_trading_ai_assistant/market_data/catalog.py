@@ -477,6 +477,7 @@ class DuckDBCatalog:
         ):
             raise CatalogPersistenceError("catalog publication failed")
         temporary_name = f".catalog.duckdb.{uuid4().hex}.tmp"
+        quarantine_name = f".catalog.duckdb.{uuid4().hex}.retained"
         target_descriptor: int | None = None
         try:
             snapshot_descriptor = os.open(
@@ -509,20 +510,13 @@ class DuckDBCatalog:
                         operation.descriptor, self._source_catalog_identity
                     )
                     operation.ensure_live()
-                    os.rename(
+                    _publish_catalog_entry_conditionally(
+                        operation.descriptor,
                         temporary_name,
-                        "catalog.duckdb",
-                        src_dir_fd=operation.descriptor,
-                        dst_dir_fd=operation.descriptor,
+                        quarantine_name,
+                        self._source_catalog_identity,
+                        target_descriptor,
                     )
-                    published_identity = _catalog_identity(os.fstat(target_descriptor))
-                    entry = os.stat(
-                        "catalog.duckdb",
-                        dir_fd=operation.descriptor,
-                        follow_symlinks=False,
-                    )
-                    if _catalog_identity(entry) != published_identity:
-                        raise CatalogPersistenceError("catalog publication failed")
                     os.close(target_descriptor)
                     target_descriptor = None
                     os.fsync(operation.descriptor)
@@ -1585,6 +1579,93 @@ def _assert_catalog_source_unchanged(
         actual = None
     if actual != expected:
         raise CatalogPersistenceError("catalog publication failed")
+
+
+def _publish_catalog_entry_conditionally(
+    root_descriptor: int,
+    temporary_name: str,
+    quarantine_name: str,
+    expected_source: tuple[int, ...] | None,
+    temporary_descriptor: int,
+) -> None:
+    quarantined = False
+    try:
+        if expected_source is not None:
+            os.rename(
+                "catalog.duckdb",
+                quarantine_name,
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+            )
+            quarantined = True
+            retained = _catalog_identity(
+                os.stat(
+                    quarantine_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            if not _catalog_identity_survives_rename(retained, expected_source):
+                raise CatalogPersistenceError("catalog publication failed")
+        else:
+            _assert_catalog_source_unchanged(root_descriptor, None)
+
+        os.link(
+            temporary_name,
+            "catalog.duckdb",
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        published_identity = _catalog_identity(os.fstat(temporary_descriptor))
+        entry_identity = _catalog_identity(
+            os.stat(
+                "catalog.duckdb",
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        )
+        if entry_identity != published_identity:
+            raise CatalogPersistenceError("catalog publication failed")
+        if expected_source is not None:
+            retained_identity = _catalog_identity(
+                os.stat(
+                    quarantine_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            if not _catalog_identity_survives_rename(
+                retained_identity, expected_source
+            ):
+                raise CatalogPersistenceError("catalog publication failed")
+            os.unlink(quarantine_name, dir_fd=root_descriptor)
+            quarantined = False
+        os.unlink(temporary_name, dir_fd=root_descriptor)
+    except Exception:
+        if quarantined:
+            _restore_catalog_quarantine(root_descriptor, quarantine_name)
+        raise
+
+
+def _restore_catalog_quarantine(root_descriptor: int, quarantine_name: str) -> None:
+    try:
+        os.link(
+            quarantine_name,
+            "catalog.duckdb",
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+    except FileExistsError:
+        return
+    os.unlink(quarantine_name, dir_fd=root_descriptor)
+
+
+def _catalog_identity_survives_rename(
+    actual: tuple[int, ...], expected: tuple[int, ...]
+) -> bool:
+    return actual[:4] == expected[:4] and actual[5:] == expected[5:]
 
 
 def _copy_exact_catalog(source: int, target: int, expected_size: int) -> None:

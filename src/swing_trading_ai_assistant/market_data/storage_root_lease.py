@@ -124,7 +124,7 @@ class StorageRootLease:
         return cls._try_acquire(root, create_lock=True, require_private_empty=True)
 
     @classmethod
-    def _try_acquire(
+    def _try_acquire(  # noqa: C901 - one hostile storage admission boundary
         cls,
         root: object,
         *,
@@ -156,7 +156,16 @@ class StorageRootLease:
                 root_descriptor,
                 (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
                 create=create_lock,
+                exclusive=require_private_empty,
             )
+            if require_private_empty and result.lease is not None:
+                try:
+                    _assert_private_locked_root(
+                        root, root_descriptor, root_descriptor_stat
+                    )
+                except Exception:
+                    _rollback_private_lock(root_descriptor, result.lease)
+                    result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         except OSError:
             result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         except Exception:
@@ -237,12 +246,17 @@ def _acquire_lock(
     root_identity: tuple[int, int],
     *,
     create: bool,
+    exclusive: bool = False,
 ) -> tuple[LeaseResult, int | None]:
     lock_descriptor: int | None = None
     try:
         lock_descriptor = os.open(
             _LOCK_NAME,
-            _LOCK_FLAGS if create else _LOCK_EXISTING_FLAGS,
+            (_LOCK_FLAGS | os.O_EXCL)
+            if create and exclusive
+            else _LOCK_FLAGS
+            if create
+            else _LOCK_EXISTING_FLAGS,
             _LOCK_MODE,
             dir_fd=root_descriptor,
         )
@@ -304,6 +318,31 @@ def _assert_private_empty_root(
     path_stat = os.stat(root, follow_symlinks=False)
     if not _same_inode(path_stat, descriptor_stat):
         raise RuntimeError
+
+
+def _assert_private_locked_root(
+    root: Path, descriptor: int, descriptor_stat: os.stat_result
+) -> None:
+    path_stat = os.stat(root, follow_symlinks=False)
+    if not _same_inode(path_stat, descriptor_stat) or os.listdir(descriptor) != [
+        _LOCK_NAME
+    ]:
+        raise RuntimeError
+
+
+def _rollback_private_lock(root_descriptor: int, lease: StorageRootLease) -> None:
+    lock_descriptor = lease._descriptor  # pyright: ignore[reportPrivateUsage]
+    with suppress(Exception):
+        if lock_descriptor is not None:
+            held = os.fstat(lock_descriptor)
+            entry = os.stat(
+                _LOCK_NAME,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if _valid_lock_identity(held, entry):
+                os.unlink(_LOCK_NAME, dir_fd=root_descriptor)
+    lease.close()
 
 
 def _close_descriptor(descriptor: int | None) -> bool:

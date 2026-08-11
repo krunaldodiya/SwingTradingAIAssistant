@@ -154,6 +154,27 @@ def test_private_empty_admission_creates_only_locked_private_file(
     result.lease.close()
 
 
+def test_private_empty_admission_rolls_back_its_lock_on_concurrent_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original = lease_module._acquire_lock
+
+    def inject_entry(*args: object, **kwargs: object):
+        (root / "user-owned.txt").write_bytes(b"concurrent")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lease_module, "_acquire_lock", inject_entry)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.lease is None
+    assert tuple(item.name for item in root.iterdir()) == ("user-owned.txt",)
+    assert (root / "user-owned.txt").read_bytes() == b"concurrent"
+
+
 @pytest.mark.skipif(
     "spawn" not in multiprocessing.get_all_start_methods(),
     reason="requires spawn process semantics",
