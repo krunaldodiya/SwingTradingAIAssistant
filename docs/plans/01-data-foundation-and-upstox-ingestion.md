@@ -576,7 +576,9 @@ instrument adapters. Those require a future approved module and release plan.
 The data phase is complete only when:
 
 - RELIANCE can be downloaded from the earliest available minute history through
-  a requested recent date;
+  a requested recent date, including the current date through the latest
+  completed scheduled minute when authoritative current-session evidence is
+  supplied;
 - reruns and crash recovery are safe and idempotent;
 - coverage and known anomalies are visible rather than silently hidden;
 - DuckDB can query one or many instruments directly from Parquet;

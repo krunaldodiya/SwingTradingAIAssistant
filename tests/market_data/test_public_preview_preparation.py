@@ -41,6 +41,7 @@ from swing_trading_ai_assistant.market_data.preview_admission import (
     PreviewAdmissionPolicyV1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleClosure,
     ScheduleEvidenceResult,
@@ -147,6 +148,70 @@ def _schedule() -> ExpectedSessionSchedule:
 def _schedule_input() -> AuthoritativeScheduleInputV1:
     schedule = _schedule()
     return AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+
+
+def _open_schedule() -> ExpectedSessionSchedule:
+    covered_from = date(2026, 8, 1)
+    covered_to = date(2026, 8, 11)
+    sessions = (
+        ScheduleSession(
+            date(2026, 8, 10),
+            datetime(2026, 8, 10, 3, 45, tzinfo=UTC),
+            datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
+            "regular",
+        ),
+        ScheduleSession(
+            date(2026, 8, 11),
+            datetime(2026, 8, 11, 3, 45, tzinfo=UTC),
+            datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
+            "regular",
+        ),
+    )
+    closures = tuple(
+        ScheduleClosure(covered_from + timedelta(days=offset), "sourced closure")
+        for offset in range(9)
+    )
+    return ExpectedSessionSchedule(
+        schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+        source="nse-authoritative-test",
+        source_release="release-2026-08-11",
+        as_of=datetime(2026, 8, 11, 3, 30, tzinfo=UTC),
+        timezone="Asia/Kolkata",
+        covered_from=covered_from,
+        covered_to=covered_to,
+        sessions=sessions,
+        closures=closures,
+    )
+
+
+def test_open_month_preparation_retains_v3_schedule_and_resolves_instrument(
+    tmp_path: Path,
+) -> None:
+    schedule = _open_schedule()
+    snapshot_client, _ = _snapshot_client(datetime(2026, 8, 11, 3, 0, tzinfo=UTC))
+    service = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(
+            AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+        ),
+        CountingSnapshotSource(snapshot_client),
+    )
+
+    report = service.prepare_open_month(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            tmp_path,
+            datetime(2026, 8, 11, 6, 30, tzinfo=UTC),
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.SUCCEEDED
+    assert report.prepared is not None
+    assert report.prepared.schedule == schedule
+    assert report.prepared.instrument.instrument_key == "NSE_EQ|INE002A01018"
 
 
 def test_canonical_file_schedule_source_loads_exact_bounded_evidence(

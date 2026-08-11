@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
+from zoneinfo import ZoneInfo
 
 from .download_preparation import (
     DownloadPreparationReportV1,
@@ -19,12 +20,22 @@ from .download_preparation import (
 from .historical import HistoricalFetchCode, RetryPolicy
 from .manifest_lifecycle import FailureCategory, ManifestState, ValidationOutcome
 from .monthly_request_planner import plan_upstox_equity_months
+from .open_month_download import (
+    OpenMonthDownloadFailureCodeV1,
+    OpenMonthDownloadOutcomeV1,
+    OpenMonthDownloadReportV1,
+    OpenMonthDownloadRequestV1,
+)
 from .partition_reconciliation import RequestReason
+from .provisional_metadata import ProvisionalPartitionMetadataV1
 from .public_contract import (
+    CoverageStateV1,
     DownloadPayloadV1,
     DownloadReportV1,
+    OpenMonthDownloadPayloadV1,
     PublicCommandReportV1,
     PublicCommandStatusV1,
+    PublicCoverageMonthV1,
     PublicDownloadRequestV1,
     PublicFailureCodeV1,
     PublicFailureV1,
@@ -41,6 +52,7 @@ from .range_ingestion import (
 from .validation import EQUITY_MONTH_VALIDATION_POLICY_V1, ValidationReason
 
 MAX_TOUCHED_MONTHS_V1 = 12
+_IST = ZoneInfo("Asia/Kolkata")
 _POLICY_PREFIX = EQUITY_MONTH_VALIDATION_POLICY_V1 + "+sessions-sha256:"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _COMPLETED = frozenset(
@@ -251,6 +263,151 @@ class SingleSymbolDownloadServiceV1:
             )
 
 
+class PublicDownloadPortV1(Protocol):
+    def download(self, request: object) -> DownloadReportV1: ...
+
+
+class OpenMonthDownloadPortV1(Protocol):
+    def download(self, request: object) -> OpenMonthDownloadReportV1: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentRangePreparationV1:
+    open_request: SingleSymbolDownloadRequestV1
+    closed_payload: DownloadPayloadV1 | None
+    closed_attempts: int
+
+
+class CurrentAwareSingleSymbolDownloadServiceV1:
+    """Route the current local month to its advancing immutable snapshot service."""
+
+    def __init__(
+        self,
+        closed_service: PublicDownloadPortV1,
+        open_month_service: OpenMonthDownloadPortV1,
+        *,
+        clock: DownloadClockV1 | object,
+    ) -> None:
+        self._closed_service = closed_service
+        self._open_month_service = open_month_service
+        self._clock = clock
+
+    def download(self, request: object) -> DownloadReportV1:
+        if type(request) is not SingleSymbolDownloadRequestV1:
+            return _terminal_report(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.INVALID_INPUT,
+                attempts=0,
+            )
+        started_at = _clock_now(self._clock)
+        if started_at is None:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=0,
+            )
+        local_today = started_at.astimezone(_IST).date()
+        current_month = (local_today.year, local_today.month)
+        to_month = (request.to_date.year, request.to_date.month)
+        if request.to_date > local_today:
+            return _terminal_report(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.INVALID_INPUT,
+                attempts=0,
+            )
+        if to_month != current_month:
+            return self._download_closed(request)
+        prepared = self._prepare_current_range(request, local_today)
+        if isinstance(prepared, PublicCommandReportV1):
+            return prepared
+        open_request = prepared.open_request
+        try:
+            source = self._open_month_service.download(
+                OpenMonthDownloadRequestV1(
+                    open_request.segment,
+                    open_request.symbol,
+                    open_request.from_date,
+                    open_request.to_date,
+                    open_request.storage_root,
+                )
+            )
+        except Exception:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=prepared.closed_attempts,
+            )
+        completed_at = _clock_now(self._clock)
+        if completed_at is None or completed_at < started_at:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=prepared.closed_attempts + _open_month_attempts(source),
+            )
+        open_report = _convert_open_month_report(
+            open_request, started_at, completed_at, source
+        )
+        if prepared.closed_payload is None:
+            return open_report
+        return _combine_current_range_report(
+            request,
+            prepared.closed_payload,
+            prepared.closed_attempts,
+            open_report,
+        )
+
+    def _download_closed(
+        self, request: SingleSymbolDownloadRequestV1
+    ) -> DownloadReportV1:
+        try:
+            return self._closed_service.download(request)
+        except Exception:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=0,
+            )
+
+    def _prepare_current_range(
+        self, request: SingleSymbolDownloadRequestV1, local_today: date
+    ) -> _CurrentRangePreparationV1 | DownloadReportV1:
+        current_month = (local_today.year, local_today.month)
+        if (request.from_date.year, request.from_date.month) == current_month:
+            return _CurrentRangePreparationV1(request, None, 0)
+        month_start = date(local_today.year, local_today.month, 1)
+        try:
+            closed_request = SingleSymbolDownloadRequestV1(
+                request.segment,
+                request.symbol,
+                request.from_date,
+                month_start - timedelta(days=1),
+                request.storage_root,
+            )
+            closed_report = self._closed_service.download(closed_request)
+        except Exception:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=0,
+            )
+        closed_payload = _closed_success_payload(closed_report, closed_request)
+        closed_attempts = _public_download_attempts(closed_report)
+        if closed_payload is None:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.INGESTION_FAILED,
+                attempts=closed_attempts,
+            )
+        open_request = SingleSymbolDownloadRequestV1(
+            request.segment,
+            request.symbol,
+            month_start,
+            request.to_date,
+            request.storage_root,
+        )
+        return _CurrentRangePreparationV1(open_request, closed_payload, closed_attempts)
+
+
 def _ingestion_command(
     request: SingleSymbolDownloadRequestV1, prepared: PreparedDownloadV1
 ) -> IngestionCommand:
@@ -446,6 +603,292 @@ def _terminal_report(
         attempts,
         None,
     )
+
+
+def _convert_open_month_report(
+    request: SingleSymbolDownloadRequestV1,
+    started_at: datetime,
+    completed_at: datetime,
+    source: object,
+) -> DownloadReportV1:
+    validated = _revalidate_open_month_report(source)
+    if validated is None:
+        return _terminal_report(
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+            attempts=0,
+        )
+    attempts = (
+        validated.snapshot_attempt_count
+        + validated.historical_attempt_count
+        + validated.intraday_attempt_count
+    )
+    metadata = validated.metadata
+    if validated.outcome in {
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadOutcomeV1.ALREADY_CURRENT,
+        OpenMonthDownloadOutcomeV1.PARTIAL,
+    }:
+        if metadata is None:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.INGESTION_FAILED,
+                attempts=attempts,
+            )
+        try:
+            month = PublicCoverageMonthV1(
+                month=f"{metadata.year:04d}-{metadata.month:02d}",
+                coverage_state=CoverageStateV1.PROVISIONAL,
+                actual_from_ts=metadata.actual_from_ts,
+                actual_to_ts=metadata.actual_to_ts,
+                row_count=metadata.row_count,
+                checksum_sha256=metadata.checksum_sha256,
+                candle_schema_version=metadata.schema_version,
+                validation_policy_version=None,
+                schedule_digest_sha256=metadata.schedule_digest_sha256,
+                failure_category=None,
+                validation_reason=None,
+                data_cutoff=metadata.cutoff,
+                session_complete=metadata.session_complete,
+            )
+            payload = OpenMonthDownloadPayloadV1(
+                PublicDownloadRequestV1(
+                    request.segment,
+                    request.symbol,
+                    request.from_date,
+                    request.to_date,
+                ),
+                started_at,
+                completed_at,
+                metadata.instrument_snapshot_digest_sha256,
+                metadata.instrument_snapshot_retrieved_at,
+                validated.snapshot_attempt_count,
+                validated.historical_attempt_count,
+                validated.intraday_attempt_count,
+                validated.appended_count,
+                validated.missing_count,
+                month,
+            )
+        except Exception:
+            return _terminal_report(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+                attempts=attempts,
+            )
+        partial = validated.outcome is OpenMonthDownloadOutcomeV1.PARTIAL
+        failure = (
+            PublicFailureV1(
+                PublicFailureCodeV1.COVERAGE_INSUFFICIENT,
+                None,
+                None,
+                None,
+                None,
+                (month.month,),
+            )
+            if partial
+            else None
+        )
+        return PublicCommandReportV1(
+            "v1",
+            "download",
+            (
+                PublicCommandStatusV1.PARTIAL
+                if partial
+                else PublicCommandStatusV1.SUCCEEDED
+            ),
+            failure,
+            attempts,
+            payload,
+        )
+    status, code = {
+        OpenMonthDownloadFailureCodeV1.INVALID_INPUT: (
+            PublicCommandStatusV1.REJECTED,
+            PublicFailureCodeV1.INVALID_INPUT,
+        ),
+        OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED: (
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        OpenMonthDownloadFailureCodeV1.STORAGE_UNAVAILABLE: (
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        OpenMonthDownloadFailureCodeV1.CREDENTIALS_UNAVAILABLE: (
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.CREDENTIALS_UNAVAILABLE,
+        ),
+        OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE: (
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        OpenMonthDownloadFailureCodeV1.INTRADAY_UNAVAILABLE: (
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED: (
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+        OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED: (
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+        OpenMonthDownloadFailureCodeV1.CATALOG_UNAVAILABLE: (
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+    }.get(
+        validated.failure_code,
+        (PublicCommandStatusV1.FAILED, PublicFailureCodeV1.UNCLASSIFIED_FAILURE),
+    )
+    return _terminal_report(status, code, attempts=attempts)
+
+
+def _revalidate_open_month_report(
+    source: object,
+) -> OpenMonthDownloadReportV1 | None:
+    if type(source) is not OpenMonthDownloadReportV1:
+        return None
+    try:
+        metadata = source.metadata
+        if metadata is not None:
+            if type(metadata) is not ProvisionalPartitionMetadataV1:
+                return None
+            metadata = replace(metadata)
+        return OpenMonthDownloadReportV1(
+            source.outcome,
+            source.failure_code,
+            metadata,
+            source.snapshot_attempt_count,
+            source.historical_attempt_count,
+            source.intraday_attempt_count,
+            source.appended_count,
+            source.missing_count,
+        )
+    except Exception:
+        return None
+
+
+def _open_month_attempts(source: object) -> int:
+    validated = _revalidate_open_month_report(source)
+    if validated is None:
+        return 0
+    return (
+        validated.snapshot_attempt_count
+        + validated.historical_attempt_count
+        + validated.intraday_attempt_count
+    )
+
+
+def _public_download_attempts(source: object) -> int:
+    if (
+        type(source) is PublicCommandReportV1
+        and source.command == "download"
+        and type(source.provider_attempt_count) is int
+        and 0 <= source.provider_attempt_count <= 37
+    ):
+        return source.provider_attempt_count
+    return 0
+
+
+def _closed_success_payload(
+    source: object, request: SingleSymbolDownloadRequestV1
+) -> DownloadPayloadV1 | None:
+    try:
+        if type(source) is not PublicCommandReportV1:
+            raise ValueError
+        report = cast(PublicCommandReportV1[object], source)
+        if (
+            report.command != "download"
+            or report.status is not PublicCommandStatusV1.SUCCEEDED
+            or report.failure is not None
+            or type(report.payload) is not DownloadPayloadV1
+        ):
+            raise ValueError
+        typed_payload = report.payload
+        payload = replace(
+            typed_payload,
+            request=replace(typed_payload.request),
+            months=tuple(replace(value) for value in typed_payload.months),
+        )
+        validated = PublicCommandReportV1(
+            report.contract_version,
+            report.command,
+            report.status,
+            None,
+            report.provider_attempt_count,
+            payload,
+        )
+        expected = PublicDownloadRequestV1(
+            request.segment,
+            request.symbol,
+            request.from_date,
+            request.to_date,
+        )
+        if validated.payload is None or validated.payload.request != expected:
+            raise ValueError
+        return validated.payload
+    except Exception:
+        return None
+
+
+def _combine_current_range_report(
+    request: SingleSymbolDownloadRequestV1,
+    closed: DownloadPayloadV1,
+    closed_attempts: int,
+    open_report: DownloadReportV1,
+) -> DownloadReportV1:
+    try:
+        if type(open_report) is not PublicCommandReportV1:
+            raise ValueError
+        failure = (
+            replace(open_report.failure) if open_report.failure is not None else None
+        )
+        if open_report.payload is None:
+            return PublicCommandReportV1(
+                "v1",
+                "download",
+                open_report.status,
+                failure,
+                closed_attempts + open_report.provider_attempt_count,
+                None,
+            )
+        if type(open_report.payload) is not OpenMonthDownloadPayloadV1:
+            raise ValueError
+        combined = replace(
+            open_report.payload,
+            request=PublicDownloadRequestV1(
+                request.segment,
+                request.symbol,
+                request.from_date,
+                request.to_date,
+            ),
+            closed_months=closed.months,
+            closed_instrument_snapshot_digest_sha256=(
+                closed.instrument_snapshot_digest_sha256
+            ),
+            closed_instrument_snapshot_retrieved_at=(
+                closed.instrument_snapshot_retrieved_at
+            ),
+            closed_instrument_snapshot_attempt_count=(
+                closed.instrument_snapshot_attempt_count
+            ),
+            closed_historical_attempt_count=closed.historical_attempt_count,
+        )
+        return PublicCommandReportV1(
+            "v1",
+            "download",
+            open_report.status,
+            failure,
+            closed_attempts + open_report.provider_attempt_count,
+            combined,
+        )
+    except Exception:
+        return _terminal_report(
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+            attempts=min(closed_attempts + _public_download_attempts(open_report), 37),
+        )
 
 
 def _revalidate_source_report(

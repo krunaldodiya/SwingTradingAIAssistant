@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ from .manifest_lifecycle import (
     verify_manifest,
 )
 from .monthly_request_planner import PlannedInstrumentMonth
+from .provisional_metadata import ProvisionalPartitionMetadataV1
 from .storage_root_lease import StorageRootLease
 from .universe_snapshot import UniverseSnapshotMetadataV1
 
@@ -85,7 +87,8 @@ _PHYSICAL_KEY_COLUMNS: Final = (
 )
 _V1_EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
 _V2_EXPECTED_TABLES: Final = (*_V1_EXPECTED_TABLES, "instrument_snapshots")
-_EXPECTED_TABLES: Final = (*_V2_EXPECTED_TABLES, "universe_snapshots")
+_V3_EXPECTED_TABLES: Final = (*_V2_EXPECTED_TABLES, "universe_snapshots")
+_EXPECTED_TABLES: Final = (*_V3_EXPECTED_TABLES, "provisional_partitions")
 _SOURCE_MANIFEST_IDENTITY_COLUMN: Final = "source_manifest_identity"
 
 _SCHEMA_SQL: Final = """
@@ -229,6 +232,66 @@ CREATE TABLE universe_snapshots (
 _UNIVERSE_SCHEMA_CHECKSUM: Final = hashlib.sha256(
     _UNIVERSE_SCHEMA_SQL.encode("utf-8")
 ).hexdigest()
+_PROVISIONAL_MIGRATION_ID: Final = "swing-trading-catalog-v4-provisional-partitions"
+_PROVISIONAL_MIGRATION_VERSION: Final = 4
+_PROVISIONAL_SCHEMA_SQL: Final = """
+CREATE TABLE provisional_partitions (
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    provider VARCHAR NOT NULL,
+    instrument_key VARCHAR NOT NULL,
+    security_id VARCHAR NOT NULL,
+    symbol VARCHAR NOT NULL,
+    exchange VARCHAR NOT NULL,
+    segment VARCHAR NOT NULL,
+    instrument_type VARCHAR NOT NULL,
+    interval VARCHAR NOT NULL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    from_date DATE NOT NULL,
+    to_date DATE NOT NULL CHECK (from_date <= to_date),
+    schedule_digest_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(schedule_digest_sha256, '[0-9a-f]{64}')),
+    cutoff TIMESTAMPTZ NOT NULL,
+    session_complete BOOLEAN NOT NULL,
+    actual_from_ts TIMESTAMPTZ NOT NULL,
+    actual_to_ts TIMESTAMPTZ NOT NULL CHECK (actual_to_ts = cutoff),
+    row_count BIGINT NOT NULL CHECK (row_count BETWEEN 1 AND 65536),
+    checksum_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(checksum_sha256, '[0-9a-f]{64}')),
+    byte_size BIGINT NOT NULL CHECK (byte_size BETWEEN 1 AND 67108864),
+    relative_path VARCHAR NOT NULL CHECK (length(relative_path) BETWEEN 1 AND 512),
+    instrument_snapshot_digest_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(instrument_snapshot_digest_sha256, '[0-9a-f]{64}')),
+    instrument_snapshot_retrieved_at TIMESTAMPTZ NOT NULL,
+    published_at TIMESTAMPTZ NOT NULL,
+    historical_attempt_count INTEGER NOT NULL CHECK (historical_attempt_count BETWEEN 0 AND 1),
+    intraday_attempt_count INTEGER NOT NULL CHECK (intraday_attempt_count BETWEEN 0 AND 1),
+    PRIMARY KEY (provider, exchange, segment, instrument_type, security_id,
+                 interval, year, month, schedule_digest_sha256, cutoff)
+);
+""".strip()
+_PROVISIONAL_SCHEMA_CHECKSUM: Final = hashlib.sha256(
+    _PROVISIONAL_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
+_PROVISIONAL_SELECT: Final = "SELECT schema_version, provider, instrument_key, security_id, symbol, exchange, segment, instrument_type, interval, year, month, from_date, to_date, schedule_digest_sha256, CAST(cutoff AS VARCHAR), session_complete, CAST(actual_from_ts AS VARCHAR), CAST(actual_to_ts AS VARCHAR), row_count, checksum_sha256, byte_size, relative_path, instrument_snapshot_digest_sha256, CAST(instrument_snapshot_retrieved_at AS VARCHAR), CAST(published_at AS VARCHAR), historical_attempt_count, intraday_attempt_count FROM provisional_partitions"
+_PROVISIONAL_PLAN_KEY_COLUMNS: Final = (
+    "provider",
+    "exchange",
+    "segment",
+    "instrument_type",
+    "security_id",
+    "interval",
+    "year",
+    "month",
+)
+_PROVISIONAL_KEY_COLUMNS: Final = (
+    *_PROVISIONAL_PLAN_KEY_COLUMNS,
+    "schedule_digest_sha256",
+    "cutoff",
+)
+_PROVISIONAL_PLAN_PREDICATE: Final = " AND ".join(
+    f"{name} = ?" for name in _PROVISIONAL_PLAN_KEY_COLUMNS
+)
+_PROVISIONAL_KEY_PREDICATE: Final = " AND ".join(
+    f"{name} = ?" for name in _PROVISIONAL_KEY_COLUMNS
+)
 
 
 class CatalogError(RuntimeError):
@@ -370,7 +433,7 @@ class DuckDBCatalog:
         ):
             raise CatalogStorageError("catalog identity is unavailable")
         try:
-            with self._lease.root_operation(self._storage_root) as operation:
+            with self._lease.read_operation(self._storage_root) as operation:
                 entry = os.stat(
                     "catalog.duckdb",
                     dir_fd=operation.descriptor,
@@ -394,7 +457,7 @@ class DuckDBCatalog:
         if self._lease is None or not isinstance(self._storage_root, Path):
             raise CatalogStorageError("catalog admission is unavailable")
         try:
-            with self._lease.root_operation(self._storage_root) as operation:
+            with self._lease.read_operation(self._storage_root) as operation:
                 descriptor = os.open(
                     "catalog.duckdb",
                     _READ_ONLY_DATABASE_FLAGS,
@@ -556,14 +619,16 @@ class DuckDBCatalog:
             raise CatalogPersistenceError("catalog publication failed") from None
         finally:
             if target_descriptor is not None:
+                with (
+                    suppress(Exception),
+                    self._lease.root_operation(self._storage_root) as operation,
+                    suppress(FileNotFoundError),
+                ):
+                    _unlink_catalog_entry_if_descriptor_matches(
+                        operation.descriptor, temporary_name, target_descriptor
+                    )
                 with suppress(OSError):
                     os.close(target_descriptor)
-            with (
-                suppress(Exception),
-                self._lease.root_operation(self._storage_root) as operation,
-                suppress(FileNotFoundError),
-            ):
-                os.unlink(temporary_name, dir_fd=operation.descriptor)
 
     def _copy_catalog_snapshot(
         self,
@@ -907,6 +972,151 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogPersistenceError("catalog read failed") from None
 
+    def save_provisional_partition(
+        self, metadata: ProvisionalPartitionMetadataV1
+    ) -> None:
+        """Append one immutable open-month cutoff, with exact replay semantics."""
+        self._assert_writable()
+        metadata = _validated_provisional_metadata(metadata)
+
+        def operation() -> None:
+            key = _provisional_key(metadata)
+            existing = self.connection.execute(
+                _PROVISIONAL_SELECT + " WHERE " + _PROVISIONAL_KEY_PREDICATE,
+                key,
+            ).fetchone()
+            if existing is not None:
+                if _provisional_metadata_from_row(existing) != metadata:
+                    raise CatalogConflictError("provisional partition conflicts")
+                return
+            values = tuple(
+                getattr(metadata, name)
+                for name in ProvisionalPartitionMetadataV1.__dataclass_fields__
+            )
+            self.connection.execute(
+                "INSERT INTO provisional_partitions VALUES ("  # noqa: S608 - internal table/placeholders
+                + ", ".join("?" for _ in values)
+                + ")",
+                values,
+            )
+
+        self._transaction(operation)
+
+    def list_provisional_partitions(
+        self, plan: PlannedInstrumentMonth, *, limit: int = 64
+    ) -> tuple[ProvisionalPartitionMetadataV1, ...]:
+        """Return bounded cutoff history for one exact physical month."""
+        plan = _validated_provisional_plan(plan)
+        if type(limit) is not int or not 1 <= limit <= 64:
+            raise CatalogConflictError("invalid provisional partition query")
+        try:
+            rows = self.connection.execute(
+                _PROVISIONAL_SELECT
+                + " WHERE "
+                + _PROVISIONAL_PLAN_PREDICATE
+                + " ORDER BY cutoff ASC, schedule_digest_sha256 ASC LIMIT ?",
+                _provisional_plan_key(plan) + (limit,),
+            ).fetchall()
+            return tuple(_provisional_metadata_from_row(row) for row in rows)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
+    def latest_provisional_partition(
+        self,
+        plan: PlannedInstrumentMonth,
+        *,
+        cutoff_lte: datetime | None = None,
+        published_at_lte: datetime | None = None,
+    ) -> ProvisionalPartitionMetadataV1 | None:
+        """Resolve the newest immutable cutoff for one exact physical month."""
+        plan = _validated_provisional_plan(plan)
+        if (cutoff_lte is None) != (published_at_lte is None) or any(
+            value is not None
+            and (
+                type(value) is not datetime
+                or value.tzinfo is None
+                or value.utcoffset() is None
+            )
+            for value in (cutoff_lte, published_at_lte)
+        ):
+            raise CatalogConflictError("invalid provisional partition query")
+        try:
+            predicate = _PROVISIONAL_PLAN_PREDICATE
+            parameters: tuple[object, ...] = _provisional_plan_key(plan)
+            if cutoff_lte is not None and published_at_lte is not None:
+                predicate += " AND cutoff <= ? AND published_at <= ?"
+                parameters += (cutoff_lte, published_at_lte)
+            row = self.connection.execute(
+                _PROVISIONAL_SELECT
+                + " WHERE "
+                + predicate
+                + " ORDER BY cutoff DESC, published_at DESC, "
+                "schedule_digest_sha256 ASC LIMIT 1",
+                parameters,
+            ).fetchone()
+            return None if row is None else _provisional_metadata_from_row(row)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
+    def latest_provisional_partition_for_symbol(
+        self,
+        *,
+        segment: str,
+        symbol: str,
+        year: int,
+        month: int,
+        cutoff_lte: datetime,
+        published_at_lte: datetime,
+    ) -> ProvisionalPartitionMetadataV1 | None:
+        """Resolve one bounded public identity without trusting a path or MAX(ts)."""
+        if (
+            type(segment) is not str
+            or not 1 <= len(segment) <= 128
+            or not segment.isascii()
+            or not segment.isprintable()
+            or type(symbol) is not str
+            or not 1 <= len(symbol) <= 128
+            or not symbol.isascii()
+            or not symbol.isprintable()
+            or type(year) is not int
+            or not 2022 <= year <= date.max.year
+            or type(month) is not int
+            or not 1 <= month <= 12
+            or any(
+                type(value) is not datetime
+                or value.tzinfo is None
+                or value.utcoffset() is None
+                for value in (cutoff_lte, published_at_lte)
+            )
+        ):
+            raise CatalogConflictError("invalid provisional partition query")
+        try:
+            row = self.connection.execute(
+                _PROVISIONAL_SELECT + " WHERE provider = 'upstox' AND exchange = 'NSE' "
+                "AND instrument_type = 'EQ' AND interval = '1m' "
+                "AND segment = ? AND symbol = ? AND year = ? AND month = ? "
+                "AND cutoff <= ? AND published_at <= ? "
+                "ORDER BY cutoff DESC, published_at DESC, "
+                "schedule_digest_sha256 ASC LIMIT 1",
+                (
+                    segment,
+                    symbol,
+                    year,
+                    month,
+                    cutoff_lte,
+                    published_at_lte,
+                ),
+            ).fetchone()
+            return None if row is None else _provisional_metadata_from_row(row)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
     def _after_history_insert(self) -> None:
         """Fault-injection seam used to prove transaction rollback."""
 
@@ -916,12 +1126,20 @@ class DuckDBCatalog:
     def _after_universe_migration(self) -> None:
         """Fault-injection seam used to prove v3 migration rollback."""
 
+    def _after_provisional_migration(self) -> None:
+        """Fault-injection seam used to prove v4 migration rollback."""
+
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
             raise CatalogStorageError("invalid storage root")
         if self._lease is not None:
             try:
-                with self._lease.root_operation(self._storage_root) as operation:
+                authority = (
+                    self._lease.read_operation
+                    if self._read_only
+                    else self._lease.root_operation
+                )
+                with authority(self._storage_root) as operation:
                     operation.ensure_live()
             except Exception:
                 raise CatalogStorageError("invalid storage root") from None
@@ -984,6 +1202,7 @@ class DuckDBCatalog:
                         _UNIVERSE_SCHEMA_CHECKSUM,
                     ),
                 )
+                self._migrate_provisional()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V1_EXPECTED_TABLES
@@ -1009,6 +1228,7 @@ class DuckDBCatalog:
                     ),
                 )
                 self._after_universe_migration()
+                self._migrate_provisional()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V2_EXPECTED_TABLES
@@ -1024,6 +1244,13 @@ class DuckDBCatalog:
                     ),
                 )
                 self._after_universe_migration()
+                self._migrate_provisional()
+                self._validate_schema()
+            elif relations == {
+                ("table", "main", table) for table in _V3_EXPECTED_TABLES
+            }:
+                self._validate_schema(version=3)
+                self._migrate_provisional()
                 self._validate_schema()
             elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
@@ -1036,6 +1263,18 @@ class DuckDBCatalog:
         except Exception:
             self._rollback()
             raise CatalogSchemaError("catalog schema is invalid") from None
+
+    def _migrate_provisional(self) -> None:
+        self.connection.execute(_PROVISIONAL_SCHEMA_SQL)
+        self.connection.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+            (
+                _PROVISIONAL_MIGRATION_ID,
+                _PROVISIONAL_MIGRATION_VERSION,
+                _PROVISIONAL_SCHEMA_CHECKSUM,
+            ),
+        )
+        self._after_provisional_migration()
 
     def _user_relations(self) -> set[tuple[str, str, str]]:
         try:
@@ -1063,7 +1302,7 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
-    def _validate_schema(self, *, version: int = 3) -> None:
+    def _validate_schema(self, *, version: int = 4) -> None:
         if self.connection.execute(
             "SELECT count(*) FROM duckdb_indexes()"
         ).fetchone() != (0,):
@@ -1073,6 +1312,8 @@ class DuckDBCatalog:
             if version == 1
             else _V2_EXPECTED_TABLES
             if version == 2
+            else _V3_EXPECTED_TABLES
+            if version == 3
             else _EXPECTED_TABLES
         )
         for table in expected_tables:
@@ -1128,6 +1369,14 @@ class DuckDBCatalog:
                     _UNIVERSE_MIGRATION_ID,
                     _UNIVERSE_MIGRATION_VERSION,
                     _UNIVERSE_SCHEMA_CHECKSUM,
+                )
+            )
+        if version >= 4:
+            expected_migrations.append(
+                (
+                    _PROVISIONAL_MIGRATION_ID,
+                    _PROVISIONAL_MIGRATION_VERSION,
+                    _PROVISIONAL_SCHEMA_CHECKSUM,
                 )
             )
         if migration != expected_migrations:
@@ -1308,7 +1557,7 @@ class DuckDBCatalog:
 DuckDbCatalog = DuckDBCatalog
 
 
-def _column_type(name: str) -> str:
+def _column_type(name: str, table: str) -> str:
     if name in {
         "schema_version",
         "manifest_schema_version",
@@ -1316,6 +1565,8 @@ def _column_type(name: str) -> str:
         "year",
         "month",
         "candle_schema_version",
+        "historical_attempt_count",
+        "intraday_attempt_count",
     }:
         return "INTEGER"
     if name in {
@@ -1323,8 +1574,19 @@ def _column_type(name: str) -> str:
         "compressed_byte_count",
         "decompressed_byte_count",
         "byte_count",
+        "byte_size",
     }:
         return "BIGINT"
+    if table == "provisional_partitions" and name in {
+        "cutoff",
+        "actual_from_ts",
+        "actual_to_ts",
+        "instrument_snapshot_retrieved_at",
+        "published_at",
+    }:
+        return "TIMESTAMP WITH TIME ZONE"
+    if table == "provisional_partitions" and name == "session_complete":
+        return "BOOLEAN"
     if name in {
         "from_date",
         "to_date",
@@ -1393,10 +1655,14 @@ def _expected_table_columns(
         names = tuple(UniverseSnapshotMetadataV1.__dataclass_fields__)
         primary_key = {"snapshot_sha256"}
         not_null = set(names)
+    elif table == "provisional_partitions":
+        names = tuple(ProvisionalPartitionMetadataV1.__dataclass_fields__)
+        primary_key = set(_PROVISIONAL_KEY_COLUMNS)
+        not_null = set(names)
     else:
         raise CatalogSchemaError("catalog schema is invalid")
     return tuple(
-        (name, _column_type(name), name in not_null, None, name in primary_key)
+        (name, _column_type(name, table), name in not_null, None, name in primary_key)
         for name in names
     )
 
@@ -1581,6 +1847,93 @@ def _expected_constraints(
                 ),
             )
         )
+    elif table == "provisional_partitions":
+        signatures.extend(
+            (
+                ("CHECK", "(schema_version = 1)", (0,), ("schema_version",), None, ()),
+                ("CHECK", '("month" BETWEEN 1 AND 12)', (10,), ("month",), None, ()),
+                (
+                    "CHECK",
+                    "(from_date <= to_date)",
+                    (11, 12),
+                    ("from_date", "to_date"),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "regexp_full_match(schedule_digest_sha256, '[0-9a-f]{64}')",
+                    (13,),
+                    ("schedule_digest_sha256",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(actual_to_ts = cutoff)",
+                    (17, 14),
+                    ("actual_to_ts", "cutoff"),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(row_count BETWEEN 1 AND 65536)",
+                    (18,),
+                    ("row_count",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "regexp_full_match(checksum_sha256, '[0-9a-f]{64}')",
+                    (19,),
+                    ("checksum_sha256",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(byte_size BETWEEN 1 AND 67108864)",
+                    (20,),
+                    ("byte_size",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(length(relative_path) BETWEEN 1 AND 512)",
+                    (21,),
+                    ("relative_path",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "regexp_full_match(instrument_snapshot_digest_sha256, '[0-9a-f]{64}')",
+                    (22,),
+                    ("instrument_snapshot_digest_sha256",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(historical_attempt_count BETWEEN 0 AND 1)",
+                    (25,),
+                    ("historical_attempt_count",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(intraday_attempt_count BETWEEN 0 AND 1)",
+                    (26,),
+                    ("intraday_attempt_count",),
+                    None,
+                    (),
+                ),
+            )
+        )
     primary_key = (
         _PHYSICAL_KEY_COLUMNS
         if table == "partitions"
@@ -1590,6 +1943,8 @@ def _expected_constraints(
         if table == "ingestion_runs"
         else ("snapshot_sha256",)
         if table == "universe_snapshots"
+        else _PROVISIONAL_KEY_COLUMNS
+        if table == "provisional_partitions"
         else ("source", "retrieved_at", "observation_sha256")
     )
     indexes = tuple(
@@ -1677,6 +2032,113 @@ def _universe_metadata_from_row(row: tuple[object, ...]) -> UniverseSnapshotMeta
         cast(str, values[12]),
         values[13],
         cast(str, values[14]),
+    )
+
+
+def _validated_provisional_metadata(
+    value: object,
+) -> ProvisionalPartitionMetadataV1:
+    try:
+        if type(value) is not ProvisionalPartitionMetadataV1:
+            raise ValueError
+        rebuilt = ProvisionalPartitionMetadataV1(
+            *(
+                getattr(value, name)
+                for name in ProvisionalPartitionMetadataV1.__dataclass_fields__
+            )
+        )
+        if rebuilt != value:
+            raise ValueError
+        _validated_provisional_plan(rebuilt.plan)
+        return rebuilt
+    except CatalogConflictError:
+        raise
+    except Exception:
+        raise CatalogConflictError("invalid provisional partition") from None
+
+
+def _validated_provisional_plan(value: object) -> PlannedInstrumentMonth:
+    try:
+        if type(value) is not PlannedInstrumentMonth:
+            raise ValueError
+        rebuilt = PlannedInstrumentMonth(
+            *(
+                getattr(value, name)
+                for name in PlannedInstrumentMonth.__dataclass_fields__
+            )
+        )
+        if (
+            rebuilt != value
+            or rebuilt.interval != "1m"
+            or rebuilt.instrument_type != "EQ"
+            or (rebuilt.from_date.year, rebuilt.from_date.month)
+            != (rebuilt.year, rebuilt.month)
+            or (rebuilt.to_date.year, rebuilt.to_date.month)
+            != (rebuilt.year, rebuilt.month)
+        ):
+            raise ValueError
+        return rebuilt
+    except Exception:
+        raise CatalogConflictError("invalid provisional partition query") from None
+
+
+def _provisional_plan_key(plan: PlannedInstrumentMonth) -> tuple[object, ...]:
+    return tuple(getattr(plan, name) for name in _PROVISIONAL_PLAN_KEY_COLUMNS)
+
+
+def _provisional_key(
+    value: ProvisionalPartitionMetadataV1,
+) -> tuple[object, ...]:
+    return _provisional_plan_key(value.plan) + (
+        value.schedule_digest_sha256,
+        value.cutoff,
+    )
+
+
+def _provisional_metadata_from_row(
+    row: tuple[object, ...],
+) -> ProvisionalPartitionMetadataV1:
+    values = list(row)
+    if (
+        len(values) != 27
+        or any(type(values[index]) is not int for index in (0, 9, 10, 18, 20, 25, 26))
+        or any(type(values[index]) is not str for index in range(1, 9))
+        or any(type(values[index]) is not date for index in (11, 12))
+        or any(
+            type(values[index]) is not str
+            for index in (13, 14, 16, 17, 19, 21, 22, 23, 24)
+        )
+        or type(values[15]) is not bool
+    ):
+        raise ValueError
+    return ProvisionalPartitionMetadataV1(
+        cast(int, values[0]),
+        cast(str, values[1]),
+        cast(str, values[2]),
+        cast(str, values[3]),
+        cast(str, values[4]),
+        cast(str, values[5]),
+        cast(str, values[6]),
+        cast(str, values[7]),
+        cast(str, values[8]),
+        cast(int, values[9]),
+        cast(int, values[10]),
+        cast(date, values[11]),
+        cast(date, values[12]),
+        cast(str, values[13]),
+        datetime.fromisoformat(cast(str, values[14])).astimezone(UTC),
+        values[15],
+        datetime.fromisoformat(cast(str, values[16])).astimezone(UTC),
+        datetime.fromisoformat(cast(str, values[17])).astimezone(UTC),
+        cast(int, values[18]),
+        cast(str, values[19]),
+        cast(int, values[20]),
+        cast(str, values[21]),
+        cast(str, values[22]),
+        datetime.fromisoformat(cast(str, values[23])).astimezone(UTC),
+        datetime.fromisoformat(cast(str, values[24])).astimezone(UTC),
+        cast(int, values[25]),
+        cast(int, values[26]),
     )
 
 
@@ -1913,35 +2375,50 @@ def _publish_catalog_entry_conditionally(
     expected_source: tuple[int, ...] | None,
     temporary_descriptor: int,
 ) -> None:
-    quarantined = False
+    retained = False
+    exchanged = False
     try:
         if expected_source is not None:
-            os.rename(
+            os.link(
                 "catalog.duckdb",
                 quarantine_name,
                 src_dir_fd=root_descriptor,
                 dst_dir_fd=root_descriptor,
+                follow_symlinks=False,
             )
-            quarantined = True
-            retained = _catalog_identity(
+            retained = True
+            retained_identity = _catalog_identity(
                 os.stat(
                     quarantine_name,
                     dir_fd=root_descriptor,
                     follow_symlinks=False,
                 )
             )
-            if not _catalog_identity_survives_rename(retained, expected_source):
+            source_identity = _catalog_identity(
+                os.stat(
+                    "catalog.duckdb",
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            if not all(
+                _catalog_identity_survives_rename(value, expected_source)
+                for value in (retained_identity, source_identity)
+            ):
                 raise CatalogPersistenceError("catalog publication failed")
+            _atomic_exchange_catalog_entries(
+                root_descriptor, temporary_name, "catalog.duckdb"
+            )
+            exchanged = True
         else:
             _assert_catalog_source_unchanged(root_descriptor, None)
-
-        os.link(
-            temporary_name,
-            "catalog.duckdb",
-            src_dir_fd=root_descriptor,
-            dst_dir_fd=root_descriptor,
-            follow_symlinks=False,
-        )
+            os.link(
+                temporary_name,
+                "catalog.duckdb",
+                src_dir_fd=root_descriptor,
+                dst_dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
         published_identity = _catalog_identity(os.fstat(temporary_descriptor))
         entry_identity = _catalog_identity(
             os.stat(
@@ -1953,6 +2430,13 @@ def _publish_catalog_entry_conditionally(
         if entry_identity != published_identity:
             raise CatalogPersistenceError("catalog publication failed")
         if expected_source is not None:
+            replaced_identity = _catalog_identity(
+                os.stat(
+                    temporary_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            )
             retained_identity = _catalog_identity(
                 os.stat(
                     quarantine_name,
@@ -1960,31 +2444,82 @@ def _publish_catalog_entry_conditionally(
                     follow_symlinks=False,
                 )
             )
-            if not _catalog_identity_survives_rename(
-                retained_identity, expected_source
+            if not all(
+                _catalog_identity_survives_rename(value, expected_source)
+                for value in (replaced_identity, retained_identity)
             ):
                 raise CatalogPersistenceError("catalog publication failed")
             os.unlink(quarantine_name, dir_fd=root_descriptor)
-            quarantined = False
+            retained = False
         os.unlink(temporary_name, dir_fd=root_descriptor)
     except Exception:
-        if quarantined:
-            _restore_catalog_quarantine(root_descriptor, quarantine_name)
+        if exchanged:
+            with suppress(Exception):
+                _atomic_exchange_catalog_entries(
+                    root_descriptor, temporary_name, "catalog.duckdb"
+                )
+                exchanged = False
+        if retained:
+            with suppress(Exception):
+                canonical = _catalog_identity(
+                    os.stat(
+                        "catalog.duckdb",
+                        dir_fd=root_descriptor,
+                        follow_symlinks=False,
+                    )
+                )
+                retained_identity = _catalog_identity(
+                    os.stat(
+                        quarantine_name,
+                        dir_fd=root_descriptor,
+                        follow_symlinks=False,
+                    )
+                )
+                if canonical == retained_identity:
+                    os.unlink(quarantine_name, dir_fd=root_descriptor)
         raise
 
 
-def _restore_catalog_quarantine(root_descriptor: int, quarantine_name: str) -> None:
-    try:
-        os.link(
-            quarantine_name,
-            "catalog.duckdb",
-            src_dir_fd=root_descriptor,
-            dst_dir_fd=root_descriptor,
-            follow_symlinks=False,
+def _atomic_exchange_catalog_entries(
+    root_descriptor: int, left_name: str, right_name: str
+) -> None:
+    """Atomically exchange two catalog entries without an absent-name window."""
+    library = ctypes.CDLL(None, use_errno=True)
+    exchange = getattr(library, "renameatx_np", None)
+    if exchange is None:
+        exchange = getattr(library, "renameat2", None)
+    if exchange is None:
+        raise CatalogPersistenceError("catalog publication failed")
+    exchange.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    exchange.restype = ctypes.c_int
+    if (
+        exchange(
+            root_descriptor,
+            os.fsencode(left_name),
+            root_descriptor,
+            os.fsencode(right_name),
+            2,
         )
-    except FileExistsError:
-        return
-    os.unlink(quarantine_name, dir_fd=root_descriptor)
+        != 0
+    ):
+        raise CatalogPersistenceError("catalog publication failed")
+
+
+def _unlink_catalog_entry_if_descriptor_matches(
+    root_descriptor: int, entry_name: str, descriptor: int
+) -> None:
+    expected = _catalog_identity(os.fstat(descriptor))
+    actual = _catalog_identity(
+        os.stat(entry_name, dir_fd=root_descriptor, follow_symlinks=False)
+    )
+    if actual == expected:
+        os.unlink(entry_name, dir_fd=root_descriptor)
 
 
 def _catalog_identity_survives_rename(

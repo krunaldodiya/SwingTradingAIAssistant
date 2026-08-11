@@ -223,7 +223,7 @@ class ExistingCoverageAdmissionV1:
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
             )
-        acquired = StorageRootLease.try_acquire_existing(root)
+        acquired = StorageRootLease.try_admit_read_existing(root)
         if acquired.outcome is not LeaseOutcome.ACQUIRED or acquired.lease is None:
             raise CoverageEvaluationFailureV1(
                 PublicCommandStatusV1.UNAVAILABLE,
@@ -240,7 +240,7 @@ class ExistingCoverageAdmissionV1:
         if not self._live or root != self._root:
             raise RuntimeError("coverage admission unavailable")
         try:
-            with self._lease.root_operation(self._root) as operation:
+            with self._lease.read_operation(self._root) as operation:
                 operation.ensure_live()
         except Exception:
             raise RuntimeError("coverage admission unavailable") from None
@@ -406,9 +406,16 @@ def _report(
         (
             item.coverage_state
             for item in months
-            if item.coverage_state is not CoverageStateV1.VERIFIED
+            if item.coverage_state
+            not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
         ),
-        CoverageStateV1.VERIFIED,
+        (
+            CoverageStateV1.PROVISIONAL
+            if any(
+                item.coverage_state is CoverageStateV1.PROVISIONAL for item in months
+            )
+            else CoverageStateV1.VERIFIED
+        ),
     )
     counts = {
         state: sum(item.coverage_state is state for item in months)
@@ -427,15 +434,17 @@ def _report(
         counts[CoverageStateV1.CORRUPT],
         counts[CoverageStateV1.SCHEDULE_UNPROVEN],
         months,
+        counts[CoverageStateV1.PROVISIONAL],
     )
-    if overall is CoverageStateV1.VERIFIED:
+    if overall in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}:
         return PublicCommandReportV1(
             "v1", "coverage", PublicCommandStatusV1.SUCCEEDED, None, 0, payload
         )
     affected = tuple(
         item.month
         for item in months
-        if item.coverage_state is not CoverageStateV1.VERIFIED
+        if item.coverage_state
+        not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
     )
     failure = PublicFailureV1(
         PublicFailureCodeV1.COVERAGE_INSUFFICIENT, None, None, None, None, affected
@@ -829,7 +838,7 @@ def _open_verified_partition(
     parent: int | None = None
     file_descriptor: int | None = None
     try:
-        with lease.root_operation(root) as operation:
+        with lease.read_operation(root) as operation:
             try:
                 parent, file_descriptor = _open_partition_descriptor(
                     operation.descriptor, selection.canonical_path
@@ -885,7 +894,7 @@ def _read_partition(
     parent: int | None = None
     file_descriptor: int | None = None
     try:
-        with lease.root_operation(root) as operation:
+        with lease.read_operation(root) as operation:
             parent, file_descriptor = _open_partition_descriptor(
                 operation.descriptor, relative_path
             )
@@ -917,6 +926,13 @@ def _read_partition(
         for candidate in (file_descriptor, parent):
             if candidate is not None:
                 os.close(candidate)
+
+
+def read_partition_under_lease(
+    root: Path, lease: StorageRootLease, relative_path: str
+) -> tuple[str, tuple[CanonicalCandle, ...]]:
+    """Read one catalog-owned Parquet object through the shared bounded boundary."""
+    return _read_partition(root, lease, relative_path)
 
 
 def _open_partition_descriptor(

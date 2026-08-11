@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
@@ -24,6 +25,8 @@ from .instruments import Instrument
 from .preview_admission import PreviewAdmissionPolicyV1
 from .schedule_evidence import (
     MAX_SCHEDULE_BYTES,
+    SCHEDULE_SCHEMA_VERSION_V2,
+    SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleEvidenceStore,
     ScheduleOutcome,
@@ -82,7 +85,8 @@ class AuthoritativeScheduleInputV1:
     def __post_init__(self) -> None:
         if (
             type(self.schedule) is not ExpectedSessionSchedule
-            or self.schedule.schema_version != 2
+            or self.schedule.schema_version
+            not in {SCHEDULE_SCHEMA_VERSION_V2, SCHEDULE_SCHEMA_VERSION_V3}
             or type(self.canonical_bytes) is not bytes
             or canonical_schedule_bytes(self.schedule) != self.canonical_bytes
         ):
@@ -212,7 +216,13 @@ class DownloadPreparationServiceV1:
     def prepare(
         self, request: DownloadPreparationRequestV1
     ) -> DownloadPreparationReportV1:
-        return self._prepare(request, None)
+        return self._prepare(request, None, _validate_schedule_input)
+
+    def prepare_open_month(
+        self, request: DownloadPreparationRequestV1
+    ) -> DownloadPreparationReportV1:
+        """Prepare one current-month request from exact v3 schedule evidence."""
+        return self._prepare(request, None, _validate_open_schedule_input)
 
     def prepare_under_lease(
         self, request: DownloadPreparationRequestV1, lease: StorageRootLease
@@ -223,12 +233,24 @@ class DownloadPreparationServiceV1:
                 PreparationOutcomeV1.UNAVAILABLE,
                 PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
             )
-        return self._prepare(request, lease)
+        return self._prepare(request, lease, _validate_schedule_input)
+
+    def prepare_open_month_under_lease(
+        self, request: DownloadPreparationRequestV1, lease: StorageRootLease
+    ) -> DownloadPreparationReportV1:
+        """Prepare a current month while a caller-owned root lease stays live."""
+        if type(lease) is not StorageRootLease:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
+        return self._prepare(request, lease, _validate_open_schedule_input)
 
     def _prepare(
         self,
         request: DownloadPreparationRequestV1,
         supplied_lease: StorageRootLease | None,
+        schedule_validator: Callable[[object, DownloadPreparationRequestV1], None],
     ) -> DownloadPreparationReportV1:
         if type(request) is not DownloadPreparationRequestV1:
             return _failure(
@@ -242,7 +264,7 @@ class DownloadPreparationServiceV1:
             )
         try:
             supplied = self._schedule_source.load()
-            _validate_schedule_input(supplied, request)
+            schedule_validator(supplied, request)
         except Exception:
             return _failure(
                 PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
@@ -384,6 +406,45 @@ def _validate_schedule_input(
         or supplied.schedule.as_of > request.invocation_time
     ):
         raise ValueError
+
+
+def _validate_open_schedule_input(
+    supplied: object, request: DownloadPreparationRequestV1
+) -> None:
+    if type(supplied) is not AuthoritativeScheduleInputV1:
+        raise ValueError
+    schedule = supplied.schedule
+    local_date = request.invocation_time.astimezone(_IST).date()
+    month_start = date(local_date.year, local_date.month, 1)
+    if (
+        schedule.schema_version != SCHEDULE_SCHEMA_VERSION_V3
+        or canonical_schedule_bytes(schedule) != supplied.canonical_bytes
+        or request.from_date < month_start
+        or request.to_date > local_date
+        or (request.from_date.year, request.from_date.month)
+        != (local_date.year, local_date.month)
+        or (request.to_date.year, request.to_date.month)
+        != (local_date.year, local_date.month)
+        or not _schedule_classifies_range(schedule, month_start, request.to_date)
+        or schedule.as_of > request.invocation_time
+    ):
+        raise ValueError
+
+
+def _schedule_classifies_range(
+    schedule: ExpectedSessionSchedule, covered_from: date, covered_to: date
+) -> bool:
+    if schedule.covered_from != covered_from or schedule.covered_to != covered_to:
+        return False
+    classified = {value.trade_date for value in schedule.sessions} | {
+        value.trade_date for value in schedule.closures
+    }
+    current = covered_from
+    while current <= covered_to:
+        if current not in classified:
+            return False
+        current += timedelta(days=1)
+    return True
 
 
 def _failure(

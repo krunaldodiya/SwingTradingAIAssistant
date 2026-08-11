@@ -20,6 +20,7 @@ from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
 
 SCHEDULE_SCHEMA_VERSION_V1: Final = 1
 SCHEDULE_SCHEMA_VERSION_V2: Final = 2
+SCHEDULE_SCHEMA_VERSION_V3: Final = 3
 SCHEDULE_SCHEMA_VERSION: Final = SCHEDULE_SCHEMA_VERSION_V1
 MAX_SCHEDULE_BYTES: Final = 1_000_000
 _TIMEZONE_NAME: Final = "Asia/Kolkata"
@@ -123,7 +124,11 @@ class ExpectedSessionSchedule:
         if (
             type(self.schema_version) is not int
             or self.schema_version
-            not in {SCHEDULE_SCHEMA_VERSION_V1, SCHEDULE_SCHEMA_VERSION_V2}
+            not in {
+                SCHEDULE_SCHEMA_VERSION_V1,
+                SCHEDULE_SCHEMA_VERSION_V2,
+                SCHEDULE_SCHEMA_VERSION_V3,
+            }
             or not _is_nonempty_ascii(self.source)
             or not _is_nonempty_ascii(self.source_release)
             or type(self.as_of) is not datetime
@@ -139,7 +144,8 @@ class ExpectedSessionSchedule:
             or (self.schema_version == SCHEDULE_SCHEMA_VERSION_V1 and self.closures)
             or (self.schema_version == SCHEDULE_SCHEMA_VERSION_V1 and not self.sessions)
             or (
-                self.schema_version == SCHEDULE_SCHEMA_VERSION_V2
+                self.schema_version
+                in {SCHEDULE_SCHEMA_VERSION_V2, SCHEDULE_SCHEMA_VERSION_V3}
                 and not (self.sessions or self.closures)
             )
         ):
@@ -160,7 +166,10 @@ class ExpectedSessionSchedule:
                 )
             ):
                 raise ValueError("invalid expected session schedule")
-            if session.close_at > as_of:
+            if session.close_at > as_of and not (
+                self.schema_version == SCHEDULE_SCHEMA_VERSION_V3
+                and session.trade_date == as_of.astimezone(_IST).date()
+            ):
                 raise ValueError("invalid expected session schedule")
             seen_dates.add(session.trade_date)
             previous = session
@@ -275,7 +284,12 @@ class ScheduleEvidenceStore:
             if supplied_bytes is not None and len(supplied_bytes) > MAX_SCHEDULE_BYTES:
                 raise ValueError
             relative_path = f"{_RELATIVE_PREFIX}{digest}.json"
-            with self._lease.root_operation(target_root) as operation:
+            authority = (
+                self._lease.read_operation
+                if supplied_bytes is None
+                else self._lease.root_operation
+            )
+            with authority(target_root) as operation:
                 parent_fd = _open_parent(operation, create=supplied_bytes is not None)
                 if parent_fd is None:
                     raise ValueError
@@ -351,7 +365,10 @@ def canonical_schedule_bytes(schedule: ExpectedSessionSchedule) -> bytes:
             for session in schedule.sessions
         ],
     }
-    if schedule.schema_version == SCHEDULE_SCHEMA_VERSION_V2:
+    if schedule.schema_version in {
+        SCHEDULE_SCHEMA_VERSION_V2,
+        SCHEDULE_SCHEMA_VERSION_V3,
+    }:
         value["closures"] = [
             {
                 "trade_date": _format_date(closure.trade_date),
@@ -456,12 +473,19 @@ def _validated_schema_version(value: dict[str, object]) -> int:
         "covered_to",
         "sessions",
     }
-    if schema_version == SCHEDULE_SCHEMA_VERSION_V2:
+    if schema_version in {
+        SCHEDULE_SCHEMA_VERSION_V2,
+        SCHEDULE_SCHEMA_VERSION_V3,
+    }:
         required.add("closures")
     if (
         type(schema_version) is not int
         or schema_version
-        not in {SCHEDULE_SCHEMA_VERSION_V1, SCHEDULE_SCHEMA_VERSION_V2}
+        not in {
+            SCHEDULE_SCHEMA_VERSION_V1,
+            SCHEDULE_SCHEMA_VERSION_V2,
+            SCHEDULE_SCHEMA_VERSION_V3,
+        }
         or set(value) != required
     ):
         raise ValueError

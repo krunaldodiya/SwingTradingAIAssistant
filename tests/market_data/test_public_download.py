@@ -30,11 +30,24 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
 )
+from swing_trading_ai_assistant.market_data.open_month_download import (
+    OpenMonthDownloadFailureCodeV1,
+    OpenMonthDownloadOutcomeV1,
+    OpenMonthDownloadReportV1,
+)
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    provisional_partition_relative_path,
+)
 from swing_trading_ai_assistant.market_data.partition_reconciliation import (
     RequestReason,
 )
+from swing_trading_ai_assistant.market_data.provisional_metadata import (
+    ProvisionalPartitionMetadataV1,
+)
 from swing_trading_ai_assistant.market_data.public_contract import (
     MAX_PUBLIC_JSON_BYTES_V1,
+    DownloadPayloadV1,
+    OpenMonthDownloadPayloadV1,
     PublicCommandReportV1,
     PublicCommandStatusV1,
     PublicDownloadRequestV1,
@@ -44,8 +57,12 @@ from swing_trading_ai_assistant.market_data.public_contract import (
     render_download_report_json,
 )
 from swing_trading_ai_assistant.market_data.public_download import (
+    CurrentAwareSingleSymbolDownloadServiceV1,
     SingleSymbolDownloadRequestV1,
     SingleSymbolDownloadServiceV1,
+    _combine_current_range_report,
+    _convert_open_month_report,
+    _open_month_attempts,
 )
 from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCommand,
@@ -367,6 +384,775 @@ def test_zero_request_repeat_preserves_zero_historical_attempts(tmp_path: Path) 
     assert report.payload is not None
     assert report.payload.skipped_count == 1
     assert report.payload.historical_attempt_count == 0
+
+
+class StaticPublicDownload:
+    def __init__(self, report) -> None:
+        self.report = report
+        self.requests: list[object] = []
+
+    def download(self, request: object):
+        self.requests.append(request)
+        return self.report
+
+
+class RaisingPublicDownload:
+    def download(self, request: object):
+        del request
+        raise RuntimeError("dependency failed")
+
+
+class SequenceClock:
+    def __init__(self, *values: object) -> None:
+        self._values = iter(values)
+
+    def now(self) -> object:
+        return next(self._values)
+
+
+def _open_metadata() -> ProvisionalPartitionMetadataV1:
+    plan = PlannedInstrumentMonth(
+        "upstox",
+        "NSE_EQ|INE002A01018",
+        "INE002A01018",
+        "RELIANCE",
+        "NSE",
+        "NSE_EQ",
+        "EQ",
+        "1m",
+        2026,
+        8,
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+    )
+    cutoff = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
+    schedule_digest = "d" * 64
+    return ProvisionalPartitionMetadataV1(
+        1,
+        plan.provider,
+        plan.instrument_key,
+        plan.security_id,
+        plan.symbol,
+        plan.exchange,
+        plan.segment,
+        plan.instrument_type,
+        plan.interval,
+        plan.year,
+        plan.month,
+        plan.from_date,
+        plan.to_date,
+        schedule_digest,
+        cutoff,
+        False,
+        datetime(2026, 8, 3, 3, 45, tzinfo=UTC),
+        cutoff,
+        1_000,
+        "e" * 64,
+        50_000,
+        provisional_partition_relative_path(plan, cutoff, schedule_digest),
+        "f" * 64,
+        datetime(2026, 8, 10, 3, 0, tzinfo=UTC),
+        datetime(2026, 8, 10, 4, 1, tzinfo=UTC),
+        1,
+        1,
+    )
+
+
+def test_current_month_routes_to_incremental_service_and_renders_cutoff(
+    tmp_path: Path,
+) -> None:
+    open_report = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    open_service = StaticPublicDownload(open_report)
+    closed_service = StaticPublicDownload(object())
+    service = CurrentAwareSingleSymbolDownloadServiceV1(
+        closed_service, open_service, clock=StaticClock()
+    )
+
+    report = service.download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert isinstance(report.payload, OpenMonthDownloadPayloadV1)
+    assert report.provider_attempt_count == 2
+    assert closed_service.requests == []
+    assert len(open_service.requests) == 1
+    decoded = json.loads(render_download_report_json(report))
+    assert decoded["payload"]["month"]["data_cutoff"] == ("2026-08-10T04:00:00.000000Z")
+    assert decoded["payload"]["month"]["session_complete"] is False
+
+
+def test_range_ending_today_combines_closed_and_open_month_evidence(
+    tmp_path: Path,
+) -> None:
+    closed_report = SingleSymbolDownloadServiceV1(
+        StaticPreparation(_prepared()),
+        StaticCoordinator(_ingestion_report()),
+        clock=StaticClock(),
+    ).download(_request(tmp_path))
+    open_report = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    closed_service = StaticPublicDownload(closed_report)
+    open_service = StaticPublicDownload(open_report)
+    service = CurrentAwareSingleSymbolDownloadServiceV1(
+        closed_service, open_service, clock=StaticClock()
+    )
+
+    report = service.download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert isinstance(report.payload, OpenMonthDownloadPayloadV1)
+    assert report.payload.request.from_date == date(2026, 7, 1)
+    assert tuple(month.month for month in report.payload.closed_months) == ("2026-07",)
+    assert report.payload.month.month == "2026-08"
+    assert report.provider_attempt_count == 4
+    assert closed_service.requests[0].to_date == date(2026, 7, 31)
+    assert open_service.requests[0].from_date == date(2026, 8, 1)
+
+
+def test_current_aware_download_rejects_invalid_and_future_requests(
+    tmp_path: Path,
+) -> None:
+    service = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(object()),
+        clock=StaticClock(),
+    )
+
+    invalid = service.download(object())
+    future = service.download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            tmp_path,
+        )
+    )
+
+    assert invalid.status is PublicCommandStatusV1.REJECTED
+    assert future.status is PublicCommandStatusV1.REJECTED
+
+
+def test_current_aware_download_fails_closed_on_invalid_or_reversed_clock(
+    tmp_path: Path,
+) -> None:
+    source = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    request = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+
+    invalid = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=NaiveClock(),
+    ).download(request)
+    reversed_clock = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=SequenceClock(NOW, NOW - timedelta(seconds=1)),
+    ).download(request)
+
+    assert invalid.status is PublicCommandStatusV1.FAILED
+    assert reversed_clock.status is PublicCommandStatusV1.FAILED
+    assert reversed_clock.provider_attempt_count == 2
+
+
+def test_current_aware_download_fails_closed_on_dependency_exceptions(
+    tmp_path: Path,
+) -> None:
+    historical = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        tmp_path,
+    )
+    current = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+    spanning = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+
+    closed_failure = CurrentAwareSingleSymbolDownloadServiceV1(
+        RaisingPublicDownload(), StaticPublicDownload(object()), clock=StaticClock()
+    ).download(historical)
+    open_failure = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()), RaisingPublicDownload(), clock=StaticClock()
+    ).download(current)
+    spanning_failure = CurrentAwareSingleSymbolDownloadServiceV1(
+        RaisingPublicDownload(), StaticPublicDownload(object()), clock=StaticClock()
+    ).download(spanning)
+
+    assert closed_failure.status is PublicCommandStatusV1.FAILED
+    assert open_failure.status is PublicCommandStatusV1.FAILED
+    assert spanning_failure.status is PublicCommandStatusV1.FAILED
+
+
+def test_current_aware_download_rejects_malformed_closed_success(
+    tmp_path: Path,
+) -> None:
+    service = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(object()),
+        clock=StaticClock(),
+    )
+
+    report = service.download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.INGESTION_FAILED
+
+
+@pytest.mark.parametrize(
+    ("source_code", "status", "public_code"),
+    (
+        (
+            OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
+            PublicCommandStatusV1.REJECTED,
+            PublicFailureCodeV1.INVALID_INPUT,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.STORAGE_UNAVAILABLE,
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.CREDENTIALS_UNAVAILABLE,
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.CREDENTIALS_UNAVAILABLE,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.INTRADAY_UNAVAILABLE,
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED,
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+        (
+            OpenMonthDownloadFailureCodeV1.CATALOG_UNAVAILABLE,
+            PublicCommandStatusV1.FAILED,
+            PublicFailureCodeV1.INGESTION_FAILED,
+        ),
+    ),
+)
+def test_every_open_month_failure_has_a_stable_public_mapping(
+    tmp_path: Path,
+    source_code: OpenMonthDownloadFailureCodeV1,
+    status: PublicCommandStatusV1,
+    public_code: PublicFailureCodeV1,
+) -> None:
+    source = OpenMonthDownloadReportV1(
+        (
+            OpenMonthDownloadOutcomeV1.REJECTED
+            if source_code is OpenMonthDownloadFailureCodeV1.INVALID_INPUT
+            else (
+                OpenMonthDownloadOutcomeV1.UNAVAILABLE
+                if status is PublicCommandStatusV1.UNAVAILABLE
+                else OpenMonthDownloadOutcomeV1.FAILED
+            )
+        ),
+        source_code,
+        None,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    service = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=StaticClock(),
+    )
+
+    report = service.download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is status
+    assert report.failure is not None
+    assert report.failure.code is public_code
+
+
+def test_open_month_partial_report_retains_available_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.PARTIAL,
+        OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+        _open_metadata(),
+        1,
+        1,
+        1,
+        2,
+        1,
+    )
+    report = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=StaticClock(),
+    ).download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.PARTIAL
+    assert isinstance(report.payload, OpenMonthDownloadPayloadV1)
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.COVERAGE_INSUFFICIENT
+
+
+def test_open_month_report_and_metadata_mutations_fail_closed(tmp_path: Path) -> None:
+    request = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+    source = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    object.__setattr__(source, "snapshot_attempt_count", "secret")
+    malformed = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=StaticClock(),
+    ).download(request)
+
+    missing_metadata = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    object.__setattr__(missing_metadata, "metadata", None)
+    missing = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(missing_metadata),
+        clock=StaticClock(),
+    ).download(request)
+
+    wrong_metadata = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    object.__setattr__(wrong_metadata, "metadata", object())
+    wrong = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(wrong_metadata),
+        clock=StaticClock(),
+    ).download(request)
+
+    assert malformed.status is PublicCommandStatusV1.FAILED
+    assert malformed.provider_attempt_count == 0
+    assert missing.status is PublicCommandStatusV1.FAILED
+    assert missing.failure is not None
+    assert missing.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert wrong.status is PublicCommandStatusV1.FAILED
+
+
+def test_open_month_payload_guards_reject_inconsistent_evidence(
+    tmp_path: Path,
+) -> None:
+    source = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    report = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(object()),
+        StaticPublicDownload(source),
+        clock=StaticClock(),
+    ).download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+    assert isinstance(report.payload, OpenMonthDownloadPayloadV1)
+    payload = report.payload
+
+    for mutation in (
+        {"completed_at": payload.started_at - timedelta(seconds=1)},
+        {"instrument_snapshot_digest_sha256": "bad"},
+        {"intraday_attempt_count": 2},
+        {"closed_instrument_snapshot_attempt_count": 1},
+    ):
+        with pytest.raises(ValueError):
+            replace(payload, **mutation)
+
+    with pytest.raises(ValueError):
+        replace(payload.month, data_cutoff=None)
+    with pytest.raises(ValueError):
+        replace(
+            payload.month, data_cutoff=payload.month.data_cutoff, session_complete=None
+        )
+    with pytest.raises(ValueError):
+        replace(payload.month, coverage_state=contract_module.CoverageStateV1.VERIFIED)
+
+    object.__setattr__(payload, "request", object())
+    with pytest.raises(ValueError, match="invalid open-month download payload"):
+        replace(payload)
+
+
+def test_provisional_only_fields_and_open_payload_serializer_are_closed() -> None:
+    verified = contract_module.PublicCoverageMonthV1(
+        "2026-07",
+        contract_module.CoverageStateV1.VERIFIED,
+        datetime(2026, 7, 1, 3, 45, tzinfo=UTC),
+        datetime(2026, 7, 31, 9, 59, tzinfo=UTC),
+        1,
+        DIGEST,
+        1,
+        f"nse-equity-month@v1+sessions-sha256:{DIGEST}",
+        DIGEST,
+        None,
+        ValidationReason.NONE,
+    )
+
+    with pytest.raises(ValueError, match="invalid public coverage month"):
+        replace(verified, data_cutoff=verified.actual_to_ts)
+    with pytest.raises(ValueError):
+        contract_module._payload_value(object())  # type: ignore[arg-type]
+
+
+def test_open_month_conversion_defensively_rejects_unvalidated_source_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+    assert _open_month_attempts(object()) == 0
+
+    missing = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    object.__setattr__(missing, "metadata", None)
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.public_download._revalidate_open_month_report",
+        lambda _source: missing,
+    )
+    missing_report = _convert_open_month_report(request, NOW, NOW, missing)
+    assert missing_report.failure is not None
+    assert missing_report.failure.code is PublicFailureCodeV1.INGESTION_FAILED
+
+    malformed = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.SUCCEEDED,
+        OpenMonthDownloadFailureCodeV1.NONE,
+        _open_metadata(),
+        0,
+        1,
+        1,
+        2,
+        0,
+    )
+    assert malformed.metadata is not None
+    object.__setattr__(malformed.metadata, "checksum_sha256", "bad")
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.public_download._revalidate_open_month_report",
+        lambda _source: malformed,
+    )
+    malformed_report = _convert_open_month_report(request, NOW, NOW, malformed)
+    assert malformed_report.failure is not None
+    assert malformed_report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+
+
+def test_spanning_download_propagates_open_failure_with_closed_attempts(
+    tmp_path: Path,
+) -> None:
+    closed_report = SingleSymbolDownloadServiceV1(
+        StaticPreparation(_prepared()),
+        StaticCoordinator(_ingestion_report()),
+        clock=StaticClock(),
+    ).download(_request(tmp_path))
+    open_failure = OpenMonthDownloadReportV1(
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        OpenMonthDownloadFailureCodeV1.CREDENTIALS_UNAVAILABLE,
+        None,
+        1,
+        0,
+        0,
+        0,
+        0,
+    )
+
+    report = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(closed_report),
+        StaticPublicDownload(open_failure),
+        clock=StaticClock(),
+    ).download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.UNAVAILABLE
+    assert report.provider_attempt_count == 3
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.CREDENTIALS_UNAVAILABLE
+
+
+def test_spanning_download_rejects_closed_request_mismatch(tmp_path: Path) -> None:
+    closed_report = SingleSymbolDownloadServiceV1(
+        StaticPreparation(_prepared()),
+        StaticCoordinator(_ingestion_report()),
+        clock=StaticClock(),
+    ).download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 2),
+            date(2026, 7, 31),
+            tmp_path,
+        )
+    )
+    report = CurrentAwareSingleSymbolDownloadServiceV1(
+        StaticPublicDownload(closed_report),
+        StaticPublicDownload(object()),
+        clock=StaticClock(),
+    ).download(
+        SingleSymbolDownloadRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 7, 1),
+            date(2026, 8, 10),
+            tmp_path,
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.INGESTION_FAILED
+
+
+def test_spanning_report_combiner_fails_closed_on_invalid_public_report(
+    tmp_path: Path,
+) -> None:
+    closed_report = SingleSymbolDownloadServiceV1(
+        StaticPreparation(_prepared()),
+        StaticCoordinator(_ingestion_report()),
+        clock=StaticClock(),
+    ).download(_request(tmp_path))
+    assert type(closed_report.payload) is DownloadPayloadV1
+    request = SingleSymbolDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 1),
+        date(2026, 8, 10),
+        tmp_path,
+    )
+
+    wrong_type = _combine_current_range_report(
+        request,
+        closed_report.payload,
+        closed_report.provider_attempt_count,
+        object(),  # type: ignore[arg-type]
+    )
+    mutated = PublicCommandReportV1(
+        "v1",
+        "download",
+        PublicCommandStatusV1.SUCCEEDED,
+        None,
+        closed_report.provider_attempt_count,
+        closed_report.payload,
+    )
+    object.__setattr__(mutated, "payload", closed_report.payload)
+    wrong_payload = _combine_current_range_report(
+        request,
+        closed_report.payload,
+        closed_report.provider_attempt_count,
+        mutated,
+    )
+
+    assert wrong_type.status is PublicCommandStatusV1.FAILED
+    assert wrong_payload.status is PublicCommandStatusV1.FAILED
+
+
+def test_cli_provider_session_is_lazy_and_maps_authentication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = object()
+
+    class TokenProvider:
+        def get_access_token(self) -> object:
+            return token
+
+    class RaisingTokenProvider:
+        def get_access_token(self) -> object:
+            raise RuntimeError("secret")
+
+    class Client:
+        def __init__(self) -> None:
+            self.values: list[tuple[object, object]] = []
+
+        def fetch(self, request: object, supplied_token: object) -> str:
+            self.values.append((request, supplied_token))
+            return "response"
+
+    client = Client()
+    factory = cli_module._HistoricalProviderSessionFactory(client, TokenProvider())
+    session = factory.open()
+    assert client.values == []
+    assert session.fetch("request") == "response"  # type: ignore[arg-type]
+    assert client.values == [("request", token)]
+
+    failing = cli_module._HistoricalProviderSessionFactory(
+        client, RaisingTokenProvider()
+    )
+    with pytest.raises(cli_module.ProviderSessionAuthenticationError):
+        failing.open()
+
+    monkeypatch.setattr(
+        cli_module,
+        "EnvironmentAccessTokenProvider",
+        TokenProvider,
+    )
+    assert cli_module._LazyEnvironmentAccessTokenProvider().get_access_token() is token
+
+
+def test_cli_default_services_are_current_aware(tmp_path: Path) -> None:
+    download = cli_module._default_download_service(
+        tmp_path / "current.json", tmp_path / "closed.json"
+    )
+    coverage = cli_module._default_coverage_service()
+    query = cli_module._default_query_service()
+
+    assert isinstance(download, CurrentAwareSingleSymbolDownloadServiceV1)
+    assert type(coverage).__name__ == "CurrentAwareCoverageServiceV1"
+    assert type(query).__name__ == "CurrentAwareQueryServiceV1"
 
 
 @pytest.mark.parametrize(
@@ -1313,6 +2099,7 @@ def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("UPSTOX_ACCESS_TOKEN", raising=False)
     catalog = gzip.compress(
         json.dumps(
             [

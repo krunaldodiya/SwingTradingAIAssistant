@@ -2,6 +2,11 @@
 
 Status: **APPROVED IMPLEMENTATION CONTRACT**
 
+This document remains authoritative for immutable closed months. The additive
+[current-month contract](06-current-month-incremental-data-contract.md) owns
+`PROVISIONAL` snapshots, current-day routing, and closed-plus-current report
+composition; it does not weaken or reinterpret the rules below.
+
 Depends on [Plan 01](01-data-foundation-and-upstox-ingestion.md) and
 [Plan 02](02-request-minimal-ingestion-orchestration.md). The rejected ARK-112
 candidate is superseded by this contract; it preserves the Sprint 3 product

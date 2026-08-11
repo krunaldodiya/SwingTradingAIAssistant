@@ -12,6 +12,7 @@ import pytest
 import swing_trading_ai_assistant.market_data.schedule_evidence as schedule_module
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
+    SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
     ScheduleEvidenceStore,
@@ -19,6 +20,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleOutcome,
     ScheduleSession,
     canonical_schedule_bytes,
+    parse_canonical_schedule_bytes,
     schedule_digest,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
@@ -80,6 +82,82 @@ def test_schedule_serialization_is_exact_and_digest_is_lowercase_sha256() -> Non
     assert canonical_schedule_bytes(schedule) == expected
     assert schedule_digest(schedule) == hashlib.sha256(expected).hexdigest()
     assert schedule_digest(schedule) == schedule_digest(schedule).lower()
+
+
+def test_v3_retains_and_round_trips_one_explicit_planned_current_session() -> None:
+    schedule = ExpectedSessionSchedule(
+        schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+        source="authoritative-nse-calendar",
+        source_release="2026-08-11T09:00:00+05:30",
+        as_of=datetime(2026, 8, 11, 3, 30, tzinfo=UTC),
+        timezone="Asia/Kolkata",
+        covered_from=date(2026, 8, 10),
+        covered_to=date(2026, 8, 11),
+        sessions=(
+            ScheduleSession(
+                date(2026, 8, 10),
+                datetime(2026, 8, 10, 3, 45, tzinfo=UTC),
+                datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
+                "REGULAR",
+            ),
+            ScheduleSession(
+                date(2026, 8, 11),
+                datetime(2026, 8, 11, 3, 45, tzinfo=UTC),
+                datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
+                "REGULAR",
+            ),
+        ),
+        closures=(),
+    )
+
+    encoded = canonical_schedule_bytes(schedule)
+
+    assert parse_canonical_schedule_bytes(encoded) == schedule
+    assert b'"schema_version":3' in encoded
+
+
+def test_v2_still_rejects_a_session_that_has_not_closed_at_as_of() -> None:
+    with pytest.raises(ValueError):
+        ExpectedSessionSchedule(
+            schema_version=2,
+            source="authoritative-nse-calendar",
+            source_release="release",
+            as_of=datetime(2026, 8, 11, 3, 30, tzinfo=UTC),
+            timezone="Asia/Kolkata",
+            covered_from=date(2026, 8, 11),
+            covered_to=date(2026, 8, 11),
+            sessions=(
+                ScheduleSession(
+                    date(2026, 8, 11),
+                    datetime(2026, 8, 11, 3, 45, tzinfo=UTC),
+                    datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
+                    "REGULAR",
+                ),
+            ),
+            closures=(),
+        )
+
+
+def test_v3_rejects_a_future_dated_session() -> None:
+    with pytest.raises(ValueError):
+        ExpectedSessionSchedule(
+            schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+            source="authoritative-nse-calendar",
+            source_release="release",
+            as_of=datetime(2026, 8, 11, 3, 30, tzinfo=UTC),
+            timezone="Asia/Kolkata",
+            covered_from=date(2026, 8, 10),
+            covered_to=date(2026, 8, 12),
+            sessions=(
+                ScheduleSession(
+                    date(2026, 8, 12),
+                    datetime(2026, 8, 12, 3, 45, tzinfo=UTC),
+                    datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
+                    "FUTURE",
+                ),
+            ),
+            closures=(),
+        )
 
 
 def test_schedule_models_and_success_result_are_immutable() -> None:

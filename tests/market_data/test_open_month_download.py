@@ -1,0 +1,534 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import swing_trading_ai_assistant.market_data.open_month_download as subject
+from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
+from swing_trading_ai_assistant.market_data.download_preparation import (
+    DownloadPreparationReportV1,
+    PreparationFailureCodeV1,
+    PreparationOutcomeV1,
+    PreparedDownloadV1,
+)
+from swing_trading_ai_assistant.market_data.historical import HistoricalResponse
+from swing_trading_ai_assistant.market_data.instruments import Instrument
+from swing_trading_ai_assistant.market_data.intraday import IntradayResponse
+from swing_trading_ai_assistant.market_data.open_month_download import (
+    OpenMonthDownloadOutcomeV1,
+    OpenMonthDownloadRequestV1,
+    OpenMonthDownloadServiceV1,
+)
+from swing_trading_ai_assistant.market_data.provisional_validation import (
+    ProvisionalValidationV1,
+)
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    SCHEDULE_SCHEMA_VERSION_V3,
+    ExpectedSessionSchedule,
+    ScheduleClosure,
+    ScheduleSession,
+    canonical_schedule_bytes,
+    schedule_digest,
+)
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseFailureCode,
+    LeaseResult,
+)
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _local(day: int, hour: int, minute: int, second: int = 0) -> datetime:
+    return datetime(2026, 8, day, hour, minute, second, tzinfo=IST)
+
+
+def _schedule() -> ExpectedSessionSchedule:
+    sessions = (
+        ScheduleSession(
+            date(2026, 8, 10), _local(10, 9, 15), _local(10, 9, 18), "TEST"
+        ),
+        ScheduleSession(
+            date(2026, 8, 11), _local(11, 9, 15), _local(11, 9, 20), "TEST"
+        ),
+    )
+    closures = tuple(
+        ScheduleClosure(date(2026, 8, day), "EXCHANGE_CLOSED") for day in range(1, 10)
+    )
+    return ExpectedSessionSchedule(
+        SCHEDULE_SCHEMA_VERSION_V3,
+        "authoritative-test-calendar",
+        "release-v3",
+        _local(11, 9, 0),
+        "Asia/Kolkata",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        sessions,
+        closures,
+    )
+
+
+def _raw(day: int, minute: int, *, close: float = 100.5) -> list[object]:
+    return [
+        _local(day, 9, minute).isoformat(),
+        100.0,
+        max(101.0, close),
+        99.0,
+        close,
+        10,
+        0,
+    ]
+
+
+class _Preparation:
+    def __init__(self) -> None:
+        schedule = _schedule()
+        self.prepared = PreparedDownloadV1(
+            schedule,
+            canonical_schedule_bytes(schedule),
+            schedule_digest(schedule),
+            Instrument(
+                "NSE_EQ|INE002A01018",
+                "INE002A01018",
+                "RELIANCE",
+                "NSE",
+                "NSE_EQ",
+                "EQ",
+                "INE002A01018",
+            ),
+            "a" * 64,
+            datetime(2026, 8, 11, 3, 0, tzinfo=UTC),
+            0,
+        )
+        self.calls = 0
+
+    def prepare_open_month(self, request):
+        del request
+        self.calls += 1
+        return DownloadPreparationReportV1(
+            PreparationOutcomeV1.SUCCEEDED,
+            PreparationFailureCodeV1.NONE,
+            self.prepared,
+            0,
+        )
+
+
+class _Historical:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self, request, token):
+        del request, token
+        self.calls += 1
+        return HistoricalResponse(200, [_raw(10, minute) for minute in (15, 16, 17)])
+
+
+class _Intraday:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self, request, token):
+        del request, token
+        self.calls += 1
+        return IntradayResponse(200, [_raw(11, minute) for minute in range(15, 20)])
+
+
+class _TokenProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get_access_token(self) -> AccessToken:
+        self.calls += 1
+        return AccessToken("test-token")
+
+
+class _Clock:
+    def __init__(self, now: datetime) -> None:
+        self.now_value = now
+
+    def now(self) -> datetime:
+        return self.now_value
+
+
+def _service(root: Path):
+    with DuckDBCatalog(root):
+        pass
+    preparation = _Preparation()
+    historical = _Historical()
+    intraday = _Intraday()
+    token = _TokenProvider()
+    clock = _Clock(_local(11, 9, 17, 30))
+    service = OpenMonthDownloadServiceV1(
+        preparation,
+        historical,
+        intraday,
+        token,
+        clock=clock,
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11), root
+    )
+    return service, request, clock, historical, intraday, token
+
+
+def test_first_open_month_download_persists_history_and_completed_current_bars(
+    tmp_path: Path,
+) -> None:
+    service, request, _, historical, intraday, token = _service(tmp_path)
+
+    report = service.download(request)
+
+    assert report.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert report.metadata is not None
+    assert report.metadata.row_count == 5
+    assert report.metadata.cutoff == _local(11, 9, 16).astimezone(UTC)
+    assert report.metadata.session_complete is False
+    assert report.appended_count == 5
+    assert (historical.calls, intraday.calls, token.calls) == (1, 1, 1)
+    assert (tmp_path / report.metadata.relative_path).is_file()
+
+
+def test_identical_cutoff_rerun_uses_only_local_evidence_and_zero_provider_calls(
+    tmp_path: Path,
+) -> None:
+    service, request, _, historical, intraday, token = _service(tmp_path)
+    first = service.download(request)
+    assert first.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+
+    repeated = service.download(request)
+
+    assert repeated.outcome is OpenMonthDownloadOutcomeV1.ALREADY_CURRENT
+    assert repeated.metadata == first.metadata
+    assert (historical.calls, intraday.calls, token.calls) == (1, 1, 1)
+
+
+def test_later_same_day_cutoff_fetches_only_intraday_and_appends_new_snapshot(
+    tmp_path: Path,
+) -> None:
+    service, request, clock, historical, intraday, token = _service(tmp_path)
+    first = service.download(request)
+    clock.now_value = _local(11, 9, 19, 30)
+
+    later = service.download(request)
+
+    assert later.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert later.metadata is not None and first.metadata is not None
+    assert later.metadata.cutoff == _local(11, 9, 18).astimezone(UTC)
+    assert later.metadata.row_count == 7
+    assert later.appended_count == 2
+    assert later.metadata.relative_path != first.metadata.relative_path
+    assert (historical.calls, intraday.calls, token.calls) == (1, 2, 2)
+    with DuckDBCatalog(tmp_path) as catalog:
+        assert len(catalog.list_provisional_partitions(later.metadata.plan)) == 2
+
+
+class _BrokenClock:
+    def now(self) -> datetime:
+        return datetime(2026, 8, 11, 9, 17, 30)
+
+
+class _RaisingPreparation:
+    def prepare_open_month(self, request: object) -> DownloadPreparationReportV1:
+        del request
+        raise RuntimeError
+
+
+class _UnavailablePreparation:
+    def prepare_open_month(self, request: object) -> DownloadPreparationReportV1:
+        del request
+        return DownloadPreparationReportV1(
+            PreparationOutcomeV1.UNAVAILABLE,
+            PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+            None,
+            1,
+        )
+
+
+class _RaisingToken:
+    def get_access_token(self) -> AccessToken:
+        raise RuntimeError
+
+
+def _assert_failure(report, outcome, code, *, snapshot=0, historical=0, intraday=0):
+    assert report.outcome is outcome
+    assert report.failure_code is code
+    assert report.metadata is None
+    assert report.snapshot_attempt_count == snapshot
+    assert report.historical_attempt_count == historical
+    assert report.intraday_attempt_count == intraday
+
+
+def test_rejects_wrong_request_and_naive_clock(tmp_path: Path) -> None:
+    service, request, _, *_ = _service(tmp_path)
+
+    _assert_failure(
+        service.download(object()),
+        OpenMonthDownloadOutcomeV1.REJECTED,
+        subject.OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
+    )
+    bad_clock_service = OpenMonthDownloadServiceV1(
+        _Preparation(),
+        _Historical(),
+        _Intraday(),
+        _TokenProvider(),
+        clock=_BrokenClock(),
+    )
+    _assert_failure(
+        bad_clock_service.download(request),
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
+    )
+
+
+def test_reports_preparation_exception_and_unavailable_snapshot(tmp_path: Path) -> None:
+    _, request, clock, *_ = _service(tmp_path)
+    exception_service = OpenMonthDownloadServiceV1(
+        _RaisingPreparation(), _Historical(), _Intraday(), _TokenProvider(), clock=clock
+    )
+    _assert_failure(
+        exception_service.download(request),
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
+    )
+    unavailable_service = OpenMonthDownloadServiceV1(
+        _UnavailablePreparation(),
+        _Historical(),
+        _Intraday(),
+        _TokenProvider(),
+        clock=clock,
+    )
+    _assert_failure(
+        unavailable_service.download(request),
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
+        snapshot=1,
+    )
+
+
+def test_rejects_bad_schedule_and_unavailable_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, request, _, *_ = _service(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            subject,
+            "open_month_schedule_from_evidence",
+            lambda value: (_ for _ in ()).throw(ValueError()),
+        )
+        _assert_failure(
+            service.download(request),
+            OpenMonthDownloadOutcomeV1.REJECTED,
+            subject.OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
+        )
+
+    service, request, _, *_ = _service(tmp_path)
+    monkeypatch.setattr(
+        subject.StorageRootLease,
+        "try_acquire",
+        lambda root: LeaseResult(
+            subject.LeaseOutcome.FAILED, LeaseFailureCode.STORAGE_UNSAFE, None
+        ),
+    )
+    _assert_failure(
+        service.download(request),
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.STORAGE_UNAVAILABLE,
+    )
+
+
+def test_provider_credentials_and_response_failures_are_stable(tmp_path: Path) -> None:
+    service, request, clock, historical, intraday, _ = _service(tmp_path)
+    credentials_service = OpenMonthDownloadServiceV1(
+        _Preparation(), historical, intraday, _RaisingToken(), clock=clock
+    )
+    _assert_failure(
+        credentials_service.download(request),
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.CREDENTIALS_UNAVAILABLE,
+    )
+
+    class _BadHistorical(_Historical):
+        def fetch(self, request, token):
+            del request, token
+            return HistoricalResponse(503, [])
+
+    historical_service = OpenMonthDownloadServiceV1(
+        _Preparation(), _BadHistorical(), intraday, _TokenProvider(), clock=clock
+    )
+    _assert_failure(
+        historical_service.download(request),
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
+        historical=1,
+    )
+
+    class _BadIntraday(_Intraday):
+        def fetch(self, request, token):
+            del request, token
+            return IntradayResponse(503, [])
+
+    intraday_service = OpenMonthDownloadServiceV1(
+        _Preparation(), historical, _BadIntraday(), _TokenProvider(), clock=clock
+    )
+    _assert_failure(
+        intraday_service.download(request),
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.INTRADAY_UNAVAILABLE,
+        historical=1,
+        intraday=1,
+    )
+
+
+def test_validation_and_catalog_failures_are_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, request, _, *_ = _service(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            subject,
+            "validate_provisional_advance",
+            lambda *args: (_ for _ in ()).throw(ValueError()),
+        )
+        _assert_failure(
+            service.download(request),
+            OpenMonthDownloadOutcomeV1.FAILED,
+            subject.OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+            historical=1,
+            intraday=1,
+        )
+
+    service, request, _, *_ = _service(tmp_path)
+    monkeypatch.setattr(
+        subject,
+        "metadata_from_publication",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError()),
+    )
+    _assert_failure(
+        service.download(request),
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.CATALOG_UNAVAILABLE,
+        historical=1,
+        intraday=1,
+    )
+
+
+def test_helper_boundaries_reject_bad_payloads_and_preserve_sources(
+    tmp_path: Path,
+) -> None:
+    service, request, clock, *_ = _service(tmp_path)
+    assert subject._now(_BrokenClock()) is None
+    assert subject._validated_preparation(object()) is None
+    assert subject._needs_history(
+        subject.open_month_schedule_from_evidence(_schedule()),
+        subject.plan_open_month(
+            request.from_date,
+            request.to_date,
+            subject.open_month_schedule_from_evidence(_schedule()),
+            clock.now(),
+        ),
+        (),
+    )
+    with pytest.raises(ValueError):
+        subject._canonical_rows(
+            HistoricalResponse(503, []),
+            _Preparation().prepared,
+            clock.now(),
+            intraday=False,
+        )
+    rows = subject._canonical_rows(
+        IntradayResponse(200, [_raw(11, 15)]),
+        _Preparation().prepared,
+        clock.now(),
+        intraday=True,
+    )
+    assert rows[0].source_version == "upstox-intraday-v3"
+
+
+def test_contract_guards_reject_invalid_requests_and_reports(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid open-month download request"):
+        OpenMonthDownloadRequestV1(
+            "NSE_EQ", "RELIANCE", date(2026, 8, 2), date(2026, 8, 1), tmp_path
+        )
+    with pytest.raises(ValueError, match="invalid open-month download report"):
+        subject.OpenMonthDownloadReportV1(
+            OpenMonthDownloadOutcomeV1.SUCCEEDED,
+            subject.OpenMonthDownloadFailureCodeV1.NONE,
+            None,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+
+
+def test_outer_lease_failure_and_empty_validation_are_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, request, _, *_ = _service(tmp_path)
+    monkeypatch.setattr(
+        service,
+        "_advance_under_lease",
+        lambda *args: (_ for _ in ()).throw(RuntimeError()),
+    )
+    _assert_failure(
+        service.download(request),
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED,
+    )
+
+    service, request, _, *_ = _service(tmp_path)
+    empty = ProvisionalValidationV1((), None, None, False, False, 3, 0, 0, "b" * 64)
+    monkeypatch.setattr(subject, "validate_provisional_advance", lambda *args: empty)
+    report = service.download(request)
+    _assert_failure(
+        report,
+        OpenMonthDownloadOutcomeV1.PARTIAL,
+        subject.OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+        historical=1,
+        intraday=1,
+    )
+    assert report.missing_count == 3
+
+
+def test_fetch_and_helper_noop_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, request, clock, *_ = _service(tmp_path)
+    schedule = subject.open_month_schedule_from_evidence(_schedule())
+    same_day = subject.plan_open_month(
+        date(2026, 8, 11), date(2026, 8, 11), schedule, clock.now()
+    )
+    batch = service._fetch_missing(
+        _Preparation().prepared, same_day, clock.now(), False, False
+    )
+    assert batch.historical_attempts == batch.intraday_attempts == 0
+    failure = service._fetch_missing(
+        _Preparation().prepared,
+        SimpleNamespace(historical_to=None),
+        clock.now(),
+        True,
+        False,
+    )
+    _assert_failure(
+        failure,
+        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
+        subject.OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
+        historical=1,
+    )
+    assert not subject._needs_history(schedule, SimpleNamespace(historical_to=None), ())
+    no_sessions = SimpleNamespace(sessions=())
+    has_history = SimpleNamespace(historical_to=date(2026, 8, 10))
+    assert not subject._needs_history(no_sessions, has_history, ())
+
+    report = _Preparation().prepare_open_month(object())
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            subject,
+            "replace",
+            lambda value, **kwargs: (_ for _ in ()).throw(ValueError()),
+        )
+        assert subject._validated_preparation(report) is None

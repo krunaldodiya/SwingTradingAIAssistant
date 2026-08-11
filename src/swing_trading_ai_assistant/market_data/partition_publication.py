@@ -24,10 +24,12 @@ from .parquet import (
     write_candles_parquet,
 )
 from .schemas import CANDLE_SCHEMA_VERSION, CanonicalCandle
+from .storage_root_lease import StorageRootLease
 
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _SAFE_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SAFE_PATH_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._=-]{0,127}\Z")
+_DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _READ_BUFFER_SIZE: Final = 64 * 1024
 _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _FINAL_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -87,7 +89,34 @@ class PublishedPartitionEvidence:
             raise ValueError("invalid published partition evidence")
 
 
-def publish_partition(  # noqa: C901
+@dataclass(frozen=True, slots=True)
+class PublishedProvisionalEvidence:
+    plan: PlannedInstrumentMonth
+    cutoff: datetime
+    schedule_digest: str
+    outcome: PublicationOutcome
+    canonical_path: str
+    checksum_sha256: str
+    candle_schema_version: int
+    row_count: int
+    actual_from_ts: datetime
+    actual_to_ts: datetime
+    byte_size: int
+
+    def __post_init__(self) -> None:
+        if not _valid_provisional_evidence(self):
+            raise ValueError("invalid published provisional evidence")
+
+
+@dataclass(frozen=True, slots=True)
+class _PublishedBytes:
+    outcome: PublicationOutcome
+    relative_path: str
+    checksum_sha256: str
+    byte_size: int
+
+
+def publish_partition(
     storage_root: Path, plan: PlannedInstrumentMonth, candles: Sequence[CanonicalCandle]
 ) -> PublishedPartitionEvidence:
     """Publish one partition without following untrusted path entries.
@@ -98,12 +127,108 @@ def publish_partition(  # noqa: C901
     validated_plan = _validated_plan(plan)
     rows = _validated_rows(candles, validated_plan)
     relative = _relative_path(validated_plan)
-    root_fd = _open_root(storage_root)
+    published = _publish_rows(storage_root, rows, relative)
+    return _evidence(
+        validated_plan,
+        published.outcome,
+        relative,
+        published.checksum_sha256,
+        rows,
+        published.byte_size,
+    )
+
+
+def publish_provisional_partition(
+    storage_root: Path,
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    candles: Sequence[CanonicalCandle],
+) -> PublishedProvisionalEvidence:
+    """Publish one immutable month-to-cutoff snapshot without replacing history."""
+    validated_plan = _validated_plan(plan)
+    rows = _validated_rows(candles, validated_plan, require_uniform_lineage=False)
+    validated_cutoff, validated_digest = _validated_provisional_identity(
+        cutoff, schedule_digest
+    )
+    if rows[-1].ts != validated_cutoff:
+        raise PartitionValidationError("invalid partition input")
+    relative = _provisional_relative_path(
+        validated_plan, validated_cutoff, validated_digest
+    )
+    published = _publish_rows(storage_root, rows, relative)
+    return _provisional_evidence(
+        validated_plan,
+        validated_cutoff,
+        validated_digest,
+        published,
+        rows,
+    )
+
+
+def publish_provisional_partition_under_lease(
+    storage_root: Path,
+    lease: StorageRootLease,
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    candles: Sequence[CanonicalCandle],
+) -> PublishedProvisionalEvidence:
+    """Publish relative to the exact root descriptor protected by ``lease``."""
+    if type(lease) is not StorageRootLease:
+        raise PartitionValidationError("invalid storage root lease")
+    validated_plan = _validated_plan(plan)
+    rows = _validated_rows(candles, validated_plan, require_uniform_lineage=False)
+    validated_cutoff, validated_digest = _validated_provisional_identity(
+        cutoff, schedule_digest
+    )
+    if rows[-1].ts != validated_cutoff:
+        raise PartitionValidationError("invalid partition input")
+    relative = _provisional_relative_path(
+        validated_plan, validated_cutoff, validated_digest
+    )
+    try:
+        with lease.root_operation(storage_root) as operation:
+            published = _publish_rows(
+                storage_root,
+                rows,
+                relative,
+                root_descriptor=operation.descriptor,
+            )
+            operation.ensure_live()
+    except PartitionPublicationError:
+        raise
+    except Exception:
+        raise PartitionPublicationError("storage authority unavailable") from None
+    return _provisional_evidence(
+        validated_plan,
+        validated_cutoff,
+        validated_digest,
+        published,
+        rows,
+    )
+
+
+def _publish_rows(  # noqa: C901
+    storage_root: Path,
+    rows: tuple[CanonicalCandle, ...],
+    relative: str,
+    *,
+    root_descriptor: int | None = None,
+) -> _PublishedBytes:
+    try:
+        root_fd = (
+            _open_root(storage_root)
+            if root_descriptor is None
+            else os.dup(root_descriptor)
+        )
+    except Exception:
+        raise PartitionPublicationError("storage unavailable") from None
     parent_fd: int | None = None
     temp_name: str | None = None
     temp_fd: int | None = None
     visible = False
-    result: PublishedPartitionEvidence | None = None
+    result: _PublishedBytes | None = None
     primary: Exception | None = None
     try:
         parent_fd = _open_or_create_parents(root_fd, relative.split("/")[:-1])
@@ -132,12 +257,10 @@ def publish_partition(  # noqa: C901
             descriptor, temp_fd = temp_fd, None
             if not _close_one(descriptor):
                 raise PublicationOutcomeUnknown("publication outcome unknown") from None
-            result = _evidence(
-                validated_plan,
+            result = _PublishedBytes(
                 PublicationOutcome.ALREADY_PRESENT,
                 relative,
                 digest,
-                rows,
                 byte_size,
             )
         else:
@@ -149,12 +272,10 @@ def publish_partition(  # noqa: C901
             descriptor, temp_fd = temp_fd, None
             if not _close_one(descriptor):
                 raise PublicationOutcomeUnknown("publication outcome unknown")
-            result = _evidence(
-                validated_plan,
+            result = _PublishedBytes(
                 PublicationOutcome.PUBLISHED,
                 relative,
                 digest,
-                rows,
                 byte_size,
             )
     except Exception as error:
@@ -168,12 +289,12 @@ def publish_partition(  # noqa: C901
 
 
 def _finish_publication(
-    result: PublishedPartitionEvidence | None,
+    result: _PublishedBytes | None,
     primary: Exception | None,
     visible: bool,
     parent_fd: int | None,
     root_fd: int,
-) -> PublishedPartitionEvidence:
+) -> _PublishedBytes:
     close_succeeded = _close_all(parent_fd, root_fd, primary)
     if visible and (primary is not None or not close_succeeded):
         outcome = PublicationOutcomeUnknown("publication outcome unknown")
@@ -202,6 +323,19 @@ def canonical_partition_relative_path(plan: PlannedInstrumentMonth) -> str:
     return _relative_path(validated_plan)
 
 
+def provisional_partition_relative_path(
+    plan: PlannedInstrumentMonth, cutoff: datetime, schedule_digest: str
+) -> str:
+    """Return the sole immutable path for one provisional data cutoff."""
+    validated_plan = _validated_plan(plan)
+    validated_cutoff, validated_digest = _validated_provisional_identity(
+        cutoff, schedule_digest
+    )
+    return _provisional_relative_path(
+        validated_plan, validated_cutoff, validated_digest
+    )
+
+
 def _validated_plan(plan: object) -> PlannedInstrumentMonth:
     if type(plan) is not PlannedInstrumentMonth:
         raise PartitionValidationError("invalid partition input")
@@ -220,7 +354,10 @@ def _validated_plan(plan: object) -> PlannedInstrumentMonth:
 
 
 def _validated_rows(
-    candles: object, plan: PlannedInstrumentMonth
+    candles: object,
+    plan: PlannedInstrumentMonth,
+    *,
+    require_uniform_lineage: bool = True,
 ) -> tuple[CanonicalCandle, ...]:
     if not isinstance(candles, Sequence) or isinstance(candles, (str, bytes)):
         raise PartitionValidationError("invalid partition input")
@@ -245,10 +382,13 @@ def _validated_rows(
         _validate_candle_for_plan(candle, plan)
         result.append(candle)
     ordered = tuple(sorted(result, key=lambda candle: candle.ts))
-    if len({candle.ts for candle in ordered}) != len(ordered) or any(
-        candle.source_version != ordered[0].source_version
-        or candle.ingested_at != ordered[0].ingested_at
-        for candle in ordered[1:]
+    if len({candle.ts for candle in ordered}) != len(ordered) or (
+        require_uniform_lineage
+        and any(
+            candle.source_version != ordered[0].source_version
+            or candle.ingested_at != ordered[0].ingested_at
+            for candle in ordered[1:]
+        )
     ):
         raise PartitionValidationError("invalid partition input")
     return ordered
@@ -304,17 +444,54 @@ def _relative_path(plan: PlannedInstrumentMonth) -> str:
     return f"candles/provider={plan.provider}/exchange={plan.exchange}/segment={plan.segment}/instrument_type={plan.instrument_type}/security_id={plan.security_id}/interval={plan.interval}/year={plan.year:04d}/month={plan.month:02d}/bars.parquet"
 
 
+def _provisional_relative_path(
+    plan: PlannedInstrumentMonth, cutoff: datetime, schedule_digest: str
+) -> str:
+    stamp = cutoff.strftime("%Y%m%dT%H%M%SZ")
+    return (
+        _relative_path(plan).removesuffix("bars.parquet")
+        + "provisional/"
+        + f"schedule_sha256={schedule_digest}/cutoff={stamp}/bars.parquet"
+    )
+
+
+def _validated_provisional_identity(
+    cutoff: object, schedule_digest: object
+) -> tuple[datetime, str]:
+    if (
+        type(cutoff) is not datetime
+        or cutoff.tzinfo is None
+        or cutoff.utcoffset() is None
+        or cutoff.tzinfo is not UTC
+        or cutoff.second != 0
+        or cutoff.microsecond != 0
+        or type(schedule_digest) is not str
+        or _DIGEST.fullmatch(schedule_digest) is None
+    ):
+        raise PartitionValidationError("invalid partition input")
+    return cutoff, schedule_digest
+
+
 def _safe_component(value: object) -> bool:
     return type(value) is str and _SAFE_COMPONENT.fullmatch(value) is not None
 
 
 def _safe_hive_component(component: str) -> bool:
-    if component == "candles":
+    if component in {"candles", "provisional"}:
         return True
     if component.startswith("year="):
         return component[5:].isdigit() and len(component) == 9
     if component.startswith("month="):
         return component[6:] in {f"{month:02d}" for month in range(1, 13)}
+    if component.startswith("schedule_sha256="):
+        return _DIGEST.fullmatch(component.removeprefix("schedule_sha256=")) is not None
+    if component.startswith("cutoff="):
+        value = component.removeprefix("cutoff=")
+        try:
+            parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ")
+        except ValueError:
+            return False
+        return parsed.strftime("%Y%m%dT%H%M%SZ") == value
     for prefix in (
         "provider=",
         "exchange=",
@@ -652,6 +829,28 @@ def _evidence(
     )
 
 
+def _provisional_evidence(
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    published: _PublishedBytes,
+    rows: tuple[CanonicalCandle, ...],
+) -> PublishedProvisionalEvidence:
+    return PublishedProvisionalEvidence(
+        plan,
+        cutoff,
+        schedule_digest,
+        published.outcome,
+        published.relative_path,
+        published.checksum_sha256,
+        CANDLE_SCHEMA_VERSION,
+        len(rows),
+        rows[0].ts,
+        rows[-1].ts,
+        published.byte_size,
+    )
+
+
 def _valid_evidence(value: object) -> bool:
     if type(value) is not PublishedPartitionEvidence:
         return False
@@ -691,6 +890,47 @@ def _valid_evidence(value: object) -> bool:
             and type(value.source_version) is str
             and bool(value.source_version)
             and value.source_version == value.source_version.strip()
+            and type(value.byte_size) is int
+            and value.byte_size > 0
+        )
+    except Exception:
+        return False
+
+
+def _valid_provisional_evidence(value: object) -> bool:
+    if type(value) is not PublishedProvisionalEvidence:
+        return False
+    try:
+        plan = _validated_plan(value.plan)
+        cutoff, digest = _validated_provisional_identity(
+            value.cutoff, value.schedule_digest
+        )
+        max_rows = (plan.to_date.toordinal() - plan.from_date.toordinal() + 1) * 1_440
+        span_minutes = (
+            int((value.actual_to_ts - value.actual_from_ts).total_seconds() // 60) + 1
+        )
+        return (
+            type(value.outcome) is PublicationOutcome
+            and type(value.canonical_path) is str
+            and value.canonical_path == _provisional_relative_path(plan, cutoff, digest)
+            and type(value.checksum_sha256) is str
+            and _DIGEST.fullmatch(value.checksum_sha256) is not None
+            and type(value.candle_schema_version) is int
+            and value.candle_schema_version == CANDLE_SCHEMA_VERSION
+            and type(value.row_count) is int
+            and 0 < value.row_count <= max_rows
+            and value.row_count <= span_minutes
+            and type(value.actual_from_ts) is datetime
+            and type(value.actual_to_ts) is datetime
+            and value.actual_from_ts.tzinfo is UTC
+            and value.actual_to_ts.tzinfo is UTC
+            and value.actual_from_ts.second == value.actual_to_ts.second == 0
+            and value.actual_from_ts.microsecond == value.actual_to_ts.microsecond == 0
+            and value.actual_from_ts <= value.actual_to_ts == cutoff
+            and plan.from_date
+            <= value.actual_from_ts.astimezone(_IST).date()
+            <= plan.to_date
+            and plan.from_date <= cutoff.astimezone(_IST).date() <= plan.to_date
             and type(value.byte_size) is int
             and value.byte_size > 0
         )

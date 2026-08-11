@@ -184,7 +184,8 @@ The extension proceeds as six coherent, independently verifiable slices:
 | 8. Runtime trust boundary | Compose authoritative schedule evidence in production and close the probe date, provider-envelope, and redirect credential gaps | ARK-139, ARK-19, ARK-20, ARK-23 | Preview closeout |
 | 9. Milestone 2 proof | Persist comparable benchmarks, derive thresholds, run the one authorized same-response RELIANCE gate, and close correctness/recovery acceptance | ARK-111, ARK-92, ARK-93, ARK-69, ARK-11 | 8 |
 | 10. Point-in-time universe | Retain versioned Nifty 50 membership and sector snapshots with effective dates and provenance | ARK-140 | 8 |
-| 11. Bounded multi-instrument workflows | Download, resume, inspect coverage, and query one or many admitted instruments under shared bounded resources | ARK-141, ARK-12 | 9–10 |
+| 10a. Current-month continuity | Persist and query the current month through the latest completed minute; append only the advancing same-day suffix | ARK-145 | 8–10 |
+| 11. Bounded multi-instrument workflows | Download, resume, inspect coverage, and query one or many admitted instruments under shared bounded resources | ARK-141, ARK-12 | 9–10a |
 | 12. Local views and adjustment boundary | Derive approved higher intraday views from verified `1m` data and represent corporate-action/raw-adjusted provenance without rewriting raw bars | ARK-142, ARK-143 | 10–11 |
 | 13. Downloader-v1 release proof | Prove clean install, Python/CLI parity, compatibility, bounded performance, documentation, full gate, and release readiness | ARK-144, ARK-13 | 9–12 |
 
@@ -197,3 +198,9 @@ implementation.
 
 Optional post-v1 work is kept out of this completion chain in the
 [data downloader future TODO](../plans/data-downloader-v1-future-todo.md).
+
+The current-month contract and its exact live evidence are recorded in
+[Plan 06](../plans/06-current-month-incremental-data-contract.md). This closes
+the former gap between a requested recent date and the latest completed minute:
+the current month is explicit `PROVISIONAL` evidence, never falsely marked as a
+fully verified closed month.
