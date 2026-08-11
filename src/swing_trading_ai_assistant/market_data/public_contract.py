@@ -432,7 +432,7 @@ class PublicQueryRequestV1:
     symbol: str
     from_date: date
     to_date: date
-    timeframe: Literal["1m"]
+    timeframe: Literal["1m", "1d"]
     fields: tuple[CandleFieldV1, ...]
     max_rows: int
 
@@ -447,7 +447,7 @@ class PublicQueryRequestV1:
             or self.from_date < date(2022, 1, 1)
             or _coverage_month_count(self.from_date, self.to_date) > 12
             or type(self.timeframe) is not str
-            or self.timeframe != "1m"
+            or self.timeframe not in {"1m", "1d"}
             or type(self.fields) is not tuple
             or not 1 <= len(self.fields) <= len(CandleFieldV1)
             or any(type(value) is not CandleFieldV1 for value in self.fields)
@@ -512,6 +512,7 @@ class QueryPayloadV1:
         if (
             type(self.request) is not PublicQueryRequestV1
             or request != self.request
+            or request.timeframe != "1m"
             or type(self.row_count) is not int
             or self.row_count != len(rows)
             or self.row_count > request.max_rows
@@ -544,6 +545,80 @@ class QueryPayloadV1:
             )
         ):
             raise ValueError("invalid query payload")
+
+
+DAILY_CALCULATION_VERSION_V1 = "nse-session-ohlcv@v1"
+MAX_DAILY_QUERY_ROWS_V1 = 366
+MAX_DAILY_VOLUME_V1 = 2**63 - 1
+
+
+@dataclass(frozen=True, slots=True)
+class DailyQueryPayloadV1:
+    request: PublicQueryRequestV1
+    calculation_version: Literal["nse-session-ohlcv@v1"]
+    adjustment_state: Literal["raw"]
+    row_count: int
+    months: tuple[PublicCoverageMonthV1, ...]
+    rows: tuple[PublicQueryRowV1, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            request = replace(self.request)
+            months = tuple(replace(value) for value in self.months)
+            rows = tuple(replace(value) for value in self.rows)
+        except (TypeError, ValueError):
+            raise ValueError("invalid daily query payload") from None
+        selected = set(request.fields)
+        start = datetime(
+            request.from_date.year,
+            request.from_date.month,
+            request.from_date.day,
+            tzinfo=_IST,
+        ).astimezone(UTC)
+        after = request.to_date + timedelta(days=1)
+        end = datetime(after.year, after.month, after.day, tzinfo=_IST).astimezone(UTC)
+        trade_dates = tuple(value.ts.astimezone(_IST).date() for value in rows)
+        if (
+            type(self.request) is not PublicQueryRequestV1
+            or request != self.request
+            or request.timeframe != "1d"
+            or request.max_rows > MAX_DAILY_QUERY_ROWS_V1
+            or self.calculation_version != DAILY_CALCULATION_VERSION_V1
+            or self.adjustment_state != "raw"
+            or type(self.row_count) is not int
+            or self.row_count != len(rows)
+            or self.row_count > request.max_rows
+            or type(self.months) is not tuple
+            or any(type(value) is not PublicCoverageMonthV1 for value in self.months)
+            or months != self.months
+            or tuple(value.month for value in months)
+            != _month_labels_from_dates(request.from_date, request.to_date)
+            or type(self.rows) is not tuple
+            or any(type(value) is not PublicQueryRowV1 for value in self.rows)
+            or rows != self.rows
+            or any(not start <= value.ts < end for value in rows)
+            or any(
+                left.ts >= right.ts for left, right in zip(rows, rows[1:], strict=False)
+            )
+            or len(set(trade_dates)) != len(trade_dates)
+            or any(
+                (value.open is not None) != (CandleFieldV1.OPEN in selected)
+                or (value.high is not None) != (CandleFieldV1.HIGH in selected)
+                or (value.low is not None) != (CandleFieldV1.LOW in selected)
+                or (value.close is not None) != (CandleFieldV1.CLOSE in selected)
+                or (value.volume is not None) != (CandleFieldV1.VOLUME in selected)
+                or (value.volume is not None and value.volume > MAX_DAILY_VOLUME_V1)
+                for value in rows
+            )
+            or (
+                any(
+                    value.coverage_state is not CoverageStateV1.VERIFIED
+                    for value in months
+                )
+                and bool(rows)
+            )
+        ):
+            raise ValueError("invalid daily query payload")
 
 
 PayloadT_co = TypeVar("PayloadT_co", covariant=True)
@@ -590,7 +665,8 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
             raise ValueError("invalid public command report")
         if self.command == "query" and (
             self.provider_attempt_count != 0
-            or type(self.payload) not in (QueryPayloadV1, type(None))
+            or type(self.payload)
+            not in (QueryPayloadV1, DailyQueryPayloadV1, type(None))
             or not _valid_query_report(self.status, self.failure, self.payload)
         ):
             raise ValueError("invalid public command report")
@@ -598,7 +674,7 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
 
 DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1]
 CoverageReportV1 = PublicCommandReportV1[CoveragePayloadV1]
-QueryReportV1 = PublicCommandReportV1[QueryPayloadV1]
+QueryReportV1 = PublicCommandReportV1[QueryPayloadV1 | DailyQueryPayloadV1]
 
 
 def _valid_coverage_report(
@@ -668,11 +744,12 @@ def _valid_query_report(
             and failure.validation_reason is None
             and failure.months == ()
         )
-    if type(payload) is not QueryPayloadV1:
+    if type(payload) not in (QueryPayloadV1, DailyQueryPayloadV1):
         return False
+    typed_payload = cast(QueryPayloadV1 | DailyQueryPayloadV1, payload)
     affected = tuple(
         value.month
-        for value in payload.months
+        for value in typed_payload.months
         if value.coverage_state is not CoverageStateV1.VERIFIED
     )
     if not affected:
@@ -686,7 +763,7 @@ def _valid_query_report(
         and failure.failure_category is None
         and failure.validation_reason is None
         and failure.months == affected
-        and payload.row_count == 0
+        and typed_payload.row_count == 0
     )
 
 
@@ -838,7 +915,9 @@ def _coverage_report_value(report: object) -> dict[str, object]:
         raise ValueError
     failure = replace(untyped.failure) if untyped.failure is not None else None
     typed_payload = untyped.payload
-    payload = replace(typed_payload) if typed_payload is not None else None
+    payload: CoveragePayloadV1 | None = (
+        replace(typed_payload) if typed_payload is not None else None
+    )
     validated: CoverageReportV1 = PublicCommandReportV1(
         untyped.contract_version,
         untyped.command,
@@ -863,11 +942,18 @@ def _query_report_value(report: object) -> dict[str, object]:
     if type(report) is not PublicCommandReportV1:
         raise ValueError
     untyped = cast(PublicCommandReportV1[object], report)
-    if untyped.payload is not None and type(untyped.payload) is not QueryPayloadV1:
+    if untyped.payload is not None and type(untyped.payload) not in (
+        QueryPayloadV1,
+        DailyQueryPayloadV1,
+    ):
         raise ValueError
     failure = replace(untyped.failure) if untyped.failure is not None else None
     typed_payload = untyped.payload
-    payload = replace(typed_payload) if typed_payload is not None else None
+    payload: QueryPayloadV1 | DailyQueryPayloadV1 | None
+    if type(typed_payload) in (QueryPayloadV1, DailyQueryPayloadV1):
+        payload = replace(cast(QueryPayloadV1 | DailyQueryPayloadV1, typed_payload))
+    else:
+        payload = None
     validated: QueryReportV1 = PublicCommandReportV1(
         untyped.contract_version,
         untyped.command,
@@ -934,23 +1020,38 @@ def _coverage_terminal_failure_value(code: PublicFailureCodeV1) -> dict[str, obj
     return value
 
 
-def _query_payload_value(value: QueryPayloadV1 | None) -> dict[str, object] | None:
+def _query_payload_value(
+    value: QueryPayloadV1 | DailyQueryPayloadV1 | None,
+) -> dict[str, object] | None:
     if value is None:
         return None
-    return {
-        "request": {
-            "segment": value.request.segment,
-            "symbol": value.request.symbol,
-            "from_date": value.request.from_date.isoformat(),
-            "to_date": value.request.to_date.isoformat(),
-            "timeframe": value.request.timeframe,
-            "fields": [field.value for field in value.request.fields],
-            "max_rows": value.request.max_rows,
-        },
+    request: dict[str, object] = {
+        "segment": value.request.segment,
+        "symbol": value.request.symbol,
+        "from_date": value.request.from_date.isoformat(),
+        "to_date": value.request.to_date.isoformat(),
+        "timeframe": value.request.timeframe,
+        "fields": [field.value for field in value.request.fields],
+        "max_rows": value.request.max_rows,
+    }
+    common: dict[str, object] = {
+        "request": request,
         "row_count": value.row_count,
         "months": [_coverage_month_value(month) for month in value.months],
         "rows": [_query_row_value(row, value.request.fields) for row in value.rows],
     }
+    if type(value) is QueryPayloadV1:
+        return common
+    if type(value) is DailyQueryPayloadV1:
+        return {
+            "request": request,
+            "calculation_version": value.calculation_version,
+            "adjustment_state": value.adjustment_state,
+            "row_count": value.row_count,
+            "months": common["months"],
+            "rows": common["rows"],
+        }
+    raise ValueError
 
 
 def _query_row_value(

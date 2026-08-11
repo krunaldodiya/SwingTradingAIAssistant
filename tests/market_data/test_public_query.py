@@ -568,3 +568,38 @@ def test_default_query_cli_rejects_unsupported_product_before_root_activity(
     assert exit_code == 2
     assert decoded["failure"]["code"] == "UNSUPPORTED_PREVIEW_INSTRUMENT"
     assert not absent.exists()
+
+
+def test_default_query_cli_routes_daily_request_to_local_daily_service(
+    tmp_path, capsys
+) -> None:
+    absent = tmp_path / "absent"
+
+    exit_code = main(
+        [
+            "query",
+            "--segment",
+            "NSE_EQ",
+            "--symbol",
+            "RELIANCE",
+            "--from",
+            "2026-07-03",
+            "--to",
+            "2026-07-03",
+            "--timeframe",
+            "1d",
+            "--fields",
+            "ts,open,high,low,close,volume",
+            "--max-rows",
+            "31",
+            "--storage-root",
+            str(absent),
+            "--output",
+            "json",
+        ]
+    )
+
+    decoded = json.loads(capsys.readouterr().out)
+    assert exit_code == 4
+    assert decoded["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
+    assert not absent.exists()
