@@ -21,8 +21,7 @@ increment and future process decisions.
   [closeout candidate](sprint-2-closeout.md) for 21/24 delivered tasks with
   ARK-92, ARK-93, and ARK-69 carried over; Milestone 2 remains blocked and is
   not accepted.
-- [Sprint 3 — Usable single-symbol downloader preview](sprint-3.md) — complete
-  in seven coherent slices: public contract, authoritative preparation,
-  persistent download, stored coverage, bounded `1m`, locally derived `1d`, and
-  a clean-install controlled usability proof. This is not a live-release or
-  multi-symbol Nifty 50 claim.
+- [Sprint 3 — Usable single-symbol downloader preview](sprint-3.md) — the
+  seven-slice preview is complete; the sprint is extended through downloader-v1
+  release readiness because Plan 01 blocks research-module implementation until
+  that milestone closes.
