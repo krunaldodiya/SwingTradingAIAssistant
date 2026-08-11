@@ -602,9 +602,13 @@ instrument key, credential, raw payload, or live market value is serializable.
 
 Output and disposable work root must be distinct, absent absolute paths below
 the repository's gitignored `artifacts/` directory. Directories are private,
-the final file is mode `0600`, publication never overwrites, and a substituted
-work-root identity or permission change stops before publication. Run exactly
-once from the repository root:
+the final file is mode `0400`, and publication never overwrites. Collection
+starts only from a clean reviewed HEAD/tree/lock identity, freezes that identity
+in forked benchmark children, and stops if it changes before publication. The
+workload runs from the held work-root descriptor as its current directory;
+pathname ABA, symlinks, a public directory, or permission changes cannot
+redirect writes.
+Run exactly once from the repository root:
 
 ```bash
 uv run --extra dev python tests/market_data/ark92_benchmark_baseline_collection.py \
@@ -612,8 +616,10 @@ uv run --extra dev python tests/market_data/ark92_benchmark_baseline_collection.
   --work-root "$PWD/artifacts/benchmarks/ark92-b01-b05-work-v1"
 ```
 
-After successful collection, record the artifact byte count and SHA-256.
-ARK-93 consumes that exact immutable file; it may not edit, replace, select, or
+Success prints only an `ark92-baseline-receipt-v1` receipt with the exact byte
+count and SHA-256. ARK-93 consumes that exact immutable file through the
+descriptor-relative reader, verifying type, owner, mode, size, identity, and
+receipt hash before and after parsing; it may not edit, replace, select, or
 rerun samples. A failed/insufficient collection remains evidence and does not
 authorize another collection without the section 5.4 measurement-error rule.
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
 import stat
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable
@@ -25,6 +27,8 @@ from ark90_benchmark_measurement import (
     ResourceEvidenceStatus,
     SourceDataShape,
     _ControlPartitionEvidence,
+    clear_benchmark_source_identity,
+    freeze_benchmark_source_identity,
     measure_b01,
     measure_benchmark_workload,
 )
@@ -32,7 +36,9 @@ from ark90_benchmark_measurement import (
 _WORKLOAD_IDS = ("B01", "B02", "B03", "B04", "B05")
 _MEASURED_ITERATION_COUNT = 5
 _ARTIFACT_SCHEMA_VERSION = "ark92-baseline-artifact-v1"
+_RECEIPT_SCHEMA_VERSION = "ark92-baseline-receipt-v1"
 _ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts"
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAX_ARTIFACT_BYTES = 4_000_000
 _MAX_TEXT_BYTES = 512
 _MAX_SEQUENCE_ITEMS = 366
@@ -70,6 +76,7 @@ _RFC3339_MICROSECONDS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z
 _REQUESTED_RANGE = re.compile(r"\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}")
 _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
+_UNSAFE_PATH_TEXT = re.compile(r"[~*?\[\]]")
 _PHYSICAL_MONTH_COUNTS = {"B01": 1, "B02": 3, "B03": 1, "B04": 1, "B05": 12}
 _PHYSICAL_MONTHS = {
     "B01": ((2024, 2),),
@@ -102,7 +109,7 @@ _TERMINAL_FAILURE_MATRIX = {
     "BENCHMARK_CHILD_FAILED": ("FAILED", frozenset(("B02", "B03", "B04", "B05"))),
     "BENCHMARK_CHILD_CANCELLED": (
         "CANCELLED",
-        frozenset(("B02", "B03", "B04", "B05")),
+        frozenset(_WORKLOAD_IDS),
     ),
     "CHILD_PROTOCOL_INVALID": ("FAILED", frozenset(_WORKLOAD_IDS)),
 }
@@ -189,10 +196,100 @@ class BaselineCollectionReport:
     results: tuple[BaselineWorkloadResult, ...]
 
 
-def write_baseline_artifact(report: BaselineCollectionReport, output: Path) -> None:
+@dataclass(frozen=True, slots=True)
+class ArtifactReceiptV1:
+    """Bounded identity used by ARK-93 to reopen exactly one retained artifact."""
+
+    schema_version: str
+    byte_count: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != _RECEIPT_SCHEMA_VERSION
+            or type(self.byte_count) is not int
+            or not 0 < self.byte_count <= _MAX_ARTIFACT_BYTES
+            or type(self.sha256) is not str
+            or _HEX_64.fullmatch(self.sha256) is None
+        ):
+            raise ValueError("invalid baseline artifact receipt")
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceIdentityV1:
+    revision: str
+    tree: str
+    lock_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            _HEX_40.fullmatch(self.revision) is None
+            or _HEX_40.fullmatch(self.tree) is None
+            or _HEX_64.fullmatch(self.lock_sha256) is None
+        ):
+            raise ValueError("invalid source identity")
+
+
+def write_baseline_artifact(
+    report: BaselineCollectionReport, output: Path
+) -> ArtifactReceiptV1:
     """Persist one complete sanitized report without replacing an existing artifact."""
+    _validate_artifact_leaf(output)
     encoded = _serialize_report(report)
-    _write_no_overwrite(output, encoded)
+    return _write_no_overwrite(output, encoded)
+
+
+def read_baseline_artifact(path: Path, receipt: ArtifactReceiptV1) -> dict[str, object]:
+    """Reopen one immutable artifact by descriptor and revalidate its receipt."""
+    if type(receipt) is not ArtifactReceiptV1:
+        raise ValueError("invalid immutable baseline artifact")
+    directory_fd: int | None = None
+    descriptor: int | None = None
+    try:
+        _validate_artifact_leaf(path)
+        directory_fd = _open_existing_private_directory(path.parent)
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory_fd,
+        )
+        before = _artifact_identity(os.fstat(descriptor))
+        entry_before = _artifact_identity(
+            os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        )
+        _validate_final_artifact_identity(before, receipt.byte_count)
+        if entry_before != before:
+            raise ValueError("invalid immutable baseline artifact")
+        encoded = _read_exact_artifact(descriptor, receipt.byte_count)
+        if hashlib.sha256(encoded).hexdigest() != receipt.sha256:
+            raise ValueError("invalid immutable baseline artifact")
+        payload = json.loads(
+            encoded,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        if (
+            type(payload) is not dict
+            or set(payload) != {"schema_version", "results"}
+            or payload["schema_version"] != _ARTIFACT_SCHEMA_VERSION
+            or type(payload["results"]) is not list
+            or len(payload["results"]) != len(_WORKLOAD_IDS)
+        ):
+            raise ValueError("invalid immutable baseline artifact")
+        after = _artifact_identity(os.fstat(descriptor))
+        entry_after = _artifact_identity(
+            os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        )
+        if after != before or entry_after != before:
+            raise ValueError("invalid immutable baseline artifact")
+        return payload
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+        raise ValueError("invalid immutable baseline artifact") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,26 +297,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = _ArtifactArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
-    work_root_fd: int | None = None
-    work_root_identity: tuple[int, ...] | None = None
     try:
         arguments = parser.parse_args(argv)
         output = _artifact_path(arguments.output, "output")
         work_root = _artifact_path(arguments.work_root, "work root")
-        if output.exists():
-            raise _ArtifactCliFailure("OUTPUT_EXISTS")
-        if _paths_overlap(output, work_root):
-            raise _ArtifactCliFailure("OUTPUT_WORK_ROOT_OVERLAP")
-        if work_root.exists():
-            raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
-        work_root_fd = _open_artifact_directory(work_root)
-        work_root_identity = _directory_identity(os.fstat(work_root_fd))
-        report = collect_benchmark_baselines(work_root)
-        if not _path_matches_directory_descriptor(
-            work_root, work_root_fd, work_root_identity
-        ):
-            raise _ArtifactCliFailure("WORK_ROOT_SUBSTITUTED")
-        write_baseline_artifact(report, output)
+        receipt = _collect_once(output, work_root)
+        print(_serialize_receipt(receipt))
     except _ArtifactCliFailure as error:
         print(f"baseline artifact collection failed: {error.code}", file=sys.stderr)
         return 2
@@ -233,10 +316,69 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("baseline artifact collection failed: COLLECTION_FAILED", file=sys.stderr)
         return 2
-    finally:
-        if work_root_fd is not None:
-            os.close(work_root_fd)
     return 0
+
+
+def _collect_once(output: Path, work_root: Path) -> ArtifactReceiptV1:
+    _validate_collection_paths(output, work_root)
+    _preflight_output(output)
+    work_root_fd = _open_artifact_directory(work_root)
+    original_directory_fd: int | None = None
+    source_frozen = False
+    try:
+        work_root_identity = _directory_identity(os.fstat(work_root_fd))
+        source_identity = _capture_source_identity()
+        if not _source_identity_matches(source_identity):
+            raise _ArtifactCliFailure("SOURCE_CHANGED")
+        freeze_benchmark_source_identity(
+            source_identity.revision,
+            source_identity.tree,
+            source_identity.lock_sha256,
+        )
+        source_frozen = True
+        original_directory_fd = os.open(
+            ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        os.fchdir(work_root_fd)
+        try:
+            report = collect_benchmark_baselines(Path("."))
+        finally:
+            os.fchdir(original_directory_fd)
+        if not _path_matches_directory_descriptor(
+            work_root, work_root_fd, work_root_identity
+        ):
+            raise _ArtifactCliFailure("WORK_ROOT_SUBSTITUTED")
+        encoded = _serialize_report(report)
+        if not _source_identity_matches(source_identity):
+            raise _ArtifactCliFailure("SOURCE_CHANGED")
+        return _write_no_overwrite(output, encoded)
+    finally:
+        if source_frozen:
+            clear_benchmark_source_identity()
+        if original_directory_fd is not None:
+            os.close(original_directory_fd)
+        os.close(work_root_fd)
+
+
+def _validate_collection_paths(output: Path, work_root: Path) -> None:
+    if _path_entry_exists(output):
+        raise _ArtifactCliFailure("OUTPUT_EXISTS")
+    if _paths_overlap(output, work_root):
+        raise _ArtifactCliFailure("OUTPUT_WORK_ROOT_OVERLAP")
+    if _path_entry_exists(work_root):
+        raise _ArtifactCliFailure("WORK_ROOT_EXISTS")
+
+
+def _serialize_receipt(receipt: ArtifactReceiptV1) -> str:
+    return json.dumps(
+        {
+            "byte_count": receipt.byte_count,
+            "schema_version": receipt.schema_version,
+            "sha256": receipt.sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def collect_benchmark_baselines(disposable_parent: Path) -> BaselineCollectionReport:
@@ -1021,11 +1163,12 @@ def _serialize_schedule_closures(value: object) -> list[list[str]]:
     return serialized
 
 
-def _write_no_overwrite(output: Path, encoded: bytes) -> None:
+def _write_no_overwrite(output: Path, encoded: bytes) -> ArtifactReceiptV1:
     if type(encoded) is not bytes or len(encoded) > _MAX_ARTIFACT_BYTES:
         raise ValueError("baseline artifact exceeds its bounded size")
     directory_fd = _open_artifact_directory(output.parent)
     temporary_name = f".{output.name}.{uuid.uuid4().hex}.tmp"
+    final_descriptor: int | None = None
     try:
         _ensure_absent(output.name, directory_fd)
         temporary_fd = os.open(
@@ -1045,30 +1188,80 @@ def _write_no_overwrite(output: Path, encoded: bytes) -> None:
             dst_dir_fd=directory_fd,
             follow_symlinks=False,
         )
+        final_descriptor = os.open(
+            output.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory_fd,
+        )
+        if _read_exact_artifact(final_descriptor, len(encoded)) != encoded:
+            raise ValueError("published baseline artifact bytes changed")
+        os.fchmod(final_descriptor, 0o400)
+        os.fsync(final_descriptor)
+        os.unlink(temporary_name, dir_fd=directory_fd)
         os.fsync(directory_fd)
+        identity = _artifact_identity(os.fstat(final_descriptor))
+        entry = _artifact_identity(
+            os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
+        )
+        _validate_final_artifact_identity(identity, len(encoded))
+        if entry != identity:
+            raise ValueError("published baseline artifact identity changed")
+        receipt = ArtifactReceiptV1(
+            _RECEIPT_SCHEMA_VERSION,
+            len(encoded),
+            hashlib.sha256(encoded).hexdigest(),
+        )
+        return receipt
     finally:
+        if final_descriptor is not None:
+            os.close(final_descriptor)
         with suppress(FileNotFoundError):
             os.unlink(temporary_name, dir_fd=directory_fd)
         os.close(directory_fd)
 
 
 def _open_artifact_directory(directory: Path) -> int:
+    return _open_private_directory(directory, create=True)
+
+
+def _open_existing_private_directory(directory: Path) -> int:
+    return _open_private_directory(directory, create=False)
+
+
+def _open_private_directory(directory: Path, *, create: bool) -> int:
     absolute = Path(os.path.abspath(directory))
+    artifact_root = Path(os.path.abspath(_ARTIFACTS_ROOT))
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(absolute.anchor, flags)
+    current = Path(absolute.anchor)
     try:
         for component in absolute.parts[1:]:
             try:
                 next_descriptor = os.open(component, flags, dir_fd=descriptor)
             except FileNotFoundError:
+                if not create:
+                    raise
                 os.mkdir(component, 0o700, dir_fd=descriptor)
                 next_descriptor = os.open(component, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = next_descriptor
+            current /= component
+            if current == artifact_root or artifact_root in current.parents:
+                _validate_private_directory(os.fstat(descriptor))
+        _validate_private_directory(os.fstat(descriptor))
         return descriptor
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _validate_private_directory(value: os.stat_result) -> None:
+    if (
+        not stat.S_ISDIR(value.st_mode)
+        or value.st_uid != os.geteuid()
+        or stat.S_IMODE(value.st_mode) != 0o700
+    ):
+        raise PermissionError("baseline artifact directory must be private")
 
 
 def _directory_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -1113,14 +1306,146 @@ def _write_temporary_fd(descriptor: int, encoded: bytes) -> None:
     os.fsync(descriptor)
 
 
+def _artifact_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        stat.S_IMODE(value.st_mode),
+        value.st_uid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_nlink,
+    )
+
+
+def _validate_final_artifact_identity(
+    identity: tuple[int, ...], byte_count: int
+) -> None:
+    if (
+        identity[2] != stat.S_IFREG
+        or identity[3] != 0o400
+        or identity[4] != os.geteuid()
+        or identity[5] != byte_count
+        or identity[8] != 1
+    ):
+        raise ValueError("invalid immutable baseline artifact")
+
+
+def _read_exact_artifact(descriptor: int, byte_count: int) -> bytes:
+    if type(byte_count) is not int or not 0 < byte_count <= _MAX_ARTIFACT_BYTES:
+        raise ValueError("invalid immutable baseline artifact")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = byte_count + 1
+    while remaining:
+        chunk = os.read(descriptor, min(1_048_576, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    encoded = b"".join(chunks)
+    if len(encoded) != byte_count:
+        raise ValueError("invalid immutable baseline artifact")
+    return encoded
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate baseline artifact key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError("invalid baseline artifact constant")
+
+
 def _artifact_path(path: Path, label: str) -> Path:
-    resolved = path.resolve(strict=False)
-    root = _ARTIFACTS_ROOT.resolve(strict=False)
+    if (
+        not isinstance(path, Path)
+        or not path.is_absolute()
+        or ".." in path.parts
+        or _UNSAFE_PATH_TEXT.search(str(path)) is not None
+    ):
+        raise ValueError(f"{label} must be an absolute bounded artifact path")
+    resolved = Path(os.path.abspath(path))
+    root = Path(os.path.abspath(_ARTIFACTS_ROOT))
     try:
         resolved.relative_to(root)
     except ValueError as error:
         raise ValueError(f"{label} must be under gitignored artifacts") from error
     return resolved
+
+
+def _validate_artifact_leaf(path: Path) -> None:
+    if (
+        not isinstance(path, Path)
+        or path.name in {"", ".", ".."}
+        or _UNSAFE_PATH_TEXT.search(path.name) is not None
+        or Path(path.name).name != path.name
+    ):
+        raise ValueError("invalid immutable baseline artifact")
+
+
+def _path_entry_exists(path: Path) -> bool:
+    try:
+        os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _preflight_output(output: Path) -> None:
+    directory_fd = _open_artifact_directory(output.parent)
+    try:
+        _ensure_absent(output.name, directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _capture_source_identity() -> _SourceIdentityV1:
+    try:
+        status = subprocess.run(  # noqa: S603
+            ["git", "status", "--porcelain", "--untracked-files=no"],  # noqa: S607
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if status.stdout:
+            raise _ArtifactCliFailure("SOURCE_UNCLEAN")
+        revision = _git_identifier("HEAD")
+        tree = _git_identifier("HEAD^{tree}")
+        lock_sha256 = hashlib.sha256(
+            (_REPOSITORY_ROOT / "uv.lock").read_bytes()
+        ).hexdigest()
+        return _SourceIdentityV1(revision, tree, lock_sha256)
+    except _ArtifactCliFailure:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise _ArtifactCliFailure("SOURCE_UNAVAILABLE") from None
+
+
+def _source_identity_matches(expected: _SourceIdentityV1) -> bool:
+    try:
+        return _capture_source_identity() == expected
+    except _ArtifactCliFailure:
+        return False
+
+
+def _git_identifier(revision: str) -> str:
+    completed = subprocess.run(  # noqa: S603
+        ["git", "rev-parse", revision],  # noqa: S607
+        cwd=_REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:

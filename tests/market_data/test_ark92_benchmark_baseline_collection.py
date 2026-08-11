@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import stat
+import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -24,12 +27,14 @@ from ark90_benchmark_measurement import (
     measure_benchmark_workload,
 )
 from ark92_benchmark_baseline_collection import (
+    ArtifactReceiptV1,
     BaselineCollectionReport,
     BaselineCollectionStatus,
     BaselineWorkloadResult,
     _comparable_valid_count,
     collect_baseline_samples,
     collect_benchmark_baselines,
+    read_baseline_artifact,
     write_baseline_artifact,
 )
 from ark92_benchmark_baseline_collection import main as persist_baseline_artifact
@@ -300,14 +305,32 @@ def _artifact_report() -> BaselineCollectionReport:
     return BaselineCollectionReport(tuple(results))
 
 
+def _allow_stable_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    identity = baseline_collection._SourceIdentityV1("a" * 40, "b" * 40, "c" * 64)
+    monkeypatch.setattr(
+        baseline_collection, "_capture_source_identity", lambda: identity
+    )
+    monkeypatch.setattr(
+        baseline_collection,
+        "_source_identity_matches",
+        lambda value: value == identity,
+    )
+
+
 def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically(
     tmp_path: Path,
 ) -> None:
     output = tmp_path / "baseline.json"
 
-    write_baseline_artifact(_artifact_report(), output)
+    receipt = write_baseline_artifact(_artifact_report(), output)
 
-    payload = json.loads(output.read_text())
+    assert receipt == ArtifactReceiptV1(
+        "ark92-baseline-receipt-v1",
+        output.stat().st_size,
+        hashlib.sha256(output.read_bytes()).hexdigest(),
+    )
+    assert stat.S_IMODE(output.stat().st_mode) == 0o400
+    payload = read_baseline_artifact(output, receipt)
     assert tuple(item["workload_id"] for item in payload["results"]) == (
         "B01",
         "B02",
@@ -325,6 +348,28 @@ def test_write_baseline_artifact_serializes_complete_sanitized_report_atomically
     ]
     assert set(b03["warmup"]) == set(B01MeasurementRecord.__dataclass_fields__)
     assert "path" not in json.dumps(payload).lower()
+
+
+def test_ark93_reader_rejects_changed_or_replaced_artifact(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "baseline.json"
+    receipt = write_baseline_artifact(_artifact_report(), output)
+    original = output.read_bytes()
+    output.chmod(0o600)
+    output.write_bytes(original.replace(b'"B01"', b'"B00"', 1))
+    output.chmod(0o400)
+
+    with pytest.raises(ValueError, match="immutable baseline artifact"):
+        read_baseline_artifact(output, receipt)
+
+    output.unlink()
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(original)
+    outside.chmod(0o400)
+    output.symlink_to(outside)
+    with pytest.raises(ValueError, match="immutable baseline artifact"):
+        read_baseline_artifact(output, receipt)
 
 
 def test_comparable_valid_count_excludes_one_mismatched_valid_identity() -> None:
@@ -827,16 +872,30 @@ def test_write_baseline_artifact_rejects_duplicate_incomplete_and_nonfinite_rows
 
 
 def test_persistence_entry_point_uses_disposable_root_and_never_retries(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[Path] = []
     output = tmp_path / "artifact" / "baseline.json"
     work_root = tmp_path / "artifact" / "work"
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", tmp_path / "artifact")
+    _allow_stable_source(monkeypatch)
+
+    def collect_from_frozen_root(root: Path) -> BaselineCollectionReport:
+        calls.append(root)
+        assert benchmark_measurement._BENCHMARK_RUNTIME.process_context == "fork"
+        assert benchmark_measurement._BENCHMARK_RUNTIME.source_identity == (
+            "a" * 40,
+            "b" * 40,
+            "c" * 64,
+        )
+        return _artifact_report()
+
     monkeypatch.setattr(
         baseline_collection,
         "collect_benchmark_baselines",
-        lambda root: calls.append(root) or _artifact_report(),
+        collect_from_frozen_root,
     )
 
     assert (
@@ -845,8 +904,19 @@ def test_persistence_entry_point_uses_disposable_root_and_never_retries(
         )
         == 0
     )
-    assert calls == [work_root]
+    assert len(calls) == 1
+    assert benchmark_measurement._BENCHMARK_RUNTIME.process_context == "spawn"
+    assert benchmark_measurement._BENCHMARK_RUNTIME.source_identity is None
+    assert calls[0] != work_root
+    assert calls[0] == Path(".")
     assert output.is_file()
+    assert stat.S_IMODE(output.stat().st_mode) == 0o400
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt == {
+        "byte_count": output.stat().st_size,
+        "schema_version": "ark92-baseline-receipt-v1",
+        "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+    }
 
     assert (
         persist_baseline_artifact(
@@ -854,7 +924,122 @@ def test_persistence_entry_point_uses_disposable_root_and_never_retries(
         )
         == 2
     )
-    assert calls == [work_root]
+    assert len(calls) == 1
+
+
+def test_persistence_rejects_dangling_output_symlink_without_redirecting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(mode=0o700)
+    output = artifact_root / "baseline.json"
+    redirected = artifact_root / "redirected.json"
+    output.symlink_to(redirected)
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(output),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err.endswith("OUTPUT_EXISTS\n")
+    assert output.is_symlink()
+    assert not redirected.exists()
+
+
+def test_persistence_rejects_public_output_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(mode=0o777)
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(artifact_root / "baseline.json"),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err.endswith("PERSISTENCE_FAILED\n")
+    assert tuple(artifact_root.iterdir()) == ()
+
+
+def test_persistence_rejects_private_child_below_public_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(mode=0o777)
+    private_child = artifact_root / "private"
+    private_child.mkdir(mode=0o700)
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(private_child / "baseline.json"),
+                "--work-root",
+                str(private_child / "work"),
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err.endswith("PERSISTENCE_FAILED\n")
+    assert tuple(private_child.iterdir()) == ()
+
+
+def test_persistence_rejects_dirty_reviewed_source_before_collection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(mode=0o700)
+    calls: list[Path] = []
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    monkeypatch.setattr(
+        baseline_collection.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, " M source.py\n", ""
+        ),
+    )
+    monkeypatch.setattr(
+        baseline_collection,
+        "collect_benchmark_baselines",
+        lambda root: calls.append(root) or _artifact_report(),
+    )
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(artifact_root / "baseline.json"),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err.endswith("SOURCE_UNCLEAN\n")
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -928,8 +1113,9 @@ def test_persistence_entry_point_sanitizes_unexpected_collection_exception(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     artifact_root = tmp_path / "artifact"
-    artifact_root.mkdir()
+    artifact_root.mkdir(mode=0o700)
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
 
     def fail_once(_root: Path) -> BaselineCollectionReport:
         raise RuntimeError(str(tmp_path))
@@ -1040,6 +1226,30 @@ def test_ordinary_terminal_observations_are_typed_done_results_with_actual_prove
         assert record.requested_range == "2024-01-01..2024-03-31"
         assert record.resource_evidence_status.value == "VALID"
         assert record.open_fd_end == record.open_fd_start
+
+
+@pytest.mark.parametrize(
+    ("terminal", "outcome", "failure_code"),
+    (
+        ("cancelled", "CANCELLED", "BENCHMARK_CHILD_CANCELLED"),
+        ("invalid", "FAILED", "CHILD_PROTOCOL_INVALID"),
+    ),
+)
+def test_b01_cancelled_and_protocol_invalid_iterations_are_retained(
+    tmp_path: Path, terminal: str, outcome: str, failure_code: str
+) -> None:
+    record = measure_b01(
+        tmp_path,
+        iteration_kind="measured",
+        iteration_index=1,
+        child_terminal=terminal,  # type: ignore[arg-type]
+    )
+
+    assert record.outcome == outcome
+    assert record.failure_code == failure_code
+    assert record.rows_raw == record.rows_normalized == record.rows_published == 0
+    assert record.request_count == record.provider_attempt_count == 0
+    assert record.partition_outcomes == ()
 
 
 def test_comparability_identity_includes_each_frozen_plan03_dimension() -> None:
@@ -1374,8 +1584,9 @@ def test_persistence_entry_point_propagates_process_control_exceptions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exception: type[BaseException]
 ) -> None:
     artifact_root = tmp_path / "artifact"
-    artifact_root.mkdir()
+    artifact_root.mkdir(mode=0o700)
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
 
     def abort(_root: Path) -> BaselineCollectionReport:
         raise exception()
@@ -1397,16 +1608,22 @@ def test_persistence_rejects_work_root_substitution_before_publication(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifact_root = tmp_path / "artifact"
-    artifact_root.mkdir()
+    artifact_root.mkdir(mode=0o700)
     outside = tmp_path / "outside"
     outside.mkdir()
     output = artifact_root / "baseline.json"
     work_root = artifact_root / "work"
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
+
+    held = tmp_path / "held-work"
 
     def substitute(root: Path) -> BaselineCollectionReport:
-        root.rename(tmp_path / "held-work")
-        root.symlink_to(outside, target_is_directory=True)
+        work_root.rename(held)
+        work_root.symlink_to(outside, target_is_directory=True)
+        (root / "descriptor-bound.txt").write_text("bound")
+        work_root.unlink()
+        held.rename(work_root)
         return _artifact_report()
 
     monkeypatch.setattr(baseline_collection, "collect_benchmark_baselines", substitute)
@@ -1415,14 +1632,53 @@ def test_persistence_rejects_work_root_substitution_before_publication(
         persist_baseline_artifact(
             ["--output", str(output), "--work-root", str(work_root)]
         )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["schema_version"] == (
+        "ark92-baseline-receipt-v1"
+    )
+    assert output.exists()
+    assert (work_root / "descriptor-bound.txt").read_text() == "bound"
+    assert tuple(outside.iterdir()) == ()
+
+
+def test_persistence_stops_if_reviewed_source_identity_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir(mode=0o700)
+    identity = baseline_collection._SourceIdentityV1("a" * 40, "b" * 40, "c" * 64)
+    checks = iter((True, False))
+    monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    monkeypatch.setattr(
+        baseline_collection, "_capture_source_identity", lambda: identity
+    )
+    monkeypatch.setattr(
+        baseline_collection,
+        "_source_identity_matches",
+        lambda _value: next(checks),
+    )
+    monkeypatch.setattr(
+        baseline_collection,
+        "collect_benchmark_baselines",
+        lambda _root: _artifact_report(),
+    )
+
+    assert (
+        persist_baseline_artifact(
+            [
+                "--output",
+                str(artifact_root / "baseline.json"),
+                "--work-root",
+                str(artifact_root / "work"),
+            ]
+        )
         == 2
     )
-    assert (
-        capsys.readouterr().err
-        == "baseline artifact collection failed: WORK_ROOT_SUBSTITUTED\n"
-    )
-    assert not output.exists()
-    assert tuple(outside.iterdir()) == ()
+    assert capsys.readouterr().err.endswith("SOURCE_CHANGED\n")
+    assert not (artifact_root / "baseline.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -1668,10 +1924,11 @@ def test_persistence_rejects_work_root_permission_substitution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifact_root = tmp_path / "artifact"
-    artifact_root.mkdir()
+    artifact_root.mkdir(mode=0o700)
     output = artifact_root / "baseline.json"
     work_root = artifact_root / "work"
     monkeypatch.setattr(baseline_collection, "_ARTIFACTS_ROOT", artifact_root)
+    _allow_stable_source(monkeypatch)
 
     def substitute(root: Path) -> BaselineCollectionReport:
         root.chmod(0o777)
