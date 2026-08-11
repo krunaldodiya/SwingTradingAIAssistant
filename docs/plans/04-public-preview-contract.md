@@ -173,12 +173,55 @@ class PublicCommandReportV1(Generic[PayloadT]):
 DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1]
 ```
 
-Coverage and query freeze their own payload dataclasses and typed report aliases
-in their implementation slices. The generic parameter is the sole extension
-point; the common envelope, failure object, status set, and serializer do not
-change. Each payload has an explicit allowlisted serializer. Generic `asdict`,
-arbitrary mappings, object dumps, caller SQL, and exception serialization are
-forbidden.
+Coverage freezes its payload in the stored-coverage slice. The one-minute query
+freezes the following vendor-neutral public types:
+
+```python
+class CandleFieldV1(StrEnum):
+    TS = "ts"
+    OPEN = "open"
+    HIGH = "high"
+    LOW = "low"
+    CLOSE = "close"
+    VOLUME = "volume"
+
+
+@dataclass(frozen=True, slots=True)
+class PublicQueryRequestV1:
+    segment: str
+    symbol: str
+    from_date: date
+    to_date: date
+    timeframe: Literal["1m"]
+    fields: tuple[CandleFieldV1, ...]
+    max_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublicQueryRowV1:
+    ts: datetime
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    volume: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class QueryPayloadV1:
+    request: PublicQueryRequestV1
+    row_count: int
+    months: tuple[PublicCoverageMonthV1, ...]
+    rows: tuple[PublicQueryRowV1, ...]
+
+
+QueryReportV1 = PublicCommandReportV1[QueryPayloadV1]
+```
+
+The generic parameter is the sole extension point; the common envelope,
+failure object, status set, and serializer do not change. Each payload has an
+explicit allowlisted serializer. Generic `asdict`, arbitrary mappings, object
+dumps, caller SQL, and exception serialization are forbidden.
 
 JSON is UTF-8 with `ensure_ascii=True`, `allow_nan=False`, compact separators,
 and one trailing newline. Dates use `YYYY-MM-DD`; UTC instants use
@@ -197,6 +240,9 @@ omitted. Exact nested key order is:
 | `PublicFailureV1` | `code`, `run_failure_code`, `historical_fetch_code`, `failure_category`, `validation_reason`, `months` |
 | `PublicMonthEvidenceV1` | `month`, `partition_outcome`, `reconciliation_reasons`, `provider_attempt_count`, `actual_from_ts`, `actual_to_ts`, `row_count`, `checksum_sha256`, `candle_schema_version`, `validation_policy_version`, `schedule_digest_sha256`, `failure_category`, `validation_reason`, `historical_fetch_code` |
 | `DownloadPayloadV1` | `request`, `started_at`, `completed_at`, `planned_count`, `skipped_count`, `locally_recovered_count`, `verified_count`, `failed_count`, `not_attempted_count`, `cancelled_count`, `instrument_snapshot_digest_sha256`, `instrument_snapshot_retrieved_at`, `instrument_snapshot_attempt_count`, `historical_attempt_count`, `months` |
+| `PublicQueryRequestV1` | `segment`, `symbol`, `from_date`, `to_date`, `timeframe`, `fields`, `max_rows` |
+| `QueryPayloadV1` | `request`, `row_count`, `months`, `rows` |
+| `PublicQueryRowV1` | only requested fields, in `CandleFieldV1` declaration order |
 
 The internal `SingleSymbolDownloadRequestV1.storage_root` is never copied into
 `PublicDownloadRequestV1`. `failure` is null only for success; `payload` is null
@@ -214,6 +260,57 @@ Public output may include only stable enums, counts, dates, digests, schema and
 policy versions, and selected candle values. It never includes a run ID, `Path`,
 provider key, security ID, canonical path, URL, SQL, raw body, credential,
 exception text, private market data, or arbitrary external text.
+
+## One-minute verified query execution
+
+`OneMinuteQueryServiceV1.query()` validates product admission before root or
+query activity, acquires exactly one existing-root coverage admission, invokes
+`evaluate_under_admission()` once, and consumes every returned verified
+partition before releasing that same admission. Coverage and query make zero
+provider calls. The public request never contains the storage root; no
+selection token, catalog path, Parquet path, provider identity, or security ID
+crosses the public boundary.
+
+An incomplete coverage month returns
+`INSUFFICIENT_EVIDENCE/COVERAGE_INSUFFICIENT`, retains the ordered public month
+evidence, and returns zero rows without opening Parquet. A fully verified query
+returns `SUCCEEDED`, including when the selected closed dates contain no bars.
+Resource exhaustion returns `FAILED/QUERY_RESOURCE_LIMIT_EXCEEDED`; deadline
+expiry returns `FAILED/QUERY_TIMEOUT`; malformed dependency data or any other
+execution failure returns bounded `FAILED/UNCLASSIFIED_FAILURE`. Query reports
+always have `provider_attempt_count=0`; `PARTIAL` is invalid.
+
+Terminal query status and failure code are exhaustive:
+
+| Status | Exact permitted failure codes |
+| --- | --- |
+| `REJECTED` | `INVALID_INPUT`, `UNSUPPORTED_PREVIEW_INSTRUMENT`, `UNSUPPORTED_TIMEFRAME`, `QUERY_BOUNDS_EXCEEDED`, `INSTRUMENT_NOT_FOUND`, `INSTRUMENT_AMBIGUOUS` |
+| `UNAVAILABLE` | `INSTRUMENT_SNAPSHOT_UNAVAILABLE`, `QUERY_CATALOG_UNAVAILABLE` |
+| `FAILED` | `QUERY_RESOURCE_LIMIT_EXCEEDED`, `QUERY_TIMEOUT`, `OUTPUT_LIMIT_EXCEEDED`, `UNCLASSIFIED_FAILURE` |
+
+Every terminal failure has null source-detail fields and `months=[]`. Any other
+status/code/detail combination is invalid and the defensive renderer emits
+bounded `FAILED/UNCLASSIFIED_FAILURE`. `SUCCEEDED` has no failure and a
+payload; `INSUFFICIENT_EVIDENCE` has the exact coverage failure and payload
+defined above. Query never returns `PARTIAL` or `CANCELLED`.
+
+The engine opens only the evaluator's verified selections, reopens and pins
+each canonical Parquet descriptor under the live admission, and holds all
+descriptors until rows are fully materialized. It accepts at most 12 paths and
+10,000 output rows. DuckDB is in-memory with one thread, a `256MB` memory
+limit, `max_temp_directory_size='0B'`, preserved insertion order disabled, and
+known-extension auto-install and auto-load disabled. A daemon interrupter
+enforces a five-second query deadline. Output overflow is an error, never
+silent truncation.
+
+SQL is an implementation-owned fixed template. The only constructed
+identifiers come from `CandleFieldV1`; paths, inclusive IST dates, and
+`max_rows + 1` are parameters. Dates become a UTC half-open predicate
+`[from_date 00:00 Asia/Kolkata, day_after_to_date 00:00 Asia/Kolkata)`. The
+engine reads timestamps as integer epoch microseconds, orders strictly by
+`ts`, materializes only numeric candle values, and renders only requested
+fields. Caller SQL, expressions, aliases, globs, arbitrary paths, provider
+fallback, spilling, and unbounded output are forbidden.
 
 ## Exhaustive conversion and exit behavior
 

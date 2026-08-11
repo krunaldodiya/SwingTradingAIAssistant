@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Generic, Literal, TypeVar, cast
 
@@ -64,6 +65,15 @@ class CoverageStateV1(StrEnum):
     STALE = "STALE"
     CORRUPT = "CORRUPT"
     SCHEDULE_UNPROVEN = "SCHEDULE_UNPROVEN"
+
+
+class CandleFieldV1(StrEnum):
+    TS = "ts"
+    OPEN = "open"
+    HIGH = "high"
+    LOW = "low"
+    CLOSE = "close"
+    VOLUME = "volume"
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +426,126 @@ class CoveragePayloadV1:
             raise ValueError("invalid coverage payload")
 
 
+@dataclass(frozen=True, slots=True)
+class PublicQueryRequestV1:
+    segment: str
+    symbol: str
+    from_date: date
+    to_date: date
+    timeframe: Literal["1m"]
+    fields: tuple[CandleFieldV1, ...]
+    max_rows: int
+
+    def __post_init__(self) -> None:
+        declaration_order = {value: index for index, value in enumerate(CandleFieldV1)}
+        if (
+            type(self.segment) is not str
+            or type(self.symbol) is not str
+            or type(self.from_date) is not date
+            or type(self.to_date) is not date
+            or self.from_date > self.to_date
+            or self.from_date < date(2022, 1, 1)
+            or _coverage_month_count(self.from_date, self.to_date) > 12
+            or type(self.timeframe) is not str
+            or self.timeframe != "1m"
+            or type(self.fields) is not tuple
+            or not 1 <= len(self.fields) <= len(CandleFieldV1)
+            or any(type(value) is not CandleFieldV1 for value in self.fields)
+            or len(set(self.fields)) != len(self.fields)
+            or tuple(sorted(self.fields, key=declaration_order.__getitem__))
+            != self.fields
+            or type(self.max_rows) is not int
+            or not 1 <= self.max_rows <= 10_000
+        ):
+            raise ValueError("invalid public query request")
+
+
+@dataclass(frozen=True, slots=True)
+class PublicQueryRowV1:
+    ts: datetime
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    volume: int | None
+
+    def __post_init__(self) -> None:
+        prices = (self.open, self.high, self.low, self.close)
+        if (
+            not _utc(self.ts)
+            or self.ts.second != 0
+            or self.ts.microsecond != 0
+            or any(
+                value is not None
+                and (type(value) is not float or not math.isfinite(value) or value < 0)
+                for value in prices
+            )
+            or type(self.volume) not in (int, type(None))
+            or (self.volume is not None and self.volume < 0)
+        ):
+            raise ValueError("invalid public query row")
+
+
+@dataclass(frozen=True, slots=True)
+class QueryPayloadV1:
+    request: PublicQueryRequestV1
+    row_count: int
+    months: tuple[PublicCoverageMonthV1, ...]
+    rows: tuple[PublicQueryRowV1, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            request = replace(self.request)
+            months = tuple(replace(value) for value in self.months)
+            rows = tuple(replace(value) for value in self.rows)
+        except (TypeError, ValueError):
+            raise ValueError("invalid query payload") from None
+        selected = set(request.fields)
+        start = datetime(
+            request.from_date.year,
+            request.from_date.month,
+            request.from_date.day,
+            tzinfo=_IST,
+        ).astimezone(UTC)
+        after = request.to_date + timedelta(days=1)
+        end = datetime(after.year, after.month, after.day, tzinfo=_IST).astimezone(UTC)
+        if (
+            type(self.request) is not PublicQueryRequestV1
+            or request != self.request
+            or type(self.row_count) is not int
+            or self.row_count != len(rows)
+            or self.row_count > request.max_rows
+            or type(self.months) is not tuple
+            or any(type(value) is not PublicCoverageMonthV1 for value in self.months)
+            or months != self.months
+            or tuple(value.month for value in months)
+            != _month_labels_from_dates(request.from_date, request.to_date)
+            or type(self.rows) is not tuple
+            or any(type(value) is not PublicQueryRowV1 for value in self.rows)
+            or rows != self.rows
+            or any(not start <= value.ts < end for value in rows)
+            or any(
+                left.ts >= right.ts for left, right in zip(rows, rows[1:], strict=False)
+            )
+            or any(
+                (value.open is not None) != (CandleFieldV1.OPEN in selected)
+                or (value.high is not None) != (CandleFieldV1.HIGH in selected)
+                or (value.low is not None) != (CandleFieldV1.LOW in selected)
+                or (value.close is not None) != (CandleFieldV1.CLOSE in selected)
+                or (value.volume is not None) != (CandleFieldV1.VOLUME in selected)
+                for value in rows
+            )
+            or (
+                any(
+                    value.coverage_state is not CoverageStateV1.VERIFIED
+                    for value in months
+                )
+                and bool(rows)
+            )
+        ):
+            raise ValueError("invalid query payload")
+
+
 PayloadT_co = TypeVar("PayloadT_co", covariant=True)
 
 
@@ -458,10 +588,17 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
             or not _valid_coverage_report(self.status, self.failure, self.payload)
         ):
             raise ValueError("invalid public command report")
+        if self.command == "query" and (
+            self.provider_attempt_count != 0
+            or type(self.payload) not in (QueryPayloadV1, type(None))
+            or not _valid_query_report(self.status, self.failure, self.payload)
+        ):
+            raise ValueError("invalid public command report")
 
 
 DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1]
 CoverageReportV1 = PublicCommandReportV1[CoveragePayloadV1]
+QueryReportV1 = PublicCommandReportV1[QueryPayloadV1]
 
 
 def _valid_coverage_report(
@@ -493,6 +630,63 @@ def _valid_coverage_report(
         and failure.failure_category is None
         and failure.validation_reason is None
         and failure.months == affected
+    )
+
+
+def _valid_query_report(
+    status: PublicCommandStatusV1,
+    failure: PublicFailureV1 | None,
+    payload: object,
+) -> bool:
+    if payload is None:
+        allowed = {
+            PublicCommandStatusV1.REJECTED: {
+                PublicFailureCodeV1.INVALID_INPUT,
+                PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+                PublicFailureCodeV1.UNSUPPORTED_TIMEFRAME,
+                PublicFailureCodeV1.QUERY_BOUNDS_EXCEEDED,
+                PublicFailureCodeV1.INSTRUMENT_NOT_FOUND,
+                PublicFailureCodeV1.INSTRUMENT_AMBIGUOUS,
+            },
+            PublicCommandStatusV1.UNAVAILABLE: {
+                PublicFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+                PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+            },
+            PublicCommandStatusV1.FAILED: {
+                PublicFailureCodeV1.QUERY_RESOURCE_LIMIT_EXCEEDED,
+                PublicFailureCodeV1.QUERY_TIMEOUT,
+                PublicFailureCodeV1.OUTPUT_LIMIT_EXCEEDED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+            },
+        }
+        return (
+            failure is not None
+            and failure.code in allowed.get(status, set())
+            and failure.run_failure_code is None
+            and failure.historical_fetch_code is None
+            and failure.failure_category is None
+            and failure.validation_reason is None
+            and failure.months == ()
+        )
+    if type(payload) is not QueryPayloadV1:
+        return False
+    affected = tuple(
+        value.month
+        for value in payload.months
+        if value.coverage_state is not CoverageStateV1.VERIFIED
+    )
+    if not affected:
+        return status is PublicCommandStatusV1.SUCCEEDED and failure is None
+    return (
+        status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
+        and failure is not None
+        and failure.code is PublicFailureCodeV1.COVERAGE_INSUFFICIENT
+        and failure.run_failure_code is None
+        and failure.historical_fetch_code is None
+        and failure.failure_category is None
+        and failure.validation_reason is None
+        and failure.months == affected
+        and payload.row_count == 0
     )
 
 
@@ -555,6 +749,24 @@ def render_coverage_report_json(report: CoverageReportV1) -> bytes:
         return encoded
     overflow = _json_bytes(
         _coverage_terminal_failure_value(PublicFailureCodeV1.OUTPUT_LIMIT_EXCEEDED)
+    )
+    if len(overflow) > MAX_PUBLIC_JSON_BYTES_V1:
+        raise ValueError("public JSON ceiling cannot contain terminal report")
+    return overflow
+
+
+def render_query_report_json(report: QueryReportV1) -> bytes:
+    """Render only the requested, allowlisted v1 candle fields."""
+    try:
+        encoded = _json_bytes(_query_report_value(report))
+    except Exception:
+        encoded = _json_bytes(
+            _query_terminal_failure_value(PublicFailureCodeV1.UNCLASSIFIED_FAILURE)
+        )
+    if len(encoded) <= MAX_PUBLIC_JSON_BYTES_V1:
+        return encoded
+    overflow = _json_bytes(
+        _query_terminal_failure_value(PublicFailureCodeV1.OUTPUT_LIMIT_EXCEEDED)
     )
     if len(overflow) > MAX_PUBLIC_JSON_BYTES_V1:
         raise ValueError("public JSON ceiling cannot contain terminal report")
@@ -647,6 +859,35 @@ def _coverage_report_value(report: object) -> dict[str, object]:
     }
 
 
+def _query_report_value(report: object) -> dict[str, object]:
+    if type(report) is not PublicCommandReportV1:
+        raise ValueError
+    untyped = cast(PublicCommandReportV1[object], report)
+    if untyped.payload is not None and type(untyped.payload) is not QueryPayloadV1:
+        raise ValueError
+    failure = replace(untyped.failure) if untyped.failure is not None else None
+    typed_payload = untyped.payload
+    payload = replace(typed_payload) if typed_payload is not None else None
+    validated: QueryReportV1 = PublicCommandReportV1(
+        untyped.contract_version,
+        untyped.command,
+        untyped.status,
+        failure,
+        untyped.provider_attempt_count,
+        payload,
+    )
+    if validated.command != "query":
+        raise ValueError
+    return {
+        "contract_version": validated.contract_version,
+        "command": validated.command,
+        "status": validated.status.value,
+        "failure": _failure_value(validated.failure),
+        "provider_attempt_count": validated.provider_attempt_count,
+        "payload": _query_payload_value(validated.payload),
+    }
+
+
 def _coverage_payload_value(
     value: CoveragePayloadV1 | None,
 ) -> dict[str, object] | None:
@@ -690,6 +931,53 @@ def _coverage_month_value(value: PublicCoverageMonthV1) -> dict[str, object]:
 def _coverage_terminal_failure_value(code: PublicFailureCodeV1) -> dict[str, object]:
     value = _terminal_failure_value(0, code)
     value["command"] = "coverage"
+    return value
+
+
+def _query_payload_value(value: QueryPayloadV1 | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "request": {
+            "segment": value.request.segment,
+            "symbol": value.request.symbol,
+            "from_date": value.request.from_date.isoformat(),
+            "to_date": value.request.to_date.isoformat(),
+            "timeframe": value.request.timeframe,
+            "fields": [field.value for field in value.request.fields],
+            "max_rows": value.request.max_rows,
+        },
+        "row_count": value.row_count,
+        "months": [_coverage_month_value(month) for month in value.months],
+        "rows": [_query_row_value(row, value.request.fields) for row in value.rows],
+    }
+
+
+def _query_row_value(
+    row: PublicQueryRowV1, fields: tuple[CandleFieldV1, ...]
+) -> dict[str, object]:
+    values: dict[str, object] = {}
+    for field in fields:
+        if field is CandleFieldV1.TS:
+            values[field.value] = _instant(row.ts)
+        elif field is CandleFieldV1.OPEN:
+            values[field.value] = row.open
+        elif field is CandleFieldV1.HIGH:
+            values[field.value] = row.high
+        elif field is CandleFieldV1.LOW:
+            values[field.value] = row.low
+        elif field is CandleFieldV1.CLOSE:
+            values[field.value] = row.close
+        elif field is CandleFieldV1.VOLUME:
+            values[field.value] = row.volume
+        else:
+            raise ValueError
+    return values
+
+
+def _query_terminal_failure_value(code: PublicFailureCodeV1) -> dict[str, object]:
+    value = _terminal_failure_value(0, code)
+    value["command"] = "query"
     return value
 
 
@@ -801,9 +1089,16 @@ def _coverage_month_count(start: date, end: date) -> int:
 
 
 def _coverage_month_labels(request: PublicCoverageRequestV1) -> tuple[str, ...]:
+    return _month_labels_from_dates(request.from_date, request.to_date)
+
+
+def _month_labels_from_dates(start: date, end: date) -> tuple[str, ...]:
     labels: list[str] = []
-    year, month = request.from_date.year, request.from_date.month
-    while (year, month) <= (request.to_date.year, request.to_date.month):
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
         labels.append(f"{year:04d}-{month:02d}")
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return tuple(labels)
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
