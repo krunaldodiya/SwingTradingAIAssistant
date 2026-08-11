@@ -282,7 +282,7 @@ class DownloadPreparationServiceV1:
                     PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
                     PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
                 )
-            with DuckDBCatalog(request.storage_root) as catalog:
+            with DuckDBCatalog(request.storage_root, lease=lease) as catalog:
                 store = InstrumentSnapshotStoreV1(request.storage_root, lease, catalog)
                 store.recover_pending()
                 resolved, attempts = self._resolve_or_fetch(store, request)

@@ -164,6 +164,34 @@ def test_schedule_cli_hashes_the_exact_private_authoritative_bytes(
     assert schedule.source_release == "sha256:" + hashlib.sha256(snapshot).hexdigest()
 
 
+def test_schedule_cli_rejects_excessive_nesting_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "authoritative-calendar.json"
+    source.write_bytes(b'{"dates":' + b"[" * 65 + b"]" * 65 + b"}")
+    source.chmod(0o400)
+
+    exit_code = live_cli.main(
+        [
+            "compose-schedule",
+            "--month",
+            "2024-02",
+            "--authoritative-calendar",
+            str(source),
+            "--observed-at",
+            "2024-03-01T00:00:00Z",
+            "--output",
+            str(tmp_path / "schedule.json"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "live gate failed: SCHEDULE_EVIDENCE_INVALID\n"
+    assert "Traceback" not in captured.err
+
+
 def test_same_response_sample_is_bounded_deterministic_and_endpoint_inclusive() -> None:
     selected = same_response_sample_indices(
         100,
@@ -440,6 +468,16 @@ def test_live_service_fail_closed_boundaries(tmp_path: Path) -> None:
         .code
         == "PREPARATION_UNAVAILABLE"
     )
+    ingestion_root = tmp_path / "ingestion-failure"
+    ingestion_root.mkdir(mode=0o700)
+    ingestion_request = DownloadPreparationRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2024, 2, 1),
+        date(2024, 2, 29),
+        ingestion_root,
+        datetime(2024, 3, 1, tzinfo=UTC),
+    )
     assert (
         LiveGateServiceV1(
             _Preparation(prepared),
@@ -448,7 +486,7 @@ def test_live_service_fail_closed_boundaries(tmp_path: Path) -> None:
             clock=_Clock(),
             source_revision="b" * 40,
         )
-        .run(request)
+        .run(ingestion_request)
         .code
         == "INGESTION_UNAVAILABLE"
     )
@@ -547,6 +585,54 @@ def test_live_service_rejects_root_swap_before_provider_open(tmp_path: Path) -> 
 
     assert terminal.code == "ROOT_AUTHORITY_LOST"
     assert session.request_count == 0
+
+
+def test_live_service_preserves_attempt_when_root_is_lost_after_provider(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    fixture = benchmark_nse_eq_v1(date(2024, 2, 1), date(2024, 2, 1))
+    prepared = PreparedDownloadV1(
+        fixture.schedule,
+        fixture.schedule_bytes,
+        fixture.schedule_digest,
+        fixture.instrument,
+        "a" * 64,
+        datetime(2024, 3, 1, tzinfo=UTC),
+        0,
+    )
+    session = _TappedSession(fixture.partitions[0].response)
+    service = LiveGateServiceV1(
+        _Preparation(prepared),
+        lambda supplied: _RootSwappingCoordinator(
+            IngestionCoordinator(
+                session_factory=supplied,
+                clock=_Clock(),
+                run_id_factory=lambda: "ark69",
+            )
+        ),  # type: ignore[arg-type]
+        session,
+        clock=_Clock(),
+        source_revision="b" * 40,
+    )
+
+    terminal = service.run(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2024, 2, 1),
+            date(2024, 2, 29),
+            root,
+            datetime(2024, 3, 1, tzinfo=UTC),
+        )
+    )
+
+    assert terminal.result == "FAILED"
+    assert terminal.code == "ROOT_AUTHORITY_LOST"
+    assert terminal.request_count == terminal.provider_attempt_count == 1
+    assert terminal.schedule_digest == fixture.schedule_digest
+    assert session.request_count == 1
 
 
 @pytest.mark.parametrize("mutation", ("append", "symlink"))
@@ -776,6 +862,18 @@ class _MutatingCoordinator:
             retained = path.with_name("retained.parquet")
             path.rename(retained)
             path.symlink_to(retained.name)
+        return report
+
+
+class _RootSwappingCoordinator:
+    def __init__(self, coordinator: IngestionCoordinator) -> None:
+        self._coordinator = coordinator
+
+    def run_under_lease(self, command, lease):  # type: ignore[no-untyped-def]
+        report = self._coordinator.run_under_lease(command, lease)
+        moved = command.storage_root.with_name(command.storage_root.name + "-held")
+        os.rename(command.storage_root, moved)
+        command.storage_root.mkdir(mode=0o700)
         return report
 
 

@@ -115,7 +115,22 @@ class StorageRootLease:
         return cls._try_acquire(root, create_lock=False)
 
     @classmethod
-    def _try_acquire(cls, root: object, *, create_lock: bool) -> LeaseResult:
+    def try_acquire_private_empty(cls, root: object) -> LeaseResult:
+        """Acquire an owner-private empty root before creating its lock.
+
+        This narrow admission is for one-shot workflows whose caller-owned root
+        must remain byte-for-byte unchanged when it is not admissible.
+        """
+        return cls._try_acquire(root, create_lock=True, require_private_empty=True)
+
+    @classmethod
+    def _try_acquire(
+        cls,
+        root: object,
+        *,
+        create_lock: bool,
+        require_private_empty: bool = False,
+    ) -> LeaseResult:
         if not isinstance(root, Path):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
 
@@ -133,6 +148,9 @@ class StorageRootLease:
                 raise RuntimeError
             if not stat.S_ISDIR(root_descriptor_stat.st_mode):
                 raise RuntimeError
+
+            if require_private_empty:
+                _assert_private_empty_root(root, root_descriptor, root_descriptor_stat)
 
             result, lock_descriptor = _acquire_lock(
                 root_descriptor,
@@ -272,6 +290,20 @@ def _valid_lock_identity(
         and descriptor_stat.st_uid == os.geteuid()
         and stat.S_IMODE(descriptor_stat.st_mode) == _LOCK_MODE
     )
+
+
+def _assert_private_empty_root(
+    root: Path, descriptor: int, descriptor_stat: os.stat_result
+) -> None:
+    if (
+        descriptor_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(descriptor_stat.st_mode) != 0o700
+        or os.listdir(descriptor)
+    ):
+        raise RuntimeError
+    path_stat = os.stat(root, follow_symlinks=False)
+    if not _same_inode(path_stat, descriptor_stat):
+        raise RuntimeError
 
 
 def _close_descriptor(descriptor: int | None) -> bool:

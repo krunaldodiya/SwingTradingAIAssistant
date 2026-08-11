@@ -99,6 +99,61 @@ def test_existing_only_lease_acquires_the_preexisting_safe_lock(tmp_path: Path) 
     acquired.lease.close()
 
 
+@pytest.mark.parametrize("invalid", ("nonempty", "wrong_mode", "symlink"))
+def test_private_empty_admission_never_mutates_invalid_root(
+    tmp_path: Path, invalid: str
+) -> None:
+    root = tmp_path / "root"
+    if invalid == "symlink":
+        target = tmp_path / "target"
+        target.mkdir(mode=0o700)
+        root.symlink_to(target, target_is_directory=True)
+    else:
+        root.mkdir(mode=0o700 if invalid == "nonempty" else 0o755)
+        if invalid == "nonempty":
+            (root / "user-owned.txt").write_bytes(b"preserve-me")
+    entry_before = os.lstat(root)
+    contents_before = (
+        tuple((item.name, item.read_bytes()) for item in root.iterdir())
+        if invalid == "nonempty"
+        else ()
+    )
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.FAILED
+    assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    entry_after = os.lstat(root)
+    assert (entry_after.st_dev, entry_after.st_ino, entry_after.st_mode) == (
+        entry_before.st_dev,
+        entry_before.st_ino,
+        entry_before.st_mode,
+    )
+    if invalid == "nonempty":
+        assert tuple((item.name, item.read_bytes()) for item in root.iterdir()) == (
+            contents_before
+        )
+    elif invalid == "wrong_mode":
+        assert tuple(root.iterdir()) == ()
+    else:
+        assert root.is_symlink()
+        assert tuple(root.resolve().iterdir()) == ()
+
+
+def test_private_empty_admission_creates_only_locked_private_file(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+
+    result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.ACQUIRED
+    assert result.lease is not None
+    assert [item.name for item in root.iterdir()] == [".ingestion.lock"]
+    result.lease.close()
+
+
 @pytest.mark.skipif(
     "spawn" not in multiprocessing.get_all_start_methods(),
     reason="requires spawn process semantics",

@@ -329,6 +329,17 @@ creation the root must be owner-held mode `0700` and contain exactly the stable
 `.ingestion.lock`; any pathname/inode substitution blocks before a provider
 request or invalidates the terminal proof.
 
+The lease admission descriptor-checks an already-existing, owner-held `0700`
+empty root before it creates `.ingestion.lock`; a nonempty, wrong-mode, missing,
+or linked root is rejected without mutation. DuckDB never opens the mutable
+caller pathname for a leased write. The catalog owner copies an admitted
+existing catalog, or creates a new catalog, in a private bounded regular file,
+then publishes the closed catalog descriptor-relatively and atomically only
+while the source entry and root authority still match. A root substitution can
+write neither the replacement root nor issue a provider request. If authority
+is lost after the one request, the terminal remains `FAILED/ROOT_AUTHORITY_LOST`
+and preserves the charged request/attempt plus schedule evidence.
+
 The schedule input is one bounded exact-byte authoritative calendar artifact.
 It explicitly classifies every calendar date in the selected month exactly once
 as either a closure with its sourced reason or a session with its supplied UTC
@@ -416,6 +427,72 @@ rejected before publication.  Authenticated readback descriptor-opens the
 canonical relative path without following links, verifies manifest/catalog,
 checksum, and full file identity before and after bounded parsing, and can
 never yield `VERIFIED` after substitution or mutation.
+
+### 4.3 Exact one-shot operator inputs and commands
+
+The operator uses the reviewed `tests/market_data/ark69_live_reliance_gate.py`
+adapter from a clean accepted checkout. The authoritative source is an absent,
+absolute, repository-ignored file below `artifacts/live-gate/`, owned by the
+effective user and mode `0400`. It is strict UTF-8 JSON, at most 262,144 bytes
+and 64 container levels, with no duplicate key or nonstandard number. Its exact
+top level is `{"dates":[...]}`. `dates` contains exactly one object for every
+date of `2026-07`, with no other date, in either exact form:
+
+```json
+{"date":"2026-07-01","session":{"close_at":"2026-07-01T10:00:00Z","kind":"official-regular","open_at":"2026-07-01T03:45:00Z"}}
+{"closure":{"reason":"official-closure"},"date":"2026-07-04"}
+```
+
+Every timestamp, session kind, and closure reason must be transcribed from the
+retained authoritative exchange evidence; these examples define shape, not an
+allowance to infer regular hours or weekends. The retained bytes' SHA-256 is
+the schedule `source_release`. The schedule output and receipt are absent,
+absolute, ignored paths whose existing parent is owner-held `0700`; publication
+is no-overwrite and final mode `0400`. `ARK69_DOTENV` is an absolute path to the
+owner-held `0600` dotenv file and is read only inside lazy provider-session
+opening. `ARK69_REVISION` and `ARK69_TREE` are the exact 40-hex accepted commit
+and tree from the final reviewed handoff; placeholders must be replaced with
+that handoff, never calculated after an attempt starts.
+
+From the accepted repository root, compose without network or credentials:
+
+```bash
+export ARK69_REVISION="<accepted-40-hex-revision>"
+export ARK69_TREE="<accepted-40-hex-tree>"
+export ARK69_OBSERVED_AT="<retained-source-observation-UTC-Z>"
+chmod 0400 "$PWD/artifacts/live-gate/ark69-nse-calendar-2026-07.json"
+uv run --extra dev python tests/market_data/ark69_live_reliance_gate.py \
+  compose-schedule \
+  --month 2026-07 \
+  --authoritative-calendar "$PWD/artifacts/live-gate/ark69-nse-calendar-2026-07.json" \
+  --observed-at "$ARK69_OBSERVED_AT" \
+  --output "$PWD/artifacts/live-gate/ark69-schedule-2026-07.json"
+```
+
+After that schedule's exact readback, the accepted full gate, and final
+high-risk review, create the empty live root once and execute exactly once:
+
+```bash
+export ARK69_DOTENV="<absolute-owner-private-dotenv-path>"
+mkdir -m 0700 "$PWD/artifacts/live-gate/ark69-reliance-2026-07-root"
+uv run --extra dev python tests/market_data/ark69_live_reliance_gate.py \
+  live-run \
+  --segment NSE_EQ \
+  --symbol RELIANCE \
+  --from 2026-07-01 \
+  --to 2026-07-31 \
+  --schedule-file "$PWD/artifacts/live-gate/ark69-schedule-2026-07.json" \
+  --storage-root "$PWD/artifacts/live-gate/ark69-reliance-2026-07-root" \
+  --dotenv-file "$ARK69_DOTENV" \
+  --output "$PWD/artifacts/live-gate/ark69-reliance-2026-07-receipt.json" \
+  --expected-revision "$ARK69_REVISION" \
+  --expected-tree "$ARK69_TREE"
+```
+
+An existing input/output/root, failed source admission, invalid mode, invalid
+calendar, or failed prerequisite stops before credential access. Any terminal
+after the request is retained as the sole receipt; no second invocation or
+alternate month is authorized.
 
 ## 5. Measurement and benchmark protocol
 

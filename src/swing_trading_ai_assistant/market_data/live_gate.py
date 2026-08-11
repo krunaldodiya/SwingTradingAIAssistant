@@ -184,7 +184,9 @@ class LiveGateServiceV1:
         self._max_parquet_rows = max_parquet_rows
 
     def run(self, request: DownloadPreparationRequestV1) -> LiveGateTerminalV1:
-        lease_result = StorageRootLease.try_acquire(request.storage_root)
+        command: IngestionCommand | None = None
+        digest: str | None = None
+        lease_result = StorageRootLease.try_acquire_private_empty(request.storage_root)
         if (
             lease_result.outcome is not LeaseOutcome.ACQUIRED
             or lease_result.lease is None
@@ -202,6 +204,7 @@ class LiveGateServiceV1:
                         request, lease
                     )
                 except Exception:
+                    root_operation.ensure_live()
                     return self._terminal("FAILED", "PREPARATION_UNAVAILABLE")
                 if (
                     prepared_report.outcome is not PreparationOutcomeV1.SUCCEEDED
@@ -210,6 +213,7 @@ class LiveGateServiceV1:
                     return self._terminal("BLOCKED", prepared_report.failure_code.value)
                 prepared = prepared_report.prepared
                 root_operation.ensure_live()
+                digest = prepared.schedule_digest_sha256
                 command = IngestionCommand(
                     prepared.instrument,
                     request.from_date,
@@ -232,15 +236,14 @@ class LiveGateServiceV1:
                         command, lease
                     )
                 except Exception:
+                    root_operation.ensure_live()
                     return self._terminal("FAILED", "INGESTION_UNAVAILABLE")
                 root_operation.ensure_live()
-                terminal = self._terminal_from_report(
-                    report, command, prepared.schedule_digest_sha256, lease
-                )
+                terminal = self._terminal_from_report(report, command, digest, lease)
                 root_operation.ensure_live()
                 return terminal
         except Exception:
-            return self._terminal("FAILED", "ROOT_AUTHORITY_LOST")
+            return self._authority_lost(command, digest)
 
     def _terminal_from_report(
         self,
@@ -399,6 +402,33 @@ class LiveGateServiceV1:
             None,
             self._source_revision,
             "nse-equity-month@v1",
+        )
+
+    def _authority_lost(
+        self, command: IngestionCommand | None, digest: str | None
+    ) -> LiveGateTerminalV1:
+        charged = 1 if self._sessions.request_count == 1 else 0
+        schedule = command.expected_sessions if command is not None else None
+        return LiveGateTerminalV1(
+            "FAILED",
+            "ROOT_AUTHORITY_LOST",
+            charged,
+            charged,
+            0,
+            0,
+            0,
+            0,
+            False,
+            digest if schedule is not None else None,
+            schedule.schema_version if schedule is not None else None,
+            _timestamp(schedule.as_of) if schedule is not None else None,
+            None,
+            None,
+            None,
+            self._source_revision,
+            command.validation_policy_version
+            if command is not None
+            else "nse-equity-month@v1",
         )
 
 

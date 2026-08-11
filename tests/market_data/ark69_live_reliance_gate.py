@@ -73,6 +73,7 @@ _INSTANT: Final = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z"
 )
 _SCHEMA_VERSION: Final = "ark69-live-gate-receipt-v1"
+_MAX_JSON_NESTING: Final = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,20 +575,55 @@ def _file_identity(
 def _snapshot_bytes(
     value: bytes,
 ) -> tuple[bytes, Mapping[str, object]]:
-    if type(value) is not bytes:
+    if type(value) is not bytes or not 1 <= len(value) <= 262_144:
         raise ValueError("invalid authoritative calendar")
     raw = value
     try:
+        text = raw.decode("utf-8", errors="strict")
+        _validate_json_nesting(text)
         parsed = json.loads(
-            raw,
+            text,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_json_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        MemoryError,
+        ValueError,
+    ) as error:
         raise ValueError("invalid authoritative calendar") from error
-    if type(parsed) is not dict or len(raw) > 262_144:
+    if type(parsed) is not dict:
         raise ValueError("invalid authoritative calendar")
     return raw, parsed
+
+
+def _validate_json_nesting(text: str) -> None:  # noqa: C901 - hostile JSON scanner
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_JSON_NESTING:
+                raise ValueError("invalid authoritative calendar")
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("invalid authoritative calendar")
+    if depth != 0 or in_string or escaped:
+        raise ValueError("invalid authoritative calendar")
 
 
 def _instant(value: object) -> datetime:
