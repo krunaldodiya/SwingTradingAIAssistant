@@ -348,11 +348,16 @@ def test_historical_client_rejects_ambiguous_or_noncanonical_success_json(
 
 def test_malformed_success_body_is_not_retained_by_the_sanitized_failure() -> None:
     marker = "raw-provider-body-must-not-survive"
+    header_marker = "valid-header-secret-must-not-survive"
+    headers = HttpResponseHeaders.from_items(
+        (("X-Provider-Diagnostic", header_marker),)
+    )
     response = HttpResponse(
         status_code=200,
         body=(
             b'{"status":"success","data":{"candles":[]},"secret":"' + marker.encode()
         ),
+        headers=headers,
     )
     token = AccessToken(_FAKE_BEARER)
     client = UpstoxV3HistoricalClient(RecordingTransport(response))
@@ -368,21 +373,25 @@ def test_malformed_success_body_is_not_retained_by_the_sanitized_failure() -> No
         client.fetch(request, token)
 
     error = exc_info.value
+    headers_identity = id(headers)
     response_identity = id(response)
     token_identity = id(token)
-    del client, marker, request, response, token
+    del client, header_marker, headers, marker, request, response, token
     rendered = "".join(
         traceback.TracebackException.from_exception(error, capture_locals=True).format()
     )
     retained = _walk_retained_objects(_project_traceback_values(error))
 
     assert "raw-provider-body-must-not-survive" not in rendered
+    assert "valid-header-secret-must-not-survive" not in rendered
     assert _FAKE_BEARER not in rendered
     assert not any(
-        id(value) in (response_identity, token_identity) for value in retained
+        id(value) in (headers_identity, response_identity, token_identity)
+        for value in retained
     )
     assert not any(
         "raw-provider-body-must-not-survive" in repr(value)
+        or "valid-header-secret-must-not-survive" in repr(value)
         or _FAKE_BEARER in repr(value)
         for value in retained
     )

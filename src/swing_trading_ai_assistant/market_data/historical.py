@@ -127,16 +127,19 @@ class UpstoxV3HistoricalClient:
                 error_category=response.error_category,
             )
         status_code = response.status_code
-        headers = response.headers
         error_category = response.error_category
         decode_status, candles = _decode_success_candles(response.body)
-        del instrument_key, request, response, self, token, url
         if decode_status is _SuccessDecodeStatus.MALFORMED_JSON:
+            del instrument_key, request, response, self, token, url
             _raise_malformed_historical_json()
         if decode_status is _SuccessDecodeStatus.INVALID_ENVELOPE:
+            del instrument_key, request, response, self, token, url
             _raise_invalid_success_envelope()
         if decode_status is _SuccessDecodeStatus.INVALID_CANDLES:
+            del instrument_key, request, response, self, token, url
             _raise_invalid_candles_array()
+        headers = response.headers
+        del instrument_key, request, response, self, token, url
         return HistoricalResponse(
             status_code=status_code,
             candles=candles,
