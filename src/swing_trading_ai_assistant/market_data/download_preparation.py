@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
@@ -21,10 +23,12 @@ from .instrument_snapshot import (
 from .instruments import Instrument
 from .preview_admission import PreviewAdmissionPolicyV1
 from .schedule_evidence import (
+    MAX_SCHEDULE_BYTES,
     ExpectedSessionSchedule,
     ScheduleEvidenceStore,
     ScheduleOutcome,
     canonical_schedule_bytes,
+    parse_canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
     schedule_digest,
 )
@@ -164,8 +168,29 @@ class AuthoritativeScheduleSourceV1(Protocol):
     def load(self) -> AuthoritativeScheduleInputV1: ...
 
 
+class CanonicalFileScheduleSourceV1:
+    """Load one explicit immutable canonical schedule file without following links."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def load(self) -> AuthoritativeScheduleInputV1:
+        try:
+            if not _valid_schedule_source_path(self._path):
+                raise ValueError
+            canonical = _read_bounded_regular_file(self._path)
+            schedule = parse_canonical_schedule_bytes(canonical)
+            return AuthoritativeScheduleInputV1(schedule, canonical)
+        except Exception:
+            raise ValueError("invalid authoritative schedule file") from None
+
+
 class InstrumentSnapshotSourceV1(Protocol):
     def fetch(self) -> FetchedInstrumentSnapshotV1: ...
+
+
+class TrustedPreparationClockV1(Protocol):
+    def now(self) -> datetime: ...
 
 
 class DownloadPreparationServiceV1:
@@ -176,10 +201,13 @@ class DownloadPreparationServiceV1:
         policy: PreviewAdmissionPolicyV1,
         schedule_source: AuthoritativeScheduleSourceV1,
         snapshot_source: InstrumentSnapshotSourceV1,
+        *,
+        clock: TrustedPreparationClockV1 | None = None,
     ) -> None:
         self._policy = policy
         self._schedule_source = schedule_source
         self._snapshot_source = snapshot_source
+        self._clock = clock
 
     def prepare(
         self, request: DownloadPreparationRequestV1
@@ -266,14 +294,25 @@ class DownloadPreparationServiceV1:
             pass
         try:
             fetched = self._snapshot_source.fetch()
-            if fetched.retrieved_at > request.invocation_time:
-                raise ValueError("snapshot is newer than invocation")
+            selection_cutoff = request.invocation_time
+            if fetched.retrieved_at > selection_cutoff:
+                observed_at = _clock_now(self._clock)
+                if (
+                    observed_at is None
+                    or fetched.retrieved_at > observed_at
+                    or fetched.observation_date
+                    != request.invocation_time.astimezone(_IST).date()
+                ):
+                    raise ValueError(
+                        "snapshot is newer than the trusted fetch boundary"
+                    )
+                selection_cutoff = fetched.retrieved_at
             store.retain(fetched)
             resolved = store.resolve_equity(
                 source="upstox-bod-nse",
                 segment=request.segment,
                 symbol=request.symbol,
-                as_of=request.invocation_time,
+                as_of=selection_cutoff,
             )
         except InstrumentSnapshotCorruptError:
             raise _AttemptedSnapshotCorrupt("instrument snapshot corrupt") from None
@@ -284,6 +323,18 @@ class DownloadPreparationServiceV1:
         except Exception:
             raise _AttemptedSnapshotUnavailable from None
         return resolved, 1
+
+
+def _clock_now(clock: TrustedPreparationClockV1 | None) -> datetime | None:
+    try:
+        if clock is None:
+            raise ValueError
+        now = clock.now()
+        if type(now) is not datetime or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError
+        return now.astimezone(UTC)
+    except Exception:
+        return None
 
 
 def _validate_schedule_input(
@@ -359,6 +410,67 @@ def _valid_storage_root_syntax(value: object) -> bool:
         and ".." not in value.parts
         and not any(character in part for part in value.parts for character in "~*?[]")
     )
+
+
+def _valid_schedule_source_path(value: object) -> bool:
+    return (
+        isinstance(value, Path)
+        and value.is_absolute()
+        and ".." not in value.parts
+        and not any(character in part for part in value.parts for character in "~*?[]")
+    )
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_bounded_regular_file(path: Path) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or not 0 < before.st_size <= MAX_SCHEDULE_BYTES
+            or before.st_mode & 0o022
+        ):
+            raise ValueError
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        canonical = b"".join(chunks)
+        after = os.fstat(descriptor)
+        entry = os.stat(path, follow_symlinks=False)
+        if (
+            not canonical
+            or len(canonical) != before.st_size
+            or _file_identity(before) != _file_identity(after)
+            or _file_identity(after) != _file_identity(entry)
+        ):
+            raise ValueError
+        return canonical
+    except (OSError, ValueError):
+        raise ValueError from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _touched_months(from_date: date, to_date: date) -> int:

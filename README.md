@@ -66,11 +66,13 @@ one authorized live comparison are completed. See the
 [Sprint 2 closeout](docs/sprints/sprint-2-closeout.md) for the exact evidence and
 remaining work.
 
-Sprint 3 is complete in seven coherent slices. It proves the controlled
-single-symbol persistent workflow, zero-request repeat, retained coverage,
-bounded `1m`, local session-aware `1d`, clean installation, and sanitized JSON.
-See the [Sprint 3 closeout](docs/sprints/sprint-3.md) for accepted revisions,
-gate evidence, and held release boundaries.
+Sprint 3's seven-slice preview is complete. The sprint is extended through the
+remaining downloader-v1 release prerequisites before research modules begin.
+The preview proves the controlled single-symbol persistent workflow,
+zero-request repeat, retained coverage, bounded `1m`, local session-aware `1d`,
+clean installation, and sanitized JSON. See the
+[Sprint 3 record](docs/sprints/sprint-3.md) for accepted preview revisions and
+the active completion chain.
 
 Sprint 3 adds an installable single-symbol preview for `NSE_EQ` `RELIANCE`:
 `market-data download`, `coverage`, and bounded `query` commands for verified
@@ -79,12 +81,12 @@ immutable monthly Parquet with a metadata-only DuckDB catalog at an explicit
 external root. This is an offline/controlled preview, not a live-release or
 multi-symbol Nifty 50 claim.
 
-The package composition deliberately has no built-in exchange-calendar feed.
-The persistent download service accepts authoritative, provenance-complete NSE
-schedule evidence as an injected dependency; the default CLI fails closed with
-`SCHEDULE_EVIDENCE_UNAVAILABLE` until an approved application composition
-supplies it. Coverage and query are provider-free and use only retained
-point-in-time evidence.
+The package deliberately has no built-in exchange-calendar feed. The persistent
+download service accepts authoritative, provenance-complete NSE schedule
+evidence as an injected dependency. The default CLI accepts the same canonical
+evidence through `--schedule-file` and otherwise fails closed with
+`SCHEDULE_EVIDENCE_UNAVAILABLE`. Coverage and query are provider-free and use
+only retained point-in-time evidence.
 
 Research modules, strategy rules, recommendations, and broker execution are not
 implemented.
@@ -126,13 +128,14 @@ uv pip install --python /var/tmp/swing-preview-venv/bin/python \
 /var/tmp/swing-preview-venv/bin/market-data --help
 ```
 
-For an application composition that supplies the approved schedule source and
-environment-only provider credential, the closed-range workflow is:
+For an approved canonical schedule file and environment-only provider
+credential, the closed-range workflow is:
 
 ```bash
 uv run market-data download \
   --segment NSE_EQ --symbol RELIANCE \
   --from 2026-07-01 --to 2026-07-31 \
+  --schedule-file /var/tmp/nse-schedule.json \
   --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data coverage \

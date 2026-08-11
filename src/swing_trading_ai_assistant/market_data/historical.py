@@ -38,6 +38,7 @@ _V3_INTERVAL_LIMITS = {
     "weeks": range(1, 2),
     "months": range(1, 2),
 }
+_MAX_PROVIDER_JSON_NESTING = 64
 
 
 def _empty_headers() -> HttpResponseHeaders:
@@ -125,28 +126,122 @@ class UpstoxV3HistoricalClient:
                 headers=response.headers,
                 error_category=response.error_category,
             )
-
-        try:
-            payload: object = json.loads(response.body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("historical response is not valid JSON") from exc
-        payload_record = (
-            cast(dict[str, object], payload) if isinstance(payload, dict) else {}
-        )
-        data = payload_record.get("data")
-        data_record = cast(dict[str, object], data) if isinstance(data, dict) else {}
-        candles = data_record.get("candles")
-        if not isinstance(candles, list):
-            raise ValueError("historical response does not contain a candles array")
-        candle_rows = cast(list[object], candles)
-        if any(not isinstance(row, list) for row in candle_rows):
-            raise ValueError("historical response does not contain a candles array")
+        status_code = response.status_code
+        error_category = response.error_category
+        decode_status, candles = _decode_success_candles(response.body)
+        if decode_status is _SuccessDecodeStatus.MALFORMED_JSON:
+            del instrument_key, request, response, self, token, url
+            _raise_malformed_historical_json()
+        if decode_status is _SuccessDecodeStatus.INVALID_ENVELOPE:
+            del instrument_key, request, response, self, token, url
+            _raise_invalid_success_envelope()
+        if decode_status is _SuccessDecodeStatus.INVALID_CANDLES:
+            del instrument_key, request, response, self, token, url
+            _raise_invalid_candles_array()
+        headers = response.headers
+        del instrument_key, request, response, self, token, url
         return HistoricalResponse(
-            status_code=response.status_code,
-            candles=cast(list[list[object]], candles),
-            headers=response.headers,
-            error_category=response.error_category,
+            status_code=status_code,
+            candles=candles,
+            headers=headers,
+            error_category=error_category,
         )
+
+
+class _SuccessDecodeStatus(StrEnum):
+    VALID = "VALID"
+    MALFORMED_JSON = "MALFORMED_JSON"
+    INVALID_ENVELOPE = "INVALID_ENVELOPE"
+    INVALID_CANDLES = "INVALID_CANDLES"
+
+
+class _RejectedProviderJSON(ValueError):
+    pass
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _RejectedProviderJSON
+        result[key] = value
+    return result
+
+
+def _reject_nonstandard_json_constant(value: str) -> NoReturn:
+    del value
+    raise _RejectedProviderJSON
+
+
+def _decode_success_candles(
+    body: bytes,
+) -> tuple[_SuccessDecodeStatus, list[list[object]]]:
+    if not _json_nesting_within_limit(body):
+        return _SuccessDecodeStatus.MALFORMED_JSON, []
+    try:
+        payload: object = json.loads(
+            body,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except (Exception, MemoryError):
+        return _SuccessDecodeStatus.MALFORMED_JSON, []
+    if type(payload) is not dict:
+        return _SuccessDecodeStatus.INVALID_ENVELOPE, []
+    payload_record = cast(dict[str, object], payload)
+    data = payload_record.get("data")
+    if (
+        set(payload_record) != {"status", "data"}
+        or payload_record.get("status") != "success"
+        or type(data) is not dict
+    ):
+        return _SuccessDecodeStatus.INVALID_ENVELOPE, []
+    data_record = cast(dict[str, object], data)
+    if set(data_record) != {"candles"}:
+        return _SuccessDecodeStatus.INVALID_ENVELOPE, []
+    candles = data_record.get("candles")
+    if type(candles) is not list:
+        return _SuccessDecodeStatus.INVALID_CANDLES, []
+    candle_rows = cast(list[object], candles)
+    if any(type(row) is not list for row in candle_rows):
+        return _SuccessDecodeStatus.INVALID_CANDLES, []
+    return _SuccessDecodeStatus.VALID, cast(list[list[object]], candles)
+
+
+def _json_nesting_within_limit(value: bytes) -> bool:
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):
+            depth += 1
+            if depth > _MAX_PROVIDER_JSON_NESTING:
+                return False
+        elif byte in (0x5D, 0x7D):
+            depth -= 1
+    return True
+
+
+def _raise_malformed_historical_json() -> NoReturn:
+    raise ValueError("historical response is not valid JSON") from None
+
+
+def _raise_invalid_success_envelope() -> NoReturn:
+    raise ValueError("historical response is not a valid success envelope") from None
+
+
+def _raise_invalid_candles_array() -> NoReturn:
+    raise ValueError("historical response does not contain a candles array") from None
 
 
 def _raise_body_too_large() -> NoReturn:

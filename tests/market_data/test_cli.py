@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
+
 import pytest
 
 from swing_trading_ai_assistant.market_data import cli
@@ -10,6 +13,48 @@ from swing_trading_ai_assistant.market_data.instruments import (
     DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
 )
 from swing_trading_ai_assistant.market_data.probe import ProbeReport
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    (
+        (date(2026, 8, 1), (date(2026, 7, 28), date(2026, 7, 31))),
+        (date(2026, 8, 3), (date(2026, 8, 1), date(2026, 8, 2))),
+        (date(2026, 8, 10), (date(2026, 8, 6), date(2026, 8, 9))),
+    ),
+)
+def test_probe_default_range_never_crosses_a_calendar_month(
+    today: date, expected: tuple[date, date]
+) -> None:
+    assert cli._default_probe_range(today) == expected
+
+
+def test_download_accepts_an_explicit_authoritative_schedule_file(
+    tmp_path: Path,
+) -> None:
+    storage_root = tmp_path / "storage"
+    schedule_file = tmp_path / "nse-schedule.json"
+    args = cli.build_parser().parse_args(
+        [
+            "download",
+            "--segment",
+            "NSE_EQ",
+            "--symbol",
+            "RELIANCE",
+            "--from",
+            "2026-07-01",
+            "--to",
+            "2026-07-31",
+            "--storage-root",
+            str(storage_root),
+            "--schedule-file",
+            str(schedule_file),
+            "--output",
+            "json",
+        ]
+    )
+
+    assert args.schedule_file == schedule_file
 
 
 def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(

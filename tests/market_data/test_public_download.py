@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -17,6 +18,7 @@ from swing_trading_ai_assistant.market_data.download_preparation import (
     PreparedDownloadV1,
 )
 from swing_trading_ai_assistant.market_data.historical import HistoricalFetchCode
+from swing_trading_ai_assistant.market_data.http import HttpResponse
 from swing_trading_ai_assistant.market_data.instruments import Instrument
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     FailureCategory,
@@ -56,6 +58,7 @@ from swing_trading_ai_assistant.market_data.range_ingestion import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleClosure,
+    canonical_schedule_bytes,
 )
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
@@ -1303,6 +1306,79 @@ def test_default_download_cli_fails_closed_without_schedule_source(
     assert output["status"] == "INSUFFICIENT_EVIDENCE"
     assert output["failure"]["code"] == "SCHEDULE_EVIDENCE_UNAVAILABLE"
     assert not root.exists()
+
+
+def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    catalog = gzip.compress(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "name": "RELIANCE INDUSTRIES LIMITED",
+                    "exchange": "NSE",
+                    "isin": "INE002A01018",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|INE002A01018",
+                    "trading_symbol": "RELIANCE",
+                }
+            ],
+            separators=(",", ":"),
+        ).encode()
+    )
+
+    class ControlledTransport:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, str]]] = []
+
+        def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+            self.calls.append((url, headers))
+            if "instruments/exchange/NSE.json.gz" not in url:
+                raise AssertionError(
+                    "an all-closure month must not call historical data"
+                )
+            return HttpResponse(200, catalog)
+
+    transport = ControlledTransport()
+    monkeypatch.setattr(cli_module, "UrllibHttpTransport", lambda **_kwargs: transport)
+    schedule_file = tmp_path / "schedule.json"
+    schedule_file.write_bytes(canonical_schedule_bytes(_schedule()))
+    schedule_file.chmod(0o600)
+    root = tmp_path / "storage"
+    root.mkdir(mode=0o700)
+
+    exit_code = main(
+        [
+            "download",
+            "--segment",
+            "NSE_EQ",
+            "--symbol",
+            "RELIANCE",
+            "--from",
+            "2026-07-01",
+            "--to",
+            "2026-07-31",
+            "--storage-root",
+            str(root),
+            "--schedule-file",
+            str(schedule_file),
+            "--output",
+            "json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 4, output
+    assert output["status"] == "UNAVAILABLE"
+    assert output["failure"]["code"] == "CREDENTIALS_UNAVAILABLE"
+    assert len(transport.calls) == 1
+    assert "Authorization" not in transport.calls[0][1]
+    retained = list((root / "calendar-schedules" / "sha256").glob("*.json"))
+    assert len(retained) == 1
+    assert retained[0].read_bytes() == schedule_file.read_bytes()
 
 
 def test_download_cli_converts_invalid_request_to_public_json(

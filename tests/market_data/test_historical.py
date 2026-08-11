@@ -266,7 +266,156 @@ def test_historical_client_rejects_malformed_success_payload() -> None:
         to_date=date(2026, 7, 31),
     )
 
-    with pytest.raises(ValueError, match="candles"):
+    with pytest.raises(ValueError, match="success envelope"):
+        client.fetch(request, AccessToken("test-token"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        [],
+        {"data": {"candles": []}},
+        {"status": "error", "data": {"candles": []}},
+        {"status": "success", "data": []},
+        {"status": True, "data": {"candles": []}},
+    ),
+)
+def test_historical_client_requires_the_exact_success_envelope(
+    payload: object,
+) -> None:
+    transport = RecordingTransport(
+        HttpResponse(status_code=200, body=json.dumps(payload).encode())
+    )
+    client = UpstoxV3HistoricalClient(transport)
+    request = HistoricalRequest(
+        instrument_key="NSE_EQ|INE002A01018",
+        unit="minutes",
+        interval=1,
+        from_date=date(2026, 7, 31),
+        to_date=date(2026, 7, 31),
+    )
+
+    with pytest.raises(ValueError, match="success envelope"):
+        client.fetch(request, AccessToken("test-token"))
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    (
+        (
+            b'{"status":"success","data":{"candles":[]},"extra":true}',
+            "success envelope",
+        ),
+        (
+            b'{"status":"success","data":{"candles":[],"extra":true}}',
+            "success envelope",
+        ),
+        (
+            b'{"status":"success","data":{"candles":[]},"data":{"candles":[[1]]}}',
+            "valid JSON",
+        ),
+        (
+            b'{"status":"success","data":{"candles":[]},"value":NaN}',
+            "valid JSON",
+        ),
+        (
+            b'{"status":"succ\\"ess","data":{"candles":[]}}',
+            "success envelope",
+        ),
+        (b"[" * 2_000 + b"0" + b"]" * 2_000, "valid JSON"),
+    ),
+)
+def test_historical_client_rejects_ambiguous_or_noncanonical_success_json(
+    body: bytes, message: str
+) -> None:
+    client = UpstoxV3HistoricalClient(
+        RecordingTransport(HttpResponse(status_code=200, body=body))
+    )
+    request = HistoricalRequest(
+        instrument_key="NSE_EQ|INE002A01018",
+        unit="minutes",
+        interval=1,
+        from_date=date(2026, 7, 31),
+        to_date=date(2026, 7, 31),
+    )
+
+    with pytest.raises(ValueError, match=message) as exc_info:
+        client.fetch(request, AccessToken("test-token"))
+
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_malformed_success_body_is_not_retained_by_the_sanitized_failure() -> None:
+    marker = "raw-provider-body-must-not-survive"
+    header_marker = "valid-header-secret-must-not-survive"
+    headers = HttpResponseHeaders.from_items(
+        (("X-Provider-Diagnostic", header_marker),)
+    )
+    response = HttpResponse(
+        status_code=200,
+        body=(
+            b'{"status":"success","data":{"candles":[]},"secret":"' + marker.encode()
+        ),
+        headers=headers,
+    )
+    token = AccessToken(_FAKE_BEARER)
+    client = UpstoxV3HistoricalClient(RecordingTransport(response))
+    request = HistoricalRequest(
+        instrument_key="NSE_EQ|INE002A01018",
+        unit="minutes",
+        interval=1,
+        from_date=date(2026, 7, 31),
+        to_date=date(2026, 7, 31),
+    )
+
+    with pytest.raises(ValueError, match="valid JSON") as exc_info:
+        client.fetch(request, token)
+
+    error = exc_info.value
+    headers_identity = id(headers)
+    response_identity = id(response)
+    token_identity = id(token)
+    del client, header_marker, headers, marker, request, response, token
+    rendered = "".join(
+        traceback.TracebackException.from_exception(error, capture_locals=True).format()
+    )
+    retained = _walk_retained_objects(_project_traceback_values(error))
+
+    assert "raw-provider-body-must-not-survive" not in rendered
+    assert "valid-header-secret-must-not-survive" not in rendered
+    assert _FAKE_BEARER not in rendered
+    assert not any(
+        id(value) in (headers_identity, response_identity, token_identity)
+        for value in retained
+    )
+    assert not any(
+        "raw-provider-body-must-not-survive" in repr(value)
+        or "valid-header-secret-must-not-survive" in repr(value)
+        or _FAKE_BEARER in repr(value)
+        for value in retained
+    )
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize("candles", ({}, [1], ["not-a-row"]))
+def test_historical_client_rejects_invalid_candle_arrays(candles: object) -> None:
+    payload = {"status": "success", "data": {"candles": candles}}
+    client = UpstoxV3HistoricalClient(
+        RecordingTransport(
+            HttpResponse(status_code=200, body=json.dumps(payload).encode())
+        )
+    )
+    request = HistoricalRequest(
+        instrument_key="NSE_EQ|INE002A01018",
+        unit="minutes",
+        interval=1,
+        from_date=date(2026, 7, 31),
+        to_date=date(2026, 7, 31),
+    )
+
+    with pytest.raises(ValueError, match="candles array"):
         client.fetch(request, AccessToken("test-token"))
 
 
