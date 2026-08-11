@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, Protocol
 
+from .catalog import DuckDBCatalog
 from .credentials import AccessToken, CredentialNotFoundError
 from .download_preparation import (
     DownloadPreparationReportV1,
@@ -27,13 +28,25 @@ from .range_ingestion import (
     IngestionCoordinator,
     IngestionReport,
     PartitionOutcome,
+    PartitionResult,
     ProviderSessionAuthenticationError,
+    RunFailureCode,
 )
 from .schemas import CanonicalCandle
+from .storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+    StorageRootLeaseOperation,
+)
 from .upstox_canonical import canonicalize_upstox_equity_candles
 
 _HEX_40: Final = re.compile(r"[0-9a-f]{40}\Z")
 _HEX_64: Final = re.compile(r"[0-9a-f]{64}\Z")
+_SAFE_CODE: Final = re.compile(r"[A-Z][A-Z0-9_]{0,79}\Z")
+_SAFE_PATH_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._=-]{0,127}\Z")
+_DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_FILE_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+_MAX_PARQUET_BYTES: Final = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +83,8 @@ class LiveGateTerminalV1:
 
 
 class PreparationPort(Protocol):
-    def prepare(
-        self, request: DownloadPreparationRequestV1
+    def prepare_under_lease(
+        self, request: DownloadPreparationRequestV1, lease: StorageRootLease
     ) -> DownloadPreparationReportV1: ...
 
 
@@ -171,42 +184,74 @@ class LiveGateServiceV1:
         self._max_parquet_rows = max_parquet_rows
 
     def run(self, request: DownloadPreparationRequestV1) -> LiveGateTerminalV1:
-        if not _private_empty_root(request.storage_root):
+        lease_result = StorageRootLease.try_acquire(request.storage_root)
+        if (
+            lease_result.outcome is not LeaseOutcome.ACQUIRED
+            or lease_result.lease is None
+        ):
             return self._terminal("REJECTED", "ROOT_PRECONDITION_FAILED")
         try:
-            prepared_report = self._preparation.prepare(request)
+            with (
+                lease_result.lease as lease,
+                lease.root_operation(request.storage_root) as root_operation,
+            ):
+                if not _private_empty_root(root_operation):
+                    return self._terminal("REJECTED", "ROOT_PRECONDITION_FAILED")
+                try:
+                    prepared_report = self._preparation.prepare_under_lease(
+                        request, lease
+                    )
+                except Exception:
+                    return self._terminal("FAILED", "PREPARATION_UNAVAILABLE")
+                if (
+                    prepared_report.outcome is not PreparationOutcomeV1.SUCCEEDED
+                    or prepared_report.prepared is None
+                ):
+                    return self._terminal("BLOCKED", prepared_report.failure_code.value)
+                prepared = prepared_report.prepared
+                root_operation.ensure_live()
+                command = IngestionCommand(
+                    prepared.instrument,
+                    request.from_date,
+                    request.to_date,
+                    "1m",
+                    request.storage_root,
+                    prepared.schedule,
+                    "nse-equity-month@v1",
+                    RetryPolicy(
+                        1,
+                        timedelta(0),
+                        timedelta(0),
+                        timedelta(0),
+                        timedelta(0),
+                    ),
+                    1,
+                )
+                try:
+                    report = self._coordinator_factory(self._sessions).run_under_lease(
+                        command, lease
+                    )
+                except Exception:
+                    return self._terminal("FAILED", "INGESTION_UNAVAILABLE")
+                root_operation.ensure_live()
+                terminal = self._terminal_from_report(
+                    report, command, prepared.schedule_digest_sha256, lease
+                )
+                root_operation.ensure_live()
+                return terminal
         except Exception:
-            return self._terminal("FAILED", "PREPARATION_UNAVAILABLE")
-        if (
-            prepared_report.outcome is not PreparationOutcomeV1.SUCCEEDED
-            or prepared_report.prepared is None
-        ):
-            return self._terminal("BLOCKED", prepared_report.failure_code.value)
-        prepared = prepared_report.prepared
-        command = IngestionCommand(
-            prepared.instrument,
-            request.from_date,
-            request.to_date,
-            "1m",
-            request.storage_root,
-            prepared.schedule,
-            "nse-equity-month@v1",
-            RetryPolicy(1, timedelta(0), timedelta(0), timedelta(0), timedelta(0)),
-            1,
-        )
-        try:
-            report = self._coordinator_factory(self._sessions).run(command)
-        except Exception:
-            return self._terminal("FAILED", "INGESTION_UNAVAILABLE")
-        return self._terminal_from_report(
-            report, command, prepared.schedule_digest_sha256
-        )
+            return self._terminal("FAILED", "ROOT_AUTHORITY_LOST")
 
     def _terminal_from_report(
-        self, report: IngestionReport, command: IngestionCommand, digest: str
+        self,
+        report: IngestionReport,
+        command: IngestionCommand,
+        digest: str,
+        lease: StorageRootLease,
     ) -> LiveGateTerminalV1:
         result = report.results[0] if len(report.results) == 1 else None
         request_missing = self._sessions.request_count != 1
+        cancelled = report.failure_code is RunFailureCode.CANCELLED
         if (
             result is None
             or result.outcome is not PartitionOutcome.VERIFIED
@@ -215,11 +260,17 @@ class LiveGateServiceV1:
             or self._sessions.response is None
         ):
             return LiveGateTerminalV1(
-                "BLOCKED" if request_missing else "FAILED",
+                "CANCELLED"
+                if cancelled
+                else "BLOCKED"
+                if request_missing
+                else "FAILED",
                 (
-                    "LIVE_REQUEST_NOT_EXECUTED"
-                    if request_missing
-                    else report.failure_code.value
+                    "CANCELLED"
+                    if cancelled
+                    else "LIVE_REQUEST_NOT_EXECUTED"
+                    if request_missing and report.failure_code is RunFailureCode.NONE
+                    else _failure_code(report, result)
                 ),
                 self._sessions.request_count,
                 report.provider_attempt_count,
@@ -259,14 +310,21 @@ class LiveGateServiceV1:
                 command.validation_policy_version,
             )
         try:
-            with iter_candles_from_parquet(
-                command.storage_root / manifest.canonical_path,
-                max_rows=self._max_parquet_rows,
-                max_uncompressed_bytes=128_000_000,
-                max_batch_decoded_bytes=16_000_000,
-                max_text_field_bytes=1024,
-            ) as reader:
-                sealed = tuple(candle for batch in reader for candle in batch)
+            with DuckDBCatalog(
+                command.storage_root, read_only=True, lease=lease
+            ) as catalog:
+                if catalog.get_manifest(result.plan) != manifest:
+                    raise ValueError("catalog manifest changed")
+                sealed = _read_sealed_partition(
+                    command.storage_root,
+                    lease,
+                    manifest.canonical_path,
+                    manifest.checksum_sha256,
+                    self._max_parquet_rows,
+                )
+                catalog.ensure_read_identity()
+                if catalog.get_manifest(result.plan) != manifest:
+                    raise ValueError("catalog manifest changed")
             comparison = compare_same_response(
                 self._sessions.response,
                 sealed,
@@ -344,19 +402,140 @@ class LiveGateServiceV1:
         )
 
 
-def _private_empty_root(root: Path) -> bool:
+def _private_empty_root(operation: StorageRootLeaseOperation) -> bool:
     try:
-        info = os.stat(root, follow_symlinks=False)
-        return (
-            type(root) is type(Path())
-            and root.is_absolute()
-            and stat.S_ISDIR(info.st_mode)
+        info = os.fstat(operation.descriptor)
+        names = os.listdir(operation.descriptor)
+        operation.ensure_live()
+        return bool(
+            stat.S_ISDIR(info.st_mode)
             and stat.S_IMODE(info.st_mode) == 0o700
-            and info.st_uid == os.getuid()
-            and not any(root.iterdir())
+            and info.st_uid == os.geteuid()
+            and names == [".ingestion.lock"]
         )
-    except OSError:
+    except Exception:
         return False
+
+
+def _failure_code(report: IngestionReport, result: PartitionResult | None) -> str:
+    if (
+        result is not None
+        and result.error_code is not None
+        and _SAFE_CODE.fullmatch(result.error_code) is not None
+    ):
+        return result.error_code
+    return report.failure_code.value
+
+
+def _read_sealed_partition(
+    root: Path,
+    lease: StorageRootLease,
+    relative_path: str,
+    expected_checksum: str,
+    max_rows: int,
+) -> tuple[CanonicalCandle, ...]:
+    if (
+        type(relative_path) is not str
+        or relative_path.startswith("/")
+        or _HEX_64.fullmatch(expected_checksum) is None
+    ):
+        raise ValueError("invalid sealed partition identity")
+    parts = tuple(relative_path.split("/"))
+    if not parts or any(_SAFE_PATH_COMPONENT.fullmatch(part) is None for part in parts):
+        raise ValueError("invalid sealed partition path")
+    parent: int | None = None
+    descriptor: int | None = None
+    try:
+        with lease.root_operation(root) as operation:
+            parent, descriptor = _open_partition_descriptor(operation.descriptor, parts)
+            before = os.fstat(descriptor)
+            _validate_partition_file(before)
+            digest, candles = _decode_partition(descriptor, max_rows)
+            after = os.fstat(descriptor)
+            entry = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            operation.ensure_live()
+        if not (
+            digest == expected_checksum
+            and _file_identity(before) == _file_identity(after) == _file_identity(entry)
+        ):
+            raise ValueError("sealed partition changed")
+        return candles
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent is not None:
+            os.close(parent)
+
+
+def _open_partition_descriptor(
+    root_descriptor: int, parts: tuple[str, ...]
+) -> tuple[int, int]:
+    parent = os.dup(root_descriptor)
+    try:
+        for component in parts[:-1]:
+            child = os.open(component, _DIRECTORY_FLAGS, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        return parent, os.open(parts[-1], _FILE_FLAGS, dir_fd=parent)
+    except Exception:
+        os.close(parent)
+        raise
+
+
+def _validate_partition_file(value: os.stat_result) -> None:
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or value.st_uid != os.geteuid()
+        or stat.S_IMODE(value.st_mode) != 0o600
+        or not 0 < value.st_size <= _MAX_PARQUET_BYTES
+    ):
+        raise ValueError("invalid sealed partition file")
+
+
+def _decode_partition(
+    descriptor: int, max_rows: int
+) -> tuple[str, tuple[CanonicalCandle, ...]]:
+    digest_before = _sha256_descriptor(descriptor)
+    with os.fdopen(os.dup(descriptor), "rb") as handle:
+        candles: list[CanonicalCandle] = []
+        with iter_candles_from_parquet(
+            handle,
+            max_rows=max_rows,
+            max_uncompressed_bytes=128_000_000,
+            max_batch_decoded_bytes=16_000_000,
+            max_text_field_bytes=1024,
+        ) as reader:
+            for batch in reader:
+                candles.extend(batch)
+                if len(candles) > max_rows:
+                    raise ValueError("sealed partition row bound exceeded")
+    if not candles:
+        raise ValueError("sealed partition is empty")
+    if digest_before != _sha256_descriptor(descriptor):
+        raise ValueError("sealed partition bytes changed")
+    return digest_before, tuple(candles)
+
+
+def _sha256_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(descriptor, 1_048_576, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_uid,
+        stat.S_IFMT(value.st_mode),
+        stat.S_IMODE(value.st_mode),
+    )
 
 
 def compare_same_response(

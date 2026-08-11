@@ -322,6 +322,21 @@ invocation are the only permitted pre-existing/initial local facts.  This makes
 one request necessary rather than allowing a skip/recovery to masquerade as the
 live gate.  It authorizes neither broad cleanup nor creation of the caller root.
 
+The invocation acquires one root lease before that emptiness proof and retains
+the same descriptor-bound lease through preparation, ingestion, catalog
+readback, authenticated Parquet readback, and sampled comparison.  After lease
+creation the root must be owner-held mode `0700` and contain exactly the stable
+`.ingestion.lock`; any pathname/inode substitution blocks before a provider
+request or invalidates the terminal proof.
+
+The schedule input is one bounded exact-byte authoritative calendar artifact.
+It explicitly classifies every calendar date in the selected month exactly once
+as either a closure with its sourced reason or a session with its supplied UTC
+open, close, and kind, including any special session.  The adapter must not
+derive weekends, holidays, or default hours.  `source_release` is exactly
+`sha256:<digest>` of those input bytes; missing, duplicate, extra, mixed, or
+malformed date evidence blocks schedule composition.
+
 The only authorized candle action is:
 
 | Field | Frozen value |
@@ -386,6 +401,21 @@ validation failure, missing schedule proof, inability to retain sanitized
 evidence, or sampled mismatch is a recorded blocked/incomplete outcome.  No
 retry, re-run, or alternative month is authorized by this gate; a later attempt
 requires new owner authorization and a separately recorded decision.
+
+Terminal precedence is: adapter/root precondition; preparation code; exact safe
+partition error code; run code; sealed readback code; sampled mismatch.  The
+durable receipt is closed as follows: `VERIFIED/NONE` has exactly one request
+and attempt, non-empty raw/normalized evidence, bounded successful comparison,
+and complete schedule/checksum/time evidence; `CANCELLED/CANCELLED` preserves
+its zero-or-one charged attempt; `REJECTED` and prerequisite/zero-request
+`BLOCKED` have no successful comparison; `FAILED` preserves its one charged
+attempt when present and exact safe failure code.  Request and attempt counts
+must agree, normalized count cannot exceed raw count, selected count cannot
+exceed normalized count or ten, and impossible optional-field combinations are
+rejected before publication.  Authenticated readback descriptor-opens the
+canonical relative path without following links, verifies manifest/catalog,
+checksum, and full file identity before and after bounded parsing, and can
+never yield `VERIFIED` after substitution or mutation.
 
 ## 5. Measurement and benchmark protocol
 

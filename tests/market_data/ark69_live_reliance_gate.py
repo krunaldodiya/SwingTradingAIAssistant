@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -66,8 +67,11 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _HEX_40: Final = re.compile(r"[0-9a-f]{40}\Z")
 _HEX_64: Final = re.compile(r"[0-9a-f]{64}\Z")
-_DATE_TEXT: Final = re.compile(r"\d{2}-[A-Za-z]{3}-\d{4}\Z")
 _SAFE_CODE: Final = re.compile(r"[A-Z][A-Z0-9_]{0,79}\Z")
+_DATE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+_INSTANT: Final = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z"
+)
 _SCHEMA_VERSION: Final = "ark69-live-gate-receipt-v1"
 
 
@@ -103,6 +107,16 @@ class LiveGateReceipt:
             self.mismatch_count,
         )
         verified = self.result == "VERIFIED"
+        schedule_present = (
+            self.schedule_digest is not None
+            and self.schedule_version == 2
+            and self.schedule_as_of is not None
+        )
+        sealed_present = (
+            self.checksum is not None
+            and self.first_ts is not None
+            and self.last_ts is not None
+        )
         if (
             self.result
             not in {"VERIFIED", "FAILED", "REJECTED", "CANCELLED", "BLOCKED"}
@@ -110,9 +124,12 @@ class LiveGateReceipt:
             or any(type(value) is not int or value < 0 for value in counts)
             or self.request_count > 1
             or self.provider_attempt_count > 1
+            or self.request_count != self.provider_attempt_count
             or self.raw_count > 100_000
             or self.normalized_count > 100_000
+            or self.normalized_count > self.raw_count
             or self.selected_count > 10
+            or self.selected_count > self.normalized_count
             or self.mismatch_count > self.selected_count
             or type(self.comparison_passed) is not bool
             or not _optional_digest(self.schedule_digest)
@@ -123,6 +140,9 @@ class LiveGateReceipt:
             or not _optional_timestamp(self.last_ts)
             or _HEX_40.fullmatch(self.source_revision) is None
             or self.policy_version != "nse-equity-month@v1"
+            or not _receipt_shape_is_valid(
+                self, schedule_present=schedule_present, sealed_present=sealed_present
+            )
             or (
                 verified
                 and (
@@ -135,11 +155,8 @@ class LiveGateReceipt:
                     or self.mismatch_count != 0
                     or not self.comparison_passed
                     or self.schedule_digest is None
-                    or self.schedule_version != 2
-                    or self.schedule_as_of is None
-                    or self.checksum is None
-                    or self.first_ts is None
-                    or self.last_ts is None
+                    or not schedule_present
+                    or not sealed_present
                 )
             )
             or (not verified and self.comparison_passed)
@@ -153,9 +170,70 @@ class LiveGateReceipt:
         return cls(**asdict(terminal))
 
 
-def compose_closed_month_schedule(
+def _receipt_shape_is_valid(
+    receipt: LiveGateReceipt, *, schedule_present: bool, sealed_present: bool
+) -> bool:
+    empty_comparison = (
+        receipt.raw_count == 0
+        and receipt.normalized_count == 0
+        and receipt.selected_count == 0
+        and receipt.mismatch_count == 0
+        and not receipt.comparison_passed
+    )
+    no_sealed_fields = (
+        receipt.checksum is None
+        and receipt.first_ts is None
+        and receipt.last_ts is None
+    )
+    if receipt.result == "VERIFIED":
+        return True
+    if receipt.result == "REJECTED":
+        return (
+            receipt.code != "NONE"
+            and receipt.request_count == 0
+            and empty_comparison
+            and not schedule_present
+            and no_sealed_fields
+        )
+    if receipt.result == "BLOCKED":
+        return (
+            receipt.code != "NONE"
+            and receipt.request_count == 0
+            and empty_comparison
+            and no_sealed_fields
+        )
+    if receipt.result == "CANCELLED":
+        return (
+            receipt.code == "CANCELLED"
+            and empty_comparison
+            and schedule_present
+            and no_sealed_fields
+        )
+    if receipt.result != "FAILED" or receipt.code == "NONE":
+        return False
+    if receipt.code == "SAMPLE_MISMATCH":
+        return (
+            receipt.request_count == 1
+            and receipt.raw_count >= receipt.normalized_count > 0
+            and receipt.selected_count > 0
+            and receipt.mismatch_count > 0
+            and schedule_present
+            and sealed_present
+        )
+    return empty_comparison and (
+        (receipt.request_count == 0 and not schedule_present and no_sealed_fields)
+        or (
+            receipt.request_count == 1
+            and schedule_present
+            and receipt.first_ts is None
+            and receipt.last_ts is None
+        )
+    )
+
+
+def compose_closed_month_schedule(  # noqa: C901 - validates one hostile boundary
     selected_month: date,
-    holiday_master_cm: Mapping[str, object],
+    authoritative_snapshot: bytes,
     *,
     source_release: str,
     observed_at: datetime,
@@ -165,12 +243,10 @@ def compose_closed_month_schedule(
     The input is deliberately a caller-provided snapshot: this function neither
     acquires calendars nor substitutes a contemporary holiday list.
     """
-    if type(selected_month) is not date or type(holiday_master_cm) is not dict:
+    if type(selected_month) is not date:
         raise ValueError("invalid schedule input")
-    if (
-        type(source_release) is not str
-        or re.fullmatch(r"sha256:[0-9a-f]{64}", source_release) is None
-    ):
+    raw, snapshot = _snapshot_bytes(authoritative_snapshot)
+    if source_release != f"sha256:{hashlib.sha256(raw).hexdigest()}":
         raise ValueError("invalid schedule input")
     if type(observed_at) is not datetime or observed_at.tzinfo is None:
         raise ValueError("invalid schedule input")
@@ -180,32 +256,48 @@ def compose_closed_month_schedule(
     last = after_month - timedelta(days=1)
     if last >= observed_at.astimezone(_IST).date():
         raise ValueError("selected month is not closed")
-    holidays = _cm_holidays(holiday_master_cm, first, last)
     sessions: list[ScheduleSession] = []
     closures: list[ScheduleClosure] = []
-    current = first
-    while current <= last:
-        if current.weekday() >= 5:
-            closures.append(ScheduleClosure(current, "weekend"))
-        elif current in holidays:
-            closures.append(ScheduleClosure(current, "official-holiday"))
-        else:
+    entries = snapshot.get("dates")
+    if set(snapshot) != {"dates"} or type(entries) is not list:
+        raise ValueError("invalid authoritative calendar")
+    seen: set[date] = set()
+    for entry in entries:
+        if type(entry) is not dict or set(entry) - {"date", "session", "closure"}:
+            raise ValueError("invalid authoritative calendar")
+        text = entry.get("date")
+        if type(text) is not str or _DATE.fullmatch(text) is None:
+            raise ValueError("invalid authoritative calendar")
+        current = date.fromisoformat(text)
+        if current < first or current > last or current in seen:
+            raise ValueError("invalid authoritative calendar")
+        seen.add(current)
+        session = entry.get("session")
+        closure = entry.get("closure")
+        if type(session) is dict and closure is None:
+            if set(session) != {"open_at", "close_at", "kind"}:
+                raise ValueError("invalid authoritative calendar")
             sessions.append(
                 ScheduleSession(
                     current,
-                    datetime(
-                        current.year, current.month, current.day, 3, 45, tzinfo=UTC
-                    ),
-                    datetime(
-                        current.year, current.month, current.day, 10, 0, tzinfo=UTC
-                    ),
-                    "nse-equity-regular",
+                    _instant(session["open_at"]),
+                    _instant(session["close_at"]),
+                    _text(session["kind"]),
                 )
             )
-        current += timedelta(days=1)
+        elif type(closure) is dict and session is None and set(closure) == {"reason"}:
+            closures.append(ScheduleClosure(current, _text(closure["reason"])))
+        else:
+            raise ValueError("invalid authoritative calendar")
+    if seen != {
+        first + timedelta(days=index) for index in range((last - first).days + 1)
+    }:
+        raise ValueError("incomplete authoritative calendar")
+    sessions.sort(key=lambda item: item.trade_date)
+    closures.sort(key=lambda item: item.trade_date)
     return ExpectedSessionSchedule(
         2,
-        "nse-holiday-master-cm",
+        "nse-authoritative-calendar",
         source_release,
         observed_at,
         "Asia/Kolkata",
@@ -230,8 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     subcommands = parser.add_subparsers(dest="mode", required=True)
     schedule = subcommands.add_parser("compose-schedule")
     schedule.add_argument("--month", required=True)
-    schedule.add_argument("--holiday-master-cm", type=Path, required=True)
-    schedule.add_argument("--source-release", required=True)
+    schedule.add_argument("--authoritative-calendar", type=Path, required=True)
     schedule.add_argument("--observed-at", required=True)
     schedule.add_argument("--output", type=Path, required=True)
     live = subcommands.add_parser("live-run")
@@ -249,13 +340,15 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.mode == "live-run":
         return _run_live(arguments)
     try:
-        snapshot = json.loads(_read_bounded_regular(arguments.holiday_master_cm))
+        snapshot = _read_bounded_regular(
+            arguments.authoritative_calendar, required_mode=0o400
+        )
         month = date.fromisoformat(arguments.month + "-01")
         observed = datetime.fromisoformat(arguments.observed_at.replace("Z", "+00:00"))
         composed = compose_closed_month_schedule(
             month,
             snapshot,
-            source_release=arguments.source_release,
+            source_release="sha256:" + hashlib.sha256(snapshot).hexdigest(),
             observed_at=observed,
         )
         output = arguments.output
@@ -427,7 +520,7 @@ def _read_bounded_regular(
         before = os.fstat(descriptor)
         if (
             not stat.S_ISREG(before.st_mode)
-            or before.st_uid != os.getuid()
+            or before.st_uid != os.geteuid()
             or before.st_size < 1
             or before.st_size > maximum
             or (
@@ -447,13 +540,15 @@ def _read_bounded_regular(
         encoded = b"".join(chunks)
         after = os.fstat(descriptor)
         entry = os.stat(path, follow_symlinks=False)
-        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        identity = _file_identity(before)
         if (
             len(encoded) > maximum
-            or identity
-            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            or identity
-            != (entry.st_dev, entry.st_ino, entry.st_size, entry.st_mtime_ns)
+            or identity != _file_identity(after)
+            or identity != _file_identity(entry)
+            or (
+                required_mode is not None
+                and stat.S_IMODE(after.st_mode) != required_mode
+            )
         ):
             raise ValueError("bounded input changed")
         return encoded
@@ -461,21 +556,63 @@ def _read_bounded_regular(
         os.close(descriptor)
 
 
-def _cm_holidays(snapshot: Mapping[str, object], first: date, last: date) -> set[date]:
-    entries = snapshot.get("CM")
-    if type(entries) is not list:
-        raise ValueError("invalid official CM holiday snapshot")
-    holidays: set[date] = set()
-    for entry in entries:
-        if type(entry) is not dict:
-            raise ValueError("invalid official CM holiday snapshot")
-        text = entry.get("tradingDate")
-        if type(text) is not str or _DATE_TEXT.fullmatch(text) is None:
-            raise ValueError("invalid official CM holiday snapshot")
-        holiday = datetime.strptime(text, "%d-%b-%Y").date()
-        if first <= holiday <= last:
-            holidays.add(holiday)
-    return holidays
+def _file_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        stat.S_IMODE(value.st_mode),
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_uid,
+    )
+
+
+def _snapshot_bytes(
+    value: bytes,
+) -> tuple[bytes, Mapping[str, object]]:
+    if type(value) is not bytes:
+        raise ValueError("invalid authoritative calendar")
+    raw = value
+    try:
+        parsed = json.loads(
+            raw,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid authoritative calendar") from error
+    if type(parsed) is not dict or len(raw) > 262_144:
+        raise ValueError("invalid authoritative calendar")
+    return raw, parsed
+
+
+def _instant(value: object) -> datetime:
+    if type(value) is not str or _INSTANT.fullmatch(value) is None:
+        raise ValueError("invalid authoritative calendar")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("invalid authoritative calendar")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError("invalid authoritative calendar")
+
+
+def _text(value: object) -> str:
+    if type(value) is not str or not value.isascii() or not value:
+        raise ValueError("invalid authoritative calendar")
+    return value
 
 
 if __name__ == "__main__":

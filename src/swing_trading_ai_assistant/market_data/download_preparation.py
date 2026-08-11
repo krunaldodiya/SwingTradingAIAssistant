@@ -212,6 +212,24 @@ class DownloadPreparationServiceV1:
     def prepare(
         self, request: DownloadPreparationRequestV1
     ) -> DownloadPreparationReportV1:
+        return self._prepare(request, None)
+
+    def prepare_under_lease(
+        self, request: DownloadPreparationRequestV1, lease: StorageRootLease
+    ) -> DownloadPreparationReportV1:
+        """Prepare while a caller-owned root lease remains live after return."""
+        if type(lease) is not StorageRootLease:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
+        return self._prepare(request, lease)
+
+    def _prepare(
+        self,
+        request: DownloadPreparationRequestV1,
+        supplied_lease: StorageRootLease | None,
+    ) -> DownloadPreparationReportV1:
         if type(request) is not DownloadPreparationRequestV1:
             return _failure(
                 PreparationOutcomeV1.REJECTED,
@@ -231,6 +249,9 @@ class DownloadPreparationServiceV1:
                 PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
             )
 
+        if supplied_lease is not None:
+            return self._prepare_leased(request, supplied, supplied_lease)
+
         lease_result = StorageRootLease.try_acquire(request.storage_root)
         if (
             lease_result.outcome is not LeaseOutcome.ACQUIRED
@@ -242,20 +263,29 @@ class DownloadPreparationServiceV1:
             )
         try:
             with lease_result.lease as lease:
-                retained = ScheduleEvidenceStore(request.storage_root, lease).retain(
-                    supplied.schedule, supplied_bytes=supplied.canonical_bytes
+                return self._prepare_leased(request, supplied, lease)
+        except Exception as error:
+            return _snapshot_failure(error)
+
+    def _prepare_leased(
+        self,
+        request: DownloadPreparationRequestV1,
+        supplied: AuthoritativeScheduleInputV1,
+        lease: StorageRootLease,
+    ) -> DownloadPreparationReportV1:
+        try:
+            retained = ScheduleEvidenceStore(request.storage_root, lease).retain(
+                supplied.schedule, supplied_bytes=supplied.canonical_bytes
+            )
+            if retained.outcome is ScheduleOutcome.FAILED:
+                return _failure(
+                    PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
+                    PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
                 )
-                if retained.outcome is ScheduleOutcome.FAILED:
-                    return _failure(
-                        PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
-                        PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
-                    )
-                with DuckDBCatalog(request.storage_root) as catalog:
-                    store = InstrumentSnapshotStoreV1(
-                        request.storage_root, lease, catalog
-                    )
-                    store.recover_pending()
-                    resolved, attempts = self._resolve_or_fetch(store, request)
+            with DuckDBCatalog(request.storage_root) as catalog:
+                store = InstrumentSnapshotStoreV1(request.storage_root, lease, catalog)
+                store.recover_pending()
+                resolved, attempts = self._resolve_or_fetch(store, request)
         except Exception as error:
             return _snapshot_failure(error)
         return DownloadPreparationReportV1(

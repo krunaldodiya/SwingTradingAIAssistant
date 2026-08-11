@@ -512,6 +512,29 @@ class IngestionCoordinator:
                 started,
             )
 
+    def run_under_lease(
+        self, command: IngestionCommand, lease: StorageRootLease
+    ) -> IngestionReport:
+        """Run while a caller-owned root lease remains live after return."""
+        started = self._now()
+        prepared = self._prepare_run(command, started)
+        if isinstance(prepared, IngestionReport):
+            return prepared
+        plans, policy = prepared
+        try:
+            if type(lease) is not StorageRootLease:
+                raise RuntimeError
+            with lease.root_operation(command.storage_root) as operation:
+                operation.ensure_live()
+            return self._run_leased(command, plans, lease, policy, started)
+        except Exception:
+            return self._report(
+                IngestionRunOutcome.FAILED,
+                RunFailureCode.CATALOG_UNAVAILABLE,
+                _not_attempted_results(plans),
+                started,
+            )
+
     def _prepare_run(
         self, command: IngestionCommand, started: datetime
     ) -> (

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -41,58 +44,124 @@ from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCoordinator,
     ProviderSessionAuthenticationError,
 )
-from swing_trading_ai_assistant.market_data.schedule_evidence import schedule_digest
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    parse_canonical_schedule_bytes,
+    schedule_digest,
+)
 
 
 def test_compose_closed_month_schedule_explicitly_classifies_every_date() -> None:
+    snapshot = _calendar_snapshot(date(2024, 2, 1), special=date(2024, 2, 10))
     schedule = compose_closed_month_schedule(
-        date(2024, 1, 1),
-        {"CM": [{"tradingDate": "26-Jan-2024"}]},
-        source_release="sha256:" + "a" * 64,
-        observed_at=datetime(2024, 2, 1, tzinfo=UTC),
+        date(2024, 2, 1),
+        snapshot,
+        source_release="sha256:" + hashlib.sha256(snapshot).hexdigest(),
+        observed_at=datetime(2024, 3, 1, tzinfo=UTC),
     )
 
     assert schedule.schema_version == 2
-    assert schedule.covered_from == date(2024, 1, 1)
-    assert schedule.covered_to == date(2024, 1, 31)
-    assert [item.trade_date for item in schedule.sessions] == [
-        date(2024, 1, 1),
-        date(2024, 1, 2),
-        date(2024, 1, 3),
-        date(2024, 1, 4),
-        date(2024, 1, 5),
-        date(2024, 1, 8),
-        date(2024, 1, 9),
-        date(2024, 1, 10),
-        date(2024, 1, 11),
-        date(2024, 1, 12),
-        date(2024, 1, 15),
-        date(2024, 1, 16),
-        date(2024, 1, 17),
-        date(2024, 1, 18),
-        date(2024, 1, 19),
-        date(2024, 1, 22),
-        date(2024, 1, 23),
-        date(2024, 1, 24),
-        date(2024, 1, 25),
-        date(2024, 1, 29),
-        date(2024, 1, 30),
-        date(2024, 1, 31),
-    ]
-    assert schedule.sessions[0].open_at.isoformat() == "2024-01-01T03:45:00+00:00"
-    assert schedule.sessions[0].close_at.isoformat() == "2024-01-01T10:00:00+00:00"
-    assert {item.trade_date: item.reason for item in schedule.closures} == {
-        date(2024, 1, 6): "weekend",
-        date(2024, 1, 7): "weekend",
-        date(2024, 1, 13): "weekend",
-        date(2024, 1, 14): "weekend",
-        date(2024, 1, 20): "weekend",
-        date(2024, 1, 21): "weekend",
-        date(2024, 1, 26): "official-holiday",
-        date(2024, 1, 27): "weekend",
-        date(2024, 1, 28): "weekend",
-    }
+    assert schedule.covered_from == date(2024, 2, 1)
+    assert schedule.covered_to == date(2024, 2, 29)
+    assert schedule.sessions[0].open_at.isoformat() == "2024-02-01T03:45:00+00:00"
+    assert any(item.kind == "special-session" for item in schedule.sessions)
+    assert {item.reason for item in schedule.closures} == {"official-closure"}
     assert schedule_digest(schedule) == schedule_digest(schedule)
+
+
+@pytest.mark.parametrize("mutator", ("missing", "duplicate", "outside"))
+def test_authoritative_calendar_rejects_incomplete_or_ambiguous_dates(
+    mutator: str,
+) -> None:
+    payload = json.loads(_calendar_snapshot(date(2024, 2, 1)))
+    if mutator == "missing":
+        payload["dates"].pop()
+    elif mutator == "duplicate":
+        payload["dates"].append(payload["dates"][0])
+    else:
+        payload["dates"][0]["date"] = "2024-03-01"
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(ValueError):
+        compose_closed_month_schedule(
+            date(2024, 2, 1),
+            raw,
+            source_release="sha256:" + hashlib.sha256(raw).hexdigest(),
+            observed_at=datetime(2024, 3, 1, tzinfo=UTC),
+        )
+
+
+def _calendar_snapshot(month: date, special: date | None = None) -> bytes:
+    entries = []
+    current = month
+    while current.month == month.month:
+        if current == special:
+            entry = {
+                "date": current.isoformat(),
+                "session": {
+                    "open_at": f"{current.isoformat()}T04:00:00Z",
+                    "close_at": f"{current.isoformat()}T05:00:00Z",
+                    "kind": "special-session",
+                },
+            }
+        elif current.weekday() >= 5:
+            entry = {
+                "date": current.isoformat(),
+                "closure": {"reason": "official-closure"},
+            }
+        else:
+            entry = {
+                "date": current.isoformat(),
+                "session": {
+                    "open_at": f"{current.isoformat()}T03:45:00Z",
+                    "close_at": f"{current.isoformat()}T10:00:00Z",
+                    "kind": "official-regular",
+                },
+            }
+        entries.append(entry)
+        current = date.fromordinal(current.toordinal() + 1)
+    return json.dumps(
+        {"dates": entries}, sort_keys=True, separators=(",", ":")
+    ).encode()
+
+
+def test_source_release_binds_exact_snapshot_bytes_not_parsed_semantics() -> None:
+    compact = _calendar_snapshot(date(2024, 2, 1))
+    spaced = json.dumps(json.loads(compact), indent=1, sort_keys=False).encode()
+    assert json.loads(compact) == json.loads(spaced)
+    with pytest.raises(ValueError):
+        compose_closed_month_schedule(
+            date(2024, 2, 1),
+            spaced,
+            source_release="sha256:" + hashlib.sha256(compact).hexdigest(),
+            observed_at=datetime(2024, 3, 1, tzinfo=UTC),
+        )
+
+
+def test_schedule_cli_hashes_the_exact_private_authoritative_bytes(
+    tmp_path: Path,
+) -> None:
+    snapshot = _calendar_snapshot(date(2024, 2, 1))
+    source = tmp_path / "authoritative-calendar.json"
+    source.write_bytes(snapshot)
+    source.chmod(0o400)
+    output = tmp_path / "schedule.json"
+
+    exit_code = live_cli.main(
+        [
+            "compose-schedule",
+            "--month",
+            "2024-02",
+            "--authoritative-calendar",
+            str(source),
+            "--observed-at",
+            "2024-03-01T00:00:00Z",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    schedule = parse_canonical_schedule_bytes(output.read_bytes())
+    assert schedule.source_release == "sha256:" + hashlib.sha256(snapshot).hexdigest()
 
 
 def test_same_response_sample_is_bounded_deterministic_and_endpoint_inclusive() -> None:
@@ -137,6 +206,38 @@ def test_receipt_writer_is_sanitized_and_never_overwrites(tmp_path) -> None:  # 
     assert "token" not in output.read_text().lower()
     with pytest.raises(FileExistsError):
         write_receipt_no_overwrite(output, receipt)
+
+
+@pytest.mark.parametrize(
+    ("request_count", "provider_attempt_count", "raw_count", "normalized_count"),
+    ((1, 0, 0, 0), (1, 1, 1, 2)),
+)
+def test_receipt_rejects_impossible_attempt_and_count_shapes(
+    request_count: int,
+    provider_attempt_count: int,
+    raw_count: int,
+    normalized_count: int,
+) -> None:
+    with pytest.raises(ValueError):
+        LiveGateReceipt(
+            result="FAILED",
+            code="EMPTY_RESPONSE",
+            request_count=request_count,
+            provider_attempt_count=provider_attempt_count,
+            raw_count=raw_count,
+            normalized_count=normalized_count,
+            selected_count=0,
+            mismatch_count=0,
+            comparison_passed=False,
+            schedule_digest="a" * 64,
+            schedule_version=2,
+            schedule_as_of="2024-03-01T00:00:00.000000Z",
+            checksum=None,
+            first_ts=None,
+            last_ts=None,
+            source_revision="b" * 40,
+            policy_version="nse-equity-month@v1",
+        )
 
 
 def test_same_response_comparison_uses_only_selected_normalized_candles() -> None:
@@ -408,6 +509,90 @@ def test_live_service_records_one_failed_provider_attempt(tmp_path: Path) -> Non
     assert terminal.result == "FAILED"
     assert terminal.request_count == terminal.provider_attempt_count == 1
     assert session.request_count == 1
+    assert terminal.code != "PARTITION_FAILURE"
+
+
+def test_live_service_rejects_root_swap_before_provider_open(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    fixture = benchmark_nse_eq_v1(date(2024, 2, 1), date(2024, 2, 1))
+    prepared = PreparedDownloadV1(
+        fixture.schedule,
+        fixture.schedule_bytes,
+        fixture.schedule_digest,
+        fixture.instrument,
+        "a" * 64,
+        datetime(2024, 3, 1, tzinfo=UTC),
+        0,
+    )
+    session = _TappedSession(fixture.partitions[0].response)
+    service = LiveGateServiceV1(
+        _SwappingPreparation(prepared),
+        lambda supplied: IngestionCoordinator(session_factory=supplied),
+        session,
+        clock=_Clock(),
+        source_revision="b" * 40,
+    )
+
+    terminal = service.run(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2024, 2, 1),
+            date(2024, 2, 29),
+            root,
+            datetime(2024, 3, 1, tzinfo=UTC),
+        )
+    )
+
+    assert terminal.code == "ROOT_AUTHORITY_LOST"
+    assert session.request_count == 0
+
+
+@pytest.mark.parametrize("mutation", ("append", "symlink"))
+def test_live_service_rejects_partition_changed_after_coordinator(
+    tmp_path: Path, mutation: str
+) -> None:
+    fixture = benchmark_nse_eq_v1(date(2024, 2, 1), date(2024, 2, 1))
+    prepared = PreparedDownloadV1(
+        fixture.schedule,
+        fixture.schedule_bytes,
+        fixture.schedule_digest,
+        fixture.instrument,
+        "a" * 64,
+        datetime(2024, 3, 1, tzinfo=UTC),
+        0,
+    )
+    session = _TappedSession(fixture.partitions[0].response)
+    service = LiveGateServiceV1(
+        _Preparation(prepared),
+        lambda supplied: _MutatingCoordinator(
+            IngestionCoordinator(
+                session_factory=supplied,
+                clock=_Clock(),
+                run_id_factory=lambda: "ark69",
+            ),
+            mutation,
+        ),  # type: ignore[arg-type]
+        session,
+        clock=_Clock(),
+        source_revision="b" * 40,
+    )
+
+    terminal = service.run(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2024, 2, 1),
+            date(2024, 2, 29),
+            tmp_path,
+            datetime(2024, 3, 1, tzinfo=UTC),
+        )
+    )
+
+    assert terminal.code == "COMPARISON_UNAVAILABLE"
+    assert terminal.result == "FAILED"
+    assert session.request_count == 1
 
 
 def test_comparison_and_sampling_reject_invalid_or_mismatched_inputs() -> None:
@@ -465,7 +650,7 @@ def test_live_cli_persists_sanitized_terminal_once_without_reading_dotenv_early(
     output = tmp_path / "receipt.json"
     output.parent.chmod(0o700)
     terminal = LiveGateTerminalV1(
-        result="FAILED",
+        result="BLOCKED",
         code="AUTHENTICATION_FAILED",
         request_count=0,
         provider_attempt_count=0,
@@ -528,6 +713,11 @@ class _Preparation:
             self._prepared,
         )
 
+    def prepare_under_lease(
+        self, _request: object, _lease: object
+    ) -> DownloadPreparationReportV1:
+        return self.prepare(_request)
+
 
 class _FailedPreparation:
     def prepare(self, _request: object) -> DownloadPreparationReportV1:
@@ -537,15 +727,56 @@ class _FailedPreparation:
             None,
         )
 
+    def prepare_under_lease(
+        self, request: object, _lease: object
+    ) -> DownloadPreparationReportV1:
+        return self.prepare(request)
+
 
 class _RaisingPreparation:
     def prepare(self, _request: object) -> DownloadPreparationReportV1:
         raise RuntimeError
 
+    def prepare_under_lease(
+        self, request: object, _lease: object
+    ) -> DownloadPreparationReportV1:
+        return self.prepare(request)
+
+
+class _SwappingPreparation(_Preparation):
+    def prepare_under_lease(
+        self, request: object, _lease: object
+    ) -> DownloadPreparationReportV1:
+        assert isinstance(request, DownloadPreparationRequestV1)
+        moved = request.storage_root.with_name(request.storage_root.name + "-held")
+        os.rename(request.storage_root, moved)
+        request.storage_root.mkdir(mode=0o700)
+        return self.prepare(request)
+
 
 class _RaisingCoordinator:
     def run(self, _command: object) -> object:
         raise RuntimeError
+
+
+class _MutatingCoordinator:
+    def __init__(self, coordinator: IngestionCoordinator, mutation: str) -> None:
+        self._coordinator = coordinator
+        self._mutation = mutation
+
+    def run_under_lease(self, command, lease):  # type: ignore[no-untyped-def]
+        report = self._coordinator.run_under_lease(command, lease)
+        manifest = report.results[0].final_manifest
+        assert manifest is not None and manifest.canonical_path is not None
+        path = command.storage_root / manifest.canonical_path
+        if self._mutation == "append":
+            with path.open("ab") as handle:
+                handle.write(b"changed-after-publication")
+        else:
+            retained = path.with_name("retained.parquet")
+            path.rename(retained)
+            path.symlink_to(retained.name)
+        return report
 
 
 class _TappedSession:
