@@ -6,14 +6,16 @@ import argparse
 import re
 import sys
 import threading
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Literal, Protocol
 
 from dotenv import load_dotenv
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
+    BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
     BoundedNifty50DownloadServiceV1,
     CanonicalFileNifty50UniverseSourceV1,
@@ -70,8 +72,15 @@ from .open_month_query import (
 from .preview_admission import PreviewAdmissionPolicyV1
 from .probe import ProbeRequest, run_capability_probe
 from .public_contract import (
+    MAX_DAILY_QUERY_ROWS_V1,
+    CandleFieldV1,
     CoverageReportV1,
     DownloadReportV1,
+    PublicCommandReportV1,
+    PublicCommandStatusV1,
+    PublicFailureCodeV1,
+    PublicFailureV1,
+    PublicQueryRequestV1,
     QueryReportV1,
     public_exit_code,
     render_coverage_report_json,
@@ -113,6 +122,14 @@ class PublicCoveragePortV1(Protocol):
 
 class PublicQueryPortV1(Protocol):
     def query(self, request: object) -> QueryReportV1: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _CommandAdmissionV1:
+    request: object
+    universe_source: CanonicalFileNifty50UniverseSourceV1 | None
+    admitted: bool
+    invalid_universe_source: bool = False
 
 
 class _SystemClock:
@@ -290,70 +307,221 @@ def main(
     query_service: PublicQueryPortV1 | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if (
-        args.command in ("download", "coverage", "query")
-        and args.segment == "NSE_EQ"
-        and date(2022, 1, 1) <= args.from_date <= args.to_date
-    ):
-        args.storage_root = _prepare_storage_root(args.storage_root)
-    if args.command == "download":
-        return _run_download_command(args, download_service)
-    if args.command == "coverage":
+    if args.command == "probe-upstox":
+        return _run_probe(args)
+    injected = {
+        "download": download_service,
+        "coverage": coverage_service,
+        "query": query_service,
+    }[args.command]
+    public = injected is not None or args.symbol is not None
+    admission = _command_request(args, injected is not None)
+    if not admission.admitted:
+        if admission.invalid_universe_source or not public:
+            return _render_admission_terminal(args, False, public)
+    else:
         try:
-            request = CoverageRequestV1(
-                args.segment,
-                args.symbol or (args.symbols or ("NIFTY50",))[0],
-                args.from_date,
-                args.to_date,
-                args.storage_root,
-            )
-        except ValueError:
-            request = object()
+            _prepare_storage_root(args.storage_root)
+        except OSError:
+            return _render_admission_terminal(args, True, public)
+    request = admission.request
+    if args.command == "download":
+        return _run_download_command(
+            args, download_service, request, admission.universe_source
+        )
+    if args.command == "coverage":
         if coverage_service is not None or args.symbol is not None:
             service = coverage_service or _default_nifty50_coverage_service()
             report = service.coverage(request)
             sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
             return public_exit_code(report.status)
-        batch_request = _bounded_read_request(args, request)
-        batch = (
-            _default_bounded_read_service().execute(batch_request)
-            if type(batch_request) is BoundedNifty50ReadRequestV1
-            else bounded_nifty50_read_terminal(
-                "coverage", Nifty50BatchOutcomeV1.REJECTED
-            )
-        )
+        batch = _default_bounded_read_service().execute(request)
         sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
         return bounded_nifty50_exit_code(batch.outcome)
-    if args.command == "query":
-        try:
-            request = QueryRequestV1(
-                args.segment,
-                args.symbol or (args.symbols or ("NIFTY50",))[0],
-                args.from_date,
-                args.to_date,
-                args.timeframe,
-                tuple(args.fields.split(",")),
-                args.max_rows,
-                args.storage_root,
-            )
-        except ValueError:
-            request = object()
-        if query_service is not None or args.symbol is not None:
-            service = query_service or _default_nifty50_query_service()
-            report = service.query(request)
-            sys.stdout.write(render_query_report_json(report).decode("utf-8"))
-            return public_exit_code(report.status)
-        batch_request = _bounded_read_request(args, request)
-        batch = (
-            _default_bounded_read_service().execute(batch_request)
-            if type(batch_request) is BoundedNifty50ReadRequestV1
-            else bounded_nifty50_read_terminal("query", Nifty50BatchOutcomeV1.REJECTED)
+    if query_service is not None or args.symbol is not None:
+        service = query_service or _default_nifty50_query_service()
+        report = service.query(request)
+        sys.stdout.write(render_query_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
+    batch = _default_bounded_read_service().execute(request)
+    sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
+    return bounded_nifty50_exit_code(batch.outcome)
+
+
+def _command_request(args: argparse.Namespace, injected: bool) -> _CommandAdmissionV1:
+    source, source_valid = _command_universe_source(args, injected)
+    if not source_valid:
+        return _CommandAdmissionV1(object(), None, False, True)
+    try:
+        public = injected or args.symbol is not None
+        request, request_admitted = _build_command_request(args, injected, public)
+    except (AttributeError, ValueError):
+        return _CommandAdmissionV1(object(), source, False)
+    if args.segment != "NSE_EQ" and not injected:
+        return _CommandAdmissionV1(object(), source, False)
+    admitted = (
+        request_admitted
+        and args.segment == "NSE_EQ"
+        and _valid_storage_root(args.storage_root)
+    )
+    return _CommandAdmissionV1(request, source, admitted)
+
+
+def _command_universe_source(
+    args: argparse.Namespace, injected: bool
+) -> tuple[CanonicalFileNifty50UniverseSourceV1 | None, bool]:
+    if args.command != "download" or injected or args.universe_file is None:
+        return None, True
+    try:
+        return CanonicalFileNifty50UniverseSourceV1(args.universe_file), True
+    except ValueError:
+        return None, False
+
+
+def _build_command_request(
+    args: argparse.Namespace, injected: bool, public: bool
+) -> tuple[object, bool]:
+    if args.command == "download":
+        return _download_command_request(args, injected), True
+    if args.command == "coverage":
+        prototype = CoverageRequestV1(
+            args.segment,
+            args.symbol or (args.symbols or ("NIFTY50",))[0],
+            args.from_date,
+            args.to_date,
+            args.storage_root,
         )
-        sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
-        return bounded_nifty50_exit_code(batch.outcome)
-    if args.command == "probe-upstox":
-        return _run_probe(args)
-    raise AssertionError("unreachable command")
+        request: object = (
+            prototype
+            if public
+            else BoundedNifty50ReadRequestV1(args.symbols, prototype, args.workers)
+        )
+        return request, True
+    prototype = QueryRequestV1(
+        args.segment,
+        args.symbol or (args.symbols or ("NIFTY50",))[0],
+        args.from_date,
+        args.to_date,
+        args.timeframe,
+        tuple(args.fields.split(",")),
+        args.max_rows,
+        args.storage_root,
+    )
+    request = (
+        prototype
+        if public
+        else BoundedNifty50ReadRequestV1(args.symbols, prototype, args.workers)
+    )
+    daily_rows_valid = not (
+        prototype.timeframe == "1d" and prototype.max_rows > MAX_DAILY_QUERY_ROWS_V1
+    )
+    public_request_valid = not public or _valid_public_query_request(prototype)
+    return request, daily_rows_valid and public_request_valid
+
+
+def _download_command_request(args: argparse.Namespace, injected: bool) -> object:
+    if injected:
+        symbol = args.symbol
+        if type(symbol) is not str:
+            raise ValueError
+        return SingleSymbolDownloadRequestV1(
+            args.segment,
+            symbol,
+            args.from_date,
+            args.to_date,
+            args.storage_root,
+        )
+    request = BoundedNifty50DownloadRequestV1(
+        symbols=(args.symbol,) if args.symbol is not None else args.symbols,
+        universe_as_of=args.universe_as_of or args.to_date,
+        knowledge_cutoff=_SystemClock().now(),
+        from_date=args.from_date,
+        to_date=args.to_date,
+        storage_root=args.storage_root,
+        workers=args.workers,
+    )
+    touched = (
+        (args.to_date.year - args.from_date.year) * 12
+        + args.to_date.month
+        - args.from_date.month
+        + 1
+    )
+    if touched > 12:
+        raise ValueError
+    return request
+
+
+def _valid_public_query_request(prototype: QueryRequestV1) -> bool:
+    try:
+        PublicQueryRequestV1(
+            prototype.segment,
+            prototype.symbol,
+            prototype.from_date,
+            prototype.to_date,
+            prototype.timeframe,  # type: ignore[arg-type]
+            tuple(CandleFieldV1(value) for value in prototype.fields),
+            prototype.max_rows,
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _render_admission_terminal(
+    args: argparse.Namespace, unavailable: bool, public: bool
+) -> int:
+    outcome = (
+        Nifty50BatchOutcomeV1.UNAVAILABLE
+        if unavailable
+        else Nifty50BatchOutcomeV1.REJECTED
+    )
+    if not public:
+        if args.command == "download":
+            batch = BoundedNifty50DownloadReportV1(outcome, None, (), 0, 0)
+            rendered = render_bounded_nifty50_download_json(batch)
+        else:
+            batch = bounded_nifty50_read_terminal(args.command, outcome)
+            rendered = render_bounded_nifty50_read_json(batch)
+        sys.stdout.write(rendered.decode("utf-8"))
+        return bounded_nifty50_exit_code(outcome)
+    command: Literal["download", "coverage", "query"] = args.command
+    code = (
+        PublicFailureCodeV1.INGESTION_UNAVAILABLE
+        if unavailable and command == "download"
+        else PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE
+        if unavailable
+        else PublicFailureCodeV1.INVALID_INPUT
+    )
+    status = (
+        PublicCommandStatusV1.UNAVAILABLE
+        if unavailable
+        else PublicCommandStatusV1.REJECTED
+    )
+    report: PublicCommandReportV1[Any] = PublicCommandReportV1(
+        "v1",
+        command,
+        status,
+        PublicFailureV1(code, None, None, None, None, ()),
+        0,
+        None,
+    )
+    if command == "download":
+        rendered = render_download_report_json(report)
+    elif command == "coverage":
+        rendered = render_coverage_report_json(report)
+    else:
+        rendered = render_query_report_json(report)
+    sys.stdout.write(rendered.decode("utf-8"))
+    return public_exit_code(status)
+
+
+def _valid_storage_root(value: object) -> bool:
+    return (
+        type(value) is type(Path())
+        and value.is_absolute()
+        and ".." not in value.parts
+        and not any(marker in part for part in value.parts for marker in "~*?[]")
+    )
 
 
 def _default_download_service(
@@ -425,74 +593,21 @@ def _default_download_service(
 def _run_download_command(
     args: argparse.Namespace,
     download_service: PublicDownloadPortV1 | None,
+    request: object,
+    universe_source: CanonicalFileNifty50UniverseSourceV1 | None,
 ) -> int:
     if download_service is not None:
-        try:
-            request: object = SingleSymbolDownloadRequestV1(
-                args.segment,
-                args.symbol,
-                args.from_date,
-                args.to_date,
-                args.storage_root,
-            )
-        except (AttributeError, ValueError):
-            request = object()
         report = download_service.download(request)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
         return public_exit_code(report.status)
+    service = _default_bounded_download_service(
+        universe_source, args.schedule_file, args.closed_schedule_file
+    )
     if args.symbol is not None:
-        try:
-            request = BoundedNifty50DownloadRequestV1(
-                symbols=(args.symbol,),
-                universe_as_of=args.universe_as_of or args.to_date,
-                knowledge_cutoff=_SystemClock().now(),
-                from_date=args.from_date,
-                to_date=args.to_date,
-                storage_root=args.storage_root,
-                workers=args.workers,
-            )
-            if args.segment != "NSE_EQ":
-                raise ValueError
-            source = (
-                None
-                if args.universe_file is None
-                else CanonicalFileNifty50UniverseSourceV1(args.universe_file)
-            )
-        except ValueError:
-            request = object()
-            source = None
-        report = _default_bounded_download_service(
-            source, args.schedule_file, args.closed_schedule_file
-        ).download_single(request)
+        report = service.download_single(request)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
         return public_exit_code(report.status)
-    try:
-        selected = args.symbols if args.symbols is not None else None
-        batch_request: object = BoundedNifty50DownloadRequestV1(
-            symbols=selected,
-            universe_as_of=args.universe_as_of or args.to_date,
-            knowledge_cutoff=_SystemClock().now(),
-            from_date=args.from_date,
-            to_date=args.to_date,
-            storage_root=args.storage_root,
-            workers=args.workers,
-        )
-        if args.segment != "NSE_EQ":
-            raise ValueError
-        source = (
-            None
-            if args.universe_file is None
-            else CanonicalFileNifty50UniverseSourceV1(args.universe_file)
-        )
-    except ValueError:
-        batch_request = object()
-        source = None
-    service = _default_bounded_download_service(
-        source,
-        args.schedule_file,
-        args.closed_schedule_file,
-    )
-    batch_report = service.download(batch_request)
+    batch_report = service.download(request)
     sys.stdout.write(render_bounded_nifty50_download_json(batch_report).decode("utf-8"))
     return bounded_nifty50_exit_code(batch_report.outcome)
 
@@ -602,24 +717,6 @@ def _default_bounded_read_service() -> BoundedPointInTimeNifty50ReadServiceV1:
     )
 
 
-def _bounded_read_request(
-    args: argparse.Namespace, prototype: object
-) -> BoundedNifty50ReadRequestV1 | object:
-    try:
-        if type(prototype) not in (CoverageRequestV1, QueryRequestV1):
-            raise ValueError
-        symbols = args.symbols if args.symbols is not None else None
-        if args.segment != "NSE_EQ":
-            raise ValueError
-        return BoundedNifty50ReadRequestV1(
-            symbols,
-            cast(CoverageRequestV1 | QueryRequestV1, prototype),
-            args.workers,
-        )
-    except ValueError:
-        return object()
-
-
 def _add_read_selection(command: argparse.ArgumentParser) -> None:
     selection = command.add_mutually_exclusive_group(required=True)
     selection.add_argument("--symbol", help="one Nifty 50 trading symbol")
@@ -668,17 +765,9 @@ def _default_storage_root() -> Path:
 
 def _prepare_storage_root(value: object) -> Path:
     """Create a syntactically valid CLI storage root without weakening admission."""
-    if (
-        not isinstance(value, Path)
-        or not value.is_absolute()
-        or ".." in value.parts
-        or any(marker in part for part in value.parts for marker in "~*?[]")
-    ):
+    if not isinstance(value, Path) or not _valid_storage_root(value):
         return Path()
-    try:
-        value.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError:
-        return Path()
+    value.mkdir(mode=0o700, parents=True, exist_ok=True)
     return value
 
 
