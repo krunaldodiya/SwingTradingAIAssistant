@@ -49,9 +49,12 @@ report zero provider attempts.
    intraday-candle requests.
 5. Resume from catalog, manifest, immutable closed-month Parquet, and
    provisional current-month evidence. Closed verified partitions require zero
-   provider requests. The open month fetches only the missing completed-minute
-   suffix and atomically replaces provisional evidence; it does not overwrite
-   immutable closed-month data.
+   provider requests. When the same-date target advances, the open month calls
+   only Intraday V3, requires the retained prefix to remain byte-for-byte equal,
+   and appends only newly completed minutes. After date rollover it finalizes
+   pending prior dates from Historical V3 and appends a new content-addressed
+   immutable generation. Older provisional generations remain addressable, and
+   immutable closed-month data is never overwritten.
 6. Coverage and query are read-only and provider-free. They resolve the same
    point-in-time universe under the same admitted lease before reading stored
    evidence.
