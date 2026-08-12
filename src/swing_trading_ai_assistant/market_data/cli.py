@@ -44,6 +44,12 @@ from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
 from .instrument_snapshot import InstrumentSnapshotClientV1
 from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalogClient
 from .intraday import UpstoxV3IntradayClient
+from .intraday_views import (
+    DerivedIntradayQueryServiceV1,
+    DuckDBIntradayViewEngineV1,
+    OpenMonthDerivedIntradayQueryServiceV1,
+    RetainedOpenMonthScheduleResolverV1,
+)
 from .nifty50_read_workflow import (
     BoundedNifty50ReadRequestV1,
     BoundedPointInTimeNifty50ReadServiceV1,
@@ -513,6 +519,8 @@ def _default_query_service(
     admission = policy or PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     evaluator = StoredCoverageEvaluatorV1()
     clock = _SystemClock()
+    retained_schedule = RetainedDailyScheduleResolverV1()
+    open_minute = OpenMonthOneMinuteQueryServiceV1(admission, clock=clock)
     closed = TimeframeQueryServiceV1(
         OneMinuteQueryServiceV1(
             admission,
@@ -523,14 +531,26 @@ def _default_query_service(
         DailyQueryServiceV1(
             admission,
             evaluator,
-            resolver=RetainedDailyScheduleResolverV1(),
+            resolver=retained_schedule,
             engine=DuckDBDailyOHLCVEngineV1(),
+            clock=clock,
+        ),
+        intraday_service=DerivedIntradayQueryServiceV1(
+            admission,
+            evaluator,
+            resolver=retained_schedule,
+            engine=DuckDBIntradayViewEngineV1(),
             clock=clock,
         ),
     )
     return CurrentAwareQueryServiceV1(
         closed,
-        OpenMonthOneMinuteQueryServiceV1(admission, clock=clock),
+        open_minute,
+        open_intraday_service=OpenMonthDerivedIntradayQueryServiceV1(
+            open_minute,
+            RetainedOpenMonthScheduleResolverV1(),
+            clock=clock,
+        ),
         clock=clock,
     )
 

@@ -182,6 +182,36 @@ def test_query_resolves_requested_member_without_provider_activity(
     assert ports[0].policy.ordered_symbols == ("RELIANCE",)
 
 
+@pytest.mark.parametrize("timeframe", ("3m", "5m", "15m", "30m", "1h", "1d"))
+def test_query_prototype_accepts_every_public_local_timeframe(
+    tmp_path: Path, timeframe: str
+) -> None:
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        timeframe,
+        ("ts", "close"),
+        1_000,
+        tmp_path,
+    )
+    assert read_module._valid_query_prototype(request)
+
+    assert not read_module._valid_query_prototype(
+        QueryRequestV1(
+            request.segment,
+            request.symbol,
+            request.from_date,
+            request.to_date,
+            request.timeframe,
+            request.fields,
+            request.max_rows,
+            Path("relative"),
+        )
+    )
+
+
 def test_nonmember_read_fails_before_coverage_or_query_port(tmp_path: Path) -> None:
     _seed(tmp_path)
     calls = 0

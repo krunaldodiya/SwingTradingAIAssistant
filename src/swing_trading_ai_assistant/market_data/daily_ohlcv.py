@@ -158,10 +158,15 @@ class TimeframeQueryServiceV1:
     """Route one validated raw request to exactly one timeframe service."""
 
     def __init__(
-        self, minute_service: PublicQueryPortV1, daily_service: PublicQueryPortV1
+        self,
+        minute_service: PublicQueryPortV1,
+        daily_service: PublicQueryPortV1,
+        *,
+        intraday_service: PublicQueryPortV1 | None = None,
     ) -> None:
         self._minute_service = minute_service
         self._daily_service = daily_service
+        self._intraday_service = intraday_service
 
     def query(self, request: object) -> QueryReportV1:
         return self._query(request, None)
@@ -178,6 +183,11 @@ class TimeframeQueryServiceV1:
             return self._call(self._minute_service, request, lease)
         if typed.timeframe == "1d":
             return self._call(self._daily_service, typed, lease)
+        if (
+            typed.timeframe in {"3m", "5m", "15m", "30m", "1h"}
+            and self._intraday_service is not None
+        ):
+            return self._call(self._intraday_service, typed, lease)
         return self._call(self._minute_service, typed, lease)
 
     @staticmethod

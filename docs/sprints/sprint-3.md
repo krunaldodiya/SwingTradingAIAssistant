@@ -208,3 +208,7 @@ fully verified closed month.
 The one/many/all-50 selection, point-in-time ISIN binding, shared resource
 bounds, and provider-free read contract are recorded in
 [Plan 07](../plans/07-bounded-nifty50-workflow-contract.md).
+
+The zero-provider `3m`, `5m`, `15m`, `30m`, and `1h` session-anchored view
+contract, including current-session completed-bucket behavior, is recorded in
+[Plan 08](../plans/08-local-intraday-view-contract.md).

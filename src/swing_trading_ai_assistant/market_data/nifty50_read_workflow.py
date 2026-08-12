@@ -195,14 +195,10 @@ class BoundedNifty50ReadRequestV1:
 
 
 def _valid_query_prototype(request: QueryRequestV1) -> bool:
-    if (
-        request.timeframe != "1m"
-        or not request.storage_root.is_absolute()
-        or any(
-            character in part
-            for part in request.storage_root.parts
-            for character in "~*?[]"
-        )
+    if not request.storage_root.is_absolute() or any(
+        character in part
+        for part in request.storage_root.parts
+        for character in "~*?[]"
     ):
         return False
     try:
@@ -211,7 +207,7 @@ def _valid_query_prototype(request: QueryRequestV1) -> bool:
             request.symbol,
             request.from_date,
             request.to_date,
-            "1m",
+            cast(Any, request.timeframe),
             tuple(CandleFieldV1(value) for value in request.fields),
             request.max_rows,
         )

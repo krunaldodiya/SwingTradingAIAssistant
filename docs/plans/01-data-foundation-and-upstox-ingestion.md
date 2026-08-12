@@ -386,10 +386,11 @@ Do not store credentials or access tokens in either Parquet or DuckDB.
   provider's `Retry-After` guidance when valid, and share one account-level rate
   limiter across all workers.
 
-Higher-timeframe aggregation is a query or derived-artifact concern, not an
-ingestion request. Its exact session buckets, partial-bucket policy, and
-corporate-action adjustment version require a separately approved
-specification before those derived bars are exposed as research facts.
+Higher-timeframe aggregation is a query concern, not an ingestion request. Its
+exact session buckets and incomplete-bucket policy are frozen in
+[Plan 08](08-local-intraday-view-contract.md). Derived intraday facts remain
+raw-only; the separately versioned corporate-action boundary owns any future
+adjusted availability or formula.
 
 ### Performance
 

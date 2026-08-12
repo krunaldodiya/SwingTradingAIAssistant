@@ -218,7 +218,7 @@ def _command(root: Path, name: str, *, timeframe: str | None = None) -> list[str
                 "--fields",
                 "ts,open,high,low,close,volume",
                 "--max-rows",
-                "1000" if timeframe == "1m" else "31",
+                "31" if timeframe == "1d" else "1000",
             ]
         )
     return values + ["--storage-root", str(root), "--output", "json"]
@@ -263,6 +263,7 @@ def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
     _retain_universe(tmp_path)
     coverage = _invoke(capsys, _command(tmp_path, "coverage"))
     minute = _invoke(capsys, _command(tmp_path, "query", timeframe="1m"))
+    five_minute = _invoke(capsys, _command(tmp_path, "query", timeframe="5m"))
     daily = _invoke(capsys, _command(tmp_path, "query", timeframe="1d"))
 
     assert first["provider_attempt_count"] == 2
@@ -274,11 +275,17 @@ def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
     assert coverage["payload"]["months"][0]["coverage_state"] == "VERIFIED"
     assert minute["provider_attempt_count"] == 0
     assert minute["payload"]["row_count"] == 375
+    assert five_minute["provider_attempt_count"] == 0
+    assert five_minute["payload"]["row_count"] == 75
+    assert (
+        five_minute["payload"]["calculation_version"] == "nse-session-intraday-ohlcv@v1"
+    )
+    assert five_minute["payload"]["bucket_minutes"] == 5
     assert daily["provider_attempt_count"] == 0
     assert daily["payload"]["row_count"] == 1
     assert daily["payload"]["calculation_version"] == "nse-session-ohlcv@v1"
     assert daily["payload"]["adjustment_state"] == "raw"
-    for output in (first, repeat, coverage, minute, daily):
+    for output in (first, repeat, coverage, minute, five_minute, daily):
         assert str(tmp_path) not in json.dumps(output)
     assert (tmp_path / "catalog.duckdb").is_file()
     assert tuple(tmp_path.rglob("bars.parquet"))
