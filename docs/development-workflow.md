@@ -45,11 +45,28 @@ For every behavior change use red-green-refactor: write a focused failing test, 
 change, then refactor while relevant tests stay green. Include proportionate failure, boundary, recovery, and
 research-bias cases.
 
-During work, run a fast gate: Ruff format/lint on changed files plus affected tests. Reproduce failures at the
+Use three native pytest profiles from the repository root:
+
+```sh
+# Focused red/green: one node, stop on the first failure.
+uv run --extra dev pytest <test-node> --no-cov -q -x
+
+# Affected tests: the smallest relevant path set.
+uv run --extra dev pytest <test-paths> --no-cov -q
+
+# Authoritative full profile: configured whole-package branch coverage.
+uv run --extra dev pytest
+```
+
+Replace the angle-bracket placeholders with concrete pytest node IDs or paths. The explicit `--no-cov`
+overrides the repository coverage plugin only for focused and affected local feedback. Focused and affected
+runs are local feedback only, never merge evidence. Do not set PYTEST_ADDOPTS to hide or disable coverage.
+During work, pair the relevant pytest profile with Ruff format/lint on changed files. Reproduce failures at the
 smallest case. Vulture runs only in the full gate, never inside the green step.
 
-Before merge, the same actor runs the existing full gate once on the sealed revision. Nothing merges unless
-all five tools pass:
+Before merge, the same actor runs the existing full gate once on the sealed revision. The authoritative full
+profile remains branch-aware through the default pytest configuration. Nothing merges unless all five tools
+pass:
 
 ```sh
 uv run --extra dev ruff format --check . && uv run --extra dev ruff check . && uv run --extra dev pyright && uv run --extra dev vulture src --min-confidence 80 && uv run --extra dev pytest

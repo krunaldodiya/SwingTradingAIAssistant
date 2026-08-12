@@ -249,7 +249,9 @@ def test_review_is_triggered_by_risk_instead_of_market_data_surface_area() -> No
 def test_workflow_has_fast_iteration_and_one_unwaivable_full_gate() -> None:
     workflow = " ".join(WORKFLOW_PATH.read_text().lower().split())
     for required in (
-        "during work, run a fast gate",
+        "uv run --extra dev pytest <test-node> --no-cov -q -x",
+        "uv run --extra dev pytest <test-paths> --no-cov -q",
+        "focused and affected runs are local feedback only, never merge evidence",
         "vulture runs only in the full gate",
         "before merge",
         "nothing merges unless all five tools pass",

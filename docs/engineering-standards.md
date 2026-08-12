@@ -36,7 +36,9 @@ Keep a testing pyramid: many fast unit tests for deterministic rules, fewer inte
 persistence, and a small number of end-to-end/contract tests for critical workflows. Tests are deterministic,
 isolated, readable, and independent of live providers unless explicitly designated as integration checks. Test
 public behavior and important failure, boundary, recovery, and market-bias cases. Follow the workflow's
-test-first and gate rules.
+test-first and gate rules. Focused and affected local loops use explicit `--no-cov` and are never pre-merge
+evidence; default pytest configuration retains whole-package branch coverage for the authoritative full gate.
+Do not hide coverage behavior through environment variables or implicit configuration.
 
 ## Security and dependencies
 
