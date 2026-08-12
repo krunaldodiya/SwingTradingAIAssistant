@@ -374,6 +374,79 @@ def test_later_same_day_cutoff_fetches_only_intraday_and_appends_new_snapshot(
         assert len(catalog.list_provisional_partitions(later.metadata.plan)) == 2
 
 
+def test_same_schedule_and_cutoff_finalization_publishes_distinct_generation(
+    tmp_path: Path,
+) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    preparation = _Preparation()
+
+    class FinalizingHistorical:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def fetch(self, request, token):
+            del token
+            self.requests.append(request)
+            if request.to_date == date(2026, 8, 10):
+                return HistoricalResponse(
+                    200, [_raw(10, minute) for minute in range(15, 18)]
+                )
+            return HistoricalResponse(
+                200,
+                [_raw(11, minute, close=100.75) for minute in range(15, 20)],
+            )
+
+    historical = FinalizingHistorical()
+    intraday = _Intraday()
+    token = _TokenProvider()
+    clock = _Clock(_local(11, 9, 21))
+    service = OpenMonthDownloadServiceV1(
+        preparation, historical, intraday, token, clock=clock
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+    first = service.download(request)
+    assert first.metadata is not None
+    old_path = tmp_path / first.metadata.relative_path
+    old_bytes = old_path.read_bytes()
+
+    clock.now_value = _local(12, 9, 21)
+    finalized = service.download(request)
+
+    assert finalized.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert finalized.metadata is not None
+    assert (
+        finalized.metadata.schedule_digest_sha256
+        == first.metadata.schedule_digest_sha256
+    )
+    assert finalized.metadata.cutoff == first.metadata.cutoff
+    assert finalized.metadata.checksum_sha256 != first.metadata.checksum_sha256
+    assert finalized.metadata.relative_path != first.metadata.relative_path
+    assert old_path.read_bytes() == old_bytes
+    with DuckDBCatalog(tmp_path) as catalog:
+        generations = catalog.list_provisional_partitions(finalized.metadata.plan)
+        latest = catalog.latest_provisional_partition(finalized.metadata.plan)
+    assert len(generations) == 2
+    assert {value.relative_path for value in generations} == {
+        first.metadata.relative_path,
+        finalized.metadata.relative_path,
+    }
+    assert latest == finalized.metadata
+
+    repeated = service.download(request)
+
+    assert repeated.outcome is OpenMonthDownloadOutcomeV1.ALREADY_CURRENT
+    assert repeated.metadata == finalized.metadata
+    assert [(value.from_date, value.to_date) for value in historical.requests] == [
+        (date(2026, 8, 1), date(2026, 8, 10)),
+        (date(2026, 8, 11), date(2026, 8, 11)),
+    ]
+    assert intraday.calls == 1
+    assert token.calls == 2
+
+
 def test_next_day_rollover_minimally_finalizes_intraday_rows_without_mutating_old_bytes(
     tmp_path: Path,
 ) -> None:
