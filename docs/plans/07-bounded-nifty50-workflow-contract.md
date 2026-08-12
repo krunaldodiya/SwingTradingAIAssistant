@@ -1,6 +1,6 @@
 # Bounded Nifty 50 Workflow Contract
 
-Status: implemented candidate for ARK-141 and ARK-12.
+Status: implemented by ARK-141 and ARK-12.
 
 ## Purpose
 

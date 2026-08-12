@@ -1,6 +1,6 @@
 # Local Intraday View Contract
 
-Status: implementation candidate for ARK-142.
+Status: implemented by ARK-142.
 
 ## Purpose
 
