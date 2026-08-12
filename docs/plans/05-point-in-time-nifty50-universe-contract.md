@@ -1,5 +1,7 @@
 # Point-in-time Nifty 50 universe contract
 
+Status: implemented by ARK-140.
+
 `Nifty50UniverseSnapshotV1` is offline, vendor-neutral evidence supplied by a
 caller. It never downloads or scrapes membership and makes no claim that a
 current list is historical authority.

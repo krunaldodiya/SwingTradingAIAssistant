@@ -1,6 +1,6 @@
 # Plan 06: Current-month incremental equity data
 
-Status: **IMPLEMENTED CANDIDATE — ARK-148 REMEDIATION REVIEW PENDING**
+Status: **Implemented by ARK-145; ARK-148 remediation merged and Done.**
 
 Extends [Plan 04](04-public-preview-contract.md) without changing the immutable
 closed-month contract.
