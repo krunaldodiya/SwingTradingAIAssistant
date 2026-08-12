@@ -640,7 +640,9 @@ def test_catalog_v5_write_remove_and_row_failure_branches(
 def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as current:
         current.connection.execute("DROP TABLE corporate_action_snapshots")
-        current.connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+        current.connection.execute("DROP TABLE provisional_partitions")
+        current.connection.execute(catalog_module._PROVISIONAL_SCHEMA_SQL)
+        current.connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     broken = DuckDBCatalog(tmp_path)
     broken._after_corporate_action_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
@@ -677,7 +679,7 @@ def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> 
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
     v3_root = tmp_path / "v3-catalog"
     v3_root.mkdir(mode=0o700)
@@ -688,7 +690,7 @@ def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> 
     with DuckDBCatalog(v3_root) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def test_metadata_reconstructs_and_rejects_wrong_content_path() -> None:

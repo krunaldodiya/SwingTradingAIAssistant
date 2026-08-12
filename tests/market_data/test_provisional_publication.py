@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -10,7 +11,6 @@ from swing_trading_ai_assistant.market_data.monthly_request_planner import (
 )
 from swing_trading_ai_assistant.market_data.partition_publication import (
     PartitionValidationError,
-    PublicationConflictError,
     PublicationOutcome,
     provisional_partition_relative_path,
     publish_provisional_partition,
@@ -84,7 +84,8 @@ def test_publish_provisional_uses_cutoff_path_and_is_idempotent(tmp_path: Path) 
     assert first.canonical_path == (
         "candles/provider=upstox/exchange=NSE/segment=NSE_EQ/instrument_type=EQ/"
         "security_id=INE002A01018/interval=1m/year=2026/month=08/provisional/"
-        f"schedule_sha256={digest}/cutoff=20260811T034600Z/bars.parquet"
+        f"schedule_sha256={digest}/cutoff=20260811T034600Z/"
+        f"checksum_sha256={first.checksum_sha256}/bars.parquet"
     )
     assert (tmp_path / first.canonical_path).is_file()
     assert not (
@@ -120,18 +121,35 @@ def test_later_cutoff_publishes_new_snapshot_without_changing_prior(
     assert (tmp_path / later.canonical_path).is_file()
 
 
-def test_same_cutoff_different_rows_is_no_clobber_conflict(tmp_path: Path) -> None:
+def test_same_cutoff_different_rows_coexist_by_checksum(tmp_path: Path) -> None:
     rows = (_candle(45),)
-    publish_provisional_partition(tmp_path, _plan(), rows[-1].ts, "c" * 64, rows)
+    first = publish_provisional_partition(
+        tmp_path, _plan(), rows[-1].ts, "c" * 64, rows
+    )
+    first_bytes = (tmp_path / first.canonical_path).read_bytes()
 
-    with pytest.raises(PublicationConflictError):
-        publish_provisional_partition(
-            tmp_path,
-            _plan(),
-            rows[-1].ts,
-            "c" * 64,
-            (_candle(45, close=100.75),),
-        )
+    second = publish_provisional_partition(
+        tmp_path,
+        _plan(),
+        rows[-1].ts,
+        "c" * 64,
+        (_candle(45, close=100.75),),
+    )
+    repeated = publish_provisional_partition(
+        tmp_path,
+        _plan(),
+        rows[-1].ts,
+        "c" * 64,
+        (_candle(45, close=100.75),),
+    )
+
+    assert first.canonical_path != second.canonical_path
+    assert f"checksum_sha256={first.checksum_sha256}" in first.canonical_path
+    assert f"checksum_sha256={second.checksum_sha256}" in second.canonical_path
+    assert (tmp_path / first.canonical_path).read_bytes() == first_bytes
+    assert second.outcome is PublicationOutcome.PUBLISHED
+    assert repeated.outcome is PublicationOutcome.ALREADY_PRESENT
+    assert repeated == replace(second, outcome=PublicationOutcome.ALREADY_PRESENT)
 
 
 @pytest.mark.parametrize(

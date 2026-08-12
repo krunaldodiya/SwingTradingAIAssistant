@@ -161,6 +161,10 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             ("swing-trading-catalog-v3-universe-snapshots", 3),
             ("swing-trading-catalog-v4-provisional-partitions", 4),
             ("swing-trading-catalog-v5-corporate-action-snapshots", 5),
+            (
+                "swing-trading-catalog-v6-content-addressed-provisional-partitions",
+                6,
+            ),
         ]
 
     with DuckDBCatalog(tmp_path) as reopened:
@@ -525,7 +529,7 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     with DuckDBCatalog(tmp_path) as migrated:
         assert migrated.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
         assert migrated.get_manifest(_plan()) == initial
 
 
@@ -538,7 +542,7 @@ def test_v2_to_current_migration_is_atomic(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
     with DuckDBCatalog(tmp_path) as catalog:
         catalog.connection.execute("DROP TABLE provisional_partitions")

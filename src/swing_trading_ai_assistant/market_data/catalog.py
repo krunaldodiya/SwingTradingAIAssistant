@@ -29,6 +29,7 @@ from .manifest_lifecycle import (
     verify_manifest,
 )
 from .monthly_request_planner import PlannedInstrumentMonth
+from .partition_publication import provisional_partition_relative_path
 from .provisional_metadata import ProvisionalPartitionMetadataV1
 from .storage_root_lease import StorageRootLease
 from .universe_snapshot import UniverseSnapshotMetadataV1
@@ -296,6 +297,17 @@ CREATE TABLE corporate_action_snapshots (
 _CORPORATE_ACTION_SCHEMA_CHECKSUM: Final = hashlib.sha256(
     _CORPORATE_ACTION_SCHEMA_SQL.encode("utf-8")
 ).hexdigest()
+_CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_ID: Final = (
+    "swing-trading-catalog-v6-content-addressed-provisional-partitions"
+)
+_CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_VERSION: Final = 6
+_CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_SQL: Final = _PROVISIONAL_SCHEMA_SQL.replace(
+    "interval, year, month, schedule_digest_sha256, cutoff)",
+    "interval, year, month, schedule_digest_sha256, cutoff, checksum_sha256)",
+)
+_CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_CHECKSUM: Final = hashlib.sha256(
+    _CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
 _PROVISIONAL_SELECT: Final = "SELECT schema_version, provider, instrument_key, security_id, symbol, exchange, segment, instrument_type, interval, year, month, from_date, to_date, schedule_digest_sha256, CAST(cutoff AS VARCHAR), session_complete, CAST(actual_from_ts AS VARCHAR), CAST(actual_to_ts AS VARCHAR), row_count, checksum_sha256, byte_size, relative_path, instrument_snapshot_digest_sha256, CAST(instrument_snapshot_retrieved_at AS VARCHAR), CAST(published_at AS VARCHAR), historical_attempt_count, intraday_attempt_count FROM provisional_partitions"
 _CORPORATE_ACTION_SELECT: Final = "SELECT schema_version, isin, source, source_release, CAST(retrieved_at AS VARCHAR), snapshot_sha256, byte_count, event_count, relative_object_path FROM corporate_action_snapshots"
 _PROVISIONAL_PLAN_KEY_COLUMNS: Final = (
@@ -308,10 +320,14 @@ _PROVISIONAL_PLAN_KEY_COLUMNS: Final = (
     "year",
     "month",
 )
-_PROVISIONAL_KEY_COLUMNS: Final = (
+_LEGACY_PROVISIONAL_KEY_COLUMNS: Final = (
     *_PROVISIONAL_PLAN_KEY_COLUMNS,
     "schedule_digest_sha256",
     "cutoff",
+)
+_PROVISIONAL_KEY_COLUMNS: Final = (
+    *_LEGACY_PROVISIONAL_KEY_COLUMNS,
+    "checksum_sha256",
 )
 _PROVISIONAL_PLAN_PREDICATE: Final = " AND ".join(
     f"{name} = ?" for name in _PROVISIONAL_PLAN_KEY_COLUMNS
@@ -1142,6 +1158,13 @@ class DuckDBCatalog:
                 if _provisional_metadata_from_row(existing) != metadata:
                     raise CatalogConflictError("provisional partition conflicts")
                 return
+            if metadata.relative_path != provisional_partition_relative_path(
+                metadata.plan,
+                metadata.cutoff,
+                metadata.schedule_digest_sha256,
+                metadata.checksum_sha256,
+            ):
+                raise CatalogConflictError("provisional partition conflicts")
             values = tuple(
                 getattr(metadata, name)
                 for name in ProvisionalPartitionMetadataV1.__dataclass_fields__
@@ -1167,7 +1190,7 @@ class DuckDBCatalog:
                 _PROVISIONAL_SELECT
                 + " WHERE "
                 + _PROVISIONAL_PLAN_PREDICATE
-                + " ORDER BY cutoff ASC, schedule_digest_sha256 ASC LIMIT ?",
+                + " ORDER BY cutoff ASC, schedule_digest_sha256 ASC, checksum_sha256 ASC LIMIT ?",
                 _provisional_plan_key(plan) + (limit,),
             ).fetchall()
             return tuple(_provisional_metadata_from_row(row) for row in rows)
@@ -1206,7 +1229,7 @@ class DuckDBCatalog:
                 + " WHERE "
                 + predicate
                 + " ORDER BY cutoff DESC, published_at DESC, "
-                "schedule_digest_sha256 ASC LIMIT 1",
+                "schedule_digest_sha256 ASC, checksum_sha256 ASC LIMIT 1",
                 parameters,
             ).fetchone()
             return None if row is None else _provisional_metadata_from_row(row)
@@ -1254,7 +1277,8 @@ class DuckDBCatalog:
                 "AND segment = ? AND symbol = ? AND year = ? AND month = ? "
                 "AND cutoff <= ? AND published_at <= ? "
                 "ORDER BY cutoff DESC, published_at DESC, "
-                "schedule_digest_sha256 ASC LIMIT 1",
+                "schedule_digest_sha256 ASC, checksum_sha256 ASC, "
+                "security_id ASC, instrument_key ASC, relative_path ASC LIMIT 1",
                 (
                     segment,
                     symbol,
@@ -1284,6 +1308,9 @@ class DuckDBCatalog:
 
     def _after_corporate_action_migration(self) -> None:
         """Fault-injection seam used to prove v5 migration rollback."""
+
+    def _after_content_addressed_provisional_migration(self) -> None:
+        """Fault-injection seam used to prove v6 migration rollback."""
 
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
@@ -1321,7 +1348,7 @@ class DuckDBCatalog:
         if self._read_only:
             raise CatalogPersistenceError("catalog is read only")
 
-    def _initialize_schema(self) -> None:
+    def _initialize_schema(self) -> None:  # noqa: C901
         connection = self.connection
         try:
             connection.execute("BEGIN")
@@ -1360,6 +1387,7 @@ class DuckDBCatalog:
                 )
                 self._migrate_provisional()
                 self._migrate_corporate_actions()
+                self._migrate_content_addressed_provisional()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V1_EXPECTED_TABLES
@@ -1387,6 +1415,7 @@ class DuckDBCatalog:
                 self._after_universe_migration()
                 self._migrate_provisional()
                 self._migrate_corporate_actions()
+                self._migrate_content_addressed_provisional()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V2_EXPECTED_TABLES
@@ -1404,12 +1433,19 @@ class DuckDBCatalog:
                 self._after_universe_migration()
                 self._migrate_provisional()
                 self._migrate_corporate_actions()
+                self._migrate_content_addressed_provisional()
                 self._validate_schema()
             elif self._migrate_late_schema(relations):
                 self._validate_schema()
             elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
             else:
+                migrations = self.connection.execute(
+                    "SELECT max(version) FROM schema_migrations"
+                ).fetchone()
+                if migrations == (5,):
+                    self._validate_schema(version=5)
+                    self._migrate_content_addressed_provisional()
                 self._validate_schema()
             connection.execute("COMMIT")
         except CatalogSchemaError:
@@ -1443,6 +1479,40 @@ class DuckDBCatalog:
         )
         self._after_corporate_action_migration()
 
+    def _migrate_content_addressed_provisional(self) -> None:
+        columns = ", ".join(ProvisionalPartitionMetadataV1.__dataclass_fields__)
+        self.connection.execute(
+            "ALTER TABLE provisional_partitions RENAME TO provisional_partitions_v5"
+        )
+        source_count = self.connection.execute(
+            "SELECT count(*) FROM provisional_partitions_v5"
+        ).fetchone()
+        self.connection.execute(_CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_SQL)
+        self.connection.execute(
+            f"INSERT INTO provisional_partitions ({columns}) SELECT {columns} FROM provisional_partitions_v5"  # noqa: S608 - fixed internal columns
+        )
+        cursor = self.connection.execute(_PROVISIONAL_SELECT)
+        migrated_count = 0
+        try:
+            while migrated_rows := cursor.fetchmany(64):
+                for row in migrated_rows:
+                    _provisional_metadata_from_row(row)
+                    migrated_count += 1
+        except Exception:
+            raise CatalogSchemaError("catalog row is invalid") from None
+        if source_count != (migrated_count,):
+            raise CatalogSchemaError("catalog row is invalid")
+        self.connection.execute("DROP TABLE provisional_partitions_v5")
+        self.connection.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+            (
+                _CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_ID,
+                _CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_VERSION,
+                _CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_CHECKSUM,
+            ),
+        )
+        self._after_content_addressed_provisional_migration()
+
     def _migrate_late_schema(self, relations: set[tuple[str, str, str]]) -> bool:
         v3 = {("table", "main", table) for table in _V3_EXPECTED_TABLES}
         v4 = {("table", "main", table) for table in _V4_EXPECTED_TABLES}
@@ -1453,6 +1523,7 @@ class DuckDBCatalog:
         if version == 3:
             self._migrate_provisional()
         self._migrate_corporate_actions()
+        self._migrate_content_addressed_provisional()
         return True
 
     def _user_relations(self) -> set[tuple[str, str, str]]:
@@ -1481,7 +1552,7 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
-    def _validate_schema(self, *, version: int = 5) -> None:
+    def _validate_schema(self, *, version: int = 6) -> None:  # noqa: C901
         if self.connection.execute(
             "SELECT count(*) FROM duckdb_indexes()"
         ).fetchone() != (0,):
@@ -1511,7 +1582,7 @@ class DuckDBCatalog:
                 )
                 for row in actual_rows
             )
-            if actual_columns != _expected_table_columns(table):
+            if actual_columns != _expected_table_columns(table, version=version):
                 raise CatalogSchemaError("catalog schema is invalid")
             actual_constraints = tuple(
                 _constraint_signature(row)
@@ -1526,7 +1597,9 @@ class DuckDBCatalog:
                     (table,),
                 ).fetchall()
             )
-            if frozenset(actual_constraints) != frozenset(_expected_constraints(table)):
+            if frozenset(actual_constraints) != frozenset(
+                _expected_constraints(table, version=version)
+            ):
                 raise CatalogSchemaError("catalog schema is invalid")
 
         migration = self.connection.execute(
@@ -1566,6 +1639,14 @@ class DuckDBCatalog:
                     _CORPORATE_ACTION_MIGRATION_ID,
                     _CORPORATE_ACTION_MIGRATION_VERSION,
                     _CORPORATE_ACTION_SCHEMA_CHECKSUM,
+                )
+            )
+        if version >= 6:
+            expected_migrations.append(
+                (
+                    _CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_ID,
+                    _CONTENT_ADDRESSED_PROVISIONAL_MIGRATION_VERSION,
+                    _CONTENT_ADDRESSED_PROVISIONAL_SCHEMA_CHECKSUM,
                 )
             )
         if migration != expected_migrations:
@@ -1799,7 +1880,7 @@ def _column_type(name: str, table: str) -> str:
 
 
 def _expected_table_columns(
-    table: str,
+    table: str, *, version: int = 6
 ) -> tuple[tuple[str, str, bool, object | None, bool], ...]:
     if table == "schema_migrations":
         names = ("migration_id", "version", "checksum_sha256")
@@ -1849,7 +1930,11 @@ def _expected_table_columns(
         not_null = set(names)
     elif table == "provisional_partitions":
         names = tuple(ProvisionalPartitionMetadataV1.__dataclass_fields__)
-        primary_key = set(_PROVISIONAL_KEY_COLUMNS)
+        primary_key = set(
+            _LEGACY_PROVISIONAL_KEY_COLUMNS
+            if version <= 5
+            else _PROVISIONAL_KEY_COLUMNS
+        )
         not_null = set(names)
     elif table == "corporate_action_snapshots":
         names = tuple(CorporateActionSnapshotMetadataV1.__dataclass_fields__)
@@ -1864,7 +1949,7 @@ def _expected_table_columns(
 
 
 def _expected_constraints(
-    table: str,
+    table: str, *, version: int = 6
 ) -> tuple[
     tuple[
         str,
@@ -1876,7 +1961,7 @@ def _expected_constraints(
     ],
     ...,
 ]:
-    columns = _expected_table_columns(table)
+    columns = _expected_table_columns(table, version=version)
     signatures: list[
         tuple[
             str,
@@ -2208,7 +2293,11 @@ def _expected_constraints(
         if table == "universe_snapshots"
         else ("isin", "retrieved_at", "snapshot_sha256")
         if table == "corporate_action_snapshots"
-        else _PROVISIONAL_KEY_COLUMNS
+        else (
+            _LEGACY_PROVISIONAL_KEY_COLUMNS
+            if version <= 5
+            else _PROVISIONAL_KEY_COLUMNS
+        )
         if table == "provisional_partitions"
         else ("source", "retrieved_at", "observation_sha256")
     )
@@ -2381,6 +2470,7 @@ def _provisional_key(
     return _provisional_plan_key(value.plan) + (
         value.schedule_digest_sha256,
         value.cutoff,
+        value.checksum_sha256,
     )
 
 
