@@ -293,9 +293,12 @@ def test_validation_rejects_wrong_schedule_type_and_requires_month_history() -> 
     today_only = plan_open_month(
         date(2026, 8, 11), date(2026, 8, 11), _schedule(), _local(9, 18)
     )
-    result = validate_provisional_advance(_schedule(), today_only, (), (), _today(17))
-    assert result.complete_to_target is False
-    assert result.missing_count == 6
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(_schedule(), today_only, (), (), _today(17))
+    assert (
+        raised.value.code
+        is ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE
+    )
 
 
 def test_rollover_replaces_only_prior_day_intraday_rows_with_complete_history() -> None:
@@ -370,3 +373,55 @@ def test_historical_rows_cannot_rewrite_an_existing_historical_prefix() -> None:
         )
 
     assert raised.value.code is ProvisionalValidationCodeV1.PREFIX_CONFLICT
+
+
+def test_historical_only_omitted_scheduled_minute_fails_closed() -> None:
+    rollover_plan = replace(
+        _plan(_local(9, 20)),
+        historical_to=date(2026, 8, 11),
+        intraday_trade_date=None,
+        last_completed_bar_start=None,
+        active_session_complete=False,
+    )
+    incomplete = (
+        *_history(),
+        *(
+            replace(value, source_version="upstox-historical-v3")
+            for value in _today(19)
+            if value.ts != _local(9, 17).astimezone(UTC)
+        ),
+    )
+
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(_schedule(), rollover_plan, (), incomplete, ())
+
+    assert (
+        raised.value.code
+        is ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE
+    )
+
+
+def test_mixed_source_finalization_with_omitted_timestamp_fails_closed() -> None:
+    rollover_plan = replace(
+        _plan(_local(9, 20)),
+        historical_to=date(2026, 8, 11),
+        intraday_trade_date=None,
+        last_completed_bar_start=None,
+        active_session_complete=False,
+    )
+    existing = (*_history(), *_today(16))
+    incomplete = tuple(
+        replace(value, source_version="upstox-historical-v3")
+        for value in _today(19)
+        if value.ts != _local(9, 17).astimezone(UTC)
+    )
+
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(
+            _schedule(), rollover_plan, existing, incomplete, ()
+        )
+
+    assert (
+        raised.value.code
+        is ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE
+    )

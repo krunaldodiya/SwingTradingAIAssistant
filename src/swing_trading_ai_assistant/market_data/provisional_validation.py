@@ -110,11 +110,6 @@ def validate_provisional_advance(
         _fail(ProvisionalValidationCodeV1.SCHEDULE_MISMATCH)
     expected_set = set(expected)
     finalized = _finalized_timestamps(schedule, plan, expected_set)
-    required_finalization = {
-        candle.ts
-        for candle in existing
-        if candle.ts in finalized and candle.source_version == _INTRADAY_SOURCE_V3
-    }
     combined, existing_keys, discarded = _merge_candles(
         schedule,
         plan,
@@ -128,7 +123,7 @@ def validate_provisional_advance(
     if any(
         (candle := combined.get(timestamp)) is None
         or candle.source_version != _HISTORICAL_SOURCE_V3
-        for timestamp in required_finalization
+        for timestamp in finalized
     ):
         _fail(ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE)
     retained: list[CanonicalCandle] = []

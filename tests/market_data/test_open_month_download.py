@@ -201,6 +201,52 @@ def test_first_open_month_download_persists_history_and_completed_current_bars(
     assert (tmp_path / report.metadata.relative_path).is_file()
 
 
+def test_incomplete_historical_finalization_writes_no_parquet_or_catalog_entry(
+    tmp_path: Path,
+) -> None:
+    class IncompleteHistorical(_Historical):
+        def fetch(self, request, token):
+            del request, token
+            self.calls += 1
+            return HistoricalResponse(200, [_raw(10, minute) for minute in (15, 17)])
+
+    with DuckDBCatalog(tmp_path):
+        pass
+    historical = IncompleteHistorical()
+    intraday = _Intraday()
+    token = _TokenProvider()
+    service = OpenMonthDownloadServiceV1(
+        _Preparation(),
+        historical,
+        intraday,
+        token,
+        clock=_Clock(_local(11, 9, 17, 30)),
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        tmp_path,
+    )
+
+    report = service.download(request)
+
+    _assert_failure(
+        report,
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+        historical=1,
+        intraday=1,
+    )
+    assert not tuple(tmp_path.rglob("*.parquet"))
+    with DuckDBCatalog(tmp_path) as catalog:
+        row = catalog.connection.execute(
+            "SELECT COUNT(*) FROM provisional_partitions"
+        ).fetchone()
+    assert row == (0,)
+
+
 def test_download_under_caller_lease_uses_gate_and_shared_limiter(
     tmp_path: Path,
 ) -> None:
