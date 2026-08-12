@@ -161,7 +161,7 @@ def test_contract_is_linked_and_replaces_microtask_execution() -> None:
     sprint = SPRINT.read_text()
 
     assert "[public-preview contract](04-public-preview-contract.md)" in plan_one
-    assert "Status: **RELEASE CANDIDATE — PUBLICATION EVIDENCE IN PROGRESS**" in sprint
+    assert "Status: **CLOSED — DOWNLOADER V1 RELEASE GATE PASSED**" in sprint
     assert "seven coherent PR-sized slices" in sprint
     assert "ARK-112" in contract and "superseded" in contract.lower()
     assert "23-task" not in sprint

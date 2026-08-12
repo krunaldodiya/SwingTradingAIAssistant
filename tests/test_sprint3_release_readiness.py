@@ -33,8 +33,8 @@ def test_release_record_crosswalks_every_plan_one_acceptance_row() -> None:
         "ARK-141",
         "ARK-142",
         "ARK-143",
-        "1,926",
-        "93.16%",
+        "1,973",
+        "93.22%",
     ):
         assert evidence in section
 
@@ -45,13 +45,16 @@ def test_release_record_keeps_publication_proof_separate_from_functional_proof()
     sprint = SPRINT.read_text()
     gates = sprint.split("## Publication gates", maxsplit=1)[1]
 
-    assert "RELEASE CANDIDATE — PUBLICATION EVIDENCE IN PROGRESS" in sprint
+    assert "CLOSED — DOWNLOADER V1 RELEASE GATE PASSED" in sprint
     assert "Independent exact-candidate review" in gates
     assert "Fresh five-tool full gate" in gates
     assert "Clean wheel installation" in gates
     assert "Hosted pull-request CI" in gates
     assert "Final merge revision" in gates
-    assert "PENDING" in gates
+    assert gates.count("| PASS |") == 5
+    assert "PENDING" not in gates
+    assert "57ffe8e405ca7becb790c3267becbf7c673cd801" in gates
+    assert "23b07d0c6204de230e5cebe17c8f54001751b253" in gates
 
 
 def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
