@@ -1,6 +1,6 @@
 # Plan 06: Current-month incremental equity data
 
-Status: **IMPLEMENTED CANDIDATE — RELEASE REVIEW PENDING**
+Status: **IMPLEMENTED CANDIDATE — ARK-148 REMEDIATION REVIEW PENDING**
 
 Extends [Plan 04](04-public-preview-contract.md) without changing the immutable
 closed-month contract.
@@ -54,11 +54,26 @@ For the first current-month invocation:
 
 For a repeated invocation:
 
-- if the retained cutoff equals the target, make zero candle-provider calls;
-- if the target advanced on the same date, call only Intraday V3;
-- require the retained prefix to remain byte-for-byte equal;
-- append only newly completed minutes and publish a new immutable snapshot; and
-- never overwrite or relabel the earlier snapshot.
+- derive the effective cutoff from the completed current-session minute, or from
+  the final scheduled Historical V3 minute when there is no intraday target;
+- reuse exact retained evidence with zero candle-provider calls when the request
+  ends before today, today is an explicit closure, or the current session has no
+  completed bar yet;
+- if the target advanced on the same date, call only Intraday V3, require the
+  retained prefix to remain byte-for-byte equal, and append only newly completed
+  minutes in a new immutable snapshot;
+- after the local date rolls over, treat prior-date Intraday V3 rows as awaiting
+  finalization, request only the minimal pending Historical V3 date range, and
+  publish a new immutable generation whose prior-date rows carry Historical V3
+  values and provenance;
+- allow corrected OHLCV only for that scheduled prior-date
+  `upstox-intraday-v3` to `upstox-historical-v3` transition; incomplete
+  finalization fails closed as `HISTORICAL_FINALIZATION_INCOMPLETE`, while a
+  changed current-date prefix, changed already-historical row, or unknown source
+  transition remains rejected; and
+- count only new timestamps as appended, never overwrite or relabel the earlier
+  snapshot, and make the post-finalization repeat zero-provider
+  `ALREADY_CURRENT`.
 
 Every provider, row, byte, decoded field, output, retry, lock, and query path
 remains bounded. Credentials are read lazily from `UPSTOX_ACCESS_TOKEN` only
@@ -86,6 +101,13 @@ subject to the unchanged 10,000-row public limit.
 
 - deterministic first, unchanged-repeat, later-cutoff append, conflicting-
   prefix, missing-minute, unsafe-path, catalog, and serializer tests pass;
+- zero-intraday-target repeats for a historical request end, explicit closure,
+  and pre-first-completed-bar cutoff reuse identical metadata without another
+  token, Historical V3, or Intraday V3 call;
+- a date-rollover test requests only the pending prior date, accepts a corrected
+  prior-date value with Historical V3 provenance in the new object, proves the
+  earlier object is byte-for-byte unchanged, rejects incomplete finalization,
+  and makes the next invocation zero-provider `ALREADY_CURRENT`;
 - a live RELIANCE smoke persisted 2,625 August rows through
   `2026-08-11T09:59:00Z`, with zero missing bars;
 - the next identical August request made zero snapshot, historical, and

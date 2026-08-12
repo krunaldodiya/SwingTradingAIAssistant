@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Protocol
 
 from .catalog import DuckDBCatalog
 from .credentials import AccessToken, AccessTokenProvider
@@ -43,6 +43,8 @@ from .schemas import CanonicalCandle
 from .storage_root_lease import LeaseOutcome, StorageRootLease
 from .upstox_canonical import canonicalize_upstox_equity_candles
 from .workflow_coordination import PublicationGateV1
+
+_HISTORICAL_SOURCE_V3: Final = "upstox-historical-v3"
 
 
 class OpenMonthDownloadOutcomeV1(StrEnum):
@@ -339,18 +341,21 @@ class OpenMonthDownloadServiceV1:
     ) -> OpenMonthDownloadReportV1:
         # The exact domain types were constructed above; local imports would only
         # duplicate their validators. Any mutation fails in the called boundaries.
-        target = open_plan.last_completed_bar_start
+        intraday_target = open_plan.last_completed_bar_start
+        effective_target = _effective_target_cutoff(schedule, open_plan)
         existing = self._existing_under_gate(
-            request, invocation, physical_plan, target, lease
+            request, invocation, physical_plan, effective_target, lease
         )
         metadata = existing[0] if existing is not None else None
         existing_rows = existing[1] if existing is not None else ()
+        pending_history = _pending_history_range(schedule, open_plan, existing_rows)
         if (
             metadata is not None
-            and target is not None
-            and metadata.cutoff == target
+            and effective_target is not None
+            and metadata.cutoff == effective_target
             and metadata.schedule_digest_sha256 == open_plan.schedule_digest
             and metadata.published_at <= invocation
+            and pending_history is None
         ):
             return OpenMonthDownloadReportV1(
                 OpenMonthDownloadOutcomeV1.ALREADY_CURRENT,
@@ -363,12 +368,11 @@ class OpenMonthDownloadServiceV1:
                 0,
             )
 
-        need_history = _needs_history(schedule, open_plan, existing_rows)
-        need_intraday = target is not None and (
-            metadata is None or metadata.cutoff < target
+        need_intraday = intraday_target is not None and (
+            metadata is None or metadata.cutoff < intraday_target
         )
         fetched = self._fetch_missing(
-            prepared, open_plan, invocation, need_history, need_intraday
+            prepared, invocation, pending_history, need_intraday
         )
         if isinstance(fetched, OpenMonthDownloadReportV1):
             return fetched
@@ -576,13 +580,12 @@ class OpenMonthDownloadServiceV1:
     def _fetch_missing(
         self,
         prepared: PreparedDownloadV1,
-        open_plan: OpenMonthPlanV1,
         invocation: datetime,
-        need_history: bool,
+        pending_history: tuple[date, date] | None,
         need_intraday: bool,
     ) -> _ProviderBatchV1 | OpenMonthDownloadReportV1:
         token: AccessToken | None = None
-        if need_history or need_intraday:
+        if pending_history is not None or need_intraday:
             try:
                 token = self._token_provider.get_access_token()
             except Exception:
@@ -593,20 +596,18 @@ class OpenMonthDownloadServiceV1:
                 )
         historical_rows: tuple[CanonicalCandle, ...] = ()
         intraday_rows: tuple[CanonicalCandle, ...] = ()
-        historical_attempts = int(need_history)
+        historical_attempts = int(pending_history is not None)
         intraday_attempts = int(need_intraday)
-        if need_history:
+        if pending_history is not None:
             try:
                 self._admit_provider_request()
-                historical_to = open_plan.historical_to
-                if historical_to is None:
-                    raise ValueError
+                historical_from, historical_to = pending_history
                 response = self._historical.fetch(
                     HistoricalRequest(
                         prepared.instrument.instrument_key,
                         "minutes",
                         1,
-                        open_plan.month_start,
+                        historical_from,
                         historical_to,
                     ),
                     token,  # type: ignore[arg-type]
@@ -671,21 +672,45 @@ def _validated_preparation(
         return None
 
 
-def _needs_history(
+def _effective_target_cutoff(
+    schedule: OpenMonthScheduleV1, plan: OpenMonthPlanV1
+) -> datetime | None:
+    if plan.last_completed_bar_start is not None:
+        return plan.last_completed_bar_start
+    if plan.historical_to is None:
+        return None
+    candidates = tuple(
+        session.close_at - timedelta(minutes=1)
+        for session in schedule.sessions
+        if session.trade_date <= plan.historical_to
+    )
+    return max(candidates).astimezone(UTC) if candidates else None
+
+
+def _pending_history_range(
     schedule: OpenMonthScheduleV1,
     plan: OpenMonthPlanV1,
     existing: tuple[CanonicalCandle, ...],
-) -> bool:
-    historical_to = plan.historical_to
-    if historical_to is None:
-        return False
-    prior_sessions = [
-        value for value in schedule.sessions if value.trade_date <= historical_to
-    ]
-    if not prior_sessions:
-        return False
-    final = prior_sessions[-1].close_at - timedelta(minutes=1)
-    return not existing or existing[-1].ts < final
+) -> tuple[date, date] | None:
+    if plan.historical_from is None or plan.historical_to is None:
+        return None
+    existing_by_timestamp = {candle.ts: candle for candle in existing}
+    pending_dates: list[date] = []
+    for session in schedule.sessions:
+        if not plan.historical_from <= session.trade_date <= plan.historical_to:
+            continue
+        timestamp = session.open_at
+        final_timestamp = session.close_at - timedelta(minutes=1)
+        while timestamp <= final_timestamp:
+            candle = existing_by_timestamp.get(timestamp)
+            if candle is None or candle.source_version != _HISTORICAL_SOURCE_V3:
+                pending_dates.append(session.trade_date)
+                break
+            timestamp += timedelta(minutes=1)
+    if not pending_dates:
+        return None
+    historical_from = plan.historical_from if not existing else min(pending_dates)
+    return historical_from, max(pending_dates)
 
 
 def _canonical_rows(

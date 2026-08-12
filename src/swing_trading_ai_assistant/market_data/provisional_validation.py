@@ -16,12 +16,15 @@ from .schedule_evidence import ScheduleSession
 from .schemas import CanonicalCandle
 
 MAX_PROVISIONAL_CANDLES_V1: Final = 65_536
+_HISTORICAL_SOURCE_V3: Final = "upstox-historical-v3"
+_INTRADAY_SOURCE_V3: Final = "upstox-intraday-v3"
 
 
 class ProvisionalValidationCodeV1(StrEnum):
     INVALID_INPUT = "INVALID_INPUT"
     SCHEDULE_MISMATCH = "SCHEDULE_MISMATCH"
     PREFIX_CONFLICT = "PREFIX_CONFLICT"
+    HISTORICAL_FINALIZATION_INCOMPLETE = "HISTORICAL_FINALIZATION_INCOMPLETE"
     IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
     OFF_SESSION_BAR = "OFF_SESSION_BAR"
 
@@ -105,15 +108,29 @@ def validate_provisional_advance(
         and target != plan.last_completed_bar_start
     ):
         _fail(ProvisionalValidationCodeV1.SCHEDULE_MISMATCH)
+    expected_set = set(expected)
+    finalized = _finalized_timestamps(schedule, plan, expected_set)
+    required_finalization = {
+        candle.ts
+        for candle in existing
+        if candle.ts in finalized and candle.source_version == _INTRADAY_SOURCE_V3
+    }
     combined, existing_keys, discarded = _merge_candles(
         schedule,
         plan,
         target,
-        set(expected),
+        expected_set,
+        finalized,
         existing,
         fetched_history,
         fetched_intraday,
     )
+    if any(
+        (candle := combined.get(timestamp)) is None
+        or candle.source_version != _HISTORICAL_SOURCE_V3
+        for timestamp in required_finalization
+    ):
+        _fail(ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE)
     retained: list[CanonicalCandle] = []
     for timestamp in expected:
         candle = combined.get(timestamp)
@@ -181,6 +198,7 @@ def _merge_candles(
     plan: OpenMonthPlanV1,
     target: datetime | None,
     expected: set[datetime],
+    finalized: set[datetime],
     existing: tuple[CanonicalCandle, ...],
     fetched_history: tuple[CanonicalCandle, ...],
     fetched_intraday: tuple[CanonicalCandle, ...],
@@ -203,11 +221,7 @@ def _merge_candles(
         ("intraday", fetched_intraday),
     ):
         for candle in values:
-            current_identity = _identity(candle)
-            if identity is None:
-                identity = current_identity
-            elif current_identity != identity:
-                _fail(ProvisionalValidationCodeV1.IDENTITY_MISMATCH)
+            identity = _validated_identity(origin, candle, identity)
             if candle.ts not in expected:
                 if origin == "intraday" and _unfinished_current_bar(
                     candle, target, active_session
@@ -216,13 +230,83 @@ def _merge_candles(
                     continue
                 _fail(ProvisionalValidationCodeV1.OFF_SESSION_BAR)
             prior = combined.get(candle.ts)
-            if prior is not None and _raw_signature(prior) != _raw_signature(candle):
+            correction = _is_historical_finalization(
+                origin, prior, candle.ts, finalized
+            )
+            if _has_prefix_conflict(prior, candle, correction):
                 _fail(ProvisionalValidationCodeV1.PREFIX_CONFLICT)
-            if prior is None:
+            if prior is None or correction:
                 combined[candle.ts] = candle
             if origin == "existing":
                 existing_keys.add(candle.ts)
     return combined, existing_keys, discarded
+
+
+def _validated_identity(
+    origin: str,
+    candle: CanonicalCandle,
+    identity: tuple[object, ...] | None,
+) -> tuple[object, ...]:
+    if not _valid_source(origin, candle.source_version):
+        _fail(ProvisionalValidationCodeV1.IDENTITY_MISMATCH)
+    current = _identity(candle)
+    if identity is not None and current != identity:
+        _fail(ProvisionalValidationCodeV1.IDENTITY_MISMATCH)
+    return current if identity is None else identity
+
+
+def _has_prefix_conflict(
+    prior: CanonicalCandle | None,
+    candle: CanonicalCandle,
+    correction: bool,
+) -> bool:
+    return (
+        prior is not None
+        and not correction
+        and _raw_signature(prior) != _raw_signature(candle)
+    )
+
+
+def _is_historical_finalization(
+    origin: str,
+    prior: CanonicalCandle | None,
+    timestamp: datetime,
+    finalized: set[datetime],
+) -> bool:
+    return (
+        origin == "history"
+        and prior is not None
+        and prior.source_version == _INTRADAY_SOURCE_V3
+        and timestamp in finalized
+    )
+
+
+def _valid_source(origin: str, source_version: str) -> bool:
+    if origin == "history":
+        return source_version == _HISTORICAL_SOURCE_V3
+    if origin == "intraday":
+        return source_version == _INTRADAY_SOURCE_V3
+    return source_version in {_HISTORICAL_SOURCE_V3, _INTRADAY_SOURCE_V3}
+
+
+def _finalized_timestamps(
+    schedule: OpenMonthScheduleV1,
+    plan: OpenMonthPlanV1,
+    expected: set[datetime],
+) -> set[datetime]:
+    if plan.historical_to is None:
+        return set()
+    finalized: set[datetime] = set()
+    for session in schedule.sessions:
+        if session.trade_date > plan.historical_to:
+            continue
+        current = session.open_at
+        final = session.close_at - timedelta(minutes=1)
+        while current <= final:
+            if current in expected:
+                finalized.add(current)
+            current += timedelta(minutes=1)
+    return finalized
 
 
 def _expected_timestamps(

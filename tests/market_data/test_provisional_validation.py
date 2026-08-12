@@ -64,7 +64,9 @@ def _plan(invocation: datetime):
     return plan_open_month(date(2026, 8, 1), date(2026, 8, 11), _schedule(), invocation)
 
 
-def _candle(ts: datetime, close: float = 100.5, *, source: str = "source-v3"):
+def _candle(
+    ts: datetime, close: float = 100.5, *, source: str = "upstox-historical-v3"
+):
     return CanonicalCandle(
         provider="upstox",
         instrument_key="NSE_EQ|INE002A01018",
@@ -294,3 +296,77 @@ def test_validation_rejects_wrong_schedule_type_and_requires_month_history() -> 
     result = validate_provisional_advance(_schedule(), today_only, (), (), _today(17))
     assert result.complete_to_target is False
     assert result.missing_count == 6
+
+
+def test_rollover_replaces_only_prior_day_intraday_rows_with_complete_history() -> None:
+    first = validate_provisional_advance(
+        _schedule(), _plan(_local(9, 20)), (), _history(), _today(19)
+    )
+    corrected_history = tuple(
+        replace(value, close=100.75, high=101.25, source_version="upstox-historical-v3")
+        for value in _today(19)
+    )
+    rollover_plan = replace(
+        _plan(_local(9, 20)),
+        historical_to=date(2026, 8, 11),
+        intraday_trade_date=None,
+        last_completed_bar_start=None,
+        active_session_complete=False,
+    )
+
+    result = validate_provisional_advance(
+        _schedule(), rollover_plan, first.candles, corrected_history, ()
+    )
+
+    assert result.complete_to_target is True
+    assert result.appended_count == 0
+    assert result.candles[:3] == first.candles[:3]
+    assert all(
+        candle.source_version == "upstox-historical-v3" for candle in result.candles[3:]
+    )
+    assert all(candle.close == 100.75 for candle in result.candles[3:])
+
+
+def test_rollover_rejects_incomplete_finalization_and_hostile_sources() -> None:
+    first = validate_provisional_advance(
+        _schedule(), _plan(_local(9, 20)), (), _history(), _today(19)
+    )
+    rollover_plan = replace(
+        _plan(_local(9, 20)),
+        historical_to=date(2026, 8, 11),
+        intraday_trade_date=None,
+        last_completed_bar_start=None,
+        active_session_complete=False,
+    )
+    incomplete = tuple(
+        replace(value, source_version="upstox-historical-v3") for value in _today(18)
+    )
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(
+            _schedule(), rollover_plan, first.candles, incomplete, ()
+        )
+    assert (
+        raised.value.code
+        is ProvisionalValidationCodeV1.HISTORICAL_FINALIZATION_INCOMPLETE
+    )
+
+    hostile = (replace(incomplete[0], source_version="hostile-source"), *incomplete[1:])
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(
+            _schedule(), rollover_plan, first.candles, hostile, ()
+        )
+    assert raised.value.code is ProvisionalValidationCodeV1.IDENTITY_MISMATCH
+
+
+def test_historical_rows_cannot_rewrite_an_existing_historical_prefix() -> None:
+    changed_prefix = tuple(
+        replace(value, close=100.75, high=101.25) if index == 0 else value
+        for index, value in enumerate(_history())
+    )
+
+    with pytest.raises(ProvisionalValidationFailureV1) as raised:
+        validate_provisional_advance(
+            _schedule(), _plan(_local(9, 18)), _history(), changed_prefix, _today(17)
+        )
+
+    assert raised.value.code is ProvisionalValidationCodeV1.PREFIX_CONFLICT
