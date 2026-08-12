@@ -11,6 +11,7 @@ from .partition_publication import provisional_partition_relative_path
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _SAFE_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._|:-]{0,127}\Z")
+_EQUITY_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 MAX_PROVISIONAL_ROWS_V1 = 65_536
 MAX_PROVISIONAL_BYTES_V1 = 64 * 1024 * 1024
 
@@ -52,7 +53,6 @@ class ProvisionalPartitionMetadataV1:
             self.provider,
             self.instrument_key,
             self.security_id,
-            self.symbol,
             self.exchange,
             self.segment,
             self.instrument_type,
@@ -66,6 +66,8 @@ class ProvisionalPartitionMetadataV1:
                 type(value) is not str or _SAFE_TEXT.fullmatch(value) is None
                 for value in text_values
             )
+            or type(self.symbol) is not str
+            or _EQUITY_SYMBOL.fullmatch(self.symbol) is None
             or type(self.year) is not int
             or type(self.month) is not int
             or not 1 <= self.month <= 12
