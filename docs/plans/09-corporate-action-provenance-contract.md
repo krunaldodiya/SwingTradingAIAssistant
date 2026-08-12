@@ -1,6 +1,6 @@
 # Corporate-Action Provenance Contract
 
-Status: implementation candidate for ARK-143.
+Status: implemented by ARK-143; date-only visibility remediated by ARK-147.
 
 ## Purpose and source decision
 
@@ -28,10 +28,15 @@ explicitly unsupported rather than inferred from candle or instrument data.
 - Unknown event/detail labels, malformed dates, duplicate event identities,
   noncanonical JSON, duplicate keys, excessive nesting, and non-finite numbers
   fail closed. Provider wording is not exposed as a market fact.
-- Announcement time is conservatively the start of the announcement date in
-  Asia/Kolkata. A fact is visible only when both its containing observation was
-  retrieved and its announcement was effective by the requested knowledge
-  cutoff.
+- Canonical `announced_at` remains the start of the provider's announcement
+  date in Asia/Kolkata so schema, canonical bytes, and existing event/snapshot
+  digests remain compatible. Because the provider supplies a date without a
+  publication time, the event becomes visible only at 00:00 Asia/Kolkata on the
+  next calendar day; that instant is inclusive and the prior microsecond is
+  hidden.
+- Observation retrieval and event visibility are independent cutoffs. An event
+  is returned only when `retrieved_at <= knowledge_cutoff` and its conservative
+  next-day visibility instant is also at or before the cutoff.
 
 ## Retention and resolution
 
@@ -61,7 +66,9 @@ manifest.
 One request, 1 MiB response, 1,000 events, 64-level JSON nesting, one immutable
 object, and a targeted two-row catalog query are hard bounds. Strict TDD proves
 Upstox parsing, token non-leakage, split/bonus/dividend/rights validation,
-cutoff no-look-ahead, retained revisions, missing/stale/ambiguous/corrupt states,
-raw immutability, unsupported adjustment, v4-to-v5 migration, and deterministic
-replay. The unchanged full gate and an independent schema/contract review are
-required before publication.
+cutoff no-look-ahead, date-only announcement visibility at the inclusive
+next-day 00:00 Asia/Kolkata boundary (with the prior microsecond hidden),
+independent retrieval cutoffs, retained revisions, missing/stale/ambiguous/corrupt
+states, raw immutability, unsupported adjustment, v4-to-v5 migration, and
+deterministic replay. The unchanged full gate and an independent schema/contract
+review are required before publication.

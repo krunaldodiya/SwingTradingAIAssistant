@@ -486,7 +486,7 @@ class AdjustmentAvailabilityReportV1:
             or len({event.event_digest_sha256 for event in self.visible_events})
             != len(self.visible_events)
             or any(
-                event.announced_at > self.knowledge_cutoff
+                not _date_only_announcement_visible(event, self.knowledge_cutoff)
                 for event in self.visible_events
             )
             or (
@@ -533,7 +533,7 @@ class AdjustmentAvailabilityServiceV1:
             events = tuple(
                 event
                 for event in snapshot.events
-                if event.announced_at <= knowledge_cutoff
+                if _date_only_announcement_visible(event, knowledge_cutoff)
             )
             return _availability(
                 isin,
@@ -931,6 +931,14 @@ def _valid_token(value: object) -> bool:
         and 1 <= len(value) <= 4096
         and all(0x21 <= ord(character) <= 0x7E for character in value)
     )
+
+
+def _date_only_announcement_visible(
+    event: CorporateActionEventV1, knowledge_cutoff: datetime
+) -> bool:
+    announcement_date = event.announced_at.astimezone(_IST).date()
+    visible_at = datetime.combine(announcement_date + timedelta(days=1), time.min, _IST)
+    return visible_at <= knowledge_cutoff
 
 
 def _aware(value: object) -> bool:
