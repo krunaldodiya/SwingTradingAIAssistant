@@ -20,7 +20,10 @@ contains an ampersand must be quoted, for example `--symbol "M&M"` or
 `--universe-as-of` (default: requested end date), and `--workers 1..8`
 (default: 4). Coverage and query consume the already-retained universe and
 accept the same selection and worker bound. Existing closed-date, timeframe,
-field, row, storage-root, schedule, and JSON-output arguments remain unchanged.
+field, row, schedule, and JSON-output arguments remain unchanged. The CLI
+storage-root option is configurable and defaults to the recursively created
+`~/SwingTradingAIAssistantData`; downstream typed requests still receive an
+absolute `Path`.
 
 Single-symbol commands retain their existing public report. Multi-symbol and
 whole-universe commands return a bounded aggregate with contract version,

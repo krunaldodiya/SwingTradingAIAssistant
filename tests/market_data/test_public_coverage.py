@@ -620,7 +620,7 @@ def test_coverage_cli_uses_shared_service_json_exit_and_never_reads_dotenv(
     assert dotenv_calls == []
 
 
-def test_default_coverage_cli_requires_retained_universe_before_root_and_never_creates_storage(
+def test_default_coverage_cli_creates_storage_then_requires_retained_universe(
     tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = tmp_path / "absent"
@@ -629,10 +629,10 @@ def test_default_coverage_cli_requires_retained_universe_before_root_and_never_c
     rejected_output = json.loads(capsys.readouterr().out)
     assert rejected == 4
     assert rejected_output["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
-    assert not root.exists()
+    assert root.is_dir()
 
     unavailable = main(_coverage_argv(root))
     unavailable_output = json.loads(capsys.readouterr().out)
     assert unavailable == 4
     assert unavailable_output["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
-    assert not root.exists()
+    assert root.is_dir()

@@ -26,6 +26,34 @@ from swing_trading_ai_assistant.market_data.public_contract import (
 )
 
 
+def _persistent_command(command: str, storage_root: Path | None = None) -> list[str]:
+    values = [
+        command,
+        "--segment",
+        "NSE_EQ",
+        "--symbol",
+        "RELIANCE",
+        "--from",
+        "2026-07-01",
+        "--to",
+        "2026-07-31",
+    ]
+    if command == "query":
+        values.extend(
+            [
+                "--timeframe",
+                "1d",
+                "--fields",
+                "ts,open,high,low,close,volume",
+                "--max-rows",
+                "31",
+            ]
+        )
+    if storage_root is not None:
+        values.extend(["--storage-root", str(storage_root)])
+    return values + ["--output", "json"]
+
+
 @pytest.mark.parametrize(
     ("today", "expected"),
     (
@@ -80,6 +108,76 @@ def test_download_accepts_an_explicit_authoritative_schedule_file(
     )
 
     assert args.schedule_file == schedule_file
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        _persistent_command("download"),
+        _persistent_command("coverage"),
+        _persistent_command("query"),
+    ),
+)
+def test_persistent_commands_default_to_the_user_data_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: list[str]
+) -> None:
+    expected = tmp_path / "SwingTradingAIAssistantData"
+    monkeypatch.setattr(cli, "_default_storage_root", lambda: expected, raising=False)
+
+    args = cli.build_parser().parse_args(command)
+
+    assert args.storage_root == expected
+
+
+def test_default_storage_root_is_under_the_user_home() -> None:
+    assert cli._default_storage_root() == Path.home() / "SwingTradingAIAssistantData"
+
+
+@pytest.mark.parametrize("explicit", (False, True))
+def test_cli_recursively_creates_default_and_explicit_storage_roots_before_use(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys, explicit: bool
+) -> None:
+    expected = tmp_path / "missing" / "nested" / "market-data"
+    if not explicit:
+        monkeypatch.setattr(cli, "_default_storage_root", lambda: expected)
+    report = PublicCommandReportV1(
+        "v1",
+        "download",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Service:
+        def download(self, request: object) -> PublicCommandReportV1:
+            assert request.storage_root == expected  # type: ignore[attr-defined]
+            assert expected.is_dir()
+            return report
+
+    assert (
+        cli.main(
+            _persistent_command("download", expected if explicit else None),
+            download_service=Service(),
+        )
+        == 2
+    )
+    assert '"status":"REJECTED"' in capsys.readouterr().out
+
+
+def test_cli_accepts_official_ampersand_symbol_selection() -> None:
+    assert cli._symbols("M&M,RELIANCE") == ("M&M", "RELIANCE")
+
+
+def test_storage_root_creation_fails_closed_for_unsafe_or_blocked_paths(
+    tmp_path: Path,
+) -> None:
+    blocked = tmp_path / "file"
+    blocked.write_text("not a directory")
+
+    assert not cli._prepare_storage_root(Path("relative")).is_absolute()
+    assert not cli._prepare_storage_root(tmp_path / "data*").is_absolute()
+    assert not cli._prepare_storage_root(blocked / "child").is_absolute()
 
 
 def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
@@ -295,6 +393,7 @@ def test_default_multi_download_keeps_the_bounded_aggregate_contract(
 def test_default_single_download_rejects_non_equity_segment_before_service_use(
     monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
 ) -> None:
+    storage_root = tmp_path / "must-not-be-created"
     report = PublicCommandReportV1(
         "v1",
         "download",
@@ -326,7 +425,7 @@ def test_default_single_download_rejects_non_equity_segment_before_service_use(
                 "--to",
                 "2026-07-31",
                 "--storage-root",
-                str(tmp_path),
+                str(storage_root),
                 "--output",
                 "json",
             ]
@@ -334,6 +433,7 @@ def test_default_single_download_rejects_non_equity_segment_before_service_use(
         == 2
     )
     assert '"status":"REJECTED"' in capsys.readouterr().out
+    assert not storage_root.exists()
 
 
 def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:

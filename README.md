@@ -139,34 +139,35 @@ uv run market-data download \
   --universe-file /var/tmp/nifty50-universe.json \
   --universe-as-of 2026-07-31 \
   --schedule-file /var/tmp/nse-schedule.json \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 
 uv run market-data coverage \
   --segment NSE_EQ --symbols RELIANCE,SBIN,TCS --workers 3 \
   --from 2026-07-01 --to 2026-07-31 \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 
 uv run market-data query \
   --segment NSE_EQ --symbols RELIANCE,SBIN,TCS --workers 3 \
   --from 2026-07-01 --to 2026-07-01 --timeframe 1m \
   --fields ts,open,high,low,close,volume --max-rows 1000 \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 
 uv run market-data query \
   --segment NSE_EQ --symbol SBIN \
   --from 2026-07-01 --to 2026-07-01 --timeframe 15m \
   --fields ts,open,high,low,close,volume --max-rows 100 \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 ```
 
 Use `--universe nifty50-current` instead of `--symbols` to operate on all 50
 members retained for the request's point-in-time cutoff. Dates are inclusive.
-The storage root must be an explicit owner-private absolute path outside the
-source tree. Read each JSON `outcome`, per-symbol result, and typed month
-evidence before retrying. Never manually edit catalog, manifest, schedule,
-snapshot, or Parquet files; correct the dependency or unsafe path and rerun the
-same command. Verified repeats and all coverage/query commands make zero
-provider requests.
+Persistent commands default to `~/SwingTradingAIAssistantData` and create that
+directory recursively when it is missing. Override it with
+`--storage-root /absolute/path`; a missing override is also created recursively.
+Read each JSON `outcome`, per-symbol result, and typed month evidence before
+retrying. Never manually edit catalog, manifest, schedule, snapshot, or Parquet
+files; correct the dependency or unsafe path and rerun the same command.
+Verified repeats and all coverage/query commands make zero provider requests.
 
 ### Current month through the latest completed minute
 
@@ -181,13 +182,13 @@ uv run market-data download \
   --segment NSE_EQ --symbol RELIANCE \
   --from 2026-08-01 --to 2026-08-12 \
   --schedule-file /var/tmp/nse-current-schedule.json \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 
 uv run market-data query \
   --segment NSE_EQ --symbol RELIANCE \
   --from 2026-08-01 --to 2026-08-12 --timeframe 5m \
   --fields ts,open,high,low,close,volume --max-rows 5000 \
-  --storage-root /var/tmp/swing-market-data --output json
+  --output json
 ```
 
 If the range crosses from closed months into the current month, also pass

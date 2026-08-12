@@ -100,6 +100,7 @@ from .range_ingestion import (
 from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+_DEFAULT_STORAGE_DIRECTORY = "SwingTradingAIAssistantData"
 
 
 class PublicDownloadPortV1(Protocol):
@@ -289,6 +290,12 @@ def main(
     query_service: PublicQueryPortV1 | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
+    if (
+        args.command in ("download", "coverage", "query")
+        and args.segment == "NSE_EQ"
+        and date(2022, 1, 1) <= args.from_date <= args.to_date
+    ):
+        args.storage_root = _prepare_storage_root(args.storage_root)
     if args.command == "download":
         return _run_download_command(args, download_service)
     if args.command == "coverage":
@@ -643,9 +650,36 @@ def _add_persistent_range_arguments(command: argparse.ArgumentParser) -> None:
         "--to", dest="to_date", type=_date, required=True, metavar="YYYY-MM-DD"
     )
     command.add_argument(
-        "--storage-root", type=Path, required=True, metavar="ABSOLUTE_PATH"
+        "--storage-root",
+        type=Path,
+        default=_default_storage_root(),
+        metavar="ABSOLUTE_PATH",
+        help=(
+            "persistent data directory (default: ~/SwingTradingAIAssistantData; "
+            "created recursively when missing)"
+        ),
     )
     command.add_argument("--output", choices=("json",), required=True)
+
+
+def _default_storage_root() -> Path:
+    return Path.home() / _DEFAULT_STORAGE_DIRECTORY
+
+
+def _prepare_storage_root(value: object) -> Path:
+    """Create a syntactically valid CLI storage root without weakening admission."""
+    if (
+        not isinstance(value, Path)
+        or not value.is_absolute()
+        or ".." in value.parts
+        or any(marker in part for part in value.parts for marker in "~*?[]")
+    ):
+        return Path()
+    try:
+        value.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        return Path()
+    return value
 
 
 def _symbols(value: str) -> tuple[str, ...]:
