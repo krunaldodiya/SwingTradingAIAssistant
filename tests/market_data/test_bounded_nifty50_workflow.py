@@ -179,6 +179,20 @@ def _request(root: Path) -> BoundedNifty50DownloadRequestV1:
     )
 
 
+def test_download_request_accepts_official_ampersand_symbol(tmp_path: Path) -> None:
+    request = BoundedNifty50DownloadRequestV1(
+        symbols=("M&M",),
+        universe_as_of=date(2026, 8, 11),
+        knowledge_cutoff=datetime(2026, 8, 12, 7, tzinfo=UTC),
+        from_date=date(2026, 8, 1),
+        to_date=date(2026, 8, 11),
+        storage_root=tmp_path,
+        workers=1,
+    )
+
+    assert request.symbols == ("M&M",)
+
+
 def test_one_or_many_selection_uses_isin_order_and_one_outer_lease(
     tmp_path: Path,
 ) -> None:

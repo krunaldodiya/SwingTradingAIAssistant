@@ -130,6 +130,15 @@ class _Query:
         return _terminal("query")
 
 
+def test_read_contracts_accept_official_ampersand_symbol(tmp_path: Path) -> None:
+    prototype = CoverageRequestV1(
+        "NSE_EQ", "M&M", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+
+    assert BoundedNifty50ReadRequestV1(("M&M",), prototype).symbols == ("M&M",)
+    assert Nifty50ReadResultV1("M&M", _terminal("coverage")).symbol == "M&M"
+
+
 def test_coverage_resolves_requested_member_from_retained_point_in_time_universe(
     tmp_path: Path,
 ) -> None:

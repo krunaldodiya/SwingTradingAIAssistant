@@ -36,7 +36,7 @@ from .universe_snapshot import (
     UniverseSnapshotStaleError,
 )
 
-_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,31}\Z")
+_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 _ISIN = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SYMBOLS = 50

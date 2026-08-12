@@ -80,6 +80,10 @@ def test_snapshot_canonical_bytes_are_deterministic_and_exact() -> None:
     assert Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload) == snapshot
 
 
+def test_constituent_accepts_official_ampersand_symbol() -> None:
+    assert Nifty50ConstituentV1("INE101A01026", "M&M", "AUTOMOBILE").symbol == "M&M"
+
+
 def test_snapshot_rejects_invalid_member_count_and_noncanonical_bytes() -> None:
     with pytest.raises(ValueError):
         _snapshot().__class__(

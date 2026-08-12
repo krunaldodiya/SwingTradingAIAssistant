@@ -243,6 +243,7 @@ def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
     assert "--universe nifty50-current" in readme
     assert "latest completed authoritative session" in readme
     assert "Upstox is the only runtime candle" in readme
+    assert "~/SwingTradingAIAssistantData" in readme
 
     schedule = _schedule()
     snapshots = _SnapshotSource()

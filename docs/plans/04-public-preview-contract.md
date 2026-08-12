@@ -16,8 +16,8 @@ slices.
 ## Purpose, value, and boundary
 
 Expose the existing deterministic ingestion coordinator as one installable,
-persistent preview for `NSE_EQ` `RELIANCE`: download a closed range to an
-explicit storage root, prove stored coverage, repeat without an unnecessary
+persistent preview for `NSE_EQ` `RELIANCE`: download a closed range to a
+durable storage root, prove stored coverage, repeat without an unnecessary
 historical request, and query bounded verified candles. The measurable value is
 one three-command workflow whose evidence is stable and machine-readable.
 
@@ -40,8 +40,11 @@ Any other pair returns `REJECTED/UNSUPPORTED_PREVIEW_INSTRUMENT` before root,
 schedule, snapshot, catalog, credential, limiter, or provider activity. Inputs
 are exact types, not silently coerced. Dates are inclusive ISO dates from
 `2022-01-01`; every touched month must be closed at the injected
-`Asia/Kolkata` date. The storage root is an explicit absolute `Path`; relative
-paths, `~`, globs, arbitrary catalog paths, and hidden defaults reject.
+`Asia/Kolkata` date. The application contract always receives an absolute
+storage-root `Path`. The CLI supplies `~/SwingTradingAIAssistantData` when the
+option is omitted and recursively creates a missing default or explicit root;
+`--storage-root /absolute/path` remains the override. Relative paths, literal
+unexpanded `~`, globs, and arbitrary catalog paths reject.
 
 The fixed bounds are:
 
