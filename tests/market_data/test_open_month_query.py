@@ -36,7 +36,10 @@ from swing_trading_ai_assistant.market_data.public_contract import (
     PublicQueryRowV1,
     QueryPayloadV1,
 )
-from swing_trading_ai_assistant.market_data.public_query import QueryRequestV1
+from swing_trading_ai_assistant.market_data.public_query import (
+    QueryRequestV1,
+    QueryTimeoutV1,
+)
 from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
@@ -174,7 +177,7 @@ def test_open_month_query_under_caller_lease_and_invalid_lease_are_bounded(
     assert acquired.lease is not None
     with acquired.lease as lease:
         report = service.query_under_lease(request, lease)
-    assert report.status is PublicCommandStatusV1.SUCCEEDED
+        assert report.status is PublicCommandStatusV1.SUCCEEDED
 
     class BrokenService(OpenMonthOneMinuteQueryServiceV1):
         def _query_under_lease(self, *args: object):
@@ -200,6 +203,39 @@ def test_open_month_query_under_caller_lease_and_invalid_lease_are_bounded(
         clock=_Clock(),  # type: ignore[arg-type]
     ).query(request)
     assert mismatch.status is PublicCommandStatusV1.REJECTED
+
+
+def test_production_open_month_query_stops_at_the_shared_deadline_before_catalog(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+
+    class Deadline:
+        checks = 0
+
+        def ensure_live(self) -> None:
+            self.checks += 1
+            if self.checks == 2:
+                raise QueryTimeoutV1
+
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+    with acquired.lease as lease, pytest.raises(QueryTimeoutV1):
+        OpenMonthOneMinuteQueryServiceV1(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+        ).query_under_lease(request, lease, deadline=Deadline())
+
+    assert not (tmp_path / "catalog.duckdb").exists()
 
 
 def test_current_aware_query_delegates_under_caller_lease(tmp_path: Path) -> None:

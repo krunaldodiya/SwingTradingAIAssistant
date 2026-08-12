@@ -280,8 +280,8 @@ _CORPORATE_ACTION_SCHEMA_SQL: Final = """
 CREATE TABLE corporate_action_snapshots (
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
     isin VARCHAR NOT NULL CHECK (regexp_full_match(isin, 'INE[A-Z0-9]{8}[0-9]')),
-    source VARCHAR NOT NULL CHECK (regexp_full_match(source, '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')),
-    source_release VARCHAR NOT NULL CHECK (regexp_full_match(source_release, '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')),
+    source VARCHAR NOT NULL CHECK (source = 'upstox-fundamentals-v2'),
+    source_release VARCHAR NOT NULL CHECK (source_release = 'corporate-actions-v1'),
     retrieved_at TIMESTAMPTZ NOT NULL,
     snapshot_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(snapshot_sha256, '[0-9a-f]{64}')),
     byte_count BIGINT NOT NULL CHECK (byte_count BETWEEN 1 AND 1048576),
@@ -1011,6 +1011,15 @@ class DuckDBCatalog:
             precommit_validator is not None and not callable(precommit_validator)
         ):
             raise CatalogConflictError("invalid corporate action snapshot")
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(
+                *(
+                    getattr(metadata, name)
+                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+                )
+            )
+        except Exception:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
 
         def operation() -> bool:
             values = tuple(
@@ -1045,6 +1054,15 @@ class DuckDBCatalog:
         self._assert_writable()
         if type(metadata) is not CorporateActionSnapshotMetadataV1:
             raise CatalogConflictError("invalid corporate action snapshot")
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(
+                *(
+                    getattr(metadata, name)
+                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+                )
+            )
+        except Exception:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
 
         def operation() -> None:
             key = (metadata.isin, metadata.retrieved_at, metadata.snapshot_sha256)
@@ -2126,7 +2144,7 @@ def _expected_constraints(
                 ),
                 (
                     "CHECK",
-                    "regexp_full_match(\"source\", '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')",
+                    "(\"source\" = 'upstox-fundamentals-v2')",
                     (2,),
                     ("source",),
                     None,
@@ -2134,7 +2152,7 @@ def _expected_constraints(
                 ),
                 (
                     "CHECK",
-                    "regexp_full_match(source_release, '[A-Za-z0-9][A-Za-z0-9._-]{0,63}')",
+                    "(source_release = 'corporate-actions-v1')",
                     (3,),
                     ("source_release",),
                     None,

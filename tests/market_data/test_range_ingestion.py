@@ -75,6 +75,14 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
 )
 
 
+def test_default_noop_limiter_accepts_the_cancellation_aware_protocol() -> None:
+    assert ingestion_module._NoopLimiter().defer_for(
+        timedelta(seconds=1),
+        timedelta(seconds=1),
+        CancellationToken(),
+    ) == timedelta(0)
+
+
 def _instrument() -> Instrument:
     return Instrument(
         "NSE_EQ|RELIANCE",

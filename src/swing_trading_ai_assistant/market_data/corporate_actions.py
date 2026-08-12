@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -33,8 +34,6 @@ MAX_CORPORATE_ACTION_JSON_DEPTH_V1: Final = 64
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _ISIN: Final = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
-_SOURCE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
-_RELEASE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _DECIMAL: Final = re.compile(r"(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,8})?\Z")
 _RATIO: Final = re.compile(r"([1-9][0-9]{0,5}):([1-9][0-9]{0,5})\Z")
 
@@ -139,10 +138,8 @@ class CorporateActionSnapshotV1:
             type(self.schema_version) is not int
             or self.schema_version != 1
             or not _valid_isin(self.isin)
-            or type(self.source) is not str
-            or _SOURCE.fullmatch(self.source) is None
-            or type(self.source_release) is not str
-            or _RELEASE.fullmatch(self.source_release) is None
+            or self.source != UPSTOX_CORPORATE_ACTIONS_SOURCE_V1
+            or self.source_release != UPSTOX_CORPORATE_ACTIONS_ADAPTER_RELEASE_V1
             or not _aware(self.retrieved_at)
             or type(events) is not tuple
             or len(events) > MAX_CORPORATE_ACTION_EVENTS_V1
@@ -237,10 +234,8 @@ class CorporateActionSnapshotMetadataV1:
             type(self.schema_version) is not int
             or self.schema_version != 1
             or not _valid_isin(self.isin)
-            or type(self.source) is not str
-            or _SOURCE.fullmatch(self.source) is None
-            or type(self.source_release) is not str
-            or _RELEASE.fullmatch(self.source_release) is None
+            or self.source != UPSTOX_CORPORATE_ACTIONS_SOURCE_V1
+            or self.source_release != UPSTOX_CORPORATE_ACTIONS_ADAPTER_RELEASE_V1
             or not _aware(self.retrieved_at)
             or type(self.snapshot_sha256) is not str
             or _DIGEST.fullmatch(self.snapshot_sha256) is None
@@ -411,7 +406,7 @@ class CorporateActionSnapshotStoreV1:
                 raise CorporateActionAmbiguousError(
                     "corporate action evidence ambiguous"
                 )
-            metadata = candidates[0]
+            metadata = _rebuild_metadata(candidates[0])
             with self._lease.read_operation(self._root) as operation:
                 object_fd = _open_action_object(
                     operation, metadata.isin, metadata.snapshot_sha256, False
@@ -498,10 +493,9 @@ class AdjustmentAvailabilityReportV1:
                 self.evidence_state is CorporateActionEvidenceStateV1.AVAILABLE
                 and (
                     any(value is None for value in evidence)
-                    or type(self.source) is not str
-                    or _SOURCE.fullmatch(self.source) is None
-                    or type(self.source_release) is not str
-                    or _RELEASE.fullmatch(self.source_release) is None
+                    or self.source != UPSTOX_CORPORATE_ACTIONS_SOURCE_V1
+                    or self.source_release
+                    != UPSTOX_CORPORATE_ACTIONS_ADAPTER_RELEASE_V1
                     or not _aware(self.retrieved_at)
                     or cast(datetime, self.retrieved_at) > self.knowledge_cutoff
                     or type(self.snapshot_sha256) is not str
@@ -593,7 +587,7 @@ def _parse_upstox_response(payload: bytes) -> tuple[CorporateActionEventV1, ...]
         value = json.loads(
             payload.decode("utf-8"),
             object_pairs_hook=_unique_object,
-            parse_float=str,
+            parse_float=Decimal,
             parse_constant=_reject_constant,
         )
         _assert_depth(value)
@@ -634,35 +628,26 @@ def _upstox_event(value: object) -> CorporateActionEventV1:
     effective = _provider_date(raw["expiry_date"])
     record_text = details.pop("Record date", None)
     record_date = _provider_date(record_text) if record_text is not None else None
-    allowed = {
-        "Dividend type",
-        "Amount",
-        "Dividend %",
-        "Details",
-        "Ex dividend date",
-        "Ex bonus date",
-        "Ex split date",
-        "Ex rights date",
-        "Ratio",
-        "Old face value",
-        "New face value",
-        "Rights price",
-    }
-    if set(details) - allowed:
-        raise ValueError
+    _validate_details_for_kind(kind, details, effective)
     announced_at = datetime.combine(announced, time.min, _IST).astimezone(UTC)
     if kind is CorporateActionKindV1.DIVIDEND:
         amount = _amount(raw["amount"])
+        detail_amount = details.get("Amount")
+        if detail_amount is not None and _amount_text(detail_amount) != amount:
+            raise ValueError
         numerator = denominator = None
         if raw["ratio"] is not None:
             raise ValueError
     else:
         if raw["amount"] is not None or type(raw["ratio"]) is not str:
             raise ValueError
-        match = _RATIO.fullmatch(raw["ratio"])
-        if match is None:
+        numerator, denominator = _ratio(raw["ratio"])
+        detail_ratio = details.get("Ratio")
+        if detail_ratio is not None and _ratio(detail_ratio) != (
+            numerator,
+            denominator,
+        ):
             raise ValueError
-        numerator, denominator = (int(match.group(1)), int(match.group(2)))
         amount = None
     digest = _event_digest_fields(
         kind,
@@ -683,6 +668,42 @@ def _upstox_event(value: object) -> CorporateActionEventV1:
         numerator,
         denominator,
     )
+
+
+def _validate_details_for_kind(
+    kind: CorporateActionKindV1, details: dict[str, str], effective: date
+) -> None:
+    common = {"Details"}
+    by_kind = {
+        CorporateActionKindV1.DIVIDEND: {
+            "Dividend type",
+            "Amount",
+            "Dividend %",
+            "Ex dividend date",
+        },
+        CorporateActionKindV1.BONUS: {"Ratio", "Ex bonus date"},
+        CorporateActionKindV1.SPLIT: {
+            "Ratio",
+            "Old face value",
+            "New face value",
+            "Ex split date",
+        },
+        CorporateActionKindV1.RIGHTS: {"Ratio", "Rights price", "Ex rights date"},
+    }
+    if set(details) - common - by_kind[kind]:
+        raise ValueError
+    date_label = {
+        CorporateActionKindV1.DIVIDEND: "Ex dividend date",
+        CorporateActionKindV1.BONUS: "Ex bonus date",
+        CorporateActionKindV1.SPLIT: "Ex split date",
+        CorporateActionKindV1.RIGHTS: "Ex rights date",
+    }[kind]
+    ex_date = details.get(date_label)
+    if ex_date is not None and _provider_date(ex_date) != effective:
+        raise ValueError
+    for label in ("Dividend %", "Old face value", "New face value", "Rights price"):
+        if label in details:
+            _amount_text(details[label])
 
 
 def _event_details(value: list[object]) -> dict[str, str]:
@@ -798,6 +819,20 @@ def _snapshot_metadata(
         len(snapshot.events),
         f"corporate_action_snapshots/isin={snapshot.isin}/sha256={digest}/snapshot.json",
     )
+
+
+def _rebuild_metadata(
+    value: object,
+) -> CorporateActionSnapshotMetadataV1:
+    if type(value) is not CorporateActionSnapshotMetadataV1:
+        raise ValueError
+    rebuilt = CorporateActionSnapshotMetadataV1(
+        *(
+            getattr(value, name)
+            for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+        )
+    )
+    return rebuilt
 
 
 def _open_action_object(
@@ -925,13 +960,29 @@ def _provider_date(value: object) -> date:
 def _amount(value: object) -> str:
     if type(value) is int:
         result = str(value)
-    elif type(value) is str:
-        result = value.rstrip("0").rstrip(".") if "." in value else value
+    elif type(value) is Decimal:
+        result = format(value, "f")
     else:
         raise ValueError
+    return _canonical_amount(result)
+
+
+def _amount_text(value: str) -> str:
+    return _canonical_amount(value)
+
+
+def _canonical_amount(value: str) -> str:
+    result = value.rstrip("0").rstrip(".") if "." in value else value
     if _DECIMAL.fullmatch(result) is None or _decimal_is_zero(result):
         raise ValueError
     return result
+
+
+def _ratio(value: str) -> tuple[int, int]:
+    match = _RATIO.fullmatch(value)
+    if match is None:
+        raise ValueError
+    return int(match.group(1)), int(match.group(2))
 
 
 def _decimal_is_zero(value: str) -> bool:

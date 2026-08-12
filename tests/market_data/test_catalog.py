@@ -167,6 +167,35 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
         assert reopened.get_manifest(_plan()) == initial
 
 
+@pytest.mark.parametrize(
+    ("source", "source_release"),
+    (
+        ("unsupported-feed", "corporate-actions-v1"),
+        ("upstox-fundamentals-v2", "forged-v2"),
+    ),
+)
+def test_v5_corporate_action_catalog_schema_accepts_only_the_frozen_adapter(
+    tmp_path, source: str, source_release: str
+) -> None:
+    with DuckDBCatalog(tmp_path) as catalog, pytest.raises(duckdb.ConstraintException):
+        catalog.connection.execute(
+            "INSERT INTO corporate_action_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                "INE062A01020",
+                source,
+                source_release,
+                _time(0),
+                "a" * 64,
+                1,
+                0,
+                "corporate_action_snapshots/isin=INE062A01020/sha256="
+                + "a" * 64
+                + "/snapshot.json",
+            ),
+        )
+
+
 def test_read_only_catalog_requires_existing_v2_and_permits_only_reads(
     tmp_path,
 ) -> None:

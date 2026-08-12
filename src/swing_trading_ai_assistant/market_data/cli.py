@@ -433,14 +433,34 @@ def _run_download_command(
         report = download_service.download(request)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
         return public_exit_code(report.status)
+    if args.symbol is not None:
+        try:
+            request = BoundedNifty50DownloadRequestV1(
+                symbols=(args.symbol,),
+                universe_as_of=args.universe_as_of or args.to_date,
+                knowledge_cutoff=_SystemClock().now(),
+                from_date=args.from_date,
+                to_date=args.to_date,
+                storage_root=args.storage_root,
+                workers=args.workers,
+            )
+            if args.segment != "NSE_EQ":
+                raise ValueError
+            source = (
+                None
+                if args.universe_file is None
+                else CanonicalFileNifty50UniverseSourceV1(args.universe_file)
+            )
+        except ValueError:
+            request = object()
+            source = None
+        report = _default_bounded_download_service(
+            source, args.schedule_file, args.closed_schedule_file
+        ).download_single(request)
+        sys.stdout.write(render_download_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
     try:
-        selected = (
-            (args.symbol,)
-            if args.symbol is not None
-            else args.symbols
-            if args.symbols is not None
-            else None
-        )
+        selected = args.symbols if args.symbols is not None else None
         batch_request: object = BoundedNifty50DownloadRequestV1(
             symbols=selected,
             universe_as_of=args.universe_as_of or args.to_date,

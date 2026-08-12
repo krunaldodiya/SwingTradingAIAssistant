@@ -17,9 +17,12 @@ from .catalog import DuckDBCatalog
 from .equity_admission import Nifty50AdmissionPolicyV1
 from .public_contract import (
     MAX_DOWNLOAD_PROVIDER_ATTEMPTS_V1,
+    DownloadReportV1,
     PublicCommandReportV1,
     PublicCommandStatusV1,
     PublicFailureCodeV1,
+    PublicFailureV1,
+    validate_download_report_v1,
 )
 from .public_download import SingleSymbolDownloadRequestV1
 from .storage_root_lease import LeaseOutcome, StorageRootLease
@@ -232,7 +235,7 @@ class CanonicalFileNifty50UniverseSourceV1:
 class Nifty50SymbolDownloadPortV1(Protocol):
     def download_under_lease(
         self, request: object, lease: StorageRootLease
-    ) -> PublicCommandReportV1[object]: ...
+    ) -> DownloadReportV1: ...
 
 
 class Nifty50SymbolDownloadFactoryV1(Protocol):
@@ -301,6 +304,45 @@ class BoundedNifty50DownloadServiceV1:
             return _empty(Nifty50BatchOutcomeV1.FAILED)
         except Exception:
             return _empty(Nifty50BatchOutcomeV1.FAILED)
+
+    def download_single(self, request: object) -> DownloadReportV1:
+        """Run one PIT-admitted member while retaining its public report shape."""
+        if (
+            type(request) is not BoundedNifty50DownloadRequestV1
+            or request.symbols is None
+            or len(request.symbols) != 1
+        ):
+            return _single_terminal(PublicCommandStatusV1.REJECTED)
+        invocation = _now(self._clock)
+        if invocation is None or request.knowledge_cutoff > invocation:
+            return _single_terminal(PublicCommandStatusV1.REJECTED)
+        acquired = StorageRootLease.try_acquire(request.storage_root)
+        if acquired.outcome is not LeaseOutcome.ACQUIRED or acquired.lease is None:
+            return _single_terminal(PublicCommandStatusV1.UNAVAILABLE)
+        try:
+            with acquired.lease as lease:
+                policy = self._resolve_policy(request, lease)
+                symbol = request.symbols[0]
+                report = self._symbol_service_factory(policy).download_under_lease(
+                    SingleSymbolDownloadRequestV1(
+                        "NSE_EQ",
+                        symbol,
+                        request.from_date,
+                        request.to_date,
+                        request.storage_root,
+                    ),
+                    lease,
+                )
+                try:
+                    return validate_download_report_v1(report)
+                except Exception:
+                    return _single_terminal(PublicCommandStatusV1.FAILED)
+        except ValueError:
+            return _single_terminal(PublicCommandStatusV1.REJECTED)
+        except (UniverseSnapshotNotFoundError, UniverseSnapshotStaleError):
+            return _single_terminal(PublicCommandStatusV1.UNAVAILABLE)
+        except Exception:
+            return _single_terminal(PublicCommandStatusV1.FAILED)
 
     def _resolve_policy(
         self,
@@ -410,6 +452,22 @@ def _aggregate(
 
 def _empty(outcome: Nifty50BatchOutcomeV1) -> BoundedNifty50DownloadReportV1:
     return BoundedNifty50DownloadReportV1(outcome, None, (), 0, 0)
+
+
+def _single_terminal(status: PublicCommandStatusV1) -> DownloadReportV1:
+    code = (
+        PublicFailureCodeV1.INVALID_INPUT
+        if status is PublicCommandStatusV1.REJECTED
+        else PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    )
+    return PublicCommandReportV1(
+        "v1",
+        "download",
+        status,
+        PublicFailureV1(code, None, None, None, None, ()),
+        0,
+        None,
+    )
 
 
 def render_bounded_nifty50_download_json(

@@ -55,6 +55,7 @@ from swing_trading_ai_assistant.market_data.public_coverage import (
     CoverageEvaluationFailureV1,
     CoverageEvaluationV1,
     ExistingCoverageAdmissionV1,
+    StoredCoverageEvaluatorV1,
     VerifiedPartitionReadHandleV1,
     VerifiedPartitionV1,
 )
@@ -461,6 +462,36 @@ def test_closed_service_maps_complete_and_incomplete_evidence_without_provider_c
     assert incomplete.provider_attempt_count == 0
 
 
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    ((4.999, PublicCommandStatusV1.SUCCEEDED), (5.0, PublicCommandStatusV1.FAILED)),
+)
+def test_closed_service_uses_one_monotonic_deadline_across_coverage_evaluation(
+    tmp_path: Path, elapsed: float, expected: PublicCommandStatusV1
+) -> None:
+    class SlowCoverageEvaluator(_CoverageEvaluator):
+        def evaluate_under_admission(
+            self, request: object, invocation: object, admission: _Admission
+        ) -> CoverageEvaluationV1:
+            clock.advance(elapsed)
+            return super().evaluate_under_admission(request, invocation, admission)
+
+    clock = _DeadlineClock()
+    report = DerivedIntradayQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        SlowCoverageEvaluator(_evaluation(5)),  # type: ignore[arg-type]
+        resolver=_ScheduleResolver(_session(5)),  # type: ignore[arg-type]
+        engine=_DerivedEngine(),  # type: ignore[arg-type]
+        clock=clock,
+    ).query(_raw_request(tmp_path.resolve()))
+
+    assert report.status is expected
+    assert report.provider_attempt_count == 0
+    if expected is PublicCommandStatusV1.FAILED:
+        assert report.failure is not None
+        assert report.failure.code is PublicFailureCodeV1.QUERY_TIMEOUT
+
+
 def _provisional_month(
     count: int, *, session_complete: bool = False
 ) -> PublicCoverageMonthV1:
@@ -513,6 +544,53 @@ class _MinutePort:
         )
 
 
+class _DeadlineClock:
+    def __init__(self) -> None:
+        self.elapsed = 0.0
+
+    def now(self) -> datetime:
+        return datetime(2026, 7, 3, 8, tzinfo=UTC)
+
+    def monotonic(self) -> float:
+        return self.elapsed
+
+    def advance(self, seconds: float) -> None:
+        self.elapsed += seconds
+
+
+def test_deadline_rejects_invalid_clocks_and_noncallable_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidStartClock:
+        def monotonic(self) -> object:
+            return "invalid"
+
+    with pytest.raises(ValueError, match="invalid monotonic clock"):
+        intraday_module._QueryDeadlineV1(InvalidStartClock())
+
+    class InvalidLaterClock:
+        calls = 0
+
+        def monotonic(self) -> object:
+            self.calls += 1
+            return 0.0 if self.calls == 1 else "invalid"
+
+    later = intraday_module._QueryDeadlineV1(InvalidLaterClock())
+    with pytest.raises(ValueError, match="invalid monotonic clock"):
+        later.remaining_seconds()
+
+    deadline = intraday_module._QueryDeadlineV1(_DeadlineClock())
+    intraday_module._ensure_deadline_live(deadline)
+    with pytest.raises(QueryExecutionFailureV1):
+        intraday_module._call_with_deadline(object(), deadline=deadline)
+
+    def no_signature(_method: object) -> object:
+        raise ValueError
+
+    monkeypatch.setattr(intraday_module, "signature", no_signature)
+    assert intraday_module._call_with_deadline(lambda: "ok", deadline=deadline) == "ok"
+
+
 class _OpenScheduleResolver:
     def resolve(
         self, _root: Path, _digest: str, _invocation: datetime, _lease: StorageRootLease
@@ -562,6 +640,80 @@ def test_open_month_service_omits_only_the_advancing_bucket(tmp_path: Path) -> N
     assert tuple(row.ts for row in report.payload.rows) == (START,)
     assert report.payload.months[0].session_complete is False
     assert minute.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    ((4.999, PublicCommandStatusV1.SUCCEEDED), (5.0, PublicCommandStatusV1.FAILED)),
+)
+def test_open_month_service_uses_one_monotonic_deadline_across_minute_query(
+    tmp_path: Path, elapsed: float, expected: PublicCommandStatusV1
+) -> None:
+    class SlowMinutePort(_MinutePort):
+        def query_under_lease(
+            self, request: QueryRequestV1, lease: StorageRootLease
+        ) -> PublicCommandReportV1[QueryPayloadV1]:
+            clock.advance(elapsed)
+            return super().query_under_lease(request, lease)
+
+    tmp_path.chmod(0o700)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    clock = _DeadlineClock()
+    minute = SlowMinutePort(_minute_rows(7), _provisional_month(7))
+    with acquired.lease as lease:
+        report = OpenMonthDerivedIntradayQueryServiceV1(
+            minute,  # type: ignore[arg-type]
+            _OpenScheduleResolver(),  # type: ignore[arg-type]
+            clock=clock,
+        ).query_under_lease(_raw_request(tmp_path.resolve()), lease)
+
+    assert report.status is expected
+    assert report.provider_attempt_count == 0
+    assert minute.calls == 1
+    if expected is PublicCommandStatusV1.FAILED:
+        assert report.failure is not None
+        assert report.failure.code is PublicFailureCodeV1.QUERY_TIMEOUT
+
+
+def test_open_month_service_maps_deadline_setup_failures_without_dependency_calls(
+    tmp_path: Path,
+) -> None:
+    class ExpiringClock(_DeadlineClock):
+        def now(self) -> datetime:
+            self.advance(5.0)
+            return super().now()
+
+    class InvalidClock:
+        def monotonic(self) -> object:
+            return "invalid"
+
+        def now(self) -> datetime:
+            return datetime(2026, 7, 3, 8, tzinfo=UTC)
+
+    tmp_path.chmod(0o700)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    minute = _MinutePort(_minute_rows(7), _provisional_month(7))
+    with acquired.lease as lease:
+        timed_out = OpenMonthDerivedIntradayQueryServiceV1(
+            minute,  # type: ignore[arg-type]
+            _OpenScheduleResolver(),  # type: ignore[arg-type]
+            clock=ExpiringClock(),
+        ).query_under_lease(_raw_request(tmp_path.resolve()), lease)
+        invalid = OpenMonthDerivedIntradayQueryServiceV1(
+            minute,  # type: ignore[arg-type]
+            _OpenScheduleResolver(),  # type: ignore[arg-type]
+            clock=InvalidClock(),  # type: ignore[arg-type]
+        ).query_under_lease(_raw_request(tmp_path.resolve()), lease)
+
+    assert timed_out.status is PublicCommandStatusV1.FAILED
+    assert timed_out.failure is not None
+    assert timed_out.failure.code is PublicFailureCodeV1.QUERY_TIMEOUT
+    assert invalid.status is PublicCommandStatusV1.FAILED
+    assert invalid.failure is not None
+    assert invalid.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert minute.calls == 0
 
 
 def _derived_report(
@@ -692,7 +844,10 @@ def test_retained_open_schedule_is_digest_bound_and_point_in_time(
         def __init__(self, _root: Path, _lease: object) -> None:
             return None
 
-        def resolve(self, _digest: str) -> ScheduleEvidenceResult:
+        def resolve(
+            self, _digest: str, *, deadline: object | None = None
+        ) -> ScheduleEvidenceResult:
+            del deadline
             return result
 
     monkeypatch.setattr(intraday_module, "ScheduleEvidenceStore", FakeStore)
@@ -725,7 +880,14 @@ def test_retained_open_schedule_is_digest_bound_and_point_in_time(
             def __init__(self, _root: Path, _lease: object) -> None:
                 return None
 
-            def resolve(self, _digest: str, value: object = invalid) -> object:
+            def resolve(
+                self,
+                _digest: str,
+                value: object = invalid,
+                *,
+                deadline: object | None = None,
+            ) -> object:
+                del deadline
                 return value
 
         monkeypatch.setattr(intraday_module, "ScheduleEvidenceStore", InvalidStore)
@@ -736,6 +898,52 @@ def test_retained_open_schedule_is_digest_bound_and_point_in_time(
                 datetime(2026, 7, 3, 8, tzinfo=UTC),
                 object(),  # type: ignore[arg-type]
             )
+
+
+def test_production_coverage_and_schedule_ports_cooperate_with_shared_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Expired:
+        def ensure_live(self) -> None:
+            raise QueryTimeoutV1
+
+    with pytest.raises(QueryTimeoutV1):
+        StoredCoverageEvaluatorV1().evaluate_under_admission(
+            object(),  # type: ignore[arg-type]
+            datetime(2026, 7, 3, 8, tzinfo=UTC),
+            object(),  # type: ignore[arg-type]
+            deadline=Expired(),
+        )
+
+    calls: list[str] = []
+
+    class Deadline:
+        checks = 0
+
+        def ensure_live(self) -> None:
+            self.checks += 1
+            if self.checks == 2:
+                raise QueryTimeoutV1
+
+    class Store:
+        def __init__(self, _root: Path, _lease: object) -> None:
+            return None
+
+        def resolve(self, _digest: str, *, deadline: object | None = None) -> object:
+            del deadline
+            calls.append("resolved")
+            return object()
+
+    monkeypatch.setattr(intraday_module, "ScheduleEvidenceStore", Store)
+    with pytest.raises(QueryTimeoutV1):
+        intraday_module.RetainedOpenMonthScheduleResolverV1().resolve(
+            tmp_path,
+            "a" * 64,
+            datetime(2026, 7, 3, 8, tzinfo=UTC),
+            object(),  # type: ignore[arg-type]
+            deadline=Deadline(),
+        )
+    assert calls == ["resolved"]
 
 
 def test_open_service_public_entry_is_existing_only_and_validates_lease(
@@ -1357,6 +1565,29 @@ def test_intraday_engine_deadline_interrupts_and_closes(
         DuckDBIntradayViewEngineV1()._execute(
             _request(), (_session(5),), (_handle(),), 5
         )
+    assert connection.closed
+
+
+def test_intraday_engine_refuses_an_already_expired_shared_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Connection:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = Connection()
+    monkeypatch.setattr(intraday_module.duckdb, "connect", lambda **_kwargs: connection)
+    clock = _DeadlineClock()
+    deadline = intraday_module._QueryDeadlineV1(clock)
+    clock.advance(5.0)
+
+    with pytest.raises(QueryTimeoutV1):
+        DuckDBIntradayViewEngineV1()._execute(
+            _request(), (_session(5),), (_handle(),), 5, deadline=deadline
+        )
+
     assert connection.closed
 
 

@@ -1065,6 +1065,46 @@ def render_download_report_json(report: DownloadReportV1) -> bytes:
     return overflow
 
 
+def validate_download_report_v1(report: object) -> DownloadReportV1:
+    """Return an independent, deeply reconstructed v1 download report."""
+    if type(report) is not PublicCommandReportV1:
+        raise ValueError("invalid public download report")
+    untyped = cast(PublicCommandReportV1[object], report)
+    failure = replace(untyped.failure) if untyped.failure is not None else None
+    source = untyped.payload
+    payload: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None
+    if type(source) is DownloadPayloadV1:
+        typed = source
+        payload = replace(
+            typed,
+            request=replace(typed.request),
+            months=tuple(replace(value) for value in typed.months),
+        )
+    elif type(source) is OpenMonthDownloadPayloadV1:
+        typed_open = source
+        payload = replace(
+            typed_open,
+            request=replace(typed_open.request),
+            month=replace(typed_open.month),
+            closed_months=tuple(replace(value) for value in typed_open.closed_months),
+        )
+    elif source is None:
+        payload = None
+    else:
+        raise ValueError("invalid public download report")
+    validated: DownloadReportV1 = PublicCommandReportV1(
+        untyped.contract_version,
+        untyped.command,
+        untyped.status,
+        failure,
+        untyped.provider_attempt_count,
+        payload,
+    )
+    if validated.command != "download":
+        raise ValueError("invalid public download report")
+    return validated
+
+
 def render_coverage_report_json(report: CoverageReportV1) -> bytes:
     """Render only the allowlisted v1 coverage fields."""
     try:
@@ -1113,35 +1153,7 @@ def _bounded_download_attempts(report: object) -> int:
 
 
 def _download_report_value(report: object) -> dict[str, object]:
-    if type(report) is not PublicCommandReportV1:
-        raise ValueError
-    untyped = cast(PublicCommandReportV1[object], report)
-    if untyped.payload is not None and type(untyped.payload) not in (
-        DownloadPayloadV1,
-        OpenMonthDownloadPayloadV1,
-    ):
-        raise ValueError
-    failure: PublicFailureV1 | None = (
-        replace(untyped.failure) if untyped.failure is not None else None
-    )
-    typed_payload = untyped.payload
-    payload: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None
-    if type(typed_payload) in (DownloadPayloadV1, OpenMonthDownloadPayloadV1):
-        payload = replace(
-            cast(DownloadPayloadV1 | OpenMonthDownloadPayloadV1, typed_payload)
-        )
-    else:
-        payload = None
-    validated: DownloadReportV1 = PublicCommandReportV1(
-        untyped.contract_version,
-        untyped.command,
-        untyped.status,
-        failure,
-        untyped.provider_attempt_count,
-        payload,
-    )
-    if validated.command != "download":
-        raise ValueError
+    validated = validate_download_report_v1(report)
     return {
         "contract_version": validated.contract_version,
         "command": validated.command,

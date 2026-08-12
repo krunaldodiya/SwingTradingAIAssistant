@@ -19,11 +19,15 @@ from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     render_bounded_nifty50_download_json,
 )
 from swing_trading_ai_assistant.market_data.public_contract import (
+    DownloadPayloadV1,
     PublicCommandReportV1,
     PublicCommandStatusV1,
+    PublicDownloadRequestV1,
     PublicFailureCodeV1,
     PublicFailureV1,
+    PublicMonthEvidenceV1,
 )
+from swing_trading_ai_assistant.market_data.range_ingestion import PartitionOutcome
 from swing_trading_ai_assistant.market_data.universe_snapshot import (
     Nifty50ConstituentV1,
     Nifty50UniverseSnapshotV1,
@@ -84,6 +88,60 @@ def _terminal_report() -> PublicCommandReportV1[None]:
     )
 
 
+def _failed_payload_report() -> PublicCommandReportV1[DownloadPayloadV1]:
+    observed = datetime(2026, 8, 12, 7, tzinfo=UTC)
+    month = PublicMonthEvidenceV1(
+        "2026-08",
+        PartitionOutcome.NOT_ATTEMPTED,
+        (),
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    payload = DownloadPayloadV1(
+        PublicDownloadRequestV1(
+            "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11)
+        ),
+        observed,
+        observed,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        "a" * 64,
+        observed,
+        0,
+        0,
+        (month,),
+    )
+    return PublicCommandReportV1(
+        "v1",
+        "download",
+        PublicCommandStatusV1.PARTIAL,
+        PublicFailureV1(
+            PublicFailureCodeV1.INGESTION_FAILED,
+            None,
+            None,
+            None,
+            None,
+            ("2026-08",),
+        ),
+        0,
+        payload,
+    )
+
+
 class _Source:
     def __init__(self, snapshot: Nifty50UniverseSnapshotV1) -> None:
         self.snapshot = snapshot
@@ -140,6 +198,191 @@ def test_one_or_many_selection_uses_isin_order_and_one_outer_lease(
     assert symbol_service.symbols == ["SBIN", "RELIANCE"]
     assert source.calls == 1
     assert report.universe_snapshot_sha256 is not None
+
+
+def test_single_symbol_adapter_keeps_pit_admission_and_original_report(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    source = _Source(_snapshot())
+    symbol_service = _SymbolService()
+    service = BoundedNifty50DownloadServiceV1(
+        source, lambda policy: symbol_service, clock=_Clock()
+    )
+    request = BoundedNifty50DownloadRequestV1(
+        symbols=("RELIANCE",),
+        universe_as_of=date(2026, 8, 11),
+        knowledge_cutoff=datetime(2026, 8, 12, 7, tzinfo=UTC),
+        from_date=date(2026, 8, 1),
+        to_date=date(2026, 8, 11),
+        storage_root=tmp_path,
+        workers=1,
+    )
+
+    report = service.download_single(request)
+
+    assert report == _terminal_report()
+    assert symbol_service.symbols == ["RELIANCE"]
+    assert source.calls == 1
+
+
+def test_single_symbol_adapter_rejects_future_cutoff_and_nonmember(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    worker = _SymbolService()
+    base = _request(tmp_path)
+    future = BoundedNifty50DownloadRequestV1(
+        ("RELIANCE",),
+        base.universe_as_of,
+        datetime(2026, 8, 13, tzinfo=UTC),
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+    nonmember = BoundedNifty50DownloadRequestV1(
+        ("NOT_A_MEMBER",),
+        base.universe_as_of,
+        base.knowledge_cutoff,
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+    service = BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()), lambda _policy: worker, clock=_Clock()
+    )
+
+    assert service.download_single(object()).status is PublicCommandStatusV1.REJECTED
+    assert service.download_single(future).status is PublicCommandStatusV1.REJECTED
+    assert service.download_single(nonmember).status is PublicCommandStatusV1.REJECTED
+    assert worker.symbols == []
+
+
+def test_single_symbol_adapter_reports_an_occupied_storage_root_unavailable(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    base = _request(tmp_path)
+    request = BoundedNifty50DownloadRequestV1(
+        ("RELIANCE",),
+        base.universe_as_of,
+        base.knowledge_cutoff,
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+    acquired = workflow_module.StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        report = BoundedNifty50DownloadServiceV1(
+            _Source(_snapshot()), lambda _policy: _SymbolService(), clock=_Clock()
+        ).download_single(request)
+
+    assert report.status is PublicCommandStatusV1.UNAVAILABLE
+
+
+def test_single_symbol_adapter_fails_closed_for_missing_or_malformed_dependencies(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    base = _request(tmp_path)
+    request = BoundedNifty50DownloadRequestV1(
+        ("RELIANCE",),
+        base.universe_as_of,
+        base.knowledge_cutoff,
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+    missing = BoundedNifty50DownloadServiceV1(
+        None, lambda _policy: _SymbolService(), clock=_Clock()
+    ).download_single(request)
+    malformed = BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()),
+        lambda _policy: type(
+            "MalformedService",
+            (),
+            {"download_under_lease": lambda *_args: object()},
+        )(),
+        clock=_Clock(),
+    ).download_single(request)
+
+    assert missing.status is PublicCommandStatusV1.UNAVAILABLE
+    assert malformed.status is PublicCommandStatusV1.FAILED
+
+
+@pytest.mark.parametrize("target", ("attempts", "failure", "request", "month"))
+def test_single_symbol_adapter_reconstructs_nested_downstream_reports(
+    tmp_path: Path, target: str
+) -> None:
+    tmp_path.chmod(0o700)
+    base = _request(tmp_path)
+    request = BoundedNifty50DownloadRequestV1(
+        ("RELIANCE",),
+        base.universe_as_of,
+        base.knowledge_cutoff,
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+    downstream = _failed_payload_report()
+    assert downstream.failure is not None
+    assert downstream.payload is not None
+    if target == "attempts":
+        object.__setattr__(downstream, "provider_attempt_count", 99)
+    elif target == "failure":
+        object.__setattr__(downstream.failure, "months", {"credential": "secret"})
+    elif target == "request":
+        object.__setattr__(
+            downstream.payload.request, "segment", {"credential": "secret"}
+        )
+    else:
+        object.__setattr__(downstream.payload.months[0], "provider_attempt_count", 99)
+
+    class Downstream:
+        def download_under_lease(self, *_args: object) -> object:
+            return downstream
+
+    report = BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()), lambda _policy: Downstream(), clock=_Clock()
+    ).download_single(request)
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.provider_attempt_count == 0
+    assert report.payload is None
+
+
+def test_single_symbol_adapter_maps_unexpected_worker_failure(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    base = _request(tmp_path)
+    request = BoundedNifty50DownloadRequestV1(
+        ("RELIANCE",),
+        base.universe_as_of,
+        base.knowledge_cutoff,
+        base.from_date,
+        base.to_date,
+        base.storage_root,
+        1,
+    )
+
+    class BrokenService:
+        def download_under_lease(self, *_args: object) -> object:
+            raise RuntimeError("private failure")
+
+    report = BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()), lambda _policy: BrokenService(), clock=_Clock()
+    ).download_single(request)
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
 
 
 def test_retained_universe_supports_zero_source_rerun(tmp_path: Path) -> None:

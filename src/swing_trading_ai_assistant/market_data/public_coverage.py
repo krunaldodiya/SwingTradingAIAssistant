@@ -83,6 +83,15 @@ class _PartitionReadFailure(RuntimeError):
         self.category = category
 
 
+class CoverageDeadlinePortV1(Protocol):
+    def ensure_live(self) -> None: ...
+
+
+def _ensure_deadline_live(deadline: CoverageDeadlinePortV1 | None) -> None:
+    if deadline is not None:
+        deadline.ensure_live()
+
+
 @dataclass(frozen=True, slots=True)
 class CoverageRequestV1:
     segment: str
@@ -197,6 +206,8 @@ class CoverageEvaluatorV1(Protocol):
         request: CoverageRequestV1,
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1: ...
 
     def evaluate_under_admission_with_policy(
@@ -205,6 +216,8 @@ class CoverageEvaluatorV1(Protocol):
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
         policy: EquityAdmissionPolicyV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1: ...
 
 
@@ -330,8 +343,12 @@ class StoredCoverageEvaluatorV1:
         request: CoverageRequestV1,
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1:
-        return self._evaluate_under_admission(request, invocation_time, admission, None)
+        return self._evaluate_under_admission(
+            request, invocation_time, admission, None, deadline
+        )
 
     def evaluate_under_admission_with_policy(
         self,
@@ -339,9 +356,11 @@ class StoredCoverageEvaluatorV1:
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
         policy: EquityAdmissionPolicyV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1:
         return self._evaluate_under_admission(
-            request, invocation_time, admission, policy
+            request, invocation_time, admission, policy, deadline
         )
 
     def _evaluate_under_admission(
@@ -350,16 +369,20 @@ class StoredCoverageEvaluatorV1:
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
         policy: EquityAdmissionPolicyV1 | None,
+        deadline: CoverageDeadlinePortV1 | None,
     ) -> CoverageEvaluationV1:
+        _ensure_deadline_live(deadline)
         request = _validated_request(request)
         invocation = _validated_invocation(invocation_time)
         _require_closed_range(request, invocation)
         if type(admission) is not ExistingCoverageAdmissionV1:
             raise ValueError("invalid coverage admission")
         admission.ensure_live(request.storage_root)
+        _ensure_deadline_live(deadline)
         with DuckDBCatalog(
             request.storage_root, read_only=True, lease=admission.lease
         ) as catalog:
+            _ensure_deadline_live(deadline)
             resolved = InstrumentSnapshotStoreV1(
                 request.storage_root, admission.lease, catalog
             ).resolve_equity(
@@ -367,7 +390,9 @@ class StoredCoverageEvaluatorV1:
                 segment=request.segment,
                 symbol=request.symbol,
                 as_of=invocation,
+                deadline=deadline,
             )
+            _ensure_deadline_live(deadline)
             if policy is not None and not policy.admits_instrument(resolved.instrument):
                 raise CoverageEvaluationFailureV1(
                     PublicCommandStatusV1.REJECTED,
@@ -377,18 +402,22 @@ class StoredCoverageEvaluatorV1:
             months: list[PublicCoverageMonthV1] = []
             selections: list[VerifiedPartitionV1] = []
             for plan in plans:
+                _ensure_deadline_live(deadline)
                 month, selection = _evaluate_month(
                     request.storage_root,
                     admission.lease,
                     catalog,
                     plan,
                     invocation,
+                    deadline,
                 )
                 months.append(month)
                 if selection is not None:
                     selections.append(selection)
             catalog.ensure_read_identity()
+            _ensure_deadline_live(deadline)
             admission.ensure_live(request.storage_root)
+            _ensure_deadline_live(deadline)
             return CoverageEvaluationV1(tuple(months), tuple(selections))
 
 
@@ -657,8 +686,11 @@ def _evaluate_month(
     catalog: DuckDBCatalog,
     plan: PlannedInstrumentMonth,
     invocation: datetime,
+    deadline: CoverageDeadlinePortV1 | None = None,
 ) -> tuple[PublicCoverageMonthV1, VerifiedPartitionV1 | None]:
+    _ensure_deadline_live(deadline)
     manifest = catalog.get_manifest(plan)
+    _ensure_deadline_live(deadline)
     if manifest is None:
         return _missing_month(plan), None
     if manifest.plan != plan:
@@ -693,7 +725,10 @@ def _evaluate_month(
             None,
             ValidationReason.SCHEDULE_DIGEST_MISSING,
         ), None
-    schedule = ScheduleEvidenceStore(root, lease).resolve(schedule_digest)
+    schedule = ScheduleEvidenceStore(root, lease).resolve(
+        schedule_digest, deadline=deadline
+    )
+    _ensure_deadline_live(deadline)
     if (
         schedule.outcome is ScheduleOutcome.FAILED
         or schedule.schedule is None
@@ -713,7 +748,7 @@ def _evaluate_month(
             plan, manifest, FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
         )
     return _evaluate_physical_month(
-        root, lease, plan, manifest, schedule, schedule_digest
+        root, lease, plan, manifest, schedule, schedule_digest, deadline
     )
 
 
@@ -724,7 +759,9 @@ def _evaluate_physical_month(
     manifest: PartitionManifest,
     schedule: ScheduleEvidenceResult,
     schedule_digest: str,
+    deadline: CoverageDeadlinePortV1 | None = None,
 ) -> tuple[PublicCoverageMonthV1, VerifiedPartitionV1 | None]:
+    _ensure_deadline_live(deadline)
     expected_path = canonical_partition_relative_path(plan)
     if manifest.canonical_path != expected_path:
         return _corrupt_month(
@@ -734,6 +771,7 @@ def _evaluate_physical_month(
         checksum, candles = _read_partition(root, lease, expected_path)
     except _PartitionReadFailure as failure:
         return _corrupt_month(plan, manifest, failure.category)
+    _ensure_deadline_live(deadline)
     if checksum != manifest.checksum_sha256:
         return _corrupt_month(
             plan, manifest, FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED
@@ -754,6 +792,7 @@ def _evaluate_physical_month(
         return _corrupt_month(
             plan, manifest, FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
         )
+    _ensure_deadline_live(deadline)
     if (
         evidence.policy_version != manifest.validation_policy_version
         or evidence.schedule_digest != schedule_digest

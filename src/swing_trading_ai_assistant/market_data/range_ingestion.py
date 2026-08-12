@@ -380,9 +380,12 @@ class _NoopLimiter:
         return timedelta(0)
 
     def defer_for(
-        self, delay: timedelta, remaining_wait: timedelta
+        self,
+        delay: timedelta,
+        remaining_wait: timedelta,
+        cancellation: CancellationSignal | None = None,
     ) -> timedelta | None:
-        del delay, remaining_wait
+        del delay, remaining_wait, cancellation
         return timedelta(0)
 
 

@@ -2148,7 +2148,8 @@ def test_default_download_cli_fails_closed_without_schedule_source(
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 4
     assert output["status"] == "UNAVAILABLE"
-    assert output["results"] == []
+    assert output["failure"]["code"] == "UNCLASSIFIED_FAILURE"
+    assert output["payload"] is None
     assert not root.exists()
 
 
@@ -2221,7 +2222,7 @@ def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 4, output
     assert output["status"] == "UNAVAILABLE"
-    assert output["results"][0]["failure_code"] == "CREDENTIALS_UNAVAILABLE"
+    assert output["failure"]["code"] == "CREDENTIALS_UNAVAILABLE"
     assert len(transport.calls) == 1
     assert "Authorization" not in transport.calls[0][1]
     retained = list((root / "calendar-schedules" / "sha256").glob("*.json"))

@@ -75,13 +75,30 @@ def _provider_event(kind: str) -> dict[str, object]:
         common["amount"] = 5.5000
         cast_details = common["event_details"]
         assert isinstance(cast_details, list)
-        cast_details.append({"value": "Final", "name": "Dividend type"})
+        cast_details.extend(
+            [
+                {"value": "Final", "name": "Dividend type"},
+                {"value": "5.5", "name": "Amount"},
+                {"value": "11 Aug 2026", "name": "Ex dividend date"},
+            ]
+        )
     else:
         common["ratio"] = {
             "Bonus": "1:1",
             "Split": "2:1",
             "Rights": "1:5",
         }[kind]
+        cast_details = common["event_details"]
+        assert isinstance(cast_details, list)
+        cast_details.extend(
+            [
+                {"value": str(common["ratio"]), "name": "Ratio"},
+                {
+                    "value": "11 Aug 2026",
+                    "name": f"Ex {kind.lower()} date",
+                },
+            ]
+        )
     return common
 
 
@@ -204,6 +221,77 @@ def test_unknown_or_invalid_provider_event_facts_fail_closed(
     payload = json.dumps({"status": "success", "data": [event]}).encode()
     client, _ = _client(payload)
     with pytest.raises(expected):
+        client.fetch(_ISIN, _TOKEN)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda event: event.update(amount="5.5"),
+        lambda event: event["event_details"].__setitem__(  # type: ignore[index]
+            5, {"name": "Ex dividend date", "value": "not a date"}
+        ),
+        lambda event: event["event_details"].__setitem__(  # type: ignore[index]
+            4, {"name": "Amount", "value": "6"}
+        ),
+        lambda event: event["event_details"].__setitem__(  # type: ignore[index]
+            5, {"name": "Ex dividend date", "value": "12 Aug 2026"}
+        ),
+        lambda event: event["event_details"].append(  # type: ignore[union-attr]
+            {"name": "Ex split date", "value": "11 Aug 2026"}
+        ),
+    ),
+)
+def test_dividend_provider_detail_types_dates_and_redundancy_fail_closed(
+    mutation,
+) -> None:
+    event = _provider_event("Dividend")
+    mutation(event)
+    client, _ = _client(json.dumps({"status": "success", "data": [event]}).encode())
+    with pytest.raises(CorporateActionCorruptError):
+        client.fetch(_ISIN, _TOKEN)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda event: event["event_details"].__setitem__(  # type: ignore[index]
+            3, {"name": "Ratio", "value": "2:1"}
+        ),
+        lambda event: event["event_details"].__setitem__(  # type: ignore[index]
+            4, {"name": "Ex bonus date", "value": "not a date"}
+        ),
+        lambda event: event["event_details"].append(  # type: ignore[union-attr]
+            {"name": "Amount", "value": "5.5"}
+        ),
+    ),
+)
+def test_ratio_provider_details_reconcile_and_reject_cross_event_labels(
+    mutation,
+) -> None:
+    event = _provider_event("Bonus")
+    mutation(event)
+    client, _ = _client(json.dumps({"status": "success", "data": [event]}).encode())
+    with pytest.raises(CorporateActionCorruptError):
+        client.fetch(_ISIN, _TOKEN)
+
+
+def test_split_numeric_details_are_strict_positive_decimals() -> None:
+    event = _provider_event("Split")
+    details = event["event_details"]
+    assert isinstance(details, list)
+    details.extend(
+        [
+            {"name": "Old face value", "value": "10"},
+            {"name": "New face value", "value": "5"},
+        ]
+    )
+    client, _ = _client(json.dumps({"status": "success", "data": [event]}).encode())
+    assert client.fetch(_ISIN, _TOKEN).events[0].kind is CorporateActionKindV1.SPLIT
+
+    details[-1] = {"name": "New face value", "value": "0"}
+    client, _ = _client(json.dumps({"status": "success", "data": [event]}).encode())
+    with pytest.raises(CorporateActionCorruptError):
         client.fetch(_ISIN, _TOKEN)
 
 
@@ -378,10 +466,8 @@ def test_catalog_v5_metadata_api_is_exact_and_bounded(tmp_path) -> None:
             isin=_ISIN, knowledge_cutoff=_RETRIEVED
         ) == (metadata,)
         assert not catalog.save_corporate_action_snapshot(metadata)
-        with pytest.raises(CatalogConflictError):
-            catalog.save_corporate_action_snapshot(
-                replace(metadata, source_release="conflicting-v2")
-            )
+        with pytest.raises(ValueError):
+            replace(metadata, source_release="conflicting-v2")
         with pytest.raises(CatalogConflictError):
             catalog.latest_corporate_action_snapshots(
                 isin=_ISIN, knowledge_cutoff=datetime(2026, 8, 10)
@@ -413,13 +499,13 @@ def test_catalog_v5_write_remove_and_row_failure_branches(
             catalog.remove_corporate_action_snapshot_exact(object())  # type: ignore[arg-type]
 
         catalog.connection.execute(
-            "UPDATE corporate_action_snapshots SET source_release = 'different-v2'"
+            "UPDATE corporate_action_snapshots SET event_count = 0"
         )
         with pytest.raises(CatalogConflictError):
             catalog.remove_corporate_action_snapshot_exact(metadata)
         catalog.connection.execute(
-            "UPDATE corporate_action_snapshots SET source_release = ?",
-            (metadata.source_release,),
+            "UPDATE corporate_action_snapshots SET event_count = ?",
+            (metadata.event_count,),
         )
 
         original_converter = catalog_module._corporate_action_metadata_from_row
@@ -533,6 +619,103 @@ def test_metadata_reconstructs_and_rejects_wrong_content_path() -> None:
     assert replace(metadata) == metadata
     with pytest.raises(ValueError):
         replace(metadata, relative_object_path="snapshot.json")
+
+
+def test_only_the_frozen_upstox_adapter_identity_is_constructible_or_retained(
+    tmp_path,
+) -> None:
+    snapshot = _snapshot("Dividend")
+    with pytest.raises(ValueError):
+        replace(snapshot, source="unsupported-feed")
+    metadata = CorporateActionSnapshotMetadataV1(
+        1,
+        _ISIN,
+        snapshot.source,
+        snapshot.source_release,
+        snapshot.retrieved_at,
+        hashlib.sha256(snapshot.canonical_json_bytes()).hexdigest(),
+        len(snapshot.canonical_json_bytes()),
+        len(snapshot.events),
+        "corporate_action_snapshots/isin="
+        + _ISIN
+        + "/sha256="
+        + hashlib.sha256(snapshot.canonical_json_bytes()).hexdigest()
+        + "/snapshot.json",
+    )
+    with pytest.raises(ValueError):
+        replace(metadata, source_release="forged-v2")
+
+    lease, catalog, store = _leased_store(tmp_path)
+    try:
+        forged = object.__new__(CorporateActionSnapshotV1)
+        for name, value in {
+            "schema_version": 1,
+            "isin": _ISIN,
+            "source": "unsupported-feed",
+            "source_release": snapshot.source_release,
+            "retrieved_at": _RETRIEVED,
+            "events": snapshot.events,
+        }.items():
+            object.__setattr__(forged, name, value)
+        with pytest.raises(CorporateActionCorruptError):
+            store.retain(forged)
+        assert not (tmp_path / "corporate_action_snapshots").exists()
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM corporate_action_snapshots"
+        ).fetchone() == (0,)
+    finally:
+        catalog.close()
+        lease.close()
+
+
+def test_forged_catalog_identity_fails_before_replay_filesystem_access(
+    tmp_path, monkeypatch
+) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    try:
+        metadata = store.retain(_snapshot("Dividend"))
+        forged = object.__new__(CorporateActionSnapshotMetadataV1)
+        for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__:
+            object.__setattr__(forged, name, getattr(metadata, name))
+        object.__setattr__(forged, "source", "unsupported-feed")
+        monkeypatch.setattr(
+            catalog,
+            "latest_corporate_action_snapshots",
+            lambda **_kwargs: (forged,),
+        )
+        monkeypatch.setattr(
+            action_module,
+            "_open_action_object",
+            lambda *_args: pytest.fail("forged metadata reached filesystem replay"),
+        )
+        with pytest.raises(CorporateActionCorruptError):
+            store.resolve(isin=_ISIN, knowledge_cutoff=_RETRIEVED)
+
+        monkeypatch.setattr(
+            catalog,
+            "latest_corporate_action_snapshots",
+            lambda **_kwargs: (object(),),
+        )
+        with pytest.raises(CorporateActionCorruptError):
+            store.resolve(isin=_ISIN, knowledge_cutoff=_RETRIEVED)
+    finally:
+        catalog.close()
+        lease.close()
+
+
+def test_catalog_revalidates_mutated_corporate_action_metadata(tmp_path) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    try:
+        metadata = store.retain(_snapshot("Dividend"))
+        forged = replace(metadata)
+        object.__setattr__(forged, "source", "unsupported-feed")
+        with pytest.raises(CatalogConflictError):
+            catalog.save_corporate_action_snapshot(forged)
+        with pytest.raises(CatalogConflictError):
+            catalog.remove_corporate_action_snapshot_exact(forged)
+    finally:
+        catalog.close()
+        lease.close()
 
 
 def test_json_depth_and_response_byte_ceiling_are_enforced() -> None:

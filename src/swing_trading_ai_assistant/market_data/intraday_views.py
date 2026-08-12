@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import ExitStack, suppress
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -77,13 +79,64 @@ MAX_DERIVED_INPUT_ROWS_V1 = 500_000
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+class _QueryDeadlineV1:
+    """One monotonic deadline shared by a complete derived query operation."""
+
+    def __init__(self, clock: QueryClockV1) -> None:
+        candidate = getattr(clock, "monotonic", None)
+        self._monotonic = candidate if callable(candidate) else time.monotonic
+        start = self._monotonic()
+        if type(start) not in (int, float):
+            raise ValueError("invalid monotonic clock")
+        self._ends_at = float(cast(float, start)) + QUERY_TIMEOUT_SECONDS_V1
+
+    def remaining_seconds(self) -> float:
+        value = self._monotonic()
+        if type(value) not in (int, float):
+            raise ValueError("invalid monotonic clock")
+        return self._ends_at - float(cast(float, value))
+
+    def ensure_live(self) -> None:
+        if self.remaining_seconds() <= 0:
+            raise QueryTimeoutV1
+
+
+def _call_with_deadline(
+    method: object, *args: object, deadline: _QueryDeadlineV1
+) -> object:
+    """Use an additive deadline seam when a dependency explicitly supports it."""
+    if not callable(method):
+        raise QueryExecutionFailureV1
+    deadline.ensure_live()
+    try:
+        parameters = signature(method).parameters.values()
+        accepts_deadline = any(
+            parameter.name == "deadline" or parameter.kind is Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+    except (TypeError, ValueError):
+        accepts_deadline = False
+    value = method(*args, deadline=deadline) if accepts_deadline else method(*args)
+    deadline.ensure_live()
+    return value
+
+
+def _ensure_deadline_live(deadline: _QueryDeadlineV1 | None) -> None:
+    if deadline is not None:
+        deadline.ensure_live()
+
+
 class DerivedEvidenceIncompleteV1(RuntimeError):
     """The raw minute grid cannot prove every requested derived bucket."""
 
 
 class MinuteQueryPortV1(Protocol):
     def query_under_lease(
-        self, request: object, lease: StorageRootLease
+        self,
+        request: object,
+        lease: StorageRootLease,
+        *,
+        deadline: _QueryDeadlineV1 | None = None,
     ) -> QueryReportV1: ...
 
 
@@ -94,6 +147,8 @@ class OpenMonthScheduleResolverPortV1(Protocol):
         digest: str,
         invocation: datetime,
         lease: StorageRootLease,
+        *,
+        deadline: _QueryDeadlineV1 | None = None,
     ) -> DailyScheduleResolutionV1: ...
 
 
@@ -106,9 +161,15 @@ class RetainedOpenMonthScheduleResolverV1:
         digest: str,
         invocation: datetime,
         lease: StorageRootLease,
+        *,
+        deadline: _QueryDeadlineV1 | None = None,
     ) -> DailyScheduleResolutionV1:
         try:
-            result = ScheduleEvidenceStore(root, lease).resolve(digest)
+            _ensure_deadline_live(deadline)
+            result = ScheduleEvidenceStore(root, lease).resolve(
+                digest, deadline=deadline
+            )
+            _ensure_deadline_live(deadline)
             if type(result) is not ScheduleEvidenceResult:
                 raise ValueError
             evidence = replace(result)
@@ -123,6 +184,7 @@ class RetainedOpenMonthScheduleResolverV1:
                 or canonical_schedule_bytes(schedule) != evidence.canonical_bytes
             ):
                 raise ValueError
+            _ensure_deadline_live(deadline)
             return DailyScheduleResolutionV1(
                 tuple(
                     VerifiedSessionV1(
@@ -138,6 +200,8 @@ class RetainedOpenMonthScheduleResolverV1:
                     for closure in schedule.closures
                 ),
             )
+        except QueryTimeoutV1:
+            raise
         except Exception:
             raise QueryExecutionFailureV1 from None
 
@@ -181,11 +245,25 @@ class OpenMonthDerivedIntradayQueryServiceV1:
             return _terminal(
                 PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
             )
-        prepared = _prepare_open_request(request, self._clock)
-        if not isinstance(prepared, tuple):
-            return prepared
-        typed, invocation, public_request = prepared
-        return self._query_prepared(typed, invocation, public_request, lease)
+        try:
+            deadline = _QueryDeadlineV1(self._clock)
+            prepared = _prepare_open_request(request, self._clock)
+            deadline.ensure_live()
+            if not isinstance(prepared, tuple):
+                return prepared
+            typed, invocation, public_request = prepared
+            return self._query_prepared(
+                typed, invocation, public_request, lease, deadline
+            )
+        except QueryTimeoutV1:
+            return _terminal(
+                PublicCommandStatusV1.FAILED, PublicFailureCodeV1.QUERY_TIMEOUT
+            )
+        except Exception:
+            return _terminal(
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
+            )
 
     def _query_prepared(
         self,
@@ -193,15 +271,22 @@ class OpenMonthDerivedIntradayQueryServiceV1:
         invocation: datetime,
         public_request: PublicQueryRequestV1,
         lease: StorageRootLease,
+        deadline: _QueryDeadlineV1,
     ) -> PublicCommandReportV1[DerivedIntradayQueryPayloadV1]:
         try:
+            deadline.ensure_live()
             minute_request = replace(
                 typed,
                 timeframe="1m",
                 fields=tuple(value.value for value in CandleFieldV1),
                 max_rows=10_000,
             )
-            report = self._minute_service.query_under_lease(minute_request, lease)
+            report = _call_with_deadline(
+                self._minute_service.query_under_lease,
+                minute_request,
+                lease,
+                deadline=deadline,
+            )
             forwarded = _forward_minute_failure(report, public_request)
             if forwarded is not None:
                 return forwarded
@@ -211,11 +296,13 @@ class OpenMonthDerivedIntradayQueryServiceV1:
             month = minute_payload.months[0]
             if month.schedule_digest_sha256 is None or month.data_cutoff is None:
                 raise QueryExecutionFailureV1
-            resolution = self._resolver.resolve(
+            resolution = _call_with_deadline(
+                self._resolver.resolve,
                 typed.storage_root,
                 month.schedule_digest_sha256,
                 invocation,
                 lease,
+                deadline=deadline,
             )
             selected_sessions = _validated_open_resolution(
                 public_request,
@@ -223,17 +310,21 @@ class OpenMonthDerivedIntradayQueryServiceV1:
                 resolution,
             )
             try:
+                deadline.ensure_live()
                 rows = _aggregate_available_rows(
                     public_request,
                     selected_sessions,
                     minute_payload.rows,
                     month.data_cutoff,
                 )
+                deadline.ensure_live()
             except DerivedEvidenceIncompleteV1:
                 return _open_incomplete_report(public_request, minute_payload)
+            deadline.ensure_live()
             ExistingCoverageAdmissionV1(typed.storage_root, lease).ensure_live(
                 typed.storage_root
             )
+            deadline.ensure_live()
             payload = DerivedIntradayQueryPayloadV1(
                 public_request,
                 DERIVED_INTRADAY_CALCULATION_VERSION_V1,
@@ -302,7 +393,9 @@ class DerivedIntradayQueryServiceV1:
             return prepared
         typed, public_request = prepared
         try:
+            deadline = _QueryDeadlineV1(self._clock)
             invocation = _validated_invocation(self._clock.now())
+            deadline.ensure_live()
             coverage_request = CoverageRequestV1(
                 typed.segment,
                 typed.symbol,
@@ -318,6 +411,7 @@ class DerivedIntradayQueryServiceV1:
                         coverage_request,
                         invocation,
                         cast(ExistingCoverageAdmissionV1, untyped_admission),
+                        deadline,
                     )
             return self._execute(
                 typed,
@@ -325,6 +419,7 @@ class DerivedIntradayQueryServiceV1:
                 coverage_request,
                 invocation,
                 ExistingCoverageAdmissionV1(typed.storage_root, lease),
+                deadline,
             )
         except CoverageEvaluationFailureV1 as error:
             return _terminal(error.status, error.code)
@@ -350,14 +445,25 @@ class DerivedIntradayQueryServiceV1:
         coverage_request: CoverageRequestV1,
         invocation: datetime,
         admission: ExistingCoverageAdmissionV1,
+        deadline: _QueryDeadlineV1,
     ) -> PublicCommandReportV1[DerivedIntradayQueryPayloadV1]:
+        deadline.ensure_live()
         evaluation = (
-            self._evaluator.evaluate_under_admission_with_policy(
-                coverage_request, invocation, admission, self._policy
+            _call_with_deadline(
+                self._evaluator.evaluate_under_admission_with_policy,
+                coverage_request,
+                invocation,
+                admission,
+                self._policy,
+                deadline=deadline,
             )
             if isinstance(self._policy, Nifty50AdmissionPolicyV1)
-            else self._evaluator.evaluate_under_admission(
-                coverage_request, invocation, admission
+            else _call_with_deadline(
+                self._evaluator.evaluate_under_admission,
+                coverage_request,
+                invocation,
+                admission,
+                deadline=deadline,
             )
         )
         evaluation = _validated_evaluation(evaluation)
@@ -376,22 +482,26 @@ class DerivedIntradayQueryServiceV1:
                 0,
                 empty,
             )
-        resolution = self._resolver.resolve(
+        resolution = _call_with_deadline(
+            self._resolver.resolve,
             public_request,
             request.storage_root,
             evaluation,
             invocation,
             admission,
+            deadline=deadline,
         )
         sessions = _validated_resolution(public_request, evaluation, resolution)
         try:
-            rows = self._engine.execute(
+            rows = _call_with_deadline(
+                self._engine.execute,
                 public_request,
                 request.storage_root,
                 evaluation,
                 sessions,
                 self._evaluator,
                 admission,
+                deadline=deadline,
             )
             rows = _validated_derived_rows(public_request, sessions, rows)
         except DerivedEvidenceIncompleteV1:
@@ -405,6 +515,7 @@ class DerivedIntradayQueryServiceV1:
                 empty,
             )
         admission.ensure_live(request.storage_root)
+        deadline.ensure_live()
         payload = _payload(public_request, evaluation, rows)
         return PublicCommandReportV1(
             "v1", "query", PublicCommandStatusV1.SUCCEEDED, None, 0, payload
@@ -422,6 +533,8 @@ class DuckDBIntradayViewEngineV1:
         sessions: tuple[VerifiedSessionV1, ...],
         evaluator: QueryCoveragePortV1,
         admission: ExistingCoverageAdmissionV1,
+        *,
+        deadline: _QueryDeadlineV1 | None = None,
     ) -> tuple[PublicQueryRowV1, ...]:
         try:
             if type(request) is not PublicQueryRequestV1:
@@ -453,7 +566,9 @@ class DuckDBIntradayViewEngineV1:
             raise QueryResourceLimitV1
         if not sessions:
             return ()
+        _ensure_deadline_live(deadline)
         admission.ensure_live(root)
+        _ensure_deadline_live(deadline)
         try:
             with ExitStack() as handles:
                 untyped = tuple(
@@ -465,9 +580,15 @@ class DuckDBIntradayViewEngineV1:
                     for selection in evaluation.verified_partitions
                 )
                 pinned = _validated_handles(untyped, evaluation.verified_partitions)
+                _ensure_deadline_live(deadline)
                 admission.ensure_live(root)
-                rows = self._execute(request, sessions, pinned, bucket_minutes)
+                _ensure_deadline_live(deadline)
+                rows = self._execute(
+                    request, sessions, pinned, bucket_minutes, deadline=deadline
+                )
+                _ensure_deadline_live(deadline)
                 admission.ensure_live(root)
+                _ensure_deadline_live(deadline)
                 return rows
         except (
             DerivedEvidenceIncompleteV1,
@@ -485,15 +606,24 @@ class DuckDBIntradayViewEngineV1:
         sessions: tuple[VerifiedSessionV1, ...],
         pinned: tuple[VerifiedPartitionReadHandleV1, ...],
         bucket_minutes: int,
+        *,
+        deadline: _QueryDeadlineV1 | None = None,
     ) -> tuple[PublicQueryRowV1, ...]:
         connection: Any | None = None
         timer: threading.Timer | None = None
-        deadline = threading.Event()
+        deadline_event = threading.Event()
         try:
             active: Any = duckdb.connect(config=_connection_config())
             connection = active
+            timeout_seconds = (
+                deadline.remaining_seconds()
+                if deadline is not None
+                else QUERY_TIMEOUT_SECONDS_V1
+            )
+            if timeout_seconds <= 0:
+                raise QueryTimeoutV1
             timer = threading.Timer(
-                QUERY_TIMEOUT_SECONDS_V1, _expire_query, (deadline, active)
+                timeout_seconds, _expire_query, (deadline_event, active)
             )
             timer.daemon = True
             timer.start()
@@ -511,8 +641,9 @@ class DuckDBIntradayViewEngineV1:
             timer.cancel()
             timer.join(timeout=1.0)
             timer = None
-            if deadline.is_set():
+            if deadline_event.is_set():
                 raise QueryTimeoutV1
+            _ensure_deadline_live(deadline)
             return rows
         except duckdb.InterruptException:
             raise QueryTimeoutV1 from None

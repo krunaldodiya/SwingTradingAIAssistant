@@ -25,6 +25,7 @@ from .public_contract import (
     QueryReportV1,
 )
 from .public_coverage import (
+    CoverageDeadlinePortV1,
     CoverageEvaluationFailureV1,
     CoverageEvaluationV1,
     CoverageRequestV1,
@@ -101,6 +102,8 @@ class QueryCoveragePortV1(Protocol):
         request: CoverageRequestV1,
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1: ...
 
     def evaluate_under_admission_with_policy(
@@ -109,6 +112,8 @@ class QueryCoveragePortV1(Protocol):
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
         policy: EquityAdmissionPolicyV1,
+        *,
+        deadline: CoverageDeadlinePortV1 | None = None,
     ) -> CoverageEvaluationV1: ...
 
     def open_verified_partition_under_admission(

@@ -26,7 +26,7 @@ from .public_contract import (
     QueryPayloadV1,
     QueryReportV1,
 )
-from .public_query import QueryRequestV1
+from .public_query import QueryRequestV1, QueryTimeoutV1
 from .schemas import CanonicalCandle
 from .storage_root_lease import LeaseOutcome, StorageRootLease
 
@@ -36,6 +36,15 @@ _MAX_ATOMIC_READ_ATTEMPTS = 3
 
 class OpenMonthQueryClockV1(Protocol):
     def now(self) -> datetime: ...
+
+
+class OpenMonthQueryDeadlinePortV1(Protocol):
+    def ensure_live(self) -> None: ...
+
+
+def _ensure_deadline_live(deadline: OpenMonthQueryDeadlinePortV1 | None) -> None:
+    if deadline is not None:
+        deadline.ensure_live()
 
 
 class QueryPortV1(Protocol):
@@ -176,17 +185,25 @@ class OpenMonthOneMinuteQueryServiceV1:
         return self._query(request, None)
 
     def query_under_lease(
-        self, request: object, lease: StorageRootLease
+        self,
+        request: object,
+        lease: StorageRootLease,
+        *,
+        deadline: OpenMonthQueryDeadlinePortV1 | None = None,
     ) -> QueryReportV1:
         if type(lease) is not StorageRootLease:
             return _terminal(
                 PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
             )
-        return self._query(request, lease)
+        return self._query(request, lease, deadline)
 
     def _query(
-        self, request: object, supplied_lease: StorageRootLease | None
+        self,
+        request: object,
+        supplied_lease: StorageRootLease | None,
+        deadline: OpenMonthQueryDeadlinePortV1 | None = None,
     ) -> QueryReportV1:
+        _ensure_deadline_live(deadline)
         try:
             request = _request(request)
             invocation = _invocation(self._clock.now())
@@ -207,7 +224,7 @@ class OpenMonthOneMinuteQueryServiceV1:
             )
         if supplied_lease is not None:
             return self._read_supplied(
-                request, public_request, invocation, supplied_lease
+                request, public_request, invocation, supplied_lease, deadline
             )
         lease_result = StorageRootLease.try_admit_read_existing(request.storage_root)
         if (
@@ -220,21 +237,37 @@ class OpenMonthOneMinuteQueryServiceV1:
             )
         try:
             with lease_result.lease as lease:
-                attempt = 0
-                while True:
-                    try:
-                        return self._query_under_lease(
-                            request, public_request, invocation, lease
-                        )
-                    except Exception:
-                        attempt += 1
-                        if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
-                            raise
+                return self._read_with_retries(
+                    request, public_request, invocation, lease, deadline
+                )
+        except QueryTimeoutV1:
+            raise
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
             )
+
+    def _read_with_retries(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        invocation: datetime,
+        lease: StorageRootLease,
+        deadline: OpenMonthQueryDeadlinePortV1 | None,
+    ) -> QueryReportV1:
+        attempt = 0
+        while True:
+            try:
+                return self._query_under_lease(
+                    request, public_request, invocation, lease, deadline
+                )
+            except QueryTimeoutV1:
+                raise
+            except Exception:
+                attempt += 1
+                if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
+                    raise
 
     def _read_supplied(
         self,
@@ -242,9 +275,14 @@ class OpenMonthOneMinuteQueryServiceV1:
         public_request: PublicQueryRequestV1,
         invocation: datetime,
         lease: StorageRootLease,
+        deadline: OpenMonthQueryDeadlinePortV1 | None = None,
     ) -> QueryReportV1:
         try:
-            return self._query_under_lease(request, public_request, invocation, lease)
+            return self._query_under_lease(
+                request, public_request, invocation, lease, deadline
+            )
+        except QueryTimeoutV1:
+            raise
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
@@ -257,11 +295,14 @@ class OpenMonthOneMinuteQueryServiceV1:
         public_request: PublicQueryRequestV1,
         invocation: datetime,
         lease: StorageRootLease,
+        deadline: OpenMonthQueryDeadlinePortV1 | None = None,
     ) -> QueryReportV1:
+        _ensure_deadline_live(deadline)
         local_today = invocation.astimezone(_IST).date()
         with DuckDBCatalog(
             request.storage_root, read_only=True, lease=lease
         ) as catalog:
+            _ensure_deadline_live(deadline)
             metadata = catalog.latest_provisional_partition_for_symbol(
                 segment=request.segment,
                 symbol=request.symbol,
@@ -270,7 +311,9 @@ class OpenMonthOneMinuteQueryServiceV1:
                 cutoff_lte=invocation,
                 published_at_lte=invocation,
             )
+            _ensure_deadline_live(deadline)
             catalog.ensure_read_identity()
+        _ensure_deadline_live(deadline)
         if metadata is None:
             month = _missing_month(local_today.year, local_today.month)
             payload = QueryPayloadV1(public_request, 0, (month,), ())
@@ -297,6 +340,7 @@ class OpenMonthOneMinuteQueryServiceV1:
                 PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
             )
         rows = load_provisional_partition(request.storage_root, lease, metadata)
+        _ensure_deadline_live(deadline)
         selected = tuple(
             row
             for row in rows
@@ -323,6 +367,7 @@ class OpenMonthOneMinuteQueryServiceV1:
             metadata.session_complete,
         )
         public_rows = tuple(_public_row(row, public_request.fields) for row in selected)
+        _ensure_deadline_live(deadline)
         payload = QueryPayloadV1(
             public_request, len(public_rows), (month,), public_rows
         )
