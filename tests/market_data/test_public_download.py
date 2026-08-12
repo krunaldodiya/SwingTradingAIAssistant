@@ -2150,7 +2150,7 @@ def test_default_download_cli_fails_closed_without_schedule_source(
     assert output["status"] == "UNAVAILABLE"
     assert output["failure"]["code"] == "UNCLASSIFIED_FAILURE"
     assert output["payload"] is None
-    assert not root.exists()
+    assert root.is_dir()
 
 
 def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(

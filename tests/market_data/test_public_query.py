@@ -578,7 +578,7 @@ def test_query_cli_invokes_one_service_and_reuses_renderer_and_exit(
     assert json.loads(capsys.readouterr().out)["command"] == "query"
 
 
-def test_default_query_cli_requires_retained_universe_before_root_activity(
+def test_default_query_cli_creates_storage_then_requires_retained_universe(
     tmp_path, capsys
 ) -> None:
     absent = tmp_path / "absent"
@@ -610,7 +610,7 @@ def test_default_query_cli_requires_retained_universe_before_root_activity(
     decoded = json.loads(capsys.readouterr().out)
     assert exit_code == 4
     assert decoded["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
-    assert not absent.exists()
+    assert absent.is_dir()
 
 
 def test_default_query_cli_routes_daily_request_to_local_daily_service(
@@ -645,4 +645,4 @@ def test_default_query_cli_routes_daily_request_to_local_daily_service(
     decoded = json.loads(capsys.readouterr().out)
     assert exit_code == 4
     assert decoded["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
-    assert not absent.exists()
+    assert absent.is_dir()
