@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date
 from pathlib import Path
 
@@ -177,7 +178,8 @@ def test_storage_root_creation_fails_closed_for_unsafe_or_blocked_paths(
 
     assert not cli._prepare_storage_root(Path("relative")).is_absolute()
     assert not cli._prepare_storage_root(tmp_path / "data*").is_absolute()
-    assert not cli._prepare_storage_root(blocked / "child").is_absolute()
+    with pytest.raises(OSError):
+        cli._prepare_storage_root(blocked / "child")
 
 
 def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
@@ -319,9 +321,14 @@ def test_default_single_download_keeps_public_report_json_and_exit_contract(
             assert request.symbols == ("RELIANCE",)  # type: ignore[attr-defined]
             return report
 
-    monkeypatch.setattr(
-        cli, "_default_bounded_download_service", lambda *_args: Service()
-    )
+    universe_file = tmp_path / "nifty50-universe.json"
+
+    def service(source: object, *_args: object) -> Service:
+        assert isinstance(source, cli.CanonicalFileNifty50UniverseSourceV1)
+        assert source.path == universe_file
+        return Service()
+
+    monkeypatch.setattr(cli, "_default_bounded_download_service", service)
     assert (
         cli.main(
             [
@@ -336,6 +343,8 @@ def test_default_single_download_keeps_public_report_json_and_exit_contract(
                 "2026-07-31",
                 "--storage-root",
                 str(tmp_path),
+                "--universe-file",
+                str(universe_file),
                 "--output",
                 "json",
             ]
@@ -390,52 +399,6 @@ def test_default_multi_download_keeps_the_bounded_aggregate_contract(
     assert '"scope":"nifty50"' in capsys.readouterr().out
 
 
-def test_default_single_download_rejects_non_equity_segment_before_service_use(
-    monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
-) -> None:
-    storage_root = tmp_path / "must-not-be-created"
-    report = PublicCommandReportV1(
-        "v1",
-        "download",
-        PublicCommandStatusV1.REJECTED,
-        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
-        0,
-        None,
-    )
-
-    class Service:
-        def download_single(self, request: object) -> object:
-            assert type(request) is object
-            return report
-
-    monkeypatch.setattr(
-        cli, "_default_bounded_download_service", lambda *_args: Service()
-    )
-
-    assert (
-        cli.main(
-            [
-                "download",
-                "--segment",
-                "BSE_EQ",
-                "--symbol",
-                "RELIANCE",
-                "--from",
-                "2026-07-01",
-                "--to",
-                "2026-07-31",
-                "--storage-root",
-                str(storage_root),
-                "--output",
-                "json",
-            ]
-        )
-        == 2
-    )
-    assert '"status":"REJECTED"' in capsys.readouterr().out
-    assert not storage_root.exists()
-
-
 def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
     def run_probe(*args: object, **kwargs: object) -> ProbeReport:
         raise ValueError("secret-token")
@@ -450,3 +413,378 @@ def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
     assert exit_code == 2
     assert captured.err == "probe_failed:ValueError\n"
     assert "secret-token" not in captured.err
+
+
+def _range_command(
+    command: str, selection: str, root: Path, *, months: int = 1
+) -> list[str]:
+    end = "2026-07-31" if months == 1 else "2026-07-01"
+    start = "2026-07-01" if months == 1 else "2025-07-01"
+    values = [
+        command,
+        "--segment",
+        "NSE_EQ",
+        selection,
+        "RELIANCE" if selection == "--symbol" else "RELIANCE,SBIN",
+        "--from",
+        start,
+        "--to",
+        end,
+        "--storage-root",
+        str(root),
+    ]
+    if command == "query":
+        values.extend(
+            [
+                "--timeframe",
+                "1d",
+                "--fields",
+                "ts,open,high,low,close,volume",
+                "--max-rows",
+                "31",
+            ]
+        )
+    return values + ["--output", "json"]
+
+
+@pytest.mark.parametrize("command", ("download", "coverage", "query"))
+def test_invalid_default_bounded_range_does_not_create_root_or_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    command: str,
+) -> None:
+    root = tmp_path / "must-not-exist"
+    service_name = {
+        "download": "_default_bounded_download_service",
+        "coverage": "_default_bounded_read_service",
+        "query": "_default_bounded_read_service",
+    }[command]
+    monkeypatch.setattr(
+        cli,
+        service_name,
+        lambda *_args: pytest.fail("default service must not be constructed"),
+    )
+
+    assert cli.main(_range_command(command, "--symbols", root, months=13)) == 2
+
+    assert not root.exists()
+    assert json.loads(capsys.readouterr().out) == {
+        "command": command,
+        "contract_version": "v1",
+        "provider_attempt_count": 0,
+        "results": [],
+        "scope": "nifty50",
+        "status": "REJECTED",
+        "universe_snapshot_sha256": None,
+        "worker_count": 0,
+    }
+
+
+@pytest.mark.parametrize("command", ("download", "coverage", "query"))
+def test_invalid_injected_range_preserves_service_classification_without_mkdir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    command: str,
+) -> None:
+    root = tmp_path / "must-not-exist"
+    calls: list[object] = []
+    report = PublicCommandReportV1(
+        "v1",
+        command,  # type: ignore[arg-type]
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(
+            PublicFailureCodeV1.QUERY_BOUNDS_EXCEEDED,
+            None,
+            None,
+            None,
+            None,
+            (),
+        ),
+        0,
+        None,
+    )
+
+    class Service:
+        def download(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+        def coverage(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+        def query(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+    kwargs = {f"{command}_service": Service()}
+    assert cli.main(_range_command(command, "--symbol", root, months=13), **kwargs) == 2  # type: ignore[arg-type]
+
+    assert len(calls) == 1
+    assert not root.exists()
+    assert json.loads(capsys.readouterr().out)["failure"]["code"] == (
+        "QUERY_BOUNDS_EXCEEDED"
+    )
+
+
+@pytest.mark.parametrize("command", ("download", "coverage", "query"))
+@pytest.mark.parametrize("selection", ("--symbol", "--symbols"))
+def test_mkdir_oserror_renders_scope_correct_unavailable_without_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    command: str,
+    selection: str,
+) -> None:
+    def blocked(_root: object) -> Path:
+        raise OSError("private-path")
+
+    monkeypatch.setattr(cli, "_prepare_storage_root", blocked)
+    for service_name in (
+        "_default_bounded_download_service",
+        "_default_nifty50_coverage_service",
+        "_default_nifty50_query_service",
+        "_default_bounded_read_service",
+    ):
+        monkeypatch.setattr(
+            cli,
+            service_name,
+            lambda *_args: pytest.fail("service must not be constructed"),
+        )
+
+    expected_exit = 4
+    assert (
+        cli.main(_range_command(command, selection, tmp_path / "blocked"))
+        == expected_exit
+    )
+
+    value = json.loads(capsys.readouterr().out)
+    if selection == "--symbols":
+        assert value == {
+            "command": command,
+            "contract_version": "v1",
+            "provider_attempt_count": 0,
+            "results": [],
+            "scope": "nifty50",
+            "status": "UNAVAILABLE",
+            "universe_snapshot_sha256": None,
+            "worker_count": 0,
+        }
+    else:
+        expected_code = (
+            "INGESTION_UNAVAILABLE"
+            if command == "download"
+            else "QUERY_CATALOG_UNAVAILABLE"
+        )
+        assert value == {
+            "contract_version": "v1",
+            "command": command,
+            "status": "UNAVAILABLE",
+            "failure": {
+                "code": expected_code,
+                "run_failure_code": None,
+                "historical_fetch_code": None,
+                "failure_category": None,
+                "validation_reason": None,
+                "months": [],
+            },
+            "provider_attempt_count": 0,
+            "payload": None,
+        }
+
+
+@pytest.mark.parametrize("route", ("default-single", "bounded", "injected"))
+def test_daily_query_row_limit_is_rejected_before_root_admission_with_exact_classification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    route: str,
+) -> None:
+    root = tmp_path / "must-not-exist"
+    command = _range_command(
+        "query", "--symbol" if route == "default-single" else "--symbols", root
+    )
+    command[command.index("31")] = "367"
+    report = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(
+            PublicFailureCodeV1.QUERY_BOUNDS_EXCEEDED,
+            None,
+            None,
+            None,
+            None,
+            (),
+        ),
+        0,
+        None,
+    )
+    calls: list[object] = []
+
+    class Service:
+        def query(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+    monkeypatch.setattr(
+        cli,
+        "_prepare_storage_root",
+        lambda _root: pytest.fail("storage root must not be prepared"),
+    )
+    kwargs: dict[str, object] = {}
+    if route == "default-single":
+        monkeypatch.setattr(cli, "_default_nifty50_query_service", Service)
+    elif route == "bounded":
+        monkeypatch.setattr(
+            cli,
+            "_default_bounded_read_service",
+            lambda: pytest.fail("bounded service must not be constructed"),
+        )
+    else:
+        kwargs["query_service"] = Service()
+
+    assert cli.main(command, **kwargs) == 2  # type: ignore[arg-type]
+
+    assert not root.exists()
+    value = json.loads(capsys.readouterr().out)
+    if route == "bounded":
+        assert calls == []
+        assert value == {
+            "command": "query",
+            "contract_version": "v1",
+            "provider_attempt_count": 0,
+            "results": [],
+            "scope": "nifty50",
+            "status": "REJECTED",
+            "universe_snapshot_sha256": None,
+            "worker_count": 0,
+        }
+    else:
+        assert len(calls) == 1
+        assert calls[0].max_rows == 367  # type: ignore[attr-defined]
+        assert value == {
+            "command": "query",
+            "contract_version": "v1",
+            "failure": {
+                "code": "QUERY_BOUNDS_EXCEEDED",
+                "failure_category": None,
+                "historical_fetch_code": None,
+                "months": [],
+                "run_failure_code": None,
+                "validation_reason": None,
+            },
+            "payload": None,
+            "provider_attempt_count": 0,
+            "status": "REJECTED",
+        }
+
+
+@pytest.mark.parametrize("selection", ("--symbol", "--symbols"))
+def test_invalid_default_universe_source_is_terminal_before_root_or_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    selection: str,
+) -> None:
+    root = tmp_path / "must-not-exist"
+    command = _range_command("download", selection, root)
+    command[command.index("--output") : command.index("--output")] = [
+        "--universe-file",
+        "relative-universe.json",
+    ]
+    monkeypatch.setattr(
+        cli,
+        "_prepare_storage_root",
+        lambda _root: pytest.fail("storage root must not be prepared"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_default_bounded_download_service",
+        lambda *_args: pytest.fail("download service must not be constructed"),
+    )
+
+    assert cli.main(command) == 2
+
+    assert not root.exists()
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    value = json.loads(captured.out)
+    if selection == "--symbols":
+        assert value == {
+            "command": "download",
+            "contract_version": "v1",
+            "provider_attempt_count": 0,
+            "results": [],
+            "scope": "nifty50",
+            "status": "REJECTED",
+            "universe_snapshot_sha256": None,
+            "worker_count": 0,
+        }
+    else:
+        assert value == {
+            "command": "download",
+            "contract_version": "v1",
+            "failure": {
+                "code": "INVALID_INPUT",
+                "failure_category": None,
+                "historical_fetch_code": None,
+                "months": [],
+                "run_failure_code": None,
+                "validation_reason": None,
+            },
+            "payload": None,
+            "provider_attempt_count": 0,
+            "status": "REJECTED",
+        }
+
+
+@pytest.mark.parametrize("command", ("download", "coverage", "query"))
+def test_invalid_injected_segment_preserves_typed_request_without_mkdir(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    root = tmp_path / "must-not-exist"
+    calls: list[object] = []
+    report = PublicCommandReportV1(
+        "v1",
+        command,  # type: ignore[arg-type]
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(
+            PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+            None,
+            None,
+            None,
+            None,
+            (),
+        ),
+        0,
+        None,
+    )
+
+    class Service:
+        def download(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+        def coverage(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+        def query(self, request: object) -> PublicCommandReportV1[object]:
+            calls.append(request)
+            return report
+
+    argv = _range_command(command, "--symbol", root)
+    argv[argv.index("NSE_EQ")] = "BSE_EQ"
+    assert cli.main(argv, **{f"{command}_service": Service()}) == 2  # type: ignore[arg-type]
+
+    assert len(calls) == 1
+    assert calls[0].segment == "BSE_EQ"
+    assert not root.exists()
+    assert json.loads(capsys.readouterr().out)["failure"]["code"] == (
+        "UNSUPPORTED_PREVIEW_INSTRUMENT"
+    )
