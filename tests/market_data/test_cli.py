@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from datetime import date
 from pathlib import Path
 
@@ -65,6 +66,20 @@ def test_probe_default_range_never_crosses_a_calendar_month(
     today: date, expected: tuple[date, date]
 ) -> None:
     assert cli._default_probe_range(today) == expected
+
+
+def test_symbol_list_parser_accepts_real_ampersand_alias_and_preserves_dot() -> None:
+    assert cli._symbols("M&M,BAJAJ-AUTO,ABC.DEF") == (
+        "M&M",
+        "BAJAJ-AUTO",
+        "ABC.DEF",
+    )
+
+
+@pytest.mark.parametrize("value", ("&M", "M/M", "M M", "m&m", "M&M,"))
+def test_symbol_list_parser_rejects_unsafe_widening(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._symbols(value)
 
 
 def test_download_accepts_an_explicit_authoritative_schedule_file(

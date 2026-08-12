@@ -179,9 +179,11 @@ def _request(root: Path) -> BoundedNifty50DownloadRequestV1:
     )
 
 
-def test_download_request_accepts_official_ampersand_symbol(tmp_path: Path) -> None:
+def test_ampersand_symbol_is_admitted_by_download_request_and_result(
+    tmp_path: Path,
+) -> None:
     request = BoundedNifty50DownloadRequestV1(
-        symbols=("M&M",),
+        symbols=("M&M", "ABC.DEF", "BAJAJ-AUTO"),
         universe_as_of=date(2026, 8, 11),
         knowledge_cutoff=datetime(2026, 8, 12, 7, tzinfo=UTC),
         from_date=date(2026, 8, 1),
@@ -189,8 +191,16 @@ def test_download_request_accepts_official_ampersand_symbol(tmp_path: Path) -> N
         storage_root=tmp_path,
         workers=1,
     )
+    result = Nifty50SymbolDownloadResultV1(
+        symbol="M&M",
+        isin="INE101A01026",
+        status=PublicCommandStatusV1.REJECTED,
+        failure_code=PublicFailureCodeV1.INVALID_INPUT,
+        provider_attempt_count=0,
+    )
 
-    assert request.symbols == ("M&M",)
+    assert request.symbols == ("M&M", "ABC.DEF", "BAJAJ-AUTO")
+    assert result.symbol == "M&M"
 
 
 def test_one_or_many_selection_uses_isin_order_and_one_outer_lease(

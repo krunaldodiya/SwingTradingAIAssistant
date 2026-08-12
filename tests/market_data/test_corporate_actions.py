@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
@@ -439,6 +439,96 @@ def test_cutoff_states_are_missing_stale_available_and_ambiguous(tmp_path) -> No
         lease.close()
 
 
+def test_date_only_announcement_is_hidden_until_next_ist_midnight(tmp_path) -> None:
+    retrieved_at = datetime(2026, 8, 1, 6, 30, tzinfo=UTC)
+    last_same_day_microsecond = datetime(2026, 8, 1, 18, 29, 59, 999_999, tzinfo=UTC)
+    next_day_boundary_utc = datetime(2026, 8, 1, 18, 30, tzinfo=UTC)
+    next_day_ist_midnight = datetime(
+        2026, 8, 2, tzinfo=timezone(timedelta(hours=5, minutes=30))
+    )
+    snapshot = _snapshot("Dividend", retrieved_at=retrieved_at)
+    canonical_bytes = snapshot.canonical_json_bytes()
+    canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
+    lease, catalog, store = _leased_store(tmp_path)
+    try:
+        metadata = store.retain(snapshot)
+        service = AdjustmentAvailabilityServiceV1(store)
+
+        hidden = service.inspect(isin=_ISIN, knowledge_cutoff=last_same_day_microsecond)
+        visible_utc = service.inspect(
+            isin=_ISIN, knowledge_cutoff=next_day_boundary_utc
+        )
+        visible_ist = service.inspect(
+            isin=_ISIN, knowledge_cutoff=next_day_ist_midnight
+        )
+
+        assert hidden.evidence_state is CorporateActionEvidenceStateV1.AVAILABLE
+        assert hidden.visible_events == ()
+        assert (
+            visible_utc.visible_events == visible_ist.visible_events == snapshot.events
+        )
+        assert (
+            hidden.snapshot_sha256
+            == visible_utc.snapshot_sha256
+            == visible_ist.snapshot_sha256
+            == canonical_digest
+        )
+        _, resolved = store.resolve(isin=_ISIN, knowledge_cutoff=next_day_ist_midnight)
+        assert resolved.canonical_json_bytes() == canonical_bytes
+        assert metadata.snapshot_sha256 == canonical_digest
+    finally:
+        catalog.close()
+        lease.close()
+
+
+def test_date_only_visibility_is_enforced_by_report_invariant() -> None:
+    retrieved_at = datetime(2026, 8, 1, 6, 30, tzinfo=UTC)
+    last_same_day_microsecond = datetime(2026, 8, 1, 18, 29, 59, 999_999, tzinfo=UTC)
+    next_day_ist_midnight = datetime(2026, 8, 1, 18, 30, tzinfo=UTC)
+    event = _snapshot("Dividend", retrieved_at=retrieved_at).events[0]
+
+    def report(cutoff: datetime) -> AdjustmentAvailabilityReportV1:
+        return AdjustmentAvailabilityReportV1(
+            1,
+            _ISIN,
+            cutoff,
+            "raw",
+            "unsupported",
+            "unsupported",
+            None,
+            CorporateActionEvidenceStateV1.AVAILABLE,
+            "upstox-fundamentals-v2",
+            "corporate-actions-v1",
+            retrieved_at,
+            "0" * 64,
+            (event,),
+        )
+
+    with pytest.raises(ValueError, match="invalid adjustment availability report"):
+        report(last_same_day_microsecond)
+    assert report(next_day_ist_midnight).visible_events == (event,)
+
+
+def test_date_only_visibility_does_not_relax_retrieval_cutoff(tmp_path) -> None:
+    visibility_boundary = datetime(2026, 8, 1, 18, 30, tzinfo=UTC)
+    retrieved_at = datetime(2026, 8, 1, 18, 30, 0, 1, tzinfo=UTC)
+    lease, catalog, store = _leased_store(tmp_path)
+    try:
+        store.retain(_snapshot("Dividend", retrieved_at=retrieved_at))
+        service = AdjustmentAvailabilityServiceV1(store)
+
+        stale = service.inspect(isin=_ISIN, knowledge_cutoff=visibility_boundary)
+        available = service.inspect(isin=_ISIN, knowledge_cutoff=retrieved_at)
+
+        assert stale.evidence_state is CorporateActionEvidenceStateV1.STALE
+        assert stale.visible_events == ()
+        assert available.evidence_state is CorporateActionEvidenceStateV1.AVAILABLE
+        assert len(available.visible_events) == 1
+    finally:
+        catalog.close()
+        lease.close()
+
+
 def test_changed_or_unsafe_retained_object_is_corrupt_not_missing(tmp_path) -> None:
     lease, catalog, store = _leased_store(tmp_path)
     try:
@@ -550,7 +640,9 @@ def test_catalog_v5_write_remove_and_row_failure_branches(
 def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as current:
         current.connection.execute("DROP TABLE corporate_action_snapshots")
-        current.connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+        current.connection.execute("DROP TABLE provisional_partitions")
+        current.connection.execute(catalog_module._PROVISIONAL_SCHEMA_SQL)
+        current.connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     broken = DuckDBCatalog(tmp_path)
     broken._after_corporate_action_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
@@ -587,7 +679,7 @@ def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> 
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
     v3_root = tmp_path / "v3-catalog"
     v3_root.mkdir(mode=0o700)
@@ -598,7 +690,7 @@ def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> 
     with DuckDBCatalog(v3_root) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def test_metadata_reconstructs_and_rejects_wrong_content_path() -> None:

@@ -108,6 +108,22 @@ def _terminal(command: str):
     )
 
 
+def test_ampersand_symbol_is_admitted_by_read_request_and_result(
+    tmp_path: Path,
+) -> None:
+    request = BoundedNifty50ReadRequestV1(
+        symbols=("M&M", "ABC.DEF", "BAJAJ-AUTO"),
+        prototype=CoverageRequestV1(
+            "NSE_EQ", "M&M", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+        ),
+        workers=1,
+    )
+    result = Nifty50ReadResultV1("M&M", _terminal("coverage"))
+
+    assert request.symbols == ("M&M", "ABC.DEF", "BAJAJ-AUTO")
+    assert result.symbol == "M&M"
+
+
 class _Coverage:
     def __init__(self, policy: Nifty50AdmissionPolicyV1) -> None:
         self.policy = policy

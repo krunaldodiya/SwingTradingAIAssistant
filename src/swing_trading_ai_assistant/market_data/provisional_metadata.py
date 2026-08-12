@@ -100,9 +100,16 @@ class ProvisionalPartitionMetadataV1:
         ):
             raise ValueError("invalid provisional partition metadata")
         plan = self.plan
-        if self.relative_path != provisional_partition_relative_path(
+        legacy_path = provisional_partition_relative_path(
             plan, self.cutoff, self.schedule_digest_sha256
-        ):
+        )
+        addressed_path = provisional_partition_relative_path(
+            plan,
+            self.cutoff,
+            self.schedule_digest_sha256,
+            self.checksum_sha256,
+        )
+        if self.relative_path not in (legacy_path, addressed_path):
             raise ValueError("invalid provisional partition metadata")
 
     @property

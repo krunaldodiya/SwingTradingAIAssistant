@@ -13,8 +13,10 @@ only. It is never used as a price source.
 ## Inputs and outputs
 
 The public selection is exactly one of `--symbol SYMBOL`,
-`--symbols SYMBOL_A,SYMBOL_B`, or `--universe nifty50-current`. Download also
-accepts an optional canonical `--universe-file` for first retention,
+`--symbols SYMBOL_A,SYMBOL_B`, or `--universe nifty50-current`. Shell input that
+contains an ampersand must be quoted, for example `--symbol "M&M"` or
+`--symbols "M&M,BAJAJ-AUTO"`. Download also accepts an optional canonical
+`--universe-file` for first retention,
 `--universe-as-of` (default: requested end date), and `--workers 1..8`
 (default: 4). Coverage and query consume the already-retained universe and
 accept the same selection and worker bound. Existing closed-date, timeframe,

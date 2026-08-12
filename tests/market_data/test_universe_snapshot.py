@@ -25,6 +25,61 @@ from swing_trading_ai_assistant.market_data.universe_snapshot import (
     UniverseSnapshotStaleError,
 )
 
+# Fixed offline alias evidence from the official Nifty 50 constituent CSV retrieved
+# 2026-08-12 (SHA-256 9fb8832853c279448d2bc05f0e7dd5f460ed2ff35332fea8c40fc1250362ad28).
+_NIFTY50_SYMBOLS_2026_08_12 = (
+    "ADANIENT",
+    "ADANIPORTS",
+    "APOLLOHOSP",
+    "ASIANPAINT",
+    "AXISBANK",
+    "BAJAJ-AUTO",
+    "BAJFINANCE",
+    "BAJAJFINSV",
+    "BEL",
+    "BHARTIARTL",
+    "CIPLA",
+    "COALINDIA",
+    "DRREDDY",
+    "EICHERMOT",
+    "ETERNAL",
+    "GRASIM",
+    "HCLTECH",
+    "HDFCBANK",
+    "HDFCLIFE",
+    "HINDALCO",
+    "HINDUNILVR",
+    "ICICIBANK",
+    "ITC",
+    "INFY",
+    "INDIGO",
+    "JSWSTEEL",
+    "JIOFIN",
+    "KOTAKBANK",
+    "LT",
+    "M&M",
+    "MARUTI",
+    "MAXHEALTH",
+    "NTPC",
+    "NESTLEIND",
+    "ONGC",
+    "POWERGRID",
+    "RELIANCE",
+    "SBILIFE",
+    "SHRIRAMFIN",
+    "SBIN",
+    "SUNPHARMA",
+    "TCS",
+    "TATACONSUM",
+    "TMPV",
+    "TATASTEEL",
+    "TECHM",
+    "TITAN",
+    "TRENT",
+    "ULTRACEMCO",
+    "WIPRO",
+)
+
 
 def _members() -> tuple[Nifty50ConstituentV1, ...]:
     return tuple(
@@ -80,8 +135,26 @@ def test_snapshot_canonical_bytes_are_deterministic_and_exact() -> None:
     assert Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload) == snapshot
 
 
-def test_constituent_accepts_official_ampersand_symbol() -> None:
-    assert Nifty50ConstituentV1("INE101A01026", "M&M", "AUTOMOBILE").symbol == "M&M"
+def test_current_official_symbol_aliases_are_admitted_and_round_trip() -> None:
+    members = tuple(
+        sorted(
+            (
+                Nifty50ConstituentV1(_isin(index), symbol, "OFFICIAL FIXTURE")
+                for index, symbol in enumerate(_NIFTY50_SYMBOLS_2026_08_12)
+            ),
+            key=lambda member: member.isin,
+        )
+    )
+
+    snapshot = _snapshot(members=members)
+    restored = Nifty50UniverseSnapshotV1.from_canonical_json_bytes(
+        snapshot.canonical_json_bytes()
+    )
+
+    assert {member.symbol for member in restored.constituents} == set(
+        _NIFTY50_SYMBOLS_2026_08_12
+    )
+    assert {"M&M", "BAJAJ-AUTO"} <= {member.symbol for member in restored.constituents}
 
 
 def test_snapshot_rejects_invalid_member_count_and_noncanonical_bytes() -> None:

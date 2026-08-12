@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,9 @@ from swing_trading_ai_assistant.market_data.open_month_download import (
     OpenMonthDownloadOutcomeV1,
     OpenMonthDownloadRequestV1,
     OpenMonthDownloadServiceV1,
+)
+from swing_trading_ai_assistant.market_data.provisional_store import (
+    load_provisional_partition,
 )
 from swing_trading_ai_assistant.market_data.provisional_validation import (
     ProvisionalValidationV1,
@@ -197,6 +201,52 @@ def test_first_open_month_download_persists_history_and_completed_current_bars(
     assert (tmp_path / report.metadata.relative_path).is_file()
 
 
+def test_incomplete_historical_finalization_writes_no_parquet_or_catalog_entry(
+    tmp_path: Path,
+) -> None:
+    class IncompleteHistorical(_Historical):
+        def fetch(self, request, token):
+            del request, token
+            self.calls += 1
+            return HistoricalResponse(200, [_raw(10, minute) for minute in (15, 17)])
+
+    with DuckDBCatalog(tmp_path):
+        pass
+    historical = IncompleteHistorical()
+    intraday = _Intraday()
+    token = _TokenProvider()
+    service = OpenMonthDownloadServiceV1(
+        _Preparation(),
+        historical,
+        intraday,
+        token,
+        clock=_Clock(_local(11, 9, 17, 30)),
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        tmp_path,
+    )
+
+    report = service.download(request)
+
+    _assert_failure(
+        report,
+        OpenMonthDownloadOutcomeV1.FAILED,
+        subject.OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
+        historical=1,
+        intraday=1,
+    )
+    assert not tuple(tmp_path.rglob("*.parquet"))
+    with DuckDBCatalog(tmp_path) as catalog:
+        row = catalog.connection.execute(
+            "SELECT COUNT(*) FROM provisional_partitions"
+        ).fetchone()
+    assert row == (0,)
+
+
 def test_download_under_caller_lease_uses_gate_and_shared_limiter(
     tmp_path: Path,
 ) -> None:
@@ -256,6 +306,54 @@ def test_identical_cutoff_rerun_uses_only_local_evidence_and_zero_provider_calls
     assert (historical.calls, intraday.calls, token.calls) == (1, 1, 1)
 
 
+@pytest.mark.parametrize(
+    "zero_target_reason",
+    ("request_ends_before_today", "explicit_closure", "before_first_bar"),
+)
+def test_identical_zero_intraday_target_replay_reuses_history(
+    tmp_path: Path, zero_target_reason: str
+) -> None:
+    service, request, clock, historical, intraday, token = _service(tmp_path)
+    clock.now_value = _local(11, 9, 14, 30)
+    if zero_target_reason != "before_first_bar":
+        preparation = service._preparation
+        assert isinstance(preparation, _Preparation)
+        schedule = _schedule()
+        if zero_target_reason == "request_ends_before_today":
+            schedule = replace(
+                schedule,
+                covered_to=date(2026, 8, 10),
+                sessions=schedule.sessions[:1],
+                closures=schedule.closures,
+            )
+            request = replace(request, to_date=date(2026, 8, 10))
+        else:
+            schedule = replace(
+                schedule,
+                sessions=schedule.sessions[:1],
+                closures=(
+                    *schedule.closures,
+                    ScheduleClosure(date(2026, 8, 11), "EXCHANGE_CLOSED"),
+                ),
+            )
+        preparation.prepared = replace(
+            preparation.prepared,
+            schedule=schedule,
+            schedule_canonical_bytes=canonical_schedule_bytes(schedule),
+            schedule_digest_sha256=schedule_digest(schedule),
+        )
+
+    first = service.download(request)
+    repeated = service.download(request)
+
+    assert first.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert repeated.outcome is OpenMonthDownloadOutcomeV1.ALREADY_CURRENT
+    assert repeated.metadata == first.metadata
+    assert first.metadata is not None
+    assert first.metadata.cutoff == _local(10, 9, 17).astimezone(UTC)
+    assert (historical.calls, intraday.calls, token.calls) == (1, 0, 1)
+
+
 def test_later_same_day_cutoff_fetches_only_intraday_and_appends_new_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -274,6 +372,185 @@ def test_later_same_day_cutoff_fetches_only_intraday_and_appends_new_snapshot(
     assert (historical.calls, intraday.calls, token.calls) == (1, 2, 2)
     with DuckDBCatalog(tmp_path) as catalog:
         assert len(catalog.list_provisional_partitions(later.metadata.plan)) == 2
+
+
+def test_same_schedule_and_cutoff_finalization_publishes_distinct_generation(
+    tmp_path: Path,
+) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    preparation = _Preparation()
+
+    class FinalizingHistorical:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def fetch(self, request, token):
+            del token
+            self.requests.append(request)
+            if request.to_date == date(2026, 8, 10):
+                return HistoricalResponse(
+                    200, [_raw(10, minute) for minute in range(15, 18)]
+                )
+            return HistoricalResponse(
+                200,
+                [_raw(11, minute, close=100.75) for minute in range(15, 20)],
+            )
+
+    historical = FinalizingHistorical()
+    intraday = _Intraday()
+    token = _TokenProvider()
+    clock = _Clock(_local(11, 9, 21))
+    service = OpenMonthDownloadServiceV1(
+        preparation, historical, intraday, token, clock=clock
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+    first = service.download(request)
+    assert first.metadata is not None
+    old_path = tmp_path / first.metadata.relative_path
+    old_bytes = old_path.read_bytes()
+
+    clock.now_value = _local(12, 9, 21)
+    finalized = service.download(request)
+
+    assert finalized.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert finalized.metadata is not None
+    assert (
+        finalized.metadata.schedule_digest_sha256
+        == first.metadata.schedule_digest_sha256
+    )
+    assert finalized.metadata.cutoff == first.metadata.cutoff
+    assert finalized.metadata.checksum_sha256 != first.metadata.checksum_sha256
+    assert finalized.metadata.relative_path != first.metadata.relative_path
+    assert old_path.read_bytes() == old_bytes
+    with DuckDBCatalog(tmp_path) as catalog:
+        generations = catalog.list_provisional_partitions(finalized.metadata.plan)
+        latest = catalog.latest_provisional_partition(finalized.metadata.plan)
+    assert len(generations) == 2
+    assert {value.relative_path for value in generations} == {
+        first.metadata.relative_path,
+        finalized.metadata.relative_path,
+    }
+    assert latest == finalized.metadata
+
+    repeated = service.download(request)
+
+    assert repeated.outcome is OpenMonthDownloadOutcomeV1.ALREADY_CURRENT
+    assert repeated.metadata == finalized.metadata
+    assert [(value.from_date, value.to_date) for value in historical.requests] == [
+        (date(2026, 8, 1), date(2026, 8, 10)),
+        (date(2026, 8, 11), date(2026, 8, 11)),
+    ]
+    assert intraday.calls == 1
+    assert token.calls == 2
+
+
+def test_next_day_rollover_minimally_finalizes_intraday_rows_without_mutating_old_bytes(
+    tmp_path: Path,
+) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    preparation = _Preparation()
+
+    class RolloverHistorical:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def fetch(self, request, token):
+            del token
+            self.requests.append(request)
+            day = 10 if request.to_date == date(2026, 8, 10) else 11
+            close = 100.5 if day == 10 else 100.75
+            return HistoricalResponse(
+                200,
+                [
+                    _raw(day, minute, close=close)
+                    for minute in range(15, 20 if day == 11 else 18)
+                ],
+            )
+
+    class RolloverIntraday:
+        def __init__(self) -> None:
+            self.day = 11
+            self.calls = 0
+
+        def fetch(self, request, token):
+            del request, token
+            self.calls += 1
+            return IntradayResponse(
+                200, [_raw(self.day, minute) for minute in range(15, 20)]
+            )
+
+    historical = RolloverHistorical()
+    intraday = RolloverIntraday()
+    token = _TokenProvider()
+    clock = _Clock(_local(11, 9, 20))
+    service = OpenMonthDownloadServiceV1(
+        preparation, historical, intraday, token, clock=clock
+    )
+    request = OpenMonthDownloadRequestV1(
+        "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+    first = service.download(request)
+    assert first.metadata is not None
+    old_path = tmp_path / first.metadata.relative_path
+    old_bytes = old_path.read_bytes()
+
+    sessions = (
+        *_schedule().sessions,
+        ScheduleSession(
+            date(2026, 8, 12), _local(12, 9, 15), _local(12, 9, 20), "TEST"
+        ),
+    )
+    rollover_schedule = ExpectedSessionSchedule(
+        SCHEDULE_SCHEMA_VERSION_V3,
+        "authoritative-test-calendar",
+        "release-v3",
+        _local(12, 9, 0),
+        "Asia/Kolkata",
+        date(2026, 8, 1),
+        date(2026, 8, 12),
+        sessions,
+        _schedule().closures,
+    )
+    preparation.prepared = replace(
+        preparation.prepared,
+        schedule=rollover_schedule,
+        schedule_canonical_bytes=canonical_schedule_bytes(rollover_schedule),
+        schedule_digest_sha256=schedule_digest(rollover_schedule),
+    )
+    intraday.day = 12
+    clock.now_value = _local(12, 9, 20)
+    rollover_request = replace(request, to_date=date(2026, 8, 12))
+
+    rollover = service.download(rollover_request)
+
+    assert rollover.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert rollover.metadata is not None
+    assert [(value.from_date, value.to_date) for value in historical.requests] == [
+        (date(2026, 8, 1), date(2026, 8, 10)),
+        (date(2026, 8, 11), date(2026, 8, 11)),
+    ]
+    assert old_path.read_bytes() == old_bytes
+    assert rollover.metadata.relative_path != first.metadata.relative_path
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        rows = load_provisional_partition(tmp_path, lease, rollover.metadata)
+    finalized = [row for row in rows if row.ts.date() == date(2026, 8, 11)]
+    assert len(finalized) == 5
+    assert all(row.source_version == "upstox-historical-v3" for row in finalized)
+    assert all(row.close == 100.75 for row in finalized)
+
+    repeated = service.download(rollover_request)
+
+    assert repeated.outcome is OpenMonthDownloadOutcomeV1.ALREADY_CURRENT
+    assert repeated.metadata == rollover.metadata
+    assert len(historical.requests) == 2
+    assert intraday.calls == 2
+    assert token.calls == 2
 
 
 class _BrokenClock:
@@ -472,16 +749,20 @@ def test_helper_boundaries_reject_bad_payloads_and_preserve_sources(
     service, request, clock, *_ = _service(tmp_path)
     assert subject._now(_BrokenClock()) is None
     assert subject._validated_preparation(object()) is None
-    assert subject._needs_history(
-        subject.open_month_schedule_from_evidence(_schedule()),
-        subject.plan_open_month(
-            request.from_date,
-            request.to_date,
-            subject.open_month_schedule_from_evidence(_schedule()),
-            clock.now(),
-        ),
-        (),
+    schedule = subject.open_month_schedule_from_evidence(_schedule())
+    plan = subject.plan_open_month(
+        request.from_date,
+        request.to_date,
+        schedule,
+        clock.now(),
     )
+    assert subject._pending_history_range(schedule, plan, ()) == (
+        date(2026, 8, 1),
+        date(2026, 8, 10),
+    )
+    assert subject._effective_target_cutoff(schedule, plan) == _local(
+        11, 9, 16
+    ).astimezone(UTC)
     with pytest.raises(ValueError):
         subject._canonical_rows(
             HistoricalResponse(503, []),
@@ -550,18 +831,12 @@ def test_fetch_and_helper_noop_boundaries(
 ) -> None:
     service, request, clock, *_ = _service(tmp_path)
     schedule = subject.open_month_schedule_from_evidence(_schedule())
-    same_day = subject.plan_open_month(
-        date(2026, 8, 11), date(2026, 8, 11), schedule, clock.now()
-    )
-    batch = service._fetch_missing(
-        _Preparation().prepared, same_day, clock.now(), False, False
-    )
+    batch = service._fetch_missing(_Preparation().prepared, clock.now(), None, False)
     assert batch.historical_attempts == batch.intraday_attempts == 0
     failure = service._fetch_missing(
         _Preparation().prepared,
-        SimpleNamespace(historical_to=None),
         clock.now(),
-        True,
+        (date(2026, 8, 11), date(2026, 8, 10)),
         False,
     )
     _assert_failure(
@@ -570,10 +845,19 @@ def test_fetch_and_helper_noop_boundaries(
         subject.OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
         historical=1,
     )
-    assert not subject._needs_history(schedule, SimpleNamespace(historical_to=None), ())
+    no_history = SimpleNamespace(
+        historical_from=None, historical_to=None, last_completed_bar_start=None
+    )
+    assert subject._pending_history_range(schedule, no_history, ()) is None
+    assert subject._effective_target_cutoff(schedule, no_history) is None
     no_sessions = SimpleNamespace(sessions=())
-    has_history = SimpleNamespace(historical_to=date(2026, 8, 10))
-    assert not subject._needs_history(no_sessions, has_history, ())
+    has_history = SimpleNamespace(
+        historical_from=date(2026, 8, 1),
+        historical_to=date(2026, 8, 10),
+        last_completed_bar_start=None,
+    )
+    assert subject._pending_history_range(no_sessions, has_history, ()) is None
+    assert subject._effective_target_cutoff(no_sessions, has_history) is None
 
     report = _Preparation().prepare_open_month(object())
     with monkeypatch.context() as patch:

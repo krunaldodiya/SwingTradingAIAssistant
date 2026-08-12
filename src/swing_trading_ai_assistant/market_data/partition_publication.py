@@ -153,10 +153,9 @@ def publish_provisional_partition(
     )
     if rows[-1].ts != validated_cutoff:
         raise PartitionValidationError("invalid partition input")
-    relative = _provisional_relative_path(
-        validated_plan, validated_cutoff, validated_digest
+    published = _publish_provisional_rows(
+        storage_root, validated_plan, validated_cutoff, validated_digest, rows
     )
-    published = _publish_rows(storage_root, rows, relative)
     return _provisional_evidence(
         validated_plan,
         validated_cutoff,
@@ -184,15 +183,14 @@ def publish_provisional_partition_under_lease(
     )
     if rows[-1].ts != validated_cutoff:
         raise PartitionValidationError("invalid partition input")
-    relative = _provisional_relative_path(
-        validated_plan, validated_cutoff, validated_digest
-    )
     try:
         with lease.root_operation(storage_root) as operation:
-            published = _publish_rows(
+            published = _publish_provisional_rows(
                 storage_root,
+                validated_plan,
+                validated_cutoff,
+                validated_digest,
                 rows,
-                relative,
                 root_descriptor=operation.descriptor,
             )
             operation.ensure_live()
@@ -207,6 +205,83 @@ def publish_provisional_partition_under_lease(
         published,
         rows,
     )
+
+
+def _publish_provisional_rows(  # noqa: C901
+    storage_root: Path,
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    rows: tuple[CanonicalCandle, ...],
+    *,
+    root_descriptor: int | None = None,
+) -> _PublishedBytes:
+    """Serialize once, then securely link the verified inode by its checksum."""
+    try:
+        root_fd = (
+            _open_root(storage_root)
+            if root_descriptor is None
+            else os.dup(root_descriptor)
+        )
+    except Exception:
+        raise PartitionPublicationError("storage unavailable") from None
+    parent_fd: int | None = None
+    temp_name: str | None = None
+    temp_fd: int | None = None
+    visible = False
+    result: _PublishedBytes | None = None
+    primary: Exception | None = None
+    try:
+        temp_name, temp_fd = _create_temp(root_fd)
+        _write_temp(temp_fd, rows)
+        digest, byte_size = _validate_fd(temp_fd, rows, PartitionWriteError)
+        relative = _provisional_relative_path(plan, cutoff, schedule_digest, digest)
+        parent_fd = _open_or_create_parents(root_fd, relative.split("/")[:-1])
+        try:
+            os.link(
+                temp_name,
+                "bars.parquet",
+                src_dir_fd=root_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            visible = True
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                visibility = _final_visibility(parent_fd)
+                if visibility is not False:
+                    visible = True
+                    raise PublicationOutcomeUnknown(
+                        "publication outcome unknown"
+                    ) from None
+                raise PartitionPublicationError("publication failed") from None
+            existing_digest, existing_size = _validate_existing_final(parent_fd, rows)
+            if existing_digest != digest or existing_size != byte_size:
+                raise PublicationConflictError(
+                    "partition publication conflict"
+                ) from None
+            outcome = PublicationOutcome.ALREADY_PRESENT
+        else:
+            _fsync_directory(parent_fd)
+            if not _final_matches_temp(parent_fd, temp_fd):
+                raise PublicationOutcomeUnknown("publication outcome unknown")
+            outcome = PublicationOutcome.PUBLISHED
+        _remove_temp(root_fd, temp_name)
+        temp_name = None
+        descriptor, temp_fd = temp_fd, None
+        if not _close_one(descriptor):
+            if visible:
+                raise PublicationOutcomeUnknown("publication outcome unknown")
+            raise PartitionWriteError("partition write failed")
+        result = _PublishedBytes(outcome, relative, digest, byte_size)
+    except Exception as error:
+        primary = error
+        if temp_fd is not None:
+            descriptor, temp_fd = temp_fd, None
+            _close_one(descriptor, error)
+        if temp_name is not None:
+            _cleanup_temp(root_fd, temp_name, error)
+    return _finish_publication(result, primary, visible, parent_fd, root_fd)
 
 
 def _publish_rows(  # noqa: C901
@@ -324,15 +399,22 @@ def canonical_partition_relative_path(plan: PlannedInstrumentMonth) -> str:
 
 
 def provisional_partition_relative_path(
-    plan: PlannedInstrumentMonth, cutoff: datetime, schedule_digest: str
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    checksum_sha256: str | None = None,
 ) -> str:
-    """Return the sole immutable path for one provisional data cutoff."""
+    """Return a legacy or checksum-addressed provisional object path."""
     validated_plan = _validated_plan(plan)
     validated_cutoff, validated_digest = _validated_provisional_identity(
         cutoff, schedule_digest
     )
+    if checksum_sha256 is not None and (
+        type(checksum_sha256) is not str or _DIGEST.fullmatch(checksum_sha256) is None
+    ):
+        raise PartitionValidationError("invalid partition input")
     return _provisional_relative_path(
-        validated_plan, validated_cutoff, validated_digest
+        validated_plan, validated_cutoff, validated_digest, checksum_sha256
     )
 
 
@@ -445,13 +527,21 @@ def _relative_path(plan: PlannedInstrumentMonth) -> str:
 
 
 def _provisional_relative_path(
-    plan: PlannedInstrumentMonth, cutoff: datetime, schedule_digest: str
+    plan: PlannedInstrumentMonth,
+    cutoff: datetime,
+    schedule_digest: str,
+    checksum_sha256: str | None = None,
 ) -> str:
     stamp = cutoff.strftime("%Y%m%dT%H%M%SZ")
     return (
         _relative_path(plan).removesuffix("bars.parquet")
         + "provisional/"
-        + f"schedule_sha256={schedule_digest}/cutoff={stamp}/bars.parquet"
+        + f"schedule_sha256={schedule_digest}/cutoff={stamp}/"
+        + (
+            "bars.parquet"
+            if checksum_sha256 is None
+            else f"checksum_sha256={checksum_sha256}/bars.parquet"
+        )
     )
 
 
@@ -485,6 +575,8 @@ def _safe_hive_component(component: str) -> bool:
         return component[6:] in {f"{month:02d}" for month in range(1, 13)}
     if component.startswith("schedule_sha256="):
         return _DIGEST.fullmatch(component.removeprefix("schedule_sha256=")) is not None
+    if component.startswith("checksum_sha256="):
+        return _DIGEST.fullmatch(component.removeprefix("checksum_sha256=")) is not None
     if component.startswith("cutoff="):
         value = component.removeprefix("cutoff=")
         try:
@@ -912,7 +1004,8 @@ def _valid_provisional_evidence(value: object) -> bool:
         return (
             type(value.outcome) is PublicationOutcome
             and type(value.canonical_path) is str
-            and value.canonical_path == _provisional_relative_path(plan, cutoff, digest)
+            and value.canonical_path
+            == _provisional_relative_path(plan, cutoff, digest, value.checksum_sha256)
             and type(value.checksum_sha256) is str
             and _DIGEST.fullmatch(value.checksum_sha256) is not None
             and type(value.candle_schema_version) is int
