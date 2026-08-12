@@ -5,8 +5,12 @@ caller. It never downloads or scrapes membership and makes no claim that a
 current list is historical authority.
 
 Each canonical JSON object names exactly 50 constituents, sorted by ISIN. ISIN
-is the stable identity; `symbol` is only the historical source alias. Sector is
-an opaque bounded source label. The schema records inclusive effective dates
+is the stable identity; `symbol` is only the historical source alias. The V1
+alias grammar is 1 to 32 characters: an uppercase ASCII letter or digit first,
+then uppercase letters, digits, `.`, `&`, `_`, or `-`. This admits real NSE
+aliases such as `M&M` and `BAJAJ-AUTO` without admitting path separators,
+whitespace, lowercase, or leading punctuation. Sector is an opaque bounded
+source label. The schema records inclusive effective dates
 and separate membership and sector source, release, published and retrieved
 timestamps. Both publication timestamps must be no later than retrieval.
 

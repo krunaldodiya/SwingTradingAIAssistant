@@ -655,7 +655,7 @@ def _symbols(value: str) -> tuple[str, ...]:
         or len(symbols) > 50
         or len(set(symbols)) != len(symbols)
         or any(
-            not symbol or re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{0,31}", symbol) is None
+            not symbol or re.fullmatch(r"[A-Z0-9][A-Z0-9.&_-]{0,31}", symbol) is None
             for symbol in symbols
         )
     ):

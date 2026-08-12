@@ -35,7 +35,7 @@ from .universe_snapshot import (
     UniverseSnapshotStaleError,
 )
 
-_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,31}\Z")
+_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 _MAX_SYMBOLS = 50
 _MAX_WORKERS = 8
 MAX_BATCH_QUERY_ROWS_V1 = 5_000
