@@ -347,3 +347,23 @@ def test_provisional_metadata_rejects_false_completion_and_path_drift() -> None:
         replace(value, relative_path="candles/foreign.parquet")
     with pytest.raises(ValueError):
         replace(value, published_at=value.actual_to_ts.replace(hour=6))
+
+
+@pytest.mark.parametrize("symbol", ("M&M", "BAJAJ-AUTO", "NIFTY_50", "ABC.DEF"))
+def test_official_equity_symbol_grammar_round_trips_provisional_metadata(
+    tmp_path, symbol: str
+) -> None:
+    metadata = replace(_metadata(), symbol=symbol)
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.save_provisional_partition(metadata)
+        assert catalog.latest_provisional_partition(metadata.plan) == metadata
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    ("m&m", "&M", "M/M", "M M", "M\\M", "A" * 33),
+)
+def test_provisional_metadata_rejects_noncanonical_equity_symbols(symbol: str) -> None:
+    with pytest.raises(ValueError):
+        replace(_metadata(), symbol=symbol)
