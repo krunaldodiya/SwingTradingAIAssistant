@@ -39,11 +39,13 @@ the program does not scrape or invent a calendar.
 
 ## Incremental persistence
 
-The catalog v4 `provisional_partitions` table stores metadata only. Each
-snapshot is content-addressed by instrument, month, schedule digest, and UTC
-cutoff and points to an immutable Parquet object. Publication is atomic,
-descriptor-relative, no-follow, no-overwrite, and protected by the existing
-storage-root lease.
+The catalog v6 `provisional_partitions` table stores metadata only. New
+snapshots are content-addressed by instrument, month, schedule digest, UTC
+cutoff, and the retained Parquet checksum. Catalog v6 preserves legacy v4/v5
+rows and paths while allowing a corrected Historical V3 generation at the same
+schedule and cutoff to coexist with the earlier immutable object. Publication
+is atomic, descriptor-relative, no-follow, no-overwrite, and protected by the
+existing storage-root lease.
 
 For the first current-month invocation:
 
@@ -67,10 +69,12 @@ For a repeated invocation:
   publish a new immutable generation whose prior-date rows carry Historical V3
   values and provenance;
 - allow corrected OHLCV only for that scheduled prior-date
-  `upstox-intraday-v3` to `upstox-historical-v3` transition; incomplete
-  finalization fails closed as `HISTORICAL_FINALIZATION_INCOMPLETE`, while a
-  changed current-date prefix, changed already-historical row, or unknown source
-  transition remains rejected; and
+  `upstox-intraday-v3` to `upstox-historical-v3` transition; require every
+  canonical finalized minute to be present with Historical V3 provenance before
+  publication; incomplete finalization fails closed as
+  `HISTORICAL_FINALIZATION_INCOMPLETE`, while a changed current-date prefix,
+  changed already-historical row, or unknown source transition remains rejected;
+  and
 - count only new timestamps as appended, never overwrite or relabel the earlier
   snapshot, and make the post-finalization repeat zero-provider
   `ALREADY_CURRENT`.
@@ -105,9 +109,11 @@ subject to the unchanged 10,000-row public limit.
   and pre-first-completed-bar cutoff reuse identical metadata without another
   token, Historical V3, or Intraday V3 call;
 - a date-rollover test requests only the pending prior date, accepts a corrected
-  prior-date value with Historical V3 provenance in the new object, proves the
-  earlier object is byte-for-byte unchanged, rejects incomplete finalization,
-  and makes the next invocation zero-provider `ALREADY_CURRENT`;
+  prior-date value with Historical V3 provenance in a checksum-distinct object
+  even when schedule and cutoff are unchanged, proves the earlier object is
+  byte-for-byte unchanged, rejects incomplete finalization without publishing an
+  object or catalog row, and makes the next invocation zero-provider
+  `ALREADY_CURRENT`;
 - a live RELIANCE smoke persisted 2,625 August rows through
   `2026-08-11T09:59:00Z`, with zero missing bars;
 - the next identical August request made zero snapshot, historical, and
