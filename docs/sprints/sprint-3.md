@@ -1,6 +1,6 @@
 # Sprint 3 — Nifty 50 downloader v1
 
-Status: **RELEASE CANDIDATE — PUBLICATION EVIDENCE IN PROGRESS**
+Status: **CLOSED — DOWNLOADER V1 RELEASE GATE PASSED**
 
 ## Goal
 
@@ -226,9 +226,8 @@ adjusted-unsupported provenance boundary is recorded in
 
 This table crosswalks every Plan 01 acceptance-gate row. `PASS` means the
 functional requirement has exact local or retained operational evidence; it
-does not waive the separate publication gates below. The latest full gate on
-the ARK-143 source candidate contained 1,926 passing tests at 93.16% project
-branch coverage.
+does not waive the separate publication gates below. The final reviewed source
+tree contained 1,973 passing tests at 93.22% project branch coverage.
 
 | ID | Plan 01 requirement | Result | Exact evidence |
 | --- | --- | --- | --- |
@@ -248,14 +247,15 @@ branch coverage.
 
 ## Publication gates
 
-Functional acceptance is complete, but Sprint 3 stays a release candidate until
-every row below is proven on the exact publication chain. A pending row is a
-real release hold, not evidence that the functional row above failed.
+Functional acceptance and every publication proof completed on the exact
+publication chain. PR #82 merged reviewed candidate
+`57ffe8e405ca7becb790c3267becbf7c673cd801` as
+`23b07d0c6204de230e5cebe17c8f54001751b253` on `main`.
 
 | Publication proof | State | Required terminal evidence |
 | --- | --- | --- |
-| Independent exact-candidate review of ARK-141, ARK-142, and ARK-143 | PENDING | Risk-triggered read-only approval of each published contract/schema candidate and its exact tree. |
-| Fresh five-tool full gate on the ARK-144 release-proof tree | PASS | Ruff format and lint, strict Pyright, Vulture at 80%, and all 1,931 pytest cases passed at 93.16% coverage; one expected Python 3.13 fork deprecation warning remains non-failing. |
-| Clean wheel installation and CLI/Python import smoke | PENDING | Build from the sealed ARK-144 revision, install into a fresh environment, import the public workflows, and run CLI help. |
-| Hosted pull-request CI on the exact candidate | PENDING | GitHub Actions `Quality and build` succeeds for the pushed ARK-144 commit. |
-| Final merge revision and Linear/sprint synchronization | PENDING | The approved candidate merges to `main`; ARK-141–144 and their eligible milestone parents are read back in their terminal states. |
+| Independent exact-candidate review of ARK-141, ARK-142, and ARK-143 | PASS | Three fresh read-only reviews approved exact candidate `57ffe8e` / tree `62ce6bc9`; focused reviewer suites passed 175, 178, and 317 tests. |
+| Fresh five-tool full gate on the ARK-144 release-proof tree | PASS | Ruff format and lint, strict Pyright, Vulture at 80%, and all 1,973 pytest cases passed at 93.22% coverage; one expected Python 3.13 fork deprecation warning remained non-failing. |
+| Clean wheel installation and CLI/Python import smoke | PASS | Python 3.11 build, fresh wheel installation, package import, and CLI help passed; wheel SHA-256 `a31524d17f71c28da42f3d014c8016efc8baacbbca00876fc663fa899348a670`. |
+| Hosted pull-request CI on the exact candidate | PASS | GitHub Actions `Quality and build` run `31578188264` and GitGuardian succeeded on exact head `57ffe8e`. |
+| Final merge revision and Linear/sprint synchronization | PASS | PR #82 merged as `23b07d0`; ARK-141–144, ARK-12, ARK-60, ARK-61, and ARK-13 were read back as Done. |
