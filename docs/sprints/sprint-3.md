@@ -1,16 +1,17 @@
-# Sprint 3 — Usable single-symbol downloader preview
+# Sprint 3 — Nifty 50 downloader v1
 
-Status: **EXTENDED — DOWNLOADER V1 COMPLETION IN PROGRESS**
+Status: **RELEASE CANDIDATE — PUBLICATION EVIDENCE IN PROGRESS**
 
 ## Goal
 
-Deliver an installable, persistent CLI preview that downloads one admitted
-`NSE_EQ` symbol, initially RELIANCE, to an explicit external storage root;
-proves stored coverage; repeats without an unnecessary historical request; and
-queries verified one-minute and locally derived daily OHLCV.
+Deliver the installable, persistent Nifty 50 equity downloader v1: one, many, or
+all retained point-in-time members; current-month continuity; bounded shared
+resources; provider-free coverage/query; local timeframes; point-in-time
+corporate-action provenance; package/install proof; and release evidence.
 
-The preview preserves the deterministic tool/AI boundary and is not the final
-multi-symbol Nifty 50 downloader release. It adds no signal, score, advice,
+The first seven slices delivered the historical single-symbol preview. The
+extension completes the final multi-symbol release boundary while preserving
+the deterministic tool/AI split. It adds no signal, score, advice,
 portfolio/account connection, autonomous decision, or broker execution.
 
 ## Delivery plan
@@ -116,7 +117,11 @@ Sprint 3 is complete only when all of the following are demonstrated:
 - missing, stale, corrupt, insufficient, `NO_TRADE`, cancellation, and partial
   outcomes remain visible and typed rather than becoming success.
 
-## Deferred boundaries
+## Preview closeout deferred boundaries (historical)
+
+These were the held boundaries at the seven-slice preview close. The downloader-
+v1 extension later promoted the multi-symbol, benchmark, authenticated proof,
+current-month, local-view, and release-readiness items into Slices 8–13 below.
 
 - Point-in-time multi-symbol Nifty 50 scheduling and bounded concurrency remain
   later downloader-v1 work.
@@ -177,7 +182,7 @@ milestone before research-module implementation begins. The remaining work is
 therefore a release prerequisite, not feature polish or speculative
 optimization.
 
-The extension proceeds as six coherent, independently verifiable slices:
+The extension proceeds as seven coherent, independently verifiable slices:
 
 | Slice | Required outcome | Linear scope | Depends on |
 | --- | --- | --- | --- |
@@ -216,3 +221,41 @@ contract, including current-session completed-bucket behavior, is recorded in
 The immutable Upstox corporate-action observation and explicit raw-only,
 adjusted-unsupported provenance boundary is recorded in
 [Plan 09](../plans/09-corporate-action-provenance-contract.md).
+
+## Downloader-v1 acceptance crosswalk
+
+This table crosswalks every Plan 01 acceptance-gate row. `PASS` means the
+functional requirement has exact local or retained operational evidence; it
+does not waive the separate publication gates below. The latest full gate on
+the ARK-143 source candidate contained 1,926 passing tests at 93.16% project
+branch coverage.
+
+| ID | Plan 01 requirement | Result | Exact evidence |
+| --- | --- | --- | --- |
+| `A01` | RELIANCE from earliest supported history through a requested recent date, including the current date through the latest completed scheduled minute | PASS | Plan 06 retained a live 8,625-row verified July partition plus a 2,625-row provisional August snapshot through `2026-08-11T09:59:00Z`; an identical repeat made zero candle-provider requests. |
+| `A02` | Safe, idempotent reruns and crash recovery | PASS | ARK-69 and the ingestion, publication, lease, recovery, and current-month suites prove zero-request replay, atomic/no-clobber publication, typed recovery, and no valid-looking partial result. |
+| `A03` | Visible coverage and known anomalies | PASS | Stored and open-month coverage tests prove scheduled minutes rather than `MAX(ts)` and retain typed missing, stale, corrupt, insufficient, provisional, and partial evidence. |
+| `A04` | Direct-Parquet query for one or many instruments | PASS | ARK-141 provides bounded point-in-time single, explicit-list, and all-50 coverage/query orchestration over the same provider-free direct-Parquet services. |
+| `A05` | Bounded multi-stock download within provider limits | PASS | ARK-141 enforces one shared account limiter, `1..8` workers, at most 50 symbols, bounded attempts, deterministic ordering, cancellation, and per-symbol terminal results. |
+| `A06` | Traceable source, ingestion time, raw/adjusted state, and checksums | PASS | Manifests and catalog metadata retain source/release/retrieval/checksum evidence; ARK-143 adds immutable Upstox corporate-action observations and explicit `raw`/`unsupported` adjustment and symbol-change states. |
+| `A07` | No tracked credential or private dataset | PASS | `.gitignore` excludes environment secrets, tokens, Parquet, DuckDB, databases, generated data, and artifacts; the tracked-file scan is empty except the safe `.env.example`. |
+| `A08` | Clean install and Python/CLI parity over the same verified data | PASS | The wheel installs into a clean virtual environment and exposes `market-data`; public CLI adapters wrap the same versioned download, coverage, and query application contracts used by Python callers. |
+| `A09` | Local higher intraday timeframes with zero additional historical request | PASS | ARK-142 derives `3m`, `5m`, `15m`, `30m`, and `1h` session-anchored views from admitted `1m`; existing `1d` remains session-aware and provider-free. |
+| `A10` | Reusable explicitly configured shared root without weakened boundaries | PASS | Every public request requires an explicit absolute owner-private root; descriptor-bound leases, no-follow reads, immutable objects, bounded read snapshots, and concurrent-reader tests preserve authority and integrity. |
+| `A11` | Measured performance and memory satisfy retained budgets | PASS | ARK-92 retained five samples per B01–B05 workload and ARK-93 accepted all 35 applicable latency, throughput, RSS, descriptor, and exact-invariant thresholds without tuning. |
+| `A12` | Independently testable provider, storage, validation, and orchestration components | PASS | Typed ports and focused suites isolate Upstox adapters, schedule/instrument/universe/action evidence, Parquet/catalog storage, validation, single-symbol services, and bounded orchestration. |
+| `A13` | No trading, indicator, backtest, or AI-agent feature in the data phase | PASS | The shipped package surface is market-data download, coverage, query, and diagnostic capability only; research logic, advice, portfolio access, and broker execution remain absent and out of scope. |
+
+## Publication gates
+
+Functional acceptance is complete, but Sprint 3 stays a release candidate until
+every row below is proven on the exact publication chain. A pending row is a
+real release hold, not evidence that the functional row above failed.
+
+| Publication proof | State | Required terminal evidence |
+| --- | --- | --- |
+| Independent exact-candidate review of ARK-141, ARK-142, and ARK-143 | PENDING | Risk-triggered read-only approval of each published contract/schema candidate and its exact tree. |
+| Fresh five-tool full gate on the ARK-144 release-proof tree | PASS | Ruff format and lint, strict Pyright, Vulture at 80%, and all 1,931 pytest cases passed at 93.16% coverage; one expected Python 3.13 fork deprecation warning remains non-failing. |
+| Clean wheel installation and CLI/Python import smoke | PENDING | Build from the sealed ARK-144 revision, install into a fresh environment, import the public workflows, and run CLI help. |
+| Hosted pull-request CI on the exact candidate | PENDING | GitHub Actions `Quality and build` succeeds for the pushed ARK-144 commit. |
+| Final merge revision and Linear/sprint synchronization | PENDING | The approved candidate merges to `main`; ARK-141–144 and their eligible milestone parents are read back in their terminal states. |

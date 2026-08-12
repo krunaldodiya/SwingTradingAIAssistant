@@ -236,10 +236,13 @@ def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
     tmp_path: Path, capsys
 ) -> None:
     readme = Path("README.md").read_text()
-    assert "## Persistent RELIANCE preview quickstart" in readme
+    assert "## Downloader v1 quickstart" in readme
     assert "SCHEDULE_EVIDENCE_UNAVAILABLE" in readme
     assert "tests/market_data/test_sprint3_quickstart.py" in readme
-    assert "must not be described as live release readiness" in readme
+    assert "--symbols RELIANCE,SBIN,TCS" in readme
+    assert "--universe nifty50-current" in readme
+    assert "latest completed authoritative session" in readme
+    assert "Upstox is the only runtime candle" in readme
 
     schedule = _schedule()
     snapshots = _SnapshotSource()
