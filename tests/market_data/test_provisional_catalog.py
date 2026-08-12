@@ -73,9 +73,10 @@ def _metadata(*, cutoff_minute: int = 59) -> ProvisionalPartitionMetadataV1:
     )
 
 
-def test_v4_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
+def test_current_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as catalog:
         assert catalog.connection.execute("SHOW TABLES").fetchall() == [
+            ("corporate_action_snapshots",),
             ("ingestion_runs",),
             ("instrument_snapshots",),
             ("partitions",),
@@ -85,9 +86,10 @@ def test_v4_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
         ]
         assert catalog.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        catalog.connection.execute("DROP TABLE corporate_action_snapshots")
         catalog.connection.execute("DROP TABLE provisional_partitions")
-        catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+        catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
 
     broken = DuckDBCatalog(tmp_path)
     broken._after_provisional_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
@@ -99,7 +101,7 @@ def test_v4_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
 
 
 def test_provisional_catalog_round_trip_latest_selection_and_exact_replay(

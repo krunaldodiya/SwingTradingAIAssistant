@@ -53,33 +53,34 @@ specified, implemented, and validated separately in pipeline order.
 
 ## Current implementation status
 
-The repository is still in the market-data foundation phase. It contains
-deterministic building blocks for Upstox instrument resolution and historical
-requests, monthly planning, bounded retries and rate limiting, schedule-aware
-validation, immutable Parquet publication, DuckDB cataloging and direct-Parquet
-queries, recovery, idempotent resume, and provenance.
+The repository is completing the market-data foundation before research modules
+begin. The downloader-v1 candidate is symbol-agnostic for retained point-in-time
+Nifty 50 members and supports one symbol, several symbols, or the full retained
+universe. It provides:
 
-Sprint 2 closed at **21/24 executable tasks (87.5%)**. Its offline correctness
-and recovery evidence is substantial, but Milestone 2 remains **blocked / not
-accepted** until the carried-over benchmark artifact, threshold decision, and
-one authorized live comparison are completed. See the
-[Sprint 2 closeout](docs/sprints/sprint-2-closeout.md) for the exact evidence and
-remaining work.
+- Upstox instrument resolution plus historical and current-session candle
+  requests behind provider-independent contracts;
+- bounded shared rate limiting, `1..8` workers, retries, output, memory, and
+  date ranges;
+- immutable monthly Parquet, provisional current-month snapshots, a
+  metadata-only DuckDB catalog, recovery, and zero-request resume;
+- provider-free coverage and bounded queries for `1m`, `3m`, `5m`, `15m`,
+  `30m`, `1h`, and `1d` data; and
+- immutable point-in-time universe, schedule, instrument, and Upstox
+  corporate-action evidence with explicit raw/adjusted/symbol-change states.
 
-Sprint 3's seven-slice preview is complete. The sprint is extended through the
-remaining downloader-v1 release prerequisites before research modules begin.
-The preview proves the controlled single-symbol persistent workflow,
-zero-request repeat, retained coverage, bounded `1m`, local session-aware `1d`,
-clean installation, and sanitized JSON. See the
-[Sprint 3 record](docs/sprints/sprint-3.md) for accepted preview revisions and
-the active completion chain.
+Sprint 2 closed at **21/24 executable tasks (87.5%)** after establishing
+immutable Parquet publication. Its carried evidence is now implemented in the
+Sprint 3 release chain, but Milestone 2 remains **blocked / not accepted** until
+the exact candidates pass publication review and merge. The sprint is extended
+through that gate. Its public surface is `market-data download`, `coverage`, and
+bounded `query` commands over the same versioned application contracts.
 
-Sprint 3 adds an installable single-symbol preview for `NSE_EQ` `RELIANCE`:
-`market-data download`, `coverage`, and bounded `query` commands for verified
-one-minute data and locally derived daily OHLCV. The canonical store remains
-immutable monthly Parquet with a metadata-only DuckDB catalog at an explicit
-external root. This is an offline/controlled preview, not a live-release or
-multi-symbol Nifty 50 claim.
+Upstox is the only runtime candle and corporate-action provider.
+`NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
+integration. A caller-
+supplied canonical universe snapshot establishes historical Nifty 50 membership
+and sector provenance; it does not supply prices or make network requests.
 
 The package deliberately has no built-in exchange-calendar feed. The persistent
 download service accepts authoritative, provenance-complete NSE schedule
@@ -91,15 +92,15 @@ only retained point-in-time evidence.
 Research modules, strategy rules, recommendations, and broker execution are not
 implemented.
 
-## Persistent RELIANCE preview quickstart
+## Downloader v1 quickstart
 
 Requirements:
 
 - Python 3.11 or newer;
 - [`uv`](https://docs.astral.sh/uv/); and
-- only for the diagnostic or a separately authorized live attempt, a current
-  Upstox access token or read-only Analytics Token. The controlled proof below
-  needs no credential.
+- for real provider requests, a current Upstox access token or read-only
+  Analytics Token supplied through `UPSTOX_ACCESS_TOKEN`. The controlled proof
+  below needs no credential.
 
 Install the locked development environment:
 
@@ -107,10 +108,9 @@ Install the locked development environment:
 uv sync --extra dev
 ```
 
-Run the credential-free controlled end-to-end proof. It creates an external
-disposable root, supplies deterministic authoritative schedule and provider
-responses, persists verified one-minute data, repeats with zero requests, and
-then exercises coverage plus `1m` and `1d` queries:
+Run the credential-free controlled end-to-end proof. It persists verified
+one-minute data, repeats with zero requests, and exercises provider-free
+coverage plus `1m`, `5m`, and `1d` queries:
 
 ```bash
 uv run --extra dev pytest \
@@ -118,55 +118,94 @@ uv run --extra dev pytest \
   --no-cov -q
 ```
 
-Prove the distributable artifact independently of the source checkout:
+Prove the distributable artifact independently of the source checkout. Use a
+fresh path for each proof:
 
 ```bash
 uv build
-uv venv /var/tmp/swing-preview-venv
-uv pip install --python /var/tmp/swing-preview-venv/bin/python \
+uv venv /var/tmp/swing-downloader-v1-venv
+uv pip install --python /var/tmp/swing-downloader-v1-venv/bin/python \
   dist/swing_trading_ai_assistant-0.1.0-py3-none-any.whl
-/var/tmp/swing-preview-venv/bin/market-data --help
+/var/tmp/swing-downloader-v1-venv/bin/market-data --help
 ```
 
-For an approved canonical schedule file and environment-only provider
-credential, the closed-range workflow is:
+For approved canonical universe/schedule files and an environment-only Upstox
+credential, a bounded multi-symbol closed-month workflow is:
 
 ```bash
 uv run market-data download \
-  --segment NSE_EQ --symbol RELIANCE \
+  --segment NSE_EQ --symbols RELIANCE,SBIN,TCS --workers 3 \
   --from 2026-07-01 --to 2026-07-31 \
+  --universe-file /var/tmp/nifty50-universe.json \
+  --universe-as-of 2026-07-31 \
   --schedule-file /var/tmp/nse-schedule.json \
   --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data coverage \
-  --segment NSE_EQ --symbol RELIANCE \
+  --segment NSE_EQ --symbols RELIANCE,SBIN,TCS --workers 3 \
   --from 2026-07-01 --to 2026-07-31 \
   --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data query \
-  --segment NSE_EQ --symbol RELIANCE \
+  --segment NSE_EQ --symbols RELIANCE,SBIN,TCS --workers 3 \
   --from 2026-07-01 --to 2026-07-01 --timeframe 1m \
   --fields ts,open,high,low,close,volume --max-rows 1000 \
   --storage-root /var/tmp/swing-market-data --output json
 
 uv run market-data query \
-  --segment NSE_EQ --symbol RELIANCE \
-  --from 2026-07-01 --to 2026-07-31 --timeframe 1d \
-  --fields ts,open,high,low,close,volume --max-rows 31 \
+  --segment NSE_EQ --symbol SBIN \
+  --from 2026-07-01 --to 2026-07-01 --timeframe 15m \
+  --fields ts,open,high,low,close,volume --max-rows 100 \
   --storage-root /var/tmp/swing-market-data --output json
 ```
 
-Dates are inclusive and must describe closed months. The storage root must be
-an explicit absolute path outside the source tree. Read the JSON `status`,
-`failure`, and typed month evidence before retrying. Do not edit or delete
-catalog, manifest, schedule, snapshot, or Parquet files to repair an error;
-retain the root, correct the missing dependency or unsafe path, and rerun the
-same command. A verified repeat reports zero provider attempts. `1d` is derived
-only from complete authoritative sessions in verified `1m` data.
+Use `--universe nifty50-current` instead of `--symbols` to operate on all 50
+members retained for the request's point-in-time cutoff. Dates are inclusive.
+The storage root must be an explicit owner-private absolute path outside the
+source tree. Read each JSON `outcome`, per-symbol result, and typed month
+evidence before retrying. Never manually edit catalog, manifest, schedule,
+snapshot, or Parquet files; correct the dependency or unsafe path and rerun the
+same command. Verified repeats and all coverage/query commands make zero
+provider requests.
 
-The controlled proof contains no credential or private market data. A real
-closed-range Upstox attempt remains a separate, explicitly authorized gate, so
-passing this quickstart must not be described as live release readiness.
+### Current month through the latest completed minute
+
+A range ending in the current month is supported. Closed months remain
+immutable; the current month is explicitly `PROVISIONAL` and advances only
+through the latest completed authoritative session minute. A later invocation
+fetches only the suffix after the last persisted point and atomically
+publishes a new snapshot rather than overwriting the previously retained one.
+
+```bash
+uv run market-data download \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-08-01 --to 2026-08-12 \
+  --schedule-file /var/tmp/nse-current-schedule.json \
+  --storage-root /var/tmp/swing-market-data --output json
+
+uv run market-data query \
+  --segment NSE_EQ --symbol RELIANCE \
+  --from 2026-08-01 --to 2026-08-12 --timeframe 5m \
+  --fields ts,open,high,low,close,volume --max-rows 5000 \
+  --storage-root /var/tmp/swing-market-data --output json
+```
+
+If the range crosses from closed months into the current month, also pass
+`--closed-schedule-file` for the closed-month evidence. Coverage and query stay
+available while another process owns the exclusive writer; they read the last
+atomically published snapshot. No current month is falsely labelled as a fully
+verified closed month.
+
+`1d` and the approved higher intraday views are derived only from complete
+authoritative sessions in verified/provisional `1m` evidence. They never make a
+second historical request. Raw candles are never rewritten for corporate
+actions; the Python provenance boundary reports adjusted prices and historical
+symbol changes as unsupported until separate versioned specifications exist.
+
+The controlled proof contains no credential or private market data. The Sprint
+3 release record distinguishes deterministic tests, sanitized Upstox live
+evidence, clean package installation, and hosted CI; none substitutes for
+another.
 
 ## Run the Upstox diagnostic
 

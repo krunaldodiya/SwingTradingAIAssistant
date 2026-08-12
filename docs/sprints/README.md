@@ -21,7 +21,7 @@ increment and future process decisions.
   [closeout candidate](sprint-2-closeout.md) for 21/24 delivered tasks with
   ARK-92, ARK-93, and ARK-69 carried over; Milestone 2 remains blocked and is
   not accepted.
-- [Sprint 3 — Usable single-symbol downloader preview](sprint-3.md) — the
-  seven-slice preview is complete; the sprint is extended through downloader-v1
-  release readiness because Plan 01 blocks research-module implementation until
-  that milestone closes.
+- [Sprint 3 — Nifty 50 downloader v1](sprint-3.md) — the seven-slice preview is
+  accepted historical evidence and the downloader-v1 release candidate is in
+  final publication verification; Plan 01 continues to block research-module
+  implementation until that release closes.

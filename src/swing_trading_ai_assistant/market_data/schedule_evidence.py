@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
 
@@ -261,9 +261,11 @@ class ScheduleEvidenceStore:
         *,
         supplied_bytes: bytes | None = None,
         root: Path | None = None,
+        deadline: ScheduleDeadlinePortV1 | None = None,
     ) -> ScheduleEvidenceResult:
         """Resolve one exact digest, optionally restoring a missing object."""
         try:
+            _ensure_deadline_live(deadline)
             if type(digest) is not str or _DIGEST_RE.fullmatch(digest) is None:
                 raise ValueError
             canonical = None
@@ -272,15 +274,23 @@ class ScheduleEvidenceStore:
                 canonical = canonical_schedule_bytes(schedule)
                 if canonical != supplied_bytes or _digest_bytes(canonical) != digest:
                     raise ValueError
-            return self._retain_or_resolve(digest, canonical, root)
+            result = self._retain_or_resolve(digest, canonical, root, deadline)
+            _ensure_deadline_live(deadline)
+            return result
         except Exception:
+            _ensure_deadline_live(deadline)
             return _failure()
 
     def _retain_or_resolve(
-        self, digest: str, supplied_bytes: bytes | None, root: Path | None
+        self,
+        digest: str,
+        supplied_bytes: bytes | None,
+        root: Path | None,
+        deadline: ScheduleDeadlinePortV1 | None = None,
     ) -> ScheduleEvidenceResult:
         target_root = self._storage_root if root is None else root
         try:
+            _ensure_deadline_live(deadline)
             if supplied_bytes is not None and len(supplied_bytes) > MAX_SCHEDULE_BYTES:
                 raise ValueError
             relative_path = f"{_RELATIVE_PREFIX}{digest}.json"
@@ -290,17 +300,30 @@ class ScheduleEvidenceStore:
                 else self._lease.root_operation
             )
             with authority(target_root) as operation:
+                _ensure_deadline_live(deadline)
                 parent_fd = _open_parent(operation, create=supplied_bytes is not None)
                 if parent_fd is None:
                     raise ValueError
                 try:
-                    return _resolve_in_parent(
+                    result = _resolve_in_parent(
                         operation, parent_fd, digest, supplied_bytes, relative_path
                     )
+                    _ensure_deadline_live(deadline)
+                    return result
                 finally:
                     os.close(parent_fd)
         except Exception:
+            _ensure_deadline_live(deadline)
             return _failure()
+
+
+class ScheduleDeadlinePortV1(Protocol):
+    def ensure_live(self) -> None: ...
+
+
+def _ensure_deadline_live(deadline: ScheduleDeadlinePortV1 | None) -> None:
+    if deadline is not None:
+        deadline.ensure_live()
 
 
 def _resolve_in_parent(

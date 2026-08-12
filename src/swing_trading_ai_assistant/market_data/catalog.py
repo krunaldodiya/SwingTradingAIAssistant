@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import duckdb
 
+from .corporate_actions import CorporateActionSnapshotMetadataV1
 from .instrument_snapshot import InstrumentSnapshotMetadataV1
 from .manifest_lifecycle import (
     FailureCategory,
@@ -88,7 +89,8 @@ _PHYSICAL_KEY_COLUMNS: Final = (
 _V1_EXPECTED_TABLES: Final = ("schema_migrations", "partitions", "ingestion_runs")
 _V2_EXPECTED_TABLES: Final = (*_V1_EXPECTED_TABLES, "instrument_snapshots")
 _V3_EXPECTED_TABLES: Final = (*_V2_EXPECTED_TABLES, "universe_snapshots")
-_EXPECTED_TABLES: Final = (*_V3_EXPECTED_TABLES, "provisional_partitions")
+_V4_EXPECTED_TABLES: Final = (*_V3_EXPECTED_TABLES, "provisional_partitions")
+_EXPECTED_TABLES: Final = (*_V4_EXPECTED_TABLES, "corporate_action_snapshots")
 _SOURCE_MANIFEST_IDENTITY_COLUMN: Final = "source_manifest_identity"
 
 _SCHEMA_SQL: Final = """
@@ -270,7 +272,32 @@ CREATE TABLE provisional_partitions (
 _PROVISIONAL_SCHEMA_CHECKSUM: Final = hashlib.sha256(
     _PROVISIONAL_SCHEMA_SQL.encode("utf-8")
 ).hexdigest()
+_CORPORATE_ACTION_MIGRATION_ID: Final = (
+    "swing-trading-catalog-v5-corporate-action-snapshots"
+)
+_CORPORATE_ACTION_MIGRATION_VERSION: Final = 5
+_CORPORATE_ACTION_SCHEMA_SQL: Final = """
+CREATE TABLE corporate_action_snapshots (
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    isin VARCHAR NOT NULL CHECK (regexp_full_match(isin, 'INE[A-Z0-9]{8}[0-9]')),
+    source VARCHAR NOT NULL CHECK (source = 'upstox-fundamentals-v2'),
+    source_release VARCHAR NOT NULL CHECK (source_release = 'corporate-actions-v1'),
+    retrieved_at TIMESTAMPTZ NOT NULL,
+    snapshot_sha256 VARCHAR NOT NULL CHECK (regexp_full_match(snapshot_sha256, '[0-9a-f]{64}')),
+    byte_count BIGINT NOT NULL CHECK (byte_count BETWEEN 1 AND 1048576),
+    event_count BIGINT NOT NULL CHECK (event_count BETWEEN 0 AND 1000),
+    relative_object_path VARCHAR NOT NULL CHECK (
+        relative_object_path = 'corporate_action_snapshots/isin=' || isin || '/sha256=' || snapshot_sha256 || '/snapshot.json'
+        AND length(relative_object_path) <= 256
+    ),
+    PRIMARY KEY (isin, retrieved_at, snapshot_sha256)
+);
+""".strip()
+_CORPORATE_ACTION_SCHEMA_CHECKSUM: Final = hashlib.sha256(
+    _CORPORATE_ACTION_SCHEMA_SQL.encode("utf-8")
+).hexdigest()
 _PROVISIONAL_SELECT: Final = "SELECT schema_version, provider, instrument_key, security_id, symbol, exchange, segment, instrument_type, interval, year, month, from_date, to_date, schedule_digest_sha256, CAST(cutoff AS VARCHAR), session_complete, CAST(actual_from_ts AS VARCHAR), CAST(actual_to_ts AS VARCHAR), row_count, checksum_sha256, byte_size, relative_path, instrument_snapshot_digest_sha256, CAST(instrument_snapshot_retrieved_at AS VARCHAR), CAST(published_at AS VARCHAR), historical_attempt_count, intraday_attempt_count FROM provisional_partitions"
+_CORPORATE_ACTION_SELECT: Final = "SELECT schema_version, isin, source, source_release, CAST(retrieved_at AS VARCHAR), snapshot_sha256, byte_count, event_count, relative_object_path FROM corporate_action_snapshots"
 _PROVISIONAL_PLAN_KEY_COLUMNS: Final = (
     "provider",
     "exchange",
@@ -972,6 +999,132 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogPersistenceError("catalog read failed") from None
 
+    def save_corporate_action_snapshot(
+        self,
+        metadata: CorporateActionSnapshotMetadataV1,
+        *,
+        precommit_validator: Callable[[], None] | None = None,
+    ) -> bool:
+        """Append one immutable corporate-action observation idempotently."""
+        self._assert_writable()
+        if type(metadata) is not CorporateActionSnapshotMetadataV1 or (
+            precommit_validator is not None and not callable(precommit_validator)
+        ):
+            raise CatalogConflictError("invalid corporate action snapshot")
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(
+                *(
+                    getattr(metadata, name)
+                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+                )
+            )
+        except Exception:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
+
+        def operation() -> bool:
+            values = tuple(
+                getattr(metadata, name)
+                for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+            )
+            existing = self.connection.execute(
+                _CORPORATE_ACTION_SELECT
+                + " WHERE isin = ? AND retrieved_at = ? AND snapshot_sha256 = ?",
+                (metadata.isin, metadata.retrieved_at, metadata.snapshot_sha256),
+            ).fetchone()
+            if existing is not None:
+                if _corporate_action_metadata_from_row(existing) != metadata:
+                    raise CatalogConflictError("corporate action snapshot conflicts")
+                if precommit_validator is not None:
+                    precommit_validator()
+                return False
+            self.connection.execute(
+                "INSERT INTO corporate_action_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            if precommit_validator is not None:
+                precommit_validator()
+            return True
+
+        return self._transaction(operation)
+
+    def remove_corporate_action_snapshot_exact(
+        self, metadata: CorporateActionSnapshotMetadataV1
+    ) -> None:
+        """Compensate only the exact corporate-action row produced by this call."""
+        self._assert_writable()
+        if type(metadata) is not CorporateActionSnapshotMetadataV1:
+            raise CatalogConflictError("invalid corporate action snapshot")
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(
+                *(
+                    getattr(metadata, name)
+                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
+                )
+            )
+        except Exception:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
+
+        def operation() -> None:
+            key = (metadata.isin, metadata.retrieved_at, metadata.snapshot_sha256)
+            existing = self.connection.execute(
+                _CORPORATE_ACTION_SELECT
+                + " WHERE isin = ? AND retrieved_at = ? AND snapshot_sha256 = ?",
+                key,
+            ).fetchone()
+            if existing is None:
+                return
+            if _corporate_action_metadata_from_row(existing) != metadata:
+                raise CatalogConflictError("corporate action snapshot conflicts")
+            self.connection.execute(
+                "DELETE FROM corporate_action_snapshots WHERE isin = ? AND retrieved_at = ? AND snapshot_sha256 = ?",
+                key,
+            )
+
+        self._transaction(operation)
+
+    def latest_corporate_action_snapshots(
+        self, *, isin: str, knowledge_cutoff: datetime
+    ) -> tuple[CorporateActionSnapshotMetadataV1, ...]:
+        """Return at most two distinct latest-timestamp candidates by cutoff."""
+        if (
+            type(isin) is not str
+            or type(knowledge_cutoff) is not datetime
+            or knowledge_cutoff.tzinfo is None
+            or knowledge_cutoff.utcoffset() is None
+        ):
+            raise CatalogConflictError("invalid corporate action query")
+        try:
+            rows = self.connection.execute(
+                _CORPORATE_ACTION_SELECT  # noqa: S608 - fixed SQL plus placeholders
+                + " WHERE isin = ? AND retrieved_at = ("
+                "SELECT max(retrieved_at) FROM corporate_action_snapshots "
+                "WHERE isin = ? AND retrieved_at <= ?) "
+                "ORDER BY snapshot_sha256 LIMIT 2",
+                (isin, isin, knowledge_cutoff),
+            ).fetchall()
+            return tuple(_corporate_action_metadata_from_row(row) for row in rows)
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
+    def has_corporate_action_snapshots(self, *, isin: str) -> bool:
+        """Distinguish absent from cutoff-stale evidence without list paging."""
+        if type(isin) is not str:
+            raise CatalogConflictError("invalid corporate action query")
+        try:
+            return (
+                self.connection.execute(
+                    "SELECT 1 FROM corporate_action_snapshots WHERE isin = ? LIMIT 1",
+                    (isin,),
+                ).fetchone()
+                is not None
+            )
+        except CatalogError:
+            raise
+        except Exception:
+            raise CatalogPersistenceError("catalog read failed") from None
+
     def save_provisional_partition(
         self, metadata: ProvisionalPartitionMetadataV1
     ) -> None:
@@ -1129,6 +1282,9 @@ class DuckDBCatalog:
     def _after_provisional_migration(self) -> None:
         """Fault-injection seam used to prove v4 migration rollback."""
 
+    def _after_corporate_action_migration(self) -> None:
+        """Fault-injection seam used to prove v5 migration rollback."""
+
     def _validate_storage_root(self) -> None:
         if not isinstance(self._storage_root, Path):
             raise CatalogStorageError("invalid storage root")
@@ -1203,6 +1359,7 @@ class DuckDBCatalog:
                     ),
                 )
                 self._migrate_provisional()
+                self._migrate_corporate_actions()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V1_EXPECTED_TABLES
@@ -1229,6 +1386,7 @@ class DuckDBCatalog:
                 )
                 self._after_universe_migration()
                 self._migrate_provisional()
+                self._migrate_corporate_actions()
                 self._validate_schema()
             elif relations == {
                 ("table", "main", table) for table in _V2_EXPECTED_TABLES
@@ -1245,12 +1403,9 @@ class DuckDBCatalog:
                 )
                 self._after_universe_migration()
                 self._migrate_provisional()
+                self._migrate_corporate_actions()
                 self._validate_schema()
-            elif relations == {
-                ("table", "main", table) for table in _V3_EXPECTED_TABLES
-            }:
-                self._validate_schema(version=3)
-                self._migrate_provisional()
+            elif self._migrate_late_schema(relations):
                 self._validate_schema()
             elif relations != {("table", "main", table) for table in _EXPECTED_TABLES}:
                 raise CatalogSchemaError("catalog schema is invalid")
@@ -1275,6 +1430,30 @@ class DuckDBCatalog:
             ),
         )
         self._after_provisional_migration()
+
+    def _migrate_corporate_actions(self) -> None:
+        self.connection.execute(_CORPORATE_ACTION_SCHEMA_SQL)
+        self.connection.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?, ?)",
+            (
+                _CORPORATE_ACTION_MIGRATION_ID,
+                _CORPORATE_ACTION_MIGRATION_VERSION,
+                _CORPORATE_ACTION_SCHEMA_CHECKSUM,
+            ),
+        )
+        self._after_corporate_action_migration()
+
+    def _migrate_late_schema(self, relations: set[tuple[str, str, str]]) -> bool:
+        v3 = {("table", "main", table) for table in _V3_EXPECTED_TABLES}
+        v4 = {("table", "main", table) for table in _V4_EXPECTED_TABLES}
+        if relations not in (v3, v4):
+            return False
+        version = 3 if relations == v3 else 4
+        self._validate_schema(version=version)
+        if version == 3:
+            self._migrate_provisional()
+        self._migrate_corporate_actions()
+        return True
 
     def _user_relations(self) -> set[tuple[str, str, str]]:
         try:
@@ -1302,7 +1481,7 @@ class DuckDBCatalog:
         except Exception:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
-    def _validate_schema(self, *, version: int = 4) -> None:
+    def _validate_schema(self, *, version: int = 5) -> None:
         if self.connection.execute(
             "SELECT count(*) FROM duckdb_indexes()"
         ).fetchone() != (0,):
@@ -1314,6 +1493,8 @@ class DuckDBCatalog:
             if version == 2
             else _V3_EXPECTED_TABLES
             if version == 3
+            else _V4_EXPECTED_TABLES
+            if version == 4
             else _EXPECTED_TABLES
         )
         for table in expected_tables:
@@ -1377,6 +1558,14 @@ class DuckDBCatalog:
                     _PROVISIONAL_MIGRATION_ID,
                     _PROVISIONAL_MIGRATION_VERSION,
                     _PROVISIONAL_SCHEMA_CHECKSUM,
+                )
+            )
+        if version >= 5:
+            expected_migrations.append(
+                (
+                    _CORPORATE_ACTION_MIGRATION_ID,
+                    _CORPORATE_ACTION_MIGRATION_VERSION,
+                    _CORPORATE_ACTION_SCHEMA_CHECKSUM,
                 )
             )
         if migration != expected_migrations:
@@ -1575,6 +1764,7 @@ def _column_type(name: str, table: str) -> str:
         "decompressed_byte_count",
         "byte_count",
         "byte_size",
+        "event_count",
     }:
         return "BIGINT"
     if table == "provisional_partitions" and name in {
@@ -1584,6 +1774,8 @@ def _column_type(name: str, table: str) -> str:
         "instrument_snapshot_retrieved_at",
         "published_at",
     }:
+        return "TIMESTAMP WITH TIME ZONE"
+    if table == "corporate_action_snapshots" and name == "retrieved_at":
         return "TIMESTAMP WITH TIME ZONE"
     if table == "provisional_partitions" and name == "session_complete":
         return "BOOLEAN"
@@ -1658,6 +1850,10 @@ def _expected_table_columns(
     elif table == "provisional_partitions":
         names = tuple(ProvisionalPartitionMetadataV1.__dataclass_fields__)
         primary_key = set(_PROVISIONAL_KEY_COLUMNS)
+        not_null = set(names)
+    elif table == "corporate_action_snapshots":
+        names = tuple(CorporateActionSnapshotMetadataV1.__dataclass_fields__)
+        primary_key = {"isin", "retrieved_at", "snapshot_sha256"}
         not_null = set(names)
     else:
         raise CatalogSchemaError("catalog schema is invalid")
@@ -1934,6 +2130,73 @@ def _expected_constraints(
                 ),
             )
         )
+    elif table == "corporate_action_snapshots":
+        signatures.extend(
+            (
+                ("CHECK", "(schema_version = 1)", (0,), ("schema_version",), None, ()),
+                (
+                    "CHECK",
+                    "regexp_full_match(isin, 'INE[A-Z0-9]{8}[0-9]')",
+                    (1,),
+                    ("isin",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(\"source\" = 'upstox-fundamentals-v2')",
+                    (2,),
+                    ("source",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(source_release = 'corporate-actions-v1')",
+                    (3,),
+                    ("source_release",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "regexp_full_match(snapshot_sha256, '[0-9a-f]{64}')",
+                    (5,),
+                    ("snapshot_sha256",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(byte_count BETWEEN 1 AND 1048576)",
+                    (6,),
+                    ("byte_count",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "(event_count BETWEEN 0 AND 1000)",
+                    (7,),
+                    ("event_count",),
+                    None,
+                    (),
+                ),
+                (
+                    "CHECK",
+                    "((relative_object_path = (((('corporate_action_snapshots/isin=' || isin) || '/sha256=') || snapshot_sha256) || '/snapshot.json')) AND (length(relative_object_path) <= 256))",
+                    (8, 1, 5, 8),
+                    (
+                        "relative_object_path",
+                        "isin",
+                        "snapshot_sha256",
+                        "relative_object_path",
+                    ),
+                    None,
+                    (),
+                ),
+            )
+        )
     primary_key = (
         _PHYSICAL_KEY_COLUMNS
         if table == "partitions"
@@ -1943,6 +2206,8 @@ def _expected_constraints(
         if table == "ingestion_runs"
         else ("snapshot_sha256",)
         if table == "universe_snapshots"
+        else ("isin", "retrieved_at", "snapshot_sha256")
+        if table == "corporate_action_snapshots"
         else _PROVISIONAL_KEY_COLUMNS
         if table == "provisional_partitions"
         else ("source", "retrieved_at", "observation_sha256")
@@ -2032,6 +2297,30 @@ def _universe_metadata_from_row(row: tuple[object, ...]) -> UniverseSnapshotMeta
         cast(str, values[12]),
         values[13],
         cast(str, values[14]),
+    )
+
+
+def _corporate_action_metadata_from_row(
+    row: tuple[object, ...],
+) -> CorporateActionSnapshotMetadataV1:
+    values = list(row)
+    if (
+        len(values) != 9
+        or type(values[0]) is not int
+        or any(type(values[index]) is not str for index in (1, 2, 3, 4, 5, 8))
+        or any(type(values[index]) is not int for index in (6, 7))
+    ):
+        raise ValueError
+    return CorporateActionSnapshotMetadataV1(
+        values[0],
+        cast(str, values[1]),
+        cast(str, values[2]),
+        cast(str, values[3]),
+        datetime.fromisoformat(cast(str, values[4])).astimezone(UTC),
+        cast(str, values[5]),
+        cast(int, values[6]),
+        cast(int, values[7]),
+        cast(str, values[8]),
     )
 
 

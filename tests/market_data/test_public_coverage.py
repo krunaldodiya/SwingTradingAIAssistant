@@ -478,6 +478,12 @@ def test_coverage_service_admits_before_evaluation_and_maps_states(tmp_path) -> 
         "NSE_EQ", "RELIANCE", date(2026, 7, 1), date(2026, 7, 31), tmp_path
     )
     report = service.coverage(accepted)
+
+    invalid_lease = service.coverage_under_lease(
+        accepted,
+        object(),  # type: ignore[arg-type]
+    )
+    assert invalid_lease.status is PublicCommandStatusV1.REJECTED
     assert report.status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
     assert report.failure is not None
     assert report.failure.code is PublicFailureCodeV1.COVERAGE_INSUFFICIENT
@@ -614,15 +620,15 @@ def test_coverage_cli_uses_shared_service_json_exit_and_never_reads_dotenv(
     assert dotenv_calls == []
 
 
-def test_default_coverage_cli_rejects_before_root_and_never_creates_storage(
+def test_default_coverage_cli_requires_retained_universe_before_root_and_never_creates_storage(
     tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = tmp_path / "absent"
 
     rejected = main(_coverage_argv(root, symbol="TCS"))
     rejected_output = json.loads(capsys.readouterr().out)
-    assert rejected == 2
-    assert rejected_output["failure"]["code"] == "UNSUPPORTED_PREVIEW_INSTRUMENT"
+    assert rejected == 4
+    assert rejected_output["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
     assert not root.exists()
 
     unavailable = main(_coverage_argv(root))

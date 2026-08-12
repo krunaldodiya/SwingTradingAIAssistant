@@ -556,7 +556,7 @@ class PublicQueryRequestV1:
     symbol: str
     from_date: date
     to_date: date
-    timeframe: Literal["1m", "1d"]
+    timeframe: Literal["1m", "3m", "5m", "15m", "30m", "1h", "1d"]
     fields: tuple[CandleFieldV1, ...]
     max_rows: int
 
@@ -571,7 +571,7 @@ class PublicQueryRequestV1:
             or self.from_date < date(2022, 1, 1)
             or _coverage_month_count(self.from_date, self.to_date) > 12
             or type(self.timeframe) is not str
-            or self.timeframe not in {"1m", "1d"}
+            or self.timeframe not in {"1m", "3m", "5m", "15m", "30m", "1h", "1d"}
             or type(self.fields) is not tuple
             or not 1 <= len(self.fields) <= len(CandleFieldV1)
             or any(type(value) is not CandleFieldV1 for value in self.fields)
@@ -747,6 +747,87 @@ class DailyQueryPayloadV1:
             raise ValueError("invalid daily query payload")
 
 
+DERIVED_INTRADAY_CALCULATION_VERSION_V1 = "nse-session-intraday-ohlcv@v1"
+DERIVED_INTRADAY_BUCKET_MINUTES_V1 = {
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedIntradayQueryPayloadV1:
+    request: PublicQueryRequestV1
+    calculation_version: Literal["nse-session-intraday-ohlcv@v1"]
+    adjustment_state: Literal["raw"]
+    bucket_minutes: int
+    row_count: int
+    months: tuple[PublicCoverageMonthV1, ...]
+    rows: tuple[PublicQueryRowV1, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            request = replace(self.request)
+            months = tuple(replace(value) for value in self.months)
+            rows = tuple(replace(value) for value in self.rows)
+        except (TypeError, ValueError):
+            raise ValueError("invalid derived intraday query payload") from None
+        selected = set(request.fields)
+        start = datetime(
+            request.from_date.year,
+            request.from_date.month,
+            request.from_date.day,
+            tzinfo=_IST,
+        ).astimezone(UTC)
+        after = request.to_date + timedelta(days=1)
+        end = datetime(after.year, after.month, after.day, tzinfo=_IST).astimezone(UTC)
+        if (
+            type(self.request) is not PublicQueryRequestV1
+            or request != self.request
+            or request.timeframe not in DERIVED_INTRADAY_BUCKET_MINUTES_V1
+            or self.calculation_version != DERIVED_INTRADAY_CALCULATION_VERSION_V1
+            or self.adjustment_state != "raw"
+            or type(self.bucket_minutes) is not int
+            or self.bucket_minutes
+            != DERIVED_INTRADAY_BUCKET_MINUTES_V1.get(request.timeframe)
+            or type(self.row_count) is not int
+            or self.row_count != len(rows)
+            or self.row_count > request.max_rows
+            or type(self.months) is not tuple
+            or any(type(value) is not PublicCoverageMonthV1 for value in self.months)
+            or months != self.months
+            or tuple(value.month for value in months)
+            != _month_labels_from_dates(request.from_date, request.to_date)
+            or type(self.rows) is not tuple
+            or any(type(value) is not PublicQueryRowV1 for value in self.rows)
+            or rows != self.rows
+            or any(not start <= value.ts < end for value in rows)
+            or any(
+                left.ts >= right.ts for left, right in zip(rows, rows[1:], strict=False)
+            )
+            or any(
+                (value.open is not None) != (CandleFieldV1.OPEN in selected)
+                or (value.high is not None) != (CandleFieldV1.HIGH in selected)
+                or (value.low is not None) != (CandleFieldV1.LOW in selected)
+                or (value.close is not None) != (CandleFieldV1.CLOSE in selected)
+                or (value.volume is not None) != (CandleFieldV1.VOLUME in selected)
+                or (value.volume is not None and value.volume > MAX_DAILY_VOLUME_V1)
+                for value in rows
+            )
+            or (
+                any(
+                    value.coverage_state
+                    not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
+                    for value in months
+                )
+                and bool(rows)
+            )
+        ):
+            raise ValueError("invalid derived intraday query payload")
+
+
 PayloadT_co = TypeVar("PayloadT_co", covariant=True)
 
 
@@ -802,7 +883,12 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
         if self.command == "query" and (
             self.provider_attempt_count != 0
             or type(self.payload)
-            not in (QueryPayloadV1, DailyQueryPayloadV1, type(None))
+            not in (
+                QueryPayloadV1,
+                DailyQueryPayloadV1,
+                DerivedIntradayQueryPayloadV1,
+                type(None),
+            )
             or not _valid_query_report(self.status, self.failure, self.payload)
         ):
             raise ValueError("invalid public command report")
@@ -810,7 +896,9 @@ class PublicCommandReportV1(Generic[PayloadT_co]):
 
 DownloadReportV1 = PublicCommandReportV1[DownloadPayloadV1 | OpenMonthDownloadPayloadV1]
 CoverageReportV1 = PublicCommandReportV1[CoveragePayloadV1]
-QueryReportV1 = PublicCommandReportV1[QueryPayloadV1 | DailyQueryPayloadV1]
+QueryReportV1 = PublicCommandReportV1[
+    QueryPayloadV1 | DailyQueryPayloadV1 | DerivedIntradayQueryPayloadV1
+]
 
 
 def _valid_coverage_report(
@@ -884,9 +972,16 @@ def _valid_query_report(
             and failure.validation_reason is None
             and failure.months == ()
         )
-    if type(payload) not in (QueryPayloadV1, DailyQueryPayloadV1):
+    if type(payload) not in (
+        QueryPayloadV1,
+        DailyQueryPayloadV1,
+        DerivedIntradayQueryPayloadV1,
+    ):
         return False
-    typed_payload = cast(QueryPayloadV1 | DailyQueryPayloadV1, payload)
+    typed_payload = cast(
+        QueryPayloadV1 | DailyQueryPayloadV1 | DerivedIntradayQueryPayloadV1,
+        payload,
+    )
     affected = tuple(
         value.month
         for value in typed_payload.months
@@ -894,7 +989,22 @@ def _valid_query_report(
         not in {CoverageStateV1.VERIFIED, CoverageStateV1.PROVISIONAL}
     )
     if not affected:
-        return status is PublicCommandStatusV1.SUCCEEDED and failure is None
+        if status is PublicCommandStatusV1.SUCCEEDED and failure is None:
+            return True
+        return (
+            status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
+            and failure is not None
+            and failure.code is PublicFailureCodeV1.COVERAGE_INSUFFICIENT
+            and failure.run_failure_code is None
+            and failure.historical_fetch_code is None
+            and failure.failure_category is None
+            and failure.validation_reason is None
+            and bool(failure.months)
+            and set(failure.months).issubset(
+                {value.month for value in typed_payload.months}
+            )
+            and typed_payload.row_count == 0
+        )
     return (
         status is PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
         and failure is not None
@@ -955,6 +1065,46 @@ def render_download_report_json(report: DownloadReportV1) -> bytes:
     return overflow
 
 
+def validate_download_report_v1(report: object) -> DownloadReportV1:
+    """Return an independent, deeply reconstructed v1 download report."""
+    if type(report) is not PublicCommandReportV1:
+        raise ValueError("invalid public download report")
+    untyped = cast(PublicCommandReportV1[object], report)
+    failure = replace(untyped.failure) if untyped.failure is not None else None
+    source = untyped.payload
+    payload: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None
+    if type(source) is DownloadPayloadV1:
+        typed = source
+        payload = replace(
+            typed,
+            request=replace(typed.request),
+            months=tuple(replace(value) for value in typed.months),
+        )
+    elif type(source) is OpenMonthDownloadPayloadV1:
+        typed_open = source
+        payload = replace(
+            typed_open,
+            request=replace(typed_open.request),
+            month=replace(typed_open.month),
+            closed_months=tuple(replace(value) for value in typed_open.closed_months),
+        )
+    elif source is None:
+        payload = None
+    else:
+        raise ValueError("invalid public download report")
+    validated: DownloadReportV1 = PublicCommandReportV1(
+        untyped.contract_version,
+        untyped.command,
+        untyped.status,
+        failure,
+        untyped.provider_attempt_count,
+        payload,
+    )
+    if validated.command != "download":
+        raise ValueError("invalid public download report")
+    return validated
+
+
 def render_coverage_report_json(report: CoverageReportV1) -> bytes:
     """Render only the allowlisted v1 coverage fields."""
     try:
@@ -1003,35 +1153,7 @@ def _bounded_download_attempts(report: object) -> int:
 
 
 def _download_report_value(report: object) -> dict[str, object]:
-    if type(report) is not PublicCommandReportV1:
-        raise ValueError
-    untyped = cast(PublicCommandReportV1[object], report)
-    if untyped.payload is not None and type(untyped.payload) not in (
-        DownloadPayloadV1,
-        OpenMonthDownloadPayloadV1,
-    ):
-        raise ValueError
-    failure: PublicFailureV1 | None = (
-        replace(untyped.failure) if untyped.failure is not None else None
-    )
-    typed_payload = untyped.payload
-    payload: DownloadPayloadV1 | OpenMonthDownloadPayloadV1 | None
-    if type(typed_payload) in (DownloadPayloadV1, OpenMonthDownloadPayloadV1):
-        payload = replace(
-            cast(DownloadPayloadV1 | OpenMonthDownloadPayloadV1, typed_payload)
-        )
-    else:
-        payload = None
-    validated: DownloadReportV1 = PublicCommandReportV1(
-        untyped.contract_version,
-        untyped.command,
-        untyped.status,
-        failure,
-        untyped.provider_attempt_count,
-        payload,
-    )
-    if validated.command != "download":
-        raise ValueError
+    validated = validate_download_report_v1(report)
     return {
         "contract_version": validated.contract_version,
         "command": validated.command,
@@ -1093,13 +1215,23 @@ def _query_report_value(report: object) -> dict[str, object]:
     if untyped.payload is not None and type(untyped.payload) not in (
         QueryPayloadV1,
         DailyQueryPayloadV1,
+        DerivedIntradayQueryPayloadV1,
     ):
         raise ValueError
     failure = replace(untyped.failure) if untyped.failure is not None else None
     typed_payload = untyped.payload
-    payload: QueryPayloadV1 | DailyQueryPayloadV1 | None
-    if type(typed_payload) in (QueryPayloadV1, DailyQueryPayloadV1):
-        payload = replace(cast(QueryPayloadV1 | DailyQueryPayloadV1, typed_payload))
+    payload: QueryPayloadV1 | DailyQueryPayloadV1 | DerivedIntradayQueryPayloadV1 | None
+    if type(typed_payload) in (
+        QueryPayloadV1,
+        DailyQueryPayloadV1,
+        DerivedIntradayQueryPayloadV1,
+    ):
+        payload = replace(
+            cast(
+                QueryPayloadV1 | DailyQueryPayloadV1 | DerivedIntradayQueryPayloadV1,
+                typed_payload,
+            )
+        )
     else:
         payload = None
     validated: QueryReportV1 = PublicCommandReportV1(
@@ -1172,7 +1304,7 @@ def _coverage_terminal_failure_value(code: PublicFailureCodeV1) -> dict[str, obj
 
 
 def _query_payload_value(
-    value: QueryPayloadV1 | DailyQueryPayloadV1 | None,
+    value: QueryPayloadV1 | DailyQueryPayloadV1 | DerivedIntradayQueryPayloadV1 | None,
 ) -> dict[str, object] | None:
     if value is None:
         return None
@@ -1198,6 +1330,16 @@ def _query_payload_value(
             "request": request,
             "calculation_version": value.calculation_version,
             "adjustment_state": value.adjustment_state,
+            "row_count": value.row_count,
+            "months": common["months"],
+            "rows": common["rows"],
+        }
+    if type(value) is DerivedIntradayQueryPayloadV1:
+        return {
+            "request": request,
+            "calculation_version": value.calculation_version,
+            "adjustment_state": value.adjustment_state,
+            "bucket_minutes": value.bucket_minutes,
             "row_count": value.row_count,
             "months": common["months"],
             "rows": common["rows"],

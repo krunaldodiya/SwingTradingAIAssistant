@@ -162,6 +162,85 @@ def test_open_month_coverage_reports_available_provisional_evidence(
     assert report.payload.months[0].session_complete is False
 
 
+def test_open_month_coverage_under_caller_lease_and_invalid_lease_are_bounded(
+    tmp_path: Path,
+) -> None:
+    _seed(tmp_path)
+    service = OpenMonthCoverageServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    )
+    request = CoverageRequestV1(
+        "NSE_EQ", "RELIANCE", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+    rejected = service.coverage_under_lease(request, object())  # type: ignore[arg-type]
+    assert rejected.status is PublicCommandStatusV1.REJECTED
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.coverage_under_lease(request, lease)
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+
+    class BrokenService(OpenMonthCoverageServiceV1):
+        def _coverage_under_lease(self, *args: object):
+            raise RuntimeError
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        unavailable = BrokenService(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+        ).coverage_under_lease(request, lease)
+    assert unavailable.status is PublicCommandStatusV1.UNAVAILABLE
+
+    class SymbolOnlyPolicy:
+        def admits(self, segment: object, symbol: object) -> bool:
+            return segment == "NSE_EQ" and symbol == "RELIANCE"
+
+        def admits_instrument(self, instrument: object) -> bool:
+            return False
+
+    mismatch = OpenMonthCoverageServiceV1(
+        SymbolOnlyPolicy(),
+        clock=_Clock(),  # type: ignore[arg-type]
+    ).coverage(request)
+    assert mismatch.status is PublicCommandStatusV1.REJECTED
+
+
+def test_current_aware_coverage_delegates_under_caller_lease(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Port:
+        def coverage(self, request: object):
+            raise AssertionError
+
+        def coverage_under_lease(self, request: object, lease: StorageRootLease):
+            calls.append("under-lease")
+            return OpenMonthCoverageServiceV1(
+                PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+            ).coverage_under_lease(request, lease)
+
+    _seed(tmp_path)
+    service = CurrentAwareCoverageServiceV1(Port(), Port(), clock=_Clock())
+    invalid = service.coverage_under_lease(object(), object())  # type: ignore[arg-type]
+    assert invalid.status is PublicCommandStatusV1.REJECTED
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.coverage_under_lease(
+            CoverageRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 1),
+                date(2026, 8, 11),
+                tmp_path,
+            ),
+            lease,
+        )
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert calls == ["under-lease"]
+
+
 def test_open_month_coverage_reads_last_snapshot_during_active_refresh(
     tmp_path: Path,
 ) -> None:

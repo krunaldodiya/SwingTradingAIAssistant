@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -58,6 +58,7 @@ from .schedule_evidence import (
 )
 from .storage_root_lease import LeaseOutcome, LeaseResult, StorageRootLease
 from .validation import EquityMonthValidationPolicy
+from .workflow_coordination import PublicationGateV1
 
 _SAFE_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -379,9 +380,12 @@ class _NoopLimiter:
         return timedelta(0)
 
     def defer_for(
-        self, delay: timedelta, remaining_wait: timedelta
+        self,
+        delay: timedelta,
+        remaining_wait: timedelta,
+        cancellation: CancellationSignal | None = None,
     ) -> timedelta | None:
-        del delay, remaining_wait
+        del delay, remaining_wait, cancellation
         return timedelta(0)
 
 
@@ -428,6 +432,50 @@ class _RangeFetcher:
         return self._remaining_attempts
 
 
+class _PrefetchedRangeFetcher:
+    """Replay exact network results while catalog publication is serialized."""
+
+    def __init__(
+        self,
+        results: Mapping[PlannedInstrumentMonth, HistoricalFetchResult],
+        max_attempts: int,
+    ) -> None:
+        self._results = results
+        self._remaining_attempts = max_attempts
+
+    def fetch(self, plan: PlannedInstrumentMonth) -> HistoricalFetchResult:
+        result = self._results.get(plan)
+        if type(result) is not HistoricalFetchResult:
+            return HistoricalFetchResult(
+                response=None,
+                attempts=0,
+                failure=HistoricalFetchFailure(
+                    HistoricalFetchCode.ATTEMPT_BUDGET_EXHAUSTED,
+                    0,
+                ),
+            )
+        if result.attempts > self._remaining_attempts:
+            return HistoricalFetchResult(
+                response=None,
+                attempts=0,
+                failure=HistoricalFetchFailure(
+                    HistoricalFetchCode.ATTEMPT_BUDGET_EXHAUSTED,
+                    0,
+                ),
+            )
+        self._remaining_attempts -= result.attempts
+        return result
+
+    @property
+    def remaining_attempts(self) -> int:
+        return self._remaining_attempts
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingInspection:
+    plans: tuple[PlannedInstrumentMonth, ...]
+
+
 class IngestionCoordinator:
     """Compose Children A through H for one sequential date-range command."""
 
@@ -455,6 +503,7 @@ class IngestionCoordinator:
         lifecycle_executor_factory: Callable[
             ..., PartitionIngestionExecutor
         ] = PartitionIngestionExecutor,
+        publication_gate: PublicationGateV1 | None = None,
     ) -> None:
         self._session_factory = session_factory or _UnavailableSessionFactory()
         self._limiter = limiter or _NoopLimiter()
@@ -470,6 +519,7 @@ class IngestionCoordinator:
         self._schedule_store_factory = schedule_store_factory
         self._recovery_observer_factory = recovery_observer_factory
         self._lifecycle_executor_factory = lifecycle_executor_factory
+        self._publication_gate = publication_gate
 
     def run(self, command: IngestionCommand) -> IngestionReport:
         started = self._now()
@@ -504,7 +554,10 @@ class IngestionCoordinator:
 
         try:
             with lease:
-                return self._run_leased(command, plans, lease, policy, started)
+                report = self._run_leased(command, plans, lease, policy, started)
+                if type(report) is IngestionReport:
+                    return report
+                raise RuntimeError
         except Exception:
             return self._report(
                 IngestionRunOutcome.FAILED,
@@ -527,7 +580,14 @@ class IngestionCoordinator:
                 raise RuntimeError
             with lease.root_operation(command.storage_root) as operation:
                 operation.ensure_live()
-            return self._run_leased(command, plans, lease, policy, started)
+            if self._publication_gate is not None:
+                return self._run_concurrent_under_lease(
+                    command, plans, lease, policy, started
+                )
+            report = self._run_leased(command, plans, lease, policy, started)
+            if type(report) is IngestionReport:
+                return report
+            raise RuntimeError
         except Exception:
             return self._report(
                 IngestionRunOutcome.FAILED,
@@ -598,7 +658,12 @@ class IngestionCoordinator:
         lease: StorageRootLease,
         policy: EquityMonthValidationPolicy,
         started: datetime,
-    ) -> IngestionReport:
+        *,
+        inspect_only: bool = False,
+        prefetched: Mapping[PlannedInstrumentMonth, HistoricalFetchResult]
+        | None = None,
+        provider_failure: RunFailureCode | None = None,
+    ) -> IngestionReport | _PendingInspection:
         try:
             schedule_store = self._schedule_store_factory(command.storage_root, lease)
             schedule = schedule_store.retain(command.expected_sessions)
@@ -671,6 +736,10 @@ class IngestionCoordinator:
             )
             if completed is not None:
                 return completed
+            if inspect_only:
+                return _PendingInspection(
+                    tuple(decision.plan for decision in pending.values())
+                )
             return self._execute_requests(
                 command,
                 plans,
@@ -680,7 +749,68 @@ class IngestionCoordinator:
                 local,
                 pending,
                 started,
+                prefetched=prefetched,
+                provider_failure=provider_failure,
             )
+
+    def _run_concurrent_under_lease(
+        self,
+        command: IngestionCommand,
+        plans: tuple[PlannedInstrumentMonth, ...],
+        lease: StorageRootLease,
+        policy: EquityMonthValidationPolicy,
+        started: datetime,
+    ) -> IngestionReport:
+        gate = self._publication_gate
+        if gate is None:
+            raise RuntimeError
+        with gate:
+            inspected = self._run_leased(
+                command,
+                plans,
+                lease,
+                policy,
+                started,
+                inspect_only=True,
+            )
+        if isinstance(inspected, IngestionReport):
+            return inspected
+        fetched, provider_failure = self._prefetch(command, inspected.plans)
+        with gate:
+            completed = self._run_leased(
+                command,
+                plans,
+                lease,
+                policy,
+                started,
+                prefetched=fetched,
+                provider_failure=provider_failure,
+            )
+        if not isinstance(completed, IngestionReport):
+            raise RuntimeError
+        return completed
+
+    def _prefetch(
+        self,
+        command: IngestionCommand,
+        plans: tuple[PlannedInstrumentMonth, ...],
+    ) -> tuple[
+        dict[PlannedInstrumentMonth, HistoricalFetchResult], RunFailureCode | None
+    ]:
+        provider, failure = self._open_provider(command)
+        if provider is None:
+            return {}, failure
+        fetcher = _RangeFetcher(
+            provider,
+            command.max_total_provider_attempts,
+            command.retry_policy.max_total_wait,
+        )
+        results: dict[PlannedInstrumentMonth, HistoricalFetchResult] = {}
+        for plan in plans:
+            if self._is_cancelled() or fetcher.remaining_attempts == 0:
+                break
+            results[plan] = fetcher.fetch(plan)
+        return results, None
 
     def _local_preflight(
         self,
@@ -792,15 +922,22 @@ class IngestionCoordinator:
         local: dict[int, PartitionResult],
         pending: dict[int, PartitionDecision],
         started: datetime,
+        *,
+        prefetched: Mapping[PlannedInstrumentMonth, HistoricalFetchResult] | None,
+        provider_failure: RunFailureCode | None,
     ) -> IngestionReport:
-        provider, session_failure = self._open_provider(command)
-        if provider is None:
-            return self._finish_fatal(plans, local, pending, session_failure, started)
-        fetcher = _RangeFetcher(
-            provider,
-            command.max_total_provider_attempts,
-            command.retry_policy.max_total_wait,
+        fetcher, early = self._request_fetcher(
+            command,
+            plans,
+            local,
+            pending,
+            started,
+            prefetched,
+            provider_failure,
         )
+        if early is not None:
+            return early
+        fetcher = cast(_RangeFetcher | _PrefetchedRangeFetcher, fetcher)
         results = dict(local)
         fatal: RunFailureCode | None = None
         for index, decision in pending.items():
@@ -831,13 +968,51 @@ class IngestionCoordinator:
             return self._finish_fatal(plans, results, pending, fatal, started)
         return self._finish_results(plans, results, started)
 
+    def _request_fetcher(
+        self,
+        command: IngestionCommand,
+        plans: tuple[PlannedInstrumentMonth, ...],
+        local: dict[int, PartitionResult],
+        pending: dict[int, PartitionDecision],
+        started: datetime,
+        prefetched: Mapping[PlannedInstrumentMonth, HistoricalFetchResult] | None,
+        provider_failure: RunFailureCode | None,
+    ) -> tuple[
+        _RangeFetcher | _PrefetchedRangeFetcher | None,
+        IngestionReport | None,
+    ]:
+        if provider_failure is not None:
+            return None, self._finish_fatal(
+                plans, local, pending, provider_failure, started
+            )
+        if prefetched is not None:
+            return (
+                _PrefetchedRangeFetcher(
+                    prefetched, command.max_total_provider_attempts
+                ),
+                None,
+            )
+        provider, session_failure = self._open_provider(command)
+        if provider is None:
+            return None, self._finish_fatal(
+                plans, local, pending, session_failure, started
+            )
+        return (
+            _RangeFetcher(
+                provider,
+                command.max_total_provider_attempts,
+                command.retry_policy.max_total_wait,
+            ),
+            None,
+        )
+
     def _execute_partition(
         self,
         command: IngestionCommand,
         catalog: object,
         schedule: ScheduleEvidenceResult,
         policy: EquityMonthValidationPolicy,
-        fetcher: _RangeFetcher,
+        fetcher: _RangeFetcher | _PrefetchedRangeFetcher,
         decision: PartitionDecision,
     ) -> tuple[PartitionResult, RunFailureCode | None, str | None]:
         remaining_before = fetcher.remaining_attempts

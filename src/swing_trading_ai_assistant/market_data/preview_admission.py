@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .instruments import Instrument
+
 
 @dataclass(frozen=True, slots=True)
 class PreviewAdmissionPolicyV1:
@@ -28,4 +30,15 @@ class PreviewAdmissionPolicyV1:
                 symbol,
             )
             == (self.segment, self.symbol)
+        )
+
+    def admits_instrument(self, instrument: Instrument) -> bool:
+        """Confirm provider resolution retained the admitted equity identity."""
+        return (
+            type(instrument) is Instrument
+            and instrument.segment == self.segment
+            and instrument.symbol == self.symbol
+            and instrument.instrument_type == "EQ"
+            and instrument.exchange == "NSE"
+            and instrument.isin is not None
         )

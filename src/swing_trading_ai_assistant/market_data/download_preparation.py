@@ -12,17 +12,19 @@ from pathlib import Path
 from typing import Protocol
 
 from .catalog import DuckDBCatalog
+from .equity_admission import EquityAdmissionPolicyV1
+from .historical import AccountRateLimiter, CancellationToken
 from .instrument_snapshot import (
     FetchedInstrumentSnapshotV1,
     InstrumentSnapshotCorruptError,
     InstrumentSnapshotNotFoundError,
     InstrumentSnapshotStoreV1,
+    InstrumentSnapshotUnavailableError,
     ResolvedInstrumentSnapshotV1,
     SnapshotInstrumentAmbiguousError,
     SnapshotInstrumentNotFoundError,
 )
 from .instruments import Instrument
-from .preview_admission import PreviewAdmissionPolicyV1
 from .schedule_evidence import (
     MAX_SCHEDULE_BYTES,
     SCHEDULE_SCHEMA_VERSION_V2,
@@ -36,6 +38,7 @@ from .schedule_evidence import (
     schedule_digest,
 )
 from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .workflow_coordination import PublicationGateV1
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 MAX_TOUCHED_MONTHS_V1 = 12
@@ -158,6 +161,7 @@ class DownloadPreparationReportV1:
                     PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT,
                     PreparationFailureCodeV1.INSTRUMENT_NOT_FOUND,
                     PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
+                    PreparationFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
                 }
             )
             or (
@@ -202,16 +206,20 @@ class DownloadPreparationServiceV1:
 
     def __init__(
         self,
-        policy: PreviewAdmissionPolicyV1,
+        policy: EquityAdmissionPolicyV1,
         schedule_source: AuthoritativeScheduleSourceV1,
         snapshot_source: InstrumentSnapshotSourceV1,
         *,
         clock: TrustedPreparationClockV1 | None = None,
+        publication_gate: PublicationGateV1 | None = None,
+        limiter: AccountRateLimiter | None = None,
     ) -> None:
         self._policy = policy
         self._schedule_source = schedule_source
         self._snapshot_source = snapshot_source
         self._clock = clock
+        self._publication_gate = publication_gate
+        self._limiter = limiter
 
     def prepare(
         self, request: DownloadPreparationRequestV1
@@ -272,7 +280,7 @@ class DownloadPreparationServiceV1:
             )
 
         if supplied_lease is not None:
-            return self._prepare_leased(request, supplied, supplied_lease)
+            return self._prepare_guarded(request, supplied, supplied_lease)
 
         lease_result = StorageRootLease.try_acquire(request.storage_root)
         if (
@@ -285,9 +293,21 @@ class DownloadPreparationServiceV1:
             )
         try:
             with lease_result.lease as lease:
-                return self._prepare_leased(request, supplied, lease)
+                return self._prepare_guarded(request, supplied, lease)
         except Exception as error:
             return _snapshot_failure(error)
+
+    def _prepare_guarded(
+        self,
+        request: DownloadPreparationRequestV1,
+        supplied: AuthoritativeScheduleInputV1,
+        lease: StorageRootLease,
+    ) -> DownloadPreparationReportV1:
+        gate = self._publication_gate
+        if gate is None:
+            return self._prepare_leased(request, supplied, lease)
+        with gate:
+            return self._prepare_leased(request, supplied, lease)
 
     def _prepare_leased(
         self,
@@ -310,6 +330,12 @@ class DownloadPreparationServiceV1:
                 resolved, attempts = self._resolve_or_fetch(store, request)
         except Exception as error:
             return _snapshot_failure(error)
+        if not self._policy.admits_instrument(resolved.instrument):
+            return _failure(
+                PreparationOutcomeV1.REJECTED,
+                PreparationFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+                attempts=attempts,
+            )
         return DownloadPreparationReportV1(
             PreparationOutcomeV1.SUCCEEDED,
             PreparationFailureCodeV1.NONE,
@@ -344,6 +370,7 @@ class DownloadPreparationServiceV1:
                 return resolved, 0
         except (InstrumentSnapshotNotFoundError, SnapshotInstrumentNotFoundError):
             pass
+        self._admit_snapshot_request()
         try:
             fetched = self._snapshot_source.fetch()
             selection_cutoff = request.invocation_time
@@ -375,6 +402,16 @@ class DownloadPreparationServiceV1:
         except Exception:
             raise _AttemptedSnapshotUnavailable from None
         return resolved, 1
+
+    def _admit_snapshot_request(self) -> None:
+        if self._limiter is None:
+            return
+        try:
+            self._limiter.acquire(CancellationToken(), timedelta(seconds=120))
+        except Exception:
+            raise InstrumentSnapshotUnavailableError(
+                "instrument snapshot unavailable"
+            ) from None
 
 
 def _clock_now(clock: TrustedPreparationClockV1 | None) -> datetime | None:

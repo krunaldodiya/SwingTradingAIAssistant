@@ -39,6 +39,7 @@ from swing_trading_ai_assistant.market_data.partition_publication import (
 )
 from swing_trading_ai_assistant.market_data.public_contract import CoverageStateV1
 from swing_trading_ai_assistant.market_data.public_coverage import (
+    CoverageEvaluationFailureV1,
     CoverageRequestV1,
     StoredCoverageEvaluatorV1,
     VerifiedPartitionReadHandleV1,
@@ -51,6 +52,11 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 )
 from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.universe_snapshot import (
+    Nifty50ConstituentV1,
+    Nifty50UniverseSnapshotV1,
+    Nifty50UniverseStoreV1,
+)
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
@@ -63,6 +69,46 @@ RELIANCE = {
     "instrument_key": "NSE_EQ|INE002A01018",
     "trading_symbol": "RELIANCE",
 }
+
+
+def _isin(index: int) -> str:
+    prefix = f"INE{index:06d}A0"
+    for digit in "0123456789":
+        candidate = prefix + digit
+        expanded = "".join(
+            str(ord(value) - 55) if value.isalpha() else value for value in candidate
+        )
+        total = sum(
+            (int(value) * 2 // 10 + int(value) * 2 % 10) if position % 2 else int(value)
+            for position, value in enumerate(reversed(expanded))
+        )
+        if total % 10 == 0:
+            return candidate
+    raise AssertionError
+
+
+def _universe() -> Nifty50UniverseSnapshotV1:
+    members = [Nifty50ConstituentV1("INE002A01018", "RELIANCE", "ENERGY")] + [
+        Nifty50ConstituentV1(_isin(index), f"SYM{index:02d}", "FINANCIALS")
+        for index in range(49)
+    ]
+    members.sort(key=lambda member: member.isin)
+    observed = datetime(2026, 6, 30, tzinfo=UTC)
+    return Nifty50UniverseSnapshotV1(
+        1,
+        "nifty-50",
+        date(2026, 7, 1),
+        date(2026, 9, 30),
+        "nse-archive",
+        "2026-q3",
+        observed,
+        observed,
+        "nse-archive",
+        "2026-q3",
+        observed,
+        observed,
+        tuple(members),
+    )
 
 
 def _plan() -> PlannedInstrumentMonth:
@@ -166,10 +212,12 @@ def _seed(
     policy_version: str | None = None,
     manifest_time: datetime = datetime(2026, 8, 2, tzinfo=UTC),
 ) -> tuple[str, str | None]:
+    root.chmod(0o700)
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.lease is not None
     canonical_path: str | None = None
     with acquired.lease, DuckDBCatalog(root) as catalog:
+        Nifty50UniverseStoreV1(root, acquired.lease, catalog).retain(_universe())
         InstrumentSnapshotStoreV1(root, acquired.lease, catalog).retain(
             _fetched_snapshot()
         )
@@ -245,6 +293,35 @@ def test_evaluator_proves_verified_partition_without_mutating_storage(
     assert result.months[0].row_count == 375
     assert len(result.verified_partitions) == 1
     assert result.verified_partitions[0].plan == _plan()
+
+
+def test_policy_aware_evaluation_rejects_resolved_instrument_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    _seed(tmp_path)
+
+    class SymbolOnlyPolicy:
+        def admits(self, segment: object, symbol: object) -> bool:
+            return True
+
+        def admits_instrument(self, instrument: object) -> bool:
+            return False
+
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(CoverageEvaluationFailureV1) as failure,
+    ):
+        evaluator.evaluate_under_admission_with_policy(
+            _request(tmp_path),
+            NOW,
+            admission,
+            SymbolOnlyPolicy(),  # type: ignore[arg-type]
+        )
+    assert (
+        failure.value.code
+        is coverage_module.PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT
+    )
 
 
 def test_default_coverage_cli_disposable_root_smoke_is_read_only(

@@ -5,12 +5,22 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import threading
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from dotenv import load_dotenv
 
+from .account_rate_limit import ThreadSafeAccountRateLimiterV1
+from .bounded_nifty50_workflow import (
+    BoundedNifty50DownloadRequestV1,
+    BoundedNifty50DownloadServiceV1,
+    CanonicalFileNifty50UniverseSourceV1,
+    Nifty50BatchOutcomeV1,
+    bounded_nifty50_exit_code,
+    render_bounded_nifty50_download_json,
+)
 from .credentials import AccessToken, EnvironmentAccessTokenProvider
 from .daily_ohlcv import (
     DailyQueryServiceV1,
@@ -23,7 +33,9 @@ from .download_preparation import (
     CanonicalFileScheduleSourceV1,
     DownloadPreparationServiceV1,
 )
+from .equity_admission import EquityAdmissionPolicyV1
 from .historical import (
+    AccountRateLimiter,
     HistoricalRequest,
     HistoricalResponse,
     UpstoxV3HistoricalClient,
@@ -32,6 +44,20 @@ from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
 from .instrument_snapshot import InstrumentSnapshotClientV1
 from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalogClient
 from .intraday import UpstoxV3IntradayClient
+from .intraday_views import (
+    DerivedIntradayQueryServiceV1,
+    DuckDBIntradayViewEngineV1,
+    OpenMonthDerivedIntradayQueryServiceV1,
+    RetainedOpenMonthScheduleResolverV1,
+)
+from .nifty50_read_workflow import (
+    BoundedNifty50ReadRequestV1,
+    BoundedPointInTimeNifty50ReadServiceV1,
+    PointInTimeNifty50CoverageServiceV1,
+    PointInTimeNifty50QueryServiceV1,
+    bounded_nifty50_read_terminal,
+    render_bounded_nifty50_read_json,
+)
 from .open_month_coverage import (
     CurrentAwareCoverageServiceV1,
     OpenMonthCoverageServiceV1,
@@ -71,6 +97,7 @@ from .range_ingestion import (
     IngestionCoordinator,
     ProviderSessionAuthenticationError,
 )
+from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
@@ -156,9 +183,41 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     download = commands.add_parser(
         "download",
-        help="persist one admitted closed-range one-minute download",
+        help="persist one or many point-in-time Nifty 50 one-minute downloads",
     )
     _add_persistent_range_arguments(download)
+    selection = download.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--symbol", help="one Nifty 50 trading symbol")
+    selection.add_argument(
+        "--symbols",
+        type=_symbols,
+        help="comma-separated Nifty 50 trading symbols",
+    )
+    selection.add_argument(
+        "--universe",
+        choices=("nifty50-current",),
+        help="all members of the retained point-in-time Nifty 50 snapshot",
+    )
+    download.add_argument(
+        "--universe-file",
+        type=Path,
+        metavar="ABSOLUTE_PATH",
+        help="canonical point-in-time Nifty 50 JSON to retain before download",
+    )
+    download.add_argument(
+        "--universe-as-of",
+        type=_date,
+        metavar="YYYY-MM-DD",
+        help="membership date; defaults to the requested end date",
+    )
+    download.add_argument(
+        "--workers",
+        type=int,
+        choices=range(1, 9),
+        default=4,
+        metavar="1..8",
+        help="bounded concurrent provider workers (default: 4)",
+    )
     download.add_argument(
         "--schedule-file",
         type=Path,
@@ -179,11 +238,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="prove retained scheduled-minute coverage without provider access",
     )
     _add_persistent_range_arguments(coverage)
+    _add_read_selection(coverage)
     query = commands.add_parser(
         "query",
         help="query bounded verified candles without provider access",
     )
     _add_persistent_range_arguments(query)
+    _add_read_selection(query)
     query.add_argument("--timeframe", required=True)
     query.add_argument("--fields", required=True)
     query.add_argument("--max-rows", type=int, required=True)
@@ -229,43 +290,38 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download":
-        service = download_service or _default_download_service(
-            args.schedule_file, args.closed_schedule_file
-        )
-        try:
-            request: object = SingleSymbolDownloadRequestV1(
-                args.segment,
-                args.symbol,
-                args.from_date,
-                args.to_date,
-                args.storage_root,
-            )
-        except ValueError:
-            request = object()
-        report = service.download(request)
-        sys.stdout.write(render_download_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        return _run_download_command(args, download_service)
     if args.command == "coverage":
-        service = coverage_service or _default_coverage_service()
         try:
             request = CoverageRequestV1(
                 args.segment,
-                args.symbol,
+                args.symbol or (args.symbols or ("NIFTY50",))[0],
                 args.from_date,
                 args.to_date,
                 args.storage_root,
             )
         except ValueError:
             request = object()
-        report = service.coverage(request)
-        sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        if coverage_service is not None or args.symbol is not None:
+            service = coverage_service or _default_nifty50_coverage_service()
+            report = service.coverage(request)
+            sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
+            return public_exit_code(report.status)
+        batch_request = _bounded_read_request(args, request)
+        batch = (
+            _default_bounded_read_service().execute(batch_request)
+            if type(batch_request) is BoundedNifty50ReadRequestV1
+            else bounded_nifty50_read_terminal(
+                "coverage", Nifty50BatchOutcomeV1.REJECTED
+            )
+        )
+        sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
+        return bounded_nifty50_exit_code(batch.outcome)
     if args.command == "query":
-        service = query_service or _default_query_service()
         try:
             request = QueryRequestV1(
                 args.segment,
-                args.symbol,
+                args.symbol or (args.symbols or ("NIFTY50",))[0],
                 args.from_date,
                 args.to_date,
                 args.timeframe,
@@ -275,9 +331,19 @@ def main(
             )
         except ValueError:
             request = object()
-        report = service.query(request)
-        sys.stdout.write(render_query_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        if query_service is not None or args.symbol is not None:
+            service = query_service or _default_nifty50_query_service()
+            report = service.query(request)
+            sys.stdout.write(render_query_report_json(report).decode("utf-8"))
+            return public_exit_code(report.status)
+        batch_request = _bounded_read_request(args, request)
+        batch = (
+            _default_bounded_read_service().execute(batch_request)
+            if type(batch_request) is BoundedNifty50ReadRequestV1
+            else bounded_nifty50_read_terminal("query", Nifty50BatchOutcomeV1.REJECTED)
+        )
+        sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
+        return bounded_nifty50_exit_code(batch.outcome)
     if args.command == "probe-upstox":
         return _run_probe(args)
     raise AssertionError("unreachable command")
@@ -286,8 +352,13 @@ def main(
 def _default_download_service(
     schedule_file: Path | None = None,
     closed_schedule_file: Path | None = None,
+    *,
+    policy: EquityAdmissionPolicyV1 | None = None,
+    limiter: AccountRateLimiter | None = None,
+    publication_gate: PublicationGateV1 | None = None,
 ) -> CurrentAwareSingleSymbolDownloadServiceV1:
     clock = _SystemClock()
+    admission = policy or PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     catalog_transport = UrllibHttpTransport(
         max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES
     )
@@ -297,7 +368,7 @@ def _default_download_service(
     historical = UpstoxV3HistoricalClient(provider_transport)
     token_provider = _LazyEnvironmentAccessTokenProvider()
     open_preparation = DownloadPreparationServiceV1(
-        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        admission,
         (
             _UnavailableAuthoritativeScheduleSource()
             if schedule_file is None
@@ -305,10 +376,12 @@ def _default_download_service(
         ),
         InstrumentSnapshotClientV1(catalog_transport, clock=clock.now),
         clock=clock,
+        publication_gate=publication_gate,
+        limiter=limiter,
     )
     closed_path = closed_schedule_file or schedule_file
     closed_preparation = DownloadPreparationServiceV1(
-        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        admission,
         (
             _UnavailableAuthoritativeScheduleSource()
             if closed_path is None
@@ -316,13 +389,17 @@ def _default_download_service(
         ),
         InstrumentSnapshotClientV1(catalog_transport, clock=clock.now),
         clock=clock,
+        publication_gate=publication_gate,
+        limiter=limiter,
     )
     closed = SingleSymbolDownloadServiceV1(
         closed_preparation,
         IngestionCoordinator(
             session_factory=_HistoricalProviderSessionFactory(
                 historical, token_provider
-            )
+            ),
+            limiter=limiter,
+            publication_gate=publication_gate,
         ),
         clock=clock,
     )
@@ -332,8 +409,105 @@ def _default_download_service(
         UpstoxV3IntradayClient(provider_transport),
         token_provider,
         clock=clock,
+        limiter=limiter,
+        publication_gate=publication_gate,
     )
     return CurrentAwareSingleSymbolDownloadServiceV1(closed, open_month, clock=clock)
+
+
+def _run_download_command(
+    args: argparse.Namespace,
+    download_service: PublicDownloadPortV1 | None,
+) -> int:
+    if download_service is not None:
+        try:
+            request: object = SingleSymbolDownloadRequestV1(
+                args.segment,
+                args.symbol,
+                args.from_date,
+                args.to_date,
+                args.storage_root,
+            )
+        except (AttributeError, ValueError):
+            request = object()
+        report = download_service.download(request)
+        sys.stdout.write(render_download_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
+    if args.symbol is not None:
+        try:
+            request = BoundedNifty50DownloadRequestV1(
+                symbols=(args.symbol,),
+                universe_as_of=args.universe_as_of or args.to_date,
+                knowledge_cutoff=_SystemClock().now(),
+                from_date=args.from_date,
+                to_date=args.to_date,
+                storage_root=args.storage_root,
+                workers=args.workers,
+            )
+            if args.segment != "NSE_EQ":
+                raise ValueError
+            source = (
+                None
+                if args.universe_file is None
+                else CanonicalFileNifty50UniverseSourceV1(args.universe_file)
+            )
+        except ValueError:
+            request = object()
+            source = None
+        report = _default_bounded_download_service(
+            source, args.schedule_file, args.closed_schedule_file
+        ).download_single(request)
+        sys.stdout.write(render_download_report_json(report).decode("utf-8"))
+        return public_exit_code(report.status)
+    try:
+        selected = args.symbols if args.symbols is not None else None
+        batch_request: object = BoundedNifty50DownloadRequestV1(
+            symbols=selected,
+            universe_as_of=args.universe_as_of or args.to_date,
+            knowledge_cutoff=_SystemClock().now(),
+            from_date=args.from_date,
+            to_date=args.to_date,
+            storage_root=args.storage_root,
+            workers=args.workers,
+        )
+        if args.segment != "NSE_EQ":
+            raise ValueError
+        source = (
+            None
+            if args.universe_file is None
+            else CanonicalFileNifty50UniverseSourceV1(args.universe_file)
+        )
+    except ValueError:
+        batch_request = object()
+        source = None
+    service = _default_bounded_download_service(
+        source,
+        args.schedule_file,
+        args.closed_schedule_file,
+    )
+    batch_report = service.download(batch_request)
+    sys.stdout.write(render_bounded_nifty50_download_json(batch_report).decode("utf-8"))
+    return bounded_nifty50_exit_code(batch_report.outcome)
+
+
+def _default_bounded_download_service(
+    universe_source: CanonicalFileNifty50UniverseSourceV1 | None,
+    schedule_file: Path | None,
+    closed_schedule_file: Path | None,
+) -> BoundedNifty50DownloadServiceV1:
+    publication_gate = threading.RLock()
+    limiter = ThreadSafeAccountRateLimiterV1()
+    return BoundedNifty50DownloadServiceV1(
+        universe_source,
+        lambda policy: _default_download_service(
+            schedule_file,
+            closed_schedule_file,
+            policy=policy,
+            limiter=limiter,
+            publication_gate=publication_gate,
+        ),
+        clock=_SystemClock(),
+    )
 
 
 def _default_probe_range(today: date) -> tuple[date, date]:
@@ -342,50 +516,126 @@ def _default_probe_range(today: date) -> tuple[date, date]:
     return max(month_start, probe_to - timedelta(days=3)), probe_to
 
 
-def _default_coverage_service() -> CurrentAwareCoverageServiceV1:
-    policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
+def _default_coverage_service(
+    policy: EquityAdmissionPolicyV1 | None = None,
+) -> CurrentAwareCoverageServiceV1:
+    admission = policy or PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     clock = _SystemClock()
     closed = StoredCoverageServiceV1(
-        policy,
+        admission,
         StoredCoverageEvaluatorV1(),
         clock=clock,
     )
     return CurrentAwareCoverageServiceV1(
         closed,
-        OpenMonthCoverageServiceV1(policy, clock=clock),
+        OpenMonthCoverageServiceV1(admission, clock=clock),
         clock=clock,
     )
 
 
-def _default_query_service() -> CurrentAwareQueryServiceV1:
-    policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
+def _default_query_service(
+    policy: EquityAdmissionPolicyV1 | None = None,
+) -> CurrentAwareQueryServiceV1:
+    admission = policy or PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     evaluator = StoredCoverageEvaluatorV1()
     clock = _SystemClock()
+    retained_schedule = RetainedDailyScheduleResolverV1()
+    open_minute = OpenMonthOneMinuteQueryServiceV1(admission, clock=clock)
     closed = TimeframeQueryServiceV1(
         OneMinuteQueryServiceV1(
-            policy,
+            admission,
             evaluator,
             engine=DuckDBOneMinuteQueryEngineV1(),
             clock=clock,
         ),
         DailyQueryServiceV1(
-            policy,
+            admission,
             evaluator,
-            resolver=RetainedDailyScheduleResolverV1(),
+            resolver=retained_schedule,
             engine=DuckDBDailyOHLCVEngineV1(),
+            clock=clock,
+        ),
+        intraday_service=DerivedIntradayQueryServiceV1(
+            admission,
+            evaluator,
+            resolver=retained_schedule,
+            engine=DuckDBIntradayViewEngineV1(),
             clock=clock,
         ),
     )
     return CurrentAwareQueryServiceV1(
         closed,
-        OpenMonthOneMinuteQueryServiceV1(policy, clock=clock),
+        open_minute,
+        open_intraday_service=OpenMonthDerivedIntradayQueryServiceV1(
+            open_minute,
+            RetainedOpenMonthScheduleResolverV1(),
+            clock=clock,
+        ),
         clock=clock,
+    )
+
+
+def _default_nifty50_coverage_service() -> PointInTimeNifty50CoverageServiceV1:
+    return PointInTimeNifty50CoverageServiceV1(
+        _default_coverage_service, clock=_SystemClock()
+    )
+
+
+def _default_nifty50_query_service() -> PointInTimeNifty50QueryServiceV1:
+    return PointInTimeNifty50QueryServiceV1(
+        _default_query_service, clock=_SystemClock()
+    )
+
+
+def _default_bounded_read_service() -> BoundedPointInTimeNifty50ReadServiceV1:
+    return BoundedPointInTimeNifty50ReadServiceV1(
+        _default_coverage_service,
+        _default_query_service,
+        clock=_SystemClock(),
+    )
+
+
+def _bounded_read_request(
+    args: argparse.Namespace, prototype: object
+) -> BoundedNifty50ReadRequestV1 | object:
+    try:
+        if type(prototype) not in (CoverageRequestV1, QueryRequestV1):
+            raise ValueError
+        symbols = args.symbols if args.symbols is not None else None
+        if args.segment != "NSE_EQ":
+            raise ValueError
+        return BoundedNifty50ReadRequestV1(
+            symbols,
+            cast(CoverageRequestV1 | QueryRequestV1, prototype),
+            args.workers,
+        )
+    except ValueError:
+        return object()
+
+
+def _add_read_selection(command: argparse.ArgumentParser) -> None:
+    selection = command.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--symbol", help="one Nifty 50 trading symbol")
+    selection.add_argument(
+        "--symbols", type=_symbols, help="comma-separated Nifty 50 trading symbols"
+    )
+    selection.add_argument(
+        "--universe",
+        choices=("nifty50-current",),
+        help="all members of the retained point-in-time Nifty 50 snapshot",
+    )
+    command.add_argument(
+        "--workers",
+        type=int,
+        choices=range(1, 9),
+        default=4,
+        metavar="1..8",
+        help="bounded concurrent read workers (default: 4)",
     )
 
 
 def _add_persistent_range_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--segment", required=True)
-    command.add_argument("--symbol", required=True)
     command.add_argument(
         "--from", dest="from_date", type=_date, required=True, metavar="YYYY-MM-DD"
     )
@@ -396,6 +646,23 @@ def _add_persistent_range_arguments(command: argparse.ArgumentParser) -> None:
         "--storage-root", type=Path, required=True, metavar="ABSOLUTE_PATH"
     )
     command.add_argument("--output", choices=("json",), required=True)
+
+
+def _symbols(value: str) -> tuple[str, ...]:
+    symbols = tuple(value.split(","))
+    if (
+        not symbols
+        or len(symbols) > 50
+        or len(set(symbols)) != len(symbols)
+        or any(
+            not symbol or re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{0,31}", symbol) is None
+            for symbol in symbols
+        )
+    ):
+        raise argparse.ArgumentTypeError(
+            "expected 1 to 50 unique comma-separated symbols"
+        )
+    return symbols
 
 
 def _run_probe(args: argparse.Namespace) -> int:

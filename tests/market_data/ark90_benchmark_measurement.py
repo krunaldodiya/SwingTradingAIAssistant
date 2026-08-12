@@ -1899,6 +1899,7 @@ def _assert_metadata_relations_only(catalog: DuckDBCatalog) -> None:
         "WHERE table_schema = 'main' ORDER BY table_name"
     ).fetchall()
     if relations != [
+        ("corporate_action_snapshots",),
         ("ingestion_runs",),
         ("instrument_snapshots",),
         ("partitions",),

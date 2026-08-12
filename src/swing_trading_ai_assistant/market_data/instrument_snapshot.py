@@ -33,6 +33,17 @@ MAX_OBSERVATION_JSON_BYTES_V1: Final = 4096
 MAX_RECOVERY_JOURNAL_BYTES_V1: Final = 4096
 _RECOVERY_JOURNAL_NAME: Final = "pending-observation-v1.json"
 _RECOVERY_JOURNAL_TEMP_NAME: Final = ".pending-observation-v1.json.tmp"
+
+
+class InstrumentSnapshotDeadlinePortV1(Protocol):
+    def ensure_live(self) -> None: ...
+
+
+def _ensure_deadline_live(deadline: InstrumentSnapshotDeadlinePortV1 | None) -> None:
+    if deadline is not None:
+        deadline.ensure_live()
+
+
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -387,9 +398,17 @@ class InstrumentSnapshotStoreV1:
             ) from None
 
     def resolve_equity(
-        self, *, source: str, segment: str, symbol: str, as_of: datetime
+        self,
+        *,
+        source: str,
+        segment: str,
+        symbol: str,
+        as_of: datetime,
+        deadline: InstrumentSnapshotDeadlinePortV1 | None = None,
     ) -> ResolvedInstrumentSnapshotV1:
+        _ensure_deadline_live(deadline)
         rows = self._catalog.list_instrument_snapshots(source, retrieved_at_lte=as_of)
+        _ensure_deadline_live(deadline)
         if not rows:
             raise InstrumentSnapshotNotFoundError("instrument snapshot unavailable")
         latest_at = rows[0].retrieved_at
@@ -398,6 +417,7 @@ class InstrumentSnapshotStoreV1:
             raise InstrumentSnapshotCorruptError("instrument snapshot ambiguous")
         metadata = latest[0]
         try:
+            _ensure_deadline_live(deadline)
             with self._lease.read_operation(self._root) as operation:
                 object_fd, observations_fd = _open_snapshot_directories(
                     operation, metadata.compressed_sha256, create=False
@@ -408,6 +428,7 @@ class InstrumentSnapshotStoreV1:
                         f"sha256={metadata.observation_sha256}.json",
                         MAX_OBSERVATION_JSON_BYTES_V1,
                     )
+                    _ensure_deadline_live(deadline)
                     expected = _canonical_observation_bytes(
                         _metadata_without_digest(metadata)
                     )
@@ -421,16 +442,20 @@ class InstrumentSnapshotStoreV1:
                         "snapshot.json.gz",
                         DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
                     )
+                    _ensure_deadline_live(deadline)
                     operation.ensure_live()
                 finally:
                     os.close(observations_fd)
                     os.close(object_fd)
             decompressed = _validate_compressed_object(metadata, compressed)
+            _ensure_deadline_live(deadline)
             instrument = _resolve_equity_in_payload(decompressed, segment, symbol)
+            _ensure_deadline_live(deadline)
             return ResolvedInstrumentSnapshotV1(metadata, instrument)
         except InstrumentSnapshotError:
             raise
         except Exception:
+            _ensure_deadline_live(deadline)
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None

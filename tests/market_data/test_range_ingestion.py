@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.range_ingestion as ingestion_module
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationToken,
+    HistoricalFetchCode,
+    HistoricalFetchResult,
     HistoricalResponse,
     RetryPolicy,
 )
@@ -69,6 +73,14 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseResult,
     StorageRootLease,
 )
+
+
+def test_default_noop_limiter_accepts_the_cancellation_aware_protocol() -> None:
+    assert ingestion_module._NoopLimiter().defer_for(
+        timedelta(seconds=1),
+        timedelta(seconds=1),
+        CancellationToken(),
+    ) == timedelta(0)
 
 
 def _instrument() -> Instrument:
@@ -788,6 +800,79 @@ def test_complete_local_reconciliation_precedes_one_lazy_sequential_session(
     assert executed == observed
 
 
+def test_shared_gate_keeps_provider_fetch_outside_serial_catalog_phase(
+    tmp_path: Path,
+) -> None:
+    class Gate:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+            self.depth = 0
+
+        def __enter__(self) -> Gate:
+            self._lock.acquire()
+            self.depth += 1
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.depth -= 1
+            self._lock.release()
+
+    gate = Gate()
+    fetches: list[date] = []
+    publications: list[date] = []
+
+    def provider_fetch(request: object) -> HistoricalResponse:
+        assert gate.depth == 0
+        fetches.append(request.from_date)  # type: ignore[attr-defined]
+        return HistoricalResponse(200, [])
+
+    def lifecycle_factory(**kwargs: object) -> SimpleNamespace:
+        def execute(plan: PlannedInstrumentMonth) -> PartitionLifecycleResult:
+            assert gate.depth == 1
+            fetched = kwargs["fetcher"].fetch(plan)  # type: ignore[union-attr]
+            assert fetched.response is not None
+            publications.append(plan.from_date)
+            return _lifecycle_result(
+                plan,
+                PartitionLifecycleOutcome.VERIFIED,
+                kwargs["run_id"],  # type: ignore[arg-type]
+                attempts=fetched.attempts,
+            )
+
+        return SimpleNamespace(execute=execute)
+
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease:
+        report = IngestionCoordinator(
+            session_factory=SimpleNamespace(
+                open=lambda: SimpleNamespace(fetch=provider_fetch)
+            ),  # type: ignore[arg-type]
+            lease_acquirer=_lease,
+            catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
+            schedule_store_factory=lambda _root, _lease: _ScheduleStore(_schedule()),  # type: ignore[arg-type]
+            recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+            lifecycle_executor_factory=lifecycle_factory,  # type: ignore[arg-type]
+            publication_gate=gate,
+        ).run_under_lease(
+            IngestionCommand(
+                _instrument(),
+                date(2026, 1, 1),
+                date(2026, 1, 31),
+                "1m",
+                tmp_path,
+                _schedule(),
+                "nse-equity-month@v1",
+                max_total_provider_attempts=1,
+            ),
+            lease,
+        )
+
+    assert report.outcome is IngestionRunOutcome.SUCCEEDED
+    assert fetches == [date(2026, 1, 1)]
+    assert publications == fetches
+
+
 def test_attempt_budget_insufficient_is_zero_session_after_local_reconciliation(
     tmp_path: Path,
 ) -> None:
@@ -815,6 +900,33 @@ def test_attempt_budget_insufficient_is_zero_session_after_local_reconciliation(
     assert report.failure_code is RunFailureCode.ATTEMPT_BUDGET_INSUFFICIENT
     assert report.not_attempted_count == 2
     assert report.provider_attempt_count == 0
+
+
+def test_prefetched_replay_enforces_exact_plan_and_attempt_budget() -> None:
+    plan = plan_upstox_equity_months(
+        _instrument(), date(2026, 1, 1), date(2026, 1, 31), "1m"
+    )[0]
+    missing = ingestion_module._PrefetchedRangeFetcher({}, 1).fetch(plan)
+    assert missing.failure is not None
+    assert missing.failure.code is HistoricalFetchCode.ATTEMPT_BUDGET_EXHAUSTED
+
+    over_budget = HistoricalFetchResult(
+        HistoricalResponse(200, []), 2, retrieved_at=datetime(2026, 1, 2, tzinfo=UTC)
+    )
+    replay = ingestion_module._PrefetchedRangeFetcher({plan: over_budget}, 1).fetch(
+        plan
+    )
+    assert replay.failure is not None
+    assert replay.failure.code is HistoricalFetchCode.ATTEMPT_BUDGET_EXHAUSTED
+
+    with pytest.raises(RuntimeError):
+        _coordinator(_request_observer)._run_concurrent_under_lease(
+            object(),
+            (),
+            object(),
+            object(),
+            datetime(2026, 1, 1, tzinfo=UTC),  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(

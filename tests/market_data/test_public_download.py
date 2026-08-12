@@ -77,6 +77,10 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleClosure,
     canonical_schedule_bytes,
 )
+from swing_trading_ai_assistant.market_data.universe_snapshot import (
+    Nifty50ConstituentV1,
+    Nifty50UniverseSnapshotV1,
+)
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
@@ -132,6 +136,49 @@ def _instrument() -> Instrument:
         instrument_type="EQ",
         isin="INE002A01018",
     )
+
+
+def _test_isin(index: int) -> str:
+    prefix = f"INE{index:06d}A0"
+    for digit in "0123456789":
+        candidate = prefix + digit
+        expanded = "".join(
+            str(ord(value) - 55) if value.isalpha() else value for value in candidate
+        )
+        total = sum(
+            (int(value) * 2 // 10 + int(value) * 2 % 10) if position % 2 else int(value)
+            for position, value in enumerate(reversed(expanded))
+        )
+        if total % 10 == 0:
+            return candidate
+    raise AssertionError
+
+
+def _universe_file(path: Path) -> Path:
+    observed = datetime(2026, 6, 30, tzinfo=UTC)
+    members = [Nifty50ConstituentV1("INE002A01018", "RELIANCE", "ENERGY")] + [
+        Nifty50ConstituentV1(_test_isin(index), f"SYM{index:02d}", "FINANCIALS")
+        for index in range(49)
+    ]
+    members.sort(key=lambda member: member.isin)
+    snapshot = Nifty50UniverseSnapshotV1(
+        1,
+        "nifty-50",
+        date(2026, 7, 1),
+        date(2026, 9, 30),
+        "nse-archive",
+        "2026-q3",
+        observed,
+        observed,
+        "nse-archive",
+        "2026-q3",
+        observed,
+        observed,
+        tuple(members),
+    )
+    path.write_bytes(snapshot.canonical_json_bytes())
+    path.chmod(0o400)
+    return path
 
 
 def _schedule() -> ExpectedSessionSchedule:
@@ -311,6 +358,17 @@ def test_download_service_builds_exact_command_and_safe_success_report(
     command = coordinator.commands[0]
     assert command.interval == "1m"
     assert command.storage_root == tmp_path
+
+    invalid_lease = SingleSymbolDownloadServiceV1(
+        preparation, coordinator, clock=StaticClock()
+    ).download_under_lease(_request(tmp_path), object())  # type: ignore[arg-type]
+    assert invalid_lease.status is PublicCommandStatusV1.REJECTED
+    routed_invalid = CurrentAwareSingleSymbolDownloadServiceV1(
+        SingleSymbolDownloadServiceV1(preparation, coordinator, clock=StaticClock()),
+        object(),  # type: ignore[arg-type]
+        clock=StaticClock(),
+    ).download_under_lease(_request(tmp_path), object())  # type: ignore[arg-type]
+    assert routed_invalid.status is PublicCommandStatusV1.REJECTED
     assert command.max_total_provider_attempts == 3
     assert command.retry_policy.max_attempts_per_partition == 3
     assert command.validation_policy_version.endswith(DIGEST)
@@ -2088,9 +2146,10 @@ def test_default_download_cli_fails_closed_without_schedule_source(
         ]
     )
     output = json.loads(capsys.readouterr().out)
-    assert exit_code == 3
-    assert output["status"] == "INSUFFICIENT_EVIDENCE"
-    assert output["failure"]["code"] == "SCHEDULE_EVIDENCE_UNAVAILABLE"
+    assert exit_code == 4
+    assert output["status"] == "UNAVAILABLE"
+    assert output["failure"]["code"] == "UNCLASSIFIED_FAILURE"
+    assert output["payload"] is None
     assert not root.exists()
 
 
@@ -2136,6 +2195,7 @@ def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(
     schedule_file.chmod(0o600)
     root = tmp_path / "storage"
     root.mkdir(mode=0o700)
+    universe_file = _universe_file(tmp_path / "universe.json")
 
     exit_code = main(
         [
@@ -2152,6 +2212,8 @@ def test_default_download_cli_consumes_and_retains_explicit_canonical_schedule(
             str(root),
             "--schedule-file",
             str(schedule_file),
+            "--universe-file",
+            str(universe_file),
             "--output",
             "json",
         ]
@@ -2197,3 +2259,32 @@ def test_download_cli_converts_invalid_request_to_public_json(
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 2
     assert output["failure"]["code"] == "INVALID_INPUT"
+
+
+def test_default_batch_cli_rejects_invalid_segment_and_range_before_root(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    root = tmp_path / "absent"
+    common = [
+        "download",
+        "--segment",
+        "BSE_EQ",
+        "--symbol",
+        "SBIN",
+        "--from",
+        "2026-08-01",
+        "--to",
+        "2026-08-11",
+        "--storage-root",
+        str(root),
+        "--output",
+        "json",
+    ]
+    assert main(common) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "REJECTED"
+    common[2] = "NSE_EQ"
+    common[6] = "2026-07-31"
+    common[8] = "2026-07-01"
+    assert main(common) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "REJECTED"
+    assert not root.exists()

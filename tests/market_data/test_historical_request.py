@@ -5,6 +5,7 @@ from threading import Timer
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.historical as historical_module
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationRequested,
     CancellationToken,
@@ -190,6 +191,81 @@ def test_executor_retries_only_retryable_failures_and_uses_bounded_retry_after()
         "provider_retryable",
         "provider_success",
     ]
+
+
+def test_executor_forwards_cancellation_to_account_deferral() -> None:
+    observed: list[CancellationToken | None] = []
+
+    class CancellationAwareLimiter(FakeLimiter):
+        def defer_for(
+            self,
+            delay: timedelta,
+            remaining_wait: timedelta,
+            cancellation: CancellationToken | None = None,
+        ) -> timedelta:
+            observed.append(cancellation)
+            return super().defer_for(delay, remaining_wait)
+
+    cancellation = CancellationToken()
+    result = _executor(
+        FakeSession(
+            [
+                HistoricalResponse(
+                    status_code=429,
+                    candles=[],
+                    headers=HttpResponseHeaders.from_items((("Retry-After", "1"),)),
+                    error_category=ProviderErrorCategory.RATE_LIMITED,
+                ),
+                _success(),
+            ]
+        ),
+        CancellationAwareLimiter(),
+        cancellation=cancellation,
+    ).fetch(_plan(), remaining_attempts=2)
+
+    assert result.response is not None
+    assert observed == [cancellation]
+
+
+def test_executor_prefers_the_safe_cancellation_signature_when_introspection_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[CancellationToken | None] = []
+
+    class OpaqueLimiter(FakeLimiter):
+        def defer_for(
+            self,
+            delay: timedelta,
+            remaining_wait: timedelta,
+            cancellation: CancellationToken | None = None,
+        ) -> timedelta:
+            observed.append(cancellation)
+            return super().defer_for(delay, remaining_wait)
+
+    monkeypatch.setattr(
+        historical_module,
+        "signature",
+        lambda _method: (_ for _ in ()).throw(ValueError("opaque callable")),
+    )
+    cancellation = CancellationToken()
+    result = _executor(
+        FakeSession(
+            [
+                HistoricalResponse(
+                    status_code=429,
+                    candles=[],
+                    headers=HttpResponseHeaders.from_items((("Retry-After", "1"),)),
+                    error_category=ProviderErrorCategory.RATE_LIMITED,
+                ),
+                _success(),
+            ]
+        ),
+        OpaqueLimiter(),
+        cancellation=cancellation,
+    ).fetch(_plan(), remaining_attempts=2)
+
+    assert result.response is not None
+    assert observed == [cancellation]
 
 
 def test_success_attempts_are_available_for_the_callers_remaining_budget() -> None:

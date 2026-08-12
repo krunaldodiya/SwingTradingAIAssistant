@@ -82,10 +82,59 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 )
 from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.universe_snapshot import (
+    Nifty50ConstituentV1,
+    Nifty50UniverseSnapshotV1,
+    Nifty50UniverseStoreV1,
+)
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
 DIGEST = "a" * 64
+
+
+def _test_isin(index: int) -> str:
+    prefix = f"INE{index:06d}A0"
+    for digit in "0123456789":
+        candidate = prefix + digit
+        expanded = "".join(
+            str(ord(value) - 55) if value.isalpha() else value for value in candidate
+        )
+        total = sum(
+            (int(value) * 2 // 10 + int(value) * 2 % 10) if position % 2 else int(value)
+            for position, value in enumerate(reversed(expanded))
+        )
+        if total % 10 == 0:
+            return candidate
+    raise AssertionError
+
+
+def _retain_reliance_universe(
+    root: Path, lease: StorageRootLease, catalog: DuckDBCatalog
+) -> None:
+    observed = datetime(2026, 6, 30, tzinfo=UTC)
+    members = [Nifty50ConstituentV1("INE002A01018", "RELIANCE", "ENERGY")] + [
+        Nifty50ConstituentV1(_test_isin(index), f"SYM{index:02d}", "FINANCIALS")
+        for index in range(49)
+    ]
+    members.sort(key=lambda member: member.isin)
+    Nifty50UniverseStoreV1(root, lease, catalog).retain(
+        Nifty50UniverseSnapshotV1(
+            1,
+            "nifty-50",
+            date(2026, 7, 1),
+            date(2026, 9, 30),
+            "nse-archive",
+            "2026-q3",
+            observed,
+            observed,
+            "nse-archive",
+            "2026-q3",
+            observed,
+            observed,
+            tuple(members),
+        )
+    )
 
 
 def _plan() -> PlannedInstrumentMonth:
@@ -306,6 +355,14 @@ def _service(
         engine=engine,  # type: ignore[arg-type]
         clock=_Clock(),
     )
+
+
+def test_daily_query_rejects_invalid_parent_lease() -> None:
+    report = _service(_Evaluator(), _Resolver(), _Engine()).query_under_lease(
+        object(),
+        object(),  # type: ignore[arg-type]
+    )
+    assert report.status is PublicCommandStatusV1.REJECTED
 
 
 @pytest.mark.parametrize(
@@ -1385,6 +1442,7 @@ def _seed_disposable_daily_root(root: Path) -> None:
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.lease is not None
     with acquired.lease, DuckDBCatalog(root) as catalog:
+        _retain_reliance_universe(root, acquired.lease, catalog)
         InstrumentSnapshotStoreV1(root, acquired.lease, catalog).retain(snapshot)
         retained = ScheduleEvidenceStore(root, acquired.lease).retain(schedule)
         assert retained.digest is not None

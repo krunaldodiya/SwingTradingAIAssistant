@@ -151,6 +151,7 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             "instrument_snapshots",
             "universe_snapshots",
             "provisional_partitions",
+            "corporate_action_snapshots",
         }
         assert catalog.connection.execute(
             "SELECT migration_id, version FROM schema_migrations ORDER BY version"
@@ -159,10 +160,40 @@ def test_migrates_round_trips_and_never_creates_candle_table(tmp_path) -> None:
             ("swing-trading-catalog-v2-instrument-snapshots", 2),
             ("swing-trading-catalog-v3-universe-snapshots", 3),
             ("swing-trading-catalog-v4-provisional-partitions", 4),
+            ("swing-trading-catalog-v5-corporate-action-snapshots", 5),
         ]
 
     with DuckDBCatalog(tmp_path) as reopened:
         assert reopened.get_manifest(_plan()) == initial
+
+
+@pytest.mark.parametrize(
+    ("source", "source_release"),
+    (
+        ("unsupported-feed", "corporate-actions-v1"),
+        ("upstox-fundamentals-v2", "forged-v2"),
+    ),
+)
+def test_v5_corporate_action_catalog_schema_accepts_only_the_frozen_adapter(
+    tmp_path, source: str, source_release: str
+) -> None:
+    with DuckDBCatalog(tmp_path) as catalog, pytest.raises(duckdb.ConstraintException):
+        catalog.connection.execute(
+            "INSERT INTO corporate_action_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                "INE062A01020",
+                source,
+                source_release,
+                _time(0),
+                "a" * 64,
+                1,
+                0,
+                "corporate_action_snapshots/isin=INE062A01020/sha256="
+                + "a" * 64
+                + "/snapshot.json",
+            ),
+        )
 
 
 def test_read_only_catalog_requires_existing_v2_and_permits_only_reads(
@@ -494,19 +525,20 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     with DuckDBCatalog(tmp_path) as migrated:
         assert migrated.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
         assert migrated.get_manifest(_plan()) == initial
 
 
 def test_v2_to_current_migration_is_atomic(tmp_path) -> None:
     with DuckDBCatalog(tmp_path) as catalog:
+        catalog.connection.execute("DROP TABLE corporate_action_snapshots")
         catalog.connection.execute("DROP TABLE provisional_partitions")
         catalog.connection.execute("DROP TABLE universe_snapshots")
         catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 3")
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
 
     with DuckDBCatalog(tmp_path) as catalog:
         catalog.connection.execute("DROP TABLE provisional_partitions")

@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from swing_trading_ai_assistant.market_data import cli
+from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
+    BoundedNifty50DownloadReportV1,
+    Nifty50BatchOutcomeV1,
+)
 from swing_trading_ai_assistant.market_data.http import (
     DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES,
 )
@@ -13,6 +17,12 @@ from swing_trading_ai_assistant.market_data.instruments import (
     DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
 )
 from swing_trading_ai_assistant.market_data.probe import ProbeReport
+from swing_trading_ai_assistant.market_data.public_contract import (
+    PublicCommandReportV1,
+    PublicCommandStatusV1,
+    PublicFailureCodeV1,
+    PublicFailureV1,
+)
 
 
 @pytest.mark.parametrize(
@@ -177,6 +187,138 @@ def test_cli_uses_the_larger_catalog_budget_without_raising_historical_budget(
     ]
     assert clients["catalog"] is not clients["historical"]
     assert capsys.readouterr().err == ""
+
+
+def test_default_single_download_keeps_public_report_json_and_exit_contract(
+    monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
+) -> None:
+    report = PublicCommandReportV1(
+        "v1",
+        "download",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Service:
+        def download_single(self, request: object) -> object:
+            assert request.symbols == ("RELIANCE",)  # type: ignore[attr-defined]
+            return report
+
+    monkeypatch.setattr(
+        cli, "_default_bounded_download_service", lambda *_args: Service()
+    )
+    assert (
+        cli.main(
+            [
+                "download",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().out == (
+        '{"contract_version":"v1","command":"download","status":"REJECTED",'
+        '"failure":{"code":"INVALID_INPUT","run_failure_code":null,'
+        '"historical_fetch_code":null,"failure_category":null,'
+        '"validation_reason":null,"months":[]},"provider_attempt_count":0,'
+        '"payload":null}\n'
+    )
+
+
+def test_default_multi_download_keeps_the_bounded_aggregate_contract(
+    monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
+) -> None:
+    report = BoundedNifty50DownloadReportV1(
+        Nifty50BatchOutcomeV1.REJECTED, None, (), 0, 0
+    )
+
+    class Service:
+        def download(self, request: object) -> BoundedNifty50DownloadReportV1:
+            assert request.symbols == ("RELIANCE", "SBIN")  # type: ignore[attr-defined]
+            return report
+
+    monkeypatch.setattr(
+        cli, "_default_bounded_download_service", lambda *_args: Service()
+    )
+
+    assert (
+        cli.main(
+            [
+                "download",
+                "--segment",
+                "NSE_EQ",
+                "--symbols",
+                "RELIANCE,SBIN",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    assert '"scope":"nifty50"' in capsys.readouterr().out
+
+
+def test_default_single_download_rejects_non_equity_segment_before_service_use(
+    monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
+) -> None:
+    report = PublicCommandReportV1(
+        "v1",
+        "download",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Service:
+        def download_single(self, request: object) -> object:
+            assert type(request) is object
+            return report
+
+    monkeypatch.setattr(
+        cli, "_default_bounded_download_service", lambda *_args: Service()
+    )
+
+    assert (
+        cli.main(
+            [
+                "download",
+                "--segment",
+                "BSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    assert '"status":"REJECTED"' in capsys.readouterr().out
 
 
 def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:

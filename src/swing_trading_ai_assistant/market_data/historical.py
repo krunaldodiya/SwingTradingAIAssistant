@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from inspect import Parameter, signature
 from random import SystemRandom
 from typing import NoReturn, Protocol, cast
 from urllib.parse import quote
@@ -402,7 +403,10 @@ class AccountRateLimiter(Protocol):
         ...
 
     def defer_for(
-        self, delay: timedelta, remaining_wait: timedelta
+        self,
+        delay: timedelta,
+        remaining_wait: timedelta,
+        cancellation: CancellationSignal | None = None,
     ) -> timedelta | None:
         """Publish an account-wide provider deferral."""
         ...
@@ -954,7 +958,24 @@ class HistoricalRequestExecutor:
         status_class: str | None,
     ) -> tuple[timedelta, timedelta, HistoricalFetchResult | None]:
         try:
-            waited = self._limiter.defer_for(delay, self._remaining(consumed_wait))
+            defer = self._limiter.defer_for
+            try:
+                parameters = signature(defer).parameters.values()
+                supports_cancellation = any(
+                    parameter.name == "cancellation"
+                    or parameter.kind is Parameter.VAR_KEYWORD
+                    for parameter in parameters
+                )
+            except (TypeError, ValueError):
+                supports_cancellation = True
+            if supports_cancellation:
+                waited = self._limiter.defer_for(
+                    delay, self._remaining(consumed_wait), self._cancellation
+                )
+            else:
+                # Existing injected test and integration limiters remain valid;
+                # production limiters receive the cancellation signal above.
+                waited = self._limiter.defer_for(delay, self._remaining(consumed_wait))
             actual = timedelta(0) if waited is None else waited
             return (
                 self._charge(consumed_wait, actual),
