@@ -212,3 +212,7 @@ bounds, and provider-free read contract are recorded in
 The zero-provider `3m`, `5m`, `15m`, `30m`, and `1h` session-anchored view
 contract, including current-session completed-bucket behavior, is recorded in
 [Plan 08](../plans/08-local-intraday-view-contract.md).
+
+The immutable Upstox corporate-action observation and explicit raw-only,
+adjusted-unsupported provenance boundary is recorded in
+[Plan 09](../plans/09-corporate-action-provenance-contract.md).

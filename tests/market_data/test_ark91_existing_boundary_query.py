@@ -165,6 +165,7 @@ def _assert_catalog_has_metadata_relations_only(catalog: DuckDBCatalog) -> None:
         "WHERE table_schema = 'main' ORDER BY table_name"
     ).fetchall()
     assert relations == [
+        ("corporate_action_snapshots",),
         ("ingestion_runs",),
         ("instrument_snapshots",),
         ("partitions",),

@@ -390,7 +390,9 @@ Higher-timeframe aggregation is a query concern, not an ingestion request. Its
 exact session buckets and incomplete-bucket policy are frozen in
 [Plan 08](08-local-intraday-view-contract.md). Derived intraday facts remain
 raw-only; the separately versioned corporate-action boundary owns any future
-adjusted availability or formula.
+adjusted availability or formula. The raw-only corporate-action provenance and
+explicit unsupported-adjustment contract is frozen in
+[Plan 09](09-corporate-action-provenance-contract.md).
 
 ### Performance
 

@@ -855,3 +855,11 @@ def _read_fd(fd: int, maximum: int) -> bytes:
     if len(data) > maximum or os.read(fd, 1):
         raise ValueError
     return data
+
+
+# Shared immutable JSON-object primitives. These aliases make the proven
+# descriptor-relative storage boundary reusable without importing private names.
+assert_private_storage_operation = _assert_private_operation
+open_private_storage_directory = _open_dir
+publish_exact_storage_object = _publish_exact
+read_bounded_storage_object = _read_bounded
