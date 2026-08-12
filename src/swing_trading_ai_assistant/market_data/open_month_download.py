@@ -16,7 +16,12 @@ from .download_preparation import (
     PreparationOutcomeV1,
     PreparedDownloadV1,
 )
-from .historical import HistoricalRequest, HistoricalResponse
+from .historical import (
+    AccountRateLimiter,
+    CancellationToken,
+    HistoricalRequest,
+    HistoricalResponse,
+)
 from .intraday import IntradayRequest, IntradayResponse
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
 from .normalization import normalize_candles
@@ -37,6 +42,7 @@ from .schedule_evidence import SCHEDULE_SCHEMA_VERSION_V3
 from .schemas import CanonicalCandle
 from .storage_root_lease import LeaseOutcome, StorageRootLease
 from .upstox_canonical import canonicalize_upstox_equity_candles
+from .workflow_coordination import PublicationGateV1
 
 
 class OpenMonthDownloadOutcomeV1(StrEnum):
@@ -138,6 +144,10 @@ class OpenMonthPreparationPortV1(Protocol):
         self, request: DownloadPreparationRequestV1
     ) -> DownloadPreparationReportV1: ...
 
+    def prepare_open_month_under_lease(
+        self, request: DownloadPreparationRequestV1, lease: StorageRootLease
+    ) -> DownloadPreparationReportV1: ...
+
 
 class HistoricalClientPortV1(Protocol):
     def fetch(
@@ -166,14 +176,34 @@ class OpenMonthDownloadServiceV1:
         token_provider: AccessTokenProvider,
         *,
         clock: OpenMonthClockV1,
+        limiter: AccountRateLimiter | None = None,
+        publication_gate: PublicationGateV1 | None = None,
     ) -> None:
         self._preparation = preparation
         self._historical = historical
         self._intraday = intraday
         self._token_provider = token_provider
         self._clock = clock
+        self._limiter = limiter
+        self._publication_gate = publication_gate
 
     def download(self, request: object) -> OpenMonthDownloadReportV1:
+        return self._download(request, None)
+
+    def download_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> OpenMonthDownloadReportV1:
+        """Advance while a bounded parent workflow owns the exact root."""
+        if type(lease) is not StorageRootLease:
+            return _failure(
+                OpenMonthDownloadOutcomeV1.REJECTED,
+                OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
+            )
+        return self._download(request, lease)
+
+    def _download(
+        self, request: object, lease: StorageRootLease | None
+    ) -> OpenMonthDownloadReportV1:
         if type(request) is not OpenMonthDownloadRequestV1:
             return _failure(
                 OpenMonthDownloadOutcomeV1.REJECTED,
@@ -186,14 +216,19 @@ class OpenMonthDownloadServiceV1:
                 OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
             )
         try:
-            preparation = self._preparation.prepare_open_month(
-                DownloadPreparationRequestV1(
-                    request.segment,
-                    request.symbol,
-                    request.from_date,
-                    request.to_date,
-                    request.storage_root,
-                    invocation,
+            preparation_request = DownloadPreparationRequestV1(
+                request.segment,
+                request.symbol,
+                request.from_date,
+                request.to_date,
+                request.storage_root,
+                invocation,
+            )
+            preparation = (
+                self._preparation.prepare_open_month(preparation_request)
+                if lease is None
+                else self._preparation.prepare_open_month_under_lease(
+                    preparation_request, lease
                 )
             )
         except Exception:
@@ -211,13 +246,17 @@ class OpenMonthDownloadServiceV1:
                 OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
                 snapshot_attempts=attempts,
             )
-        return self._download_prepared(request, invocation, preparation.prepared)
+        return self._download_prepared(
+            request, invocation, preparation.prepared, supplied_lease=lease
+        )
 
     def _download_prepared(
         self,
         request: OpenMonthDownloadRequestV1,
         invocation: datetime,
         prepared: PreparedDownloadV1,
+        *,
+        supplied_lease: StorageRootLease | None = None,
     ) -> OpenMonthDownloadReportV1:
         snapshot_attempts = prepared.snapshot_attempt_count
         try:
@@ -239,6 +278,26 @@ class OpenMonthDownloadServiceV1:
                 OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
                 snapshot_attempts=snapshot_attempts,
             )
+
+        if supplied_lease is not None:
+            try:
+                with supplied_lease.root_operation(request.storage_root) as operation:
+                    operation.ensure_live()
+                return self._advance_under_lease(
+                    request,
+                    invocation,
+                    prepared,
+                    schedule,
+                    open_plan,
+                    physical_plan,
+                    supplied_lease,
+                )
+            except Exception:
+                return _failure(
+                    OpenMonthDownloadOutcomeV1.FAILED,
+                    OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED,
+                    snapshot_attempts=snapshot_attempts,
+                )
 
         lease_result = StorageRootLease.try_acquire(request.storage_root)
         if (
@@ -281,16 +340,8 @@ class OpenMonthDownloadServiceV1:
         # The exact domain types were constructed above; local imports would only
         # duplicate their validators. Any mutation fails in the called boundaries.
         target = open_plan.last_completed_bar_start
-        existing = (
-            None
-            if target is None
-            else latest_provisional_partition(
-                request.storage_root,
-                lease,
-                physical_plan,
-                cutoff_lte=target,
-                published_at_lte=invocation,
-            )
+        existing = self._existing_under_gate(
+            request, invocation, physical_plan, target, lease
         )
         metadata = existing[0] if existing is not None else None
         existing_rows = existing[1] if existing is not None else ()
@@ -323,6 +374,117 @@ class OpenMonthDownloadServiceV1:
             return fetched
         historical_attempts = fetched.historical_attempts
         intraday_attempts = fetched.intraday_attempts
+
+        return self._validate_and_publish_guarded(
+            request,
+            invocation,
+            prepared,
+            schedule,
+            open_plan,
+            physical_plan,
+            lease,
+            existing_rows,
+            fetched,
+            historical_attempts,
+            intraday_attempts,
+        )
+
+    def _existing_under_gate(
+        self,
+        request: OpenMonthDownloadRequestV1,
+        invocation: datetime,
+        physical_plan: PlannedInstrumentMonth,
+        target: datetime | None,
+        lease: StorageRootLease,
+    ) -> tuple[ProvisionalPartitionMetadataV1, tuple[CanonicalCandle, ...]] | None:
+        gate = self._publication_gate
+        if gate is None:
+            return self._load_existing(
+                request, invocation, physical_plan, target, lease
+            )
+        with gate:
+            return self._load_existing(
+                request, invocation, physical_plan, target, lease
+            )
+
+    @staticmethod
+    def _load_existing(
+        request: OpenMonthDownloadRequestV1,
+        invocation: datetime,
+        physical_plan: PlannedInstrumentMonth,
+        target: datetime | None,
+        lease: StorageRootLease,
+    ) -> tuple[ProvisionalPartitionMetadataV1, tuple[CanonicalCandle, ...]] | None:
+        return (
+            None
+            if target is None
+            else latest_provisional_partition(
+                request.storage_root,
+                lease,
+                physical_plan,
+                cutoff_lte=target,
+                published_at_lte=invocation,
+            )
+        )
+
+    def _validate_and_publish_guarded(
+        self,
+        request: OpenMonthDownloadRequestV1,
+        invocation: datetime,
+        prepared: PreparedDownloadV1,
+        schedule: OpenMonthScheduleV1,
+        open_plan: OpenMonthPlanV1,
+        physical_plan: PlannedInstrumentMonth,
+        lease: StorageRootLease,
+        existing_rows: tuple[CanonicalCandle, ...],
+        fetched: _ProviderBatchV1,
+        historical_attempts: int,
+        intraday_attempts: int,
+    ) -> OpenMonthDownloadReportV1:
+        gate = self._publication_gate
+        if gate is None:
+            return self._validate_and_publish(
+                request,
+                invocation,
+                prepared,
+                schedule,
+                open_plan,
+                physical_plan,
+                lease,
+                existing_rows,
+                fetched,
+                historical_attempts,
+                intraday_attempts,
+            )
+        with gate:
+            return self._validate_and_publish(
+                request,
+                invocation,
+                prepared,
+                schedule,
+                open_plan,
+                physical_plan,
+                lease,
+                existing_rows,
+                fetched,
+                historical_attempts,
+                intraday_attempts,
+            )
+
+    def _validate_and_publish(
+        self,
+        request: OpenMonthDownloadRequestV1,
+        invocation: datetime,
+        prepared: PreparedDownloadV1,
+        schedule: OpenMonthScheduleV1,
+        open_plan: OpenMonthPlanV1,
+        physical_plan: PlannedInstrumentMonth,
+        lease: StorageRootLease,
+        existing_rows: tuple[CanonicalCandle, ...],
+        fetched: _ProviderBatchV1,
+        historical_attempts: int,
+        intraday_attempts: int,
+    ) -> OpenMonthDownloadReportV1:
 
         try:
             validation = validate_provisional_advance(
@@ -435,6 +597,7 @@ class OpenMonthDownloadServiceV1:
         intraday_attempts = int(need_intraday)
         if need_history:
             try:
+                self._admit_provider_request()
                 historical_to = open_plan.historical_to
                 if historical_to is None:
                     raise ValueError
@@ -460,6 +623,7 @@ class OpenMonthDownloadServiceV1:
                 )
         if need_intraday:
             try:
+                self._admit_provider_request()
                 response = self._intraday.fetch(
                     IntradayRequest(prepared.instrument.instrument_key),
                     token,  # type: ignore[arg-type]
@@ -481,6 +645,11 @@ class OpenMonthDownloadServiceV1:
             historical_attempts,
             intraday_attempts,
         )
+
+    def _admit_provider_request(self) -> None:
+        if self._limiter is None:
+            return
+        self._limiter.acquire(CancellationToken(), timedelta(seconds=120))
 
 
 def _validated_preparation(

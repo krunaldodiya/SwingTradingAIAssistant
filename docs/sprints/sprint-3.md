@@ -204,3 +204,7 @@ The current-month contract and its exact live evidence are recorded in
 the former gap between a requested recent date and the latest completed minute:
 the current month is explicit `PROVISIONAL` evidence, never falsely marked as a
 fully verified closed month.
+
+The one/many/all-50 selection, point-in-time ISIN binding, shared resource
+bounds, and provider-free read contract are recorded in
+[Plan 07](../plans/07-bounded-nifty50-workflow-contract.md).

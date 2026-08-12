@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .catalog import CatalogError, DuckDBCatalog
+from .equity_admission import EquityAdmissionPolicyV1, Nifty50AdmissionPolicyV1
 from .instrument_snapshot import (
     SNAPSHOT_SOURCE_V1,
     InstrumentSnapshotCorruptError,
@@ -34,7 +35,6 @@ from .manifest_lifecycle import (
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
 from .parquet import iter_candles_from_parquet
 from .partition_publication import canonical_partition_relative_path
-from .preview_admission import PreviewAdmissionPolicyV1
 from .public_contract import (
     CoveragePayloadV1,
     CoverageReportV1,
@@ -192,6 +192,21 @@ class CoverageEvaluatorV1(Protocol):
         self, request: CoverageRequestV1, invocation_time: datetime
     ) -> CoverageEvaluationV1: ...
 
+    def evaluate_under_admission(
+        self,
+        request: CoverageRequestV1,
+        invocation_time: datetime,
+        admission: ExistingCoverageAdmissionV1,
+    ) -> CoverageEvaluationV1: ...
+
+    def evaluate_under_admission_with_policy(
+        self,
+        request: CoverageRequestV1,
+        invocation_time: datetime,
+        admission: ExistingCoverageAdmissionV1,
+        policy: EquityAdmissionPolicyV1,
+    ) -> CoverageEvaluationV1: ...
+
 
 class CoverageClockV1(Protocol):
     def now(self) -> datetime: ...
@@ -316,6 +331,26 @@ class StoredCoverageEvaluatorV1:
         invocation_time: datetime,
         admission: ExistingCoverageAdmissionV1,
     ) -> CoverageEvaluationV1:
+        return self._evaluate_under_admission(request, invocation_time, admission, None)
+
+    def evaluate_under_admission_with_policy(
+        self,
+        request: CoverageRequestV1,
+        invocation_time: datetime,
+        admission: ExistingCoverageAdmissionV1,
+        policy: EquityAdmissionPolicyV1,
+    ) -> CoverageEvaluationV1:
+        return self._evaluate_under_admission(
+            request, invocation_time, admission, policy
+        )
+
+    def _evaluate_under_admission(
+        self,
+        request: CoverageRequestV1,
+        invocation_time: datetime,
+        admission: ExistingCoverageAdmissionV1,
+        policy: EquityAdmissionPolicyV1 | None,
+    ) -> CoverageEvaluationV1:
         request = _validated_request(request)
         invocation = _validated_invocation(invocation_time)
         _require_closed_range(request, invocation)
@@ -333,6 +368,11 @@ class StoredCoverageEvaluatorV1:
                 symbol=request.symbol,
                 as_of=invocation,
             )
+            if policy is not None and not policy.admits_instrument(resolved.instrument):
+                raise CoverageEvaluationFailureV1(
+                    PublicCommandStatusV1.REJECTED,
+                    PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+                )
             plans = _canonical_plans(request, resolved.instrument)
             months: list[PublicCoverageMonthV1] = []
             selections: list[VerifiedPartitionV1] = []
@@ -355,7 +395,7 @@ class StoredCoverageEvaluatorV1:
 class StoredCoverageServiceV1:
     def __init__(
         self,
-        policy: PreviewAdmissionPolicyV1,
+        policy: EquityAdmissionPolicyV1,
         evaluator: CoverageEvaluatorV1,
         *,
         clock: CoverageClockV1,
@@ -365,6 +405,20 @@ class StoredCoverageServiceV1:
         self._clock = clock
 
     def coverage(self, request: object) -> CoverageReportV1:
+        return self._coverage(request, None)
+
+    def coverage_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> CoverageReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._coverage(request, lease)
+
+    def _coverage(
+        self, request: object, lease: StorageRootLease | None
+    ) -> CoverageReportV1:
         try:
             request = _validated_request(request)
         except ValueError:
@@ -383,7 +437,18 @@ class StoredCoverageServiceV1:
                     PublicCommandStatusV1.REJECTED,
                     PublicFailureCodeV1.INVALID_INPUT,
                 )
-            evaluation = self._evaluator.evaluate(request, invocation)
+            if lease is None:
+                evaluation = self._evaluator.evaluate(request, invocation)
+            else:
+                admission = ExistingCoverageAdmissionV1(request.storage_root, lease)
+                if isinstance(self._policy, Nifty50AdmissionPolicyV1):
+                    evaluation = self._evaluator.evaluate_under_admission_with_policy(
+                        request, invocation, admission, self._policy
+                    )
+                else:
+                    evaluation = self._evaluator.evaluate_under_admission(
+                        request, invocation, admission
+                    )
             evaluation = replace(evaluation)
             return _report(request, evaluation)
         except CoverageEvaluationFailureV1 as failure:

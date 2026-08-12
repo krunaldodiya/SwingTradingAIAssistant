@@ -214,6 +214,101 @@ def test_open_month_preparation_retains_v3_schedule_and_resolves_instrument(
     assert report.prepared.instrument.instrument_key == "NSE_EQ|INE002A01018"
 
 
+def test_preparation_rejects_resolved_instrument_identity_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    class SymbolOnlyPolicy:
+        def admits(self, segment: object, symbol: object) -> bool:
+            return segment == "NSE_EQ" and symbol == "RELIANCE"
+
+        def admits_instrument(self, instrument: object) -> bool:
+            return False
+
+    schedule = _open_schedule()
+    snapshot_client, _ = _snapshot_client(datetime(2026, 8, 11, 3, 0, tzinfo=UTC))
+    report = DownloadPreparationServiceV1(
+        SymbolOnlyPolicy(),  # type: ignore[arg-type]
+        StaticScheduleSource(
+            AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+        ),
+        CountingSnapshotSource(snapshot_client),
+    ).prepare_open_month(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            tmp_path,
+            datetime(2026, 8, 11, 6, 30, tzinfo=UTC),
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.REJECTED
+    assert (
+        report.failure_code is PreparationFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT
+    )
+
+
+def test_instrument_snapshot_fetch_uses_shared_account_limiter(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Limiter:
+        def acquire(self, cancellation: object, remaining_wait: timedelta) -> timedelta:
+            calls.append("limit")
+            return timedelta(0)
+
+    schedule = _open_schedule()
+    snapshot_client, _ = _snapshot_client(datetime(2026, 8, 11, 3, 0, tzinfo=UTC))
+    source = CountingSnapshotSource(snapshot_client)
+    report = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(
+            AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+        ),
+        source,
+        limiter=Limiter(),  # type: ignore[arg-type]
+    ).prepare_open_month(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            tmp_path,
+            datetime(2026, 8, 11, 6, 30, tzinfo=UTC),
+        )
+    )
+    assert report.outcome is PreparationOutcomeV1.SUCCEEDED
+    assert calls == ["limit"]
+    assert source.calls == 1
+
+    class BrokenLimiter:
+        def acquire(self, cancellation: object, remaining_wait: timedelta) -> timedelta:
+            raise RuntimeError
+
+    other = tmp_path / "other"
+    blocked_source = CountingSnapshotSource(snapshot_client)
+    blocked = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(
+            AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+        ),
+        blocked_source,
+        limiter=BrokenLimiter(),  # type: ignore[arg-type]
+    ).prepare_open_month(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            other,
+            datetime(2026, 8, 11, 6, 30, tzinfo=UTC),
+        )
+    )
+    assert blocked.outcome is PreparationOutcomeV1.UNAVAILABLE
+    assert blocked.snapshot_attempt_count == 0
+    assert blocked_source.calls == 0
+
+
 def test_canonical_file_schedule_source_loads_exact_bounded_evidence(
     tmp_path: Path,
 ) -> None:

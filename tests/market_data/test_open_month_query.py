@@ -150,6 +150,95 @@ class _RaisingQueryStub:
         raise RuntimeError("dependency failed")
 
 
+def test_open_month_query_under_caller_lease_and_invalid_lease_are_bounded(
+    tmp_path: Path,
+) -> None:
+    _seed(tmp_path)
+    service = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+    )
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 11),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+    rejected = service.query_under_lease(request, object())  # type: ignore[arg-type]
+    assert rejected.status is PublicCommandStatusV1.REJECTED
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.query_under_lease(request, lease)
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+
+    class BrokenService(OpenMonthOneMinuteQueryServiceV1):
+        def _query_under_lease(self, *args: object):
+            raise RuntimeError
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        unavailable = BrokenService(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+        ).query_under_lease(request, lease)
+    assert unavailable.status is PublicCommandStatusV1.UNAVAILABLE
+
+    class SymbolOnlyPolicy:
+        def admits(self, segment: object, symbol: object) -> bool:
+            return segment == "NSE_EQ" and symbol == "RELIANCE"
+
+        def admits_instrument(self, instrument: object) -> bool:
+            return False
+
+    mismatch = OpenMonthOneMinuteQueryServiceV1(
+        SymbolOnlyPolicy(),
+        clock=_Clock(),  # type: ignore[arg-type]
+    ).query(request)
+    assert mismatch.status is PublicCommandStatusV1.REJECTED
+
+
+def test_current_aware_query_delegates_under_caller_lease(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Port:
+        def query(self, request: object):
+            raise AssertionError
+
+        def query_under_lease(self, request: object, lease: StorageRootLease):
+            calls.append("under-lease")
+            return OpenMonthOneMinuteQueryServiceV1(
+                PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+            ).query_under_lease(request, lease)
+
+    _seed(tmp_path)
+    service = CurrentAwareQueryServiceV1(Port(), Port(), clock=_Clock())
+    invalid = service.query_under_lease(object(), object())  # type: ignore[arg-type]
+    assert invalid.status is PublicCommandStatusV1.REJECTED
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.query_under_lease(
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 1),
+                date(2026, 8, 11),
+                "1m",
+                ("ts", "close"),
+                100,
+                tmp_path,
+            ),
+            lease,
+        )
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert calls == ["under-lease"]
+
+
 def test_current_aware_query_routes_only_current_month_one_minute(
     tmp_path: Path,
 ) -> None:

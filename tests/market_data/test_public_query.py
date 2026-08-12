@@ -578,7 +578,7 @@ def test_query_cli_invokes_one_service_and_reuses_renderer_and_exit(
     assert json.loads(capsys.readouterr().out)["command"] == "query"
 
 
-def test_default_query_cli_rejects_unsupported_product_before_root_activity(
+def test_default_query_cli_requires_retained_universe_before_root_activity(
     tmp_path, capsys
 ) -> None:
     absent = tmp_path / "absent"
@@ -608,8 +608,8 @@ def test_default_query_cli_rejects_unsupported_product_before_root_activity(
     )
 
     decoded = json.loads(capsys.readouterr().out)
-    assert exit_code == 2
-    assert decoded["failure"]["code"] == "UNSUPPORTED_PREVIEW_INSTRUMENT"
+    assert exit_code == 4
+    assert decoded["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
     assert not absent.exists()
 
 

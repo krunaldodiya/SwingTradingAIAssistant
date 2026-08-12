@@ -11,7 +11,7 @@ from typing import Any, Protocol, cast
 
 import duckdb as _duckdb
 
-from .preview_admission import PreviewAdmissionPolicyV1
+from .equity_admission import EquityAdmissionPolicyV1, Nifty50AdmissionPolicyV1
 from .public_contract import (
     DAILY_CALCULATION_VERSION_V1,
     MAX_DAILY_QUERY_ROWS_V1,
@@ -54,6 +54,7 @@ from .schedule_evidence import (
     canonical_schedule_bytes,
     schedule_digest,
 )
+from .storage_root_lease import StorageRootLease
 
 duckdb: Any = cast(Any, _duckdb)
 
@@ -148,6 +149,10 @@ class DailyQueryEnginePortV1(Protocol):
 class PublicQueryPortV1(Protocol):
     def query(self, request: object) -> QueryReportV1: ...
 
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1: ...
+
 
 class TimeframeQueryServiceV1:
     """Route one validated raw request to exactly one timeframe service."""
@@ -159,19 +164,39 @@ class TimeframeQueryServiceV1:
         self._daily_service = daily_service
 
     def query(self, request: object) -> QueryReportV1:
+        return self._query(request, None)
+
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1:
+        return self._query(request, lease)
+
+    def _query(self, request: object, lease: StorageRootLease | None) -> QueryReportV1:
         try:
             typed = _validated_raw_request(request)
         except ValueError:
-            return self._minute_service.query(request)
+            return self._call(self._minute_service, request, lease)
         if typed.timeframe == "1d":
-            return self._daily_service.query(typed)
-        return self._minute_service.query(typed)
+            return self._call(self._daily_service, typed, lease)
+        return self._call(self._minute_service, typed, lease)
+
+    @staticmethod
+    def _call(
+        service: PublicQueryPortV1,
+        request: object,
+        lease: StorageRootLease | None,
+    ) -> QueryReportV1:
+        return (
+            service.query(request)
+            if lease is None
+            else service.query_under_lease(request, lease)
+        )
 
 
 class DailyQueryServiceV1:
     def __init__(
         self,
-        policy: PreviewAdmissionPolicyV1,
+        policy: EquityAdmissionPolicyV1,
         evaluator: QueryCoveragePortV1,
         *,
         resolver: DailyScheduleResolverPortV1,
@@ -185,6 +210,18 @@ class DailyQueryServiceV1:
         self._clock = clock
 
     def query(self, request: object) -> QueryReportV1:
+        return self._query(request, None)
+
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._query(request, lease)
+
+    def _query(self, request: object, lease: StorageRootLease | None) -> QueryReportV1:
         try:
             request = _validated_raw_request(request)
         except ValueError:
@@ -221,8 +258,12 @@ class DailyQueryServiceV1:
                 request.to_date,
                 request.storage_root,
             )
-            return self._query_under_admission(
-                request, public_request, coverage_request, invocation
+            return self._execute_query(
+                request,
+                public_request,
+                coverage_request,
+                invocation,
+                lease,
             )
         except CoverageEvaluationFailureV1 as error:
             return _terminal(error.status, error.code)
@@ -241,6 +282,26 @@ class DailyQueryServiceV1:
                 PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
+    def _execute_query(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        coverage_request: CoverageRequestV1,
+        invocation: datetime,
+        lease: StorageRootLease | None,
+    ) -> QueryReportV1:
+        if lease is None:
+            return self._query_under_admission(
+                request, public_request, coverage_request, invocation
+            )
+        return self._query_with_admission(
+            request,
+            public_request,
+            coverage_request,
+            invocation,
+            ExistingCoverageAdmissionV1(request.storage_root, lease),
+        )
+
     def _query_under_admission(
         self,
         request: QueryRequestV1,
@@ -249,74 +310,99 @@ class DailyQueryServiceV1:
         invocation: datetime,
     ) -> QueryReportV1:
         with self._evaluator.admit(request.storage_root) as admission:
-            evaluation = self._evaluator.evaluate_under_admission(
+            return self._query_with_admission(
+                request,
+                public_request,
                 coverage_request,
                 invocation,
                 cast(ExistingCoverageAdmissionV1, admission),
             )
-            evaluation = _validated_evaluation(evaluation)
-            empty = DailyQueryPayloadV1(
-                public_request,
-                DAILY_CALCULATION_VERSION_V1,
-                "raw",
-                0,
-                evaluation.months,
-                (),
-            )
-            affected = tuple(
-                month.month
-                for month in evaluation.months
-                if month.coverage_state is not CoverageStateV1.VERIFIED
-            )
-            if affected:
-                return PublicCommandReportV1(
-                    "v1",
-                    "query",
-                    PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
-                    _failure(PublicFailureCodeV1.COVERAGE_INSUFFICIENT, affected),
-                    0,
-                    empty,
-                )
-            resolution = self._resolver.resolve(
-                public_request,
-                request.storage_root,
-                evaluation,
+
+    def _query_with_admission(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        coverage_request: CoverageRequestV1,
+        invocation: datetime,
+        admission: ExistingCoverageAdmissionV1,
+    ) -> QueryReportV1:
+        evaluation = (
+            self._evaluator.evaluate_under_admission_with_policy(
+                coverage_request,
                 invocation,
-                cast(ExistingCoverageAdmissionV1, admission),
+                admission,
+                self._policy,
             )
-            sessions = _validated_resolution(public_request, evaluation, resolution)
-            if len(sessions) > public_request.max_rows:
-                raise QueryResourceLimitV1
-            rows = (
-                self._engine.execute(
-                    public_request,
-                    request.storage_root,
-                    evaluation,
-                    sessions,
-                    self._evaluator,
-                    cast(ExistingCoverageAdmissionV1, admission),
-                )
-                if sessions
-                else ()
+            if isinstance(self._policy, Nifty50AdmissionPolicyV1)
+            else self._evaluator.evaluate_under_admission(
+                coverage_request,
+                invocation,
+                admission,
             )
-            rows = _validated_daily_rows(public_request, sessions, rows)
-            admission.ensure_live(request.storage_root)
-            payload = DailyQueryPayloadV1(
-                public_request,
-                DAILY_CALCULATION_VERSION_V1,
-                "raw",
-                len(rows),
-                evaluation.months,
-                rows,
-            )
+        )
+        evaluation = _validated_evaluation(evaluation)
+        empty = DailyQueryPayloadV1(
+            public_request,
+            DAILY_CALCULATION_VERSION_V1,
+            "raw",
+            0,
+            evaluation.months,
+            (),
+        )
+        affected = tuple(
+            month.month
+            for month in evaluation.months
+            if month.coverage_state is not CoverageStateV1.VERIFIED
+        )
+        if affected:
             return PublicCommandReportV1(
                 "v1",
                 "query",
-                PublicCommandStatusV1.SUCCEEDED,
-                None,
+                PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+                _failure(PublicFailureCodeV1.COVERAGE_INSUFFICIENT, affected),
                 0,
-                payload,
+                empty,
             )
+        resolution = self._resolver.resolve(
+            public_request,
+            request.storage_root,
+            evaluation,
+            invocation,
+            admission,
+        )
+        sessions = _validated_resolution(public_request, evaluation, resolution)
+        if len(sessions) > public_request.max_rows:
+            raise QueryResourceLimitV1
+        rows = (
+            self._engine.execute(
+                public_request,
+                request.storage_root,
+                evaluation,
+                sessions,
+                self._evaluator,
+                admission,
+            )
+            if sessions
+            else ()
+        )
+        rows = _validated_daily_rows(public_request, sessions, rows)
+        admission.ensure_live(request.storage_root)
+        payload = DailyQueryPayloadV1(
+            public_request,
+            DAILY_CALCULATION_VERSION_V1,
+            "raw",
+            len(rows),
+            evaluation.months,
+            rows,
+        )
+        return PublicCommandReportV1(
+            "v1",
+            "query",
+            PublicCommandStatusV1.SUCCEEDED,
+            None,
+            0,
+            payload,
+        )
 
 
 class RetainedDailyScheduleResolverV1:

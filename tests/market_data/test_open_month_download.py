@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +38,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseFailureCode,
     LeaseResult,
+    StorageRootLease,
 )
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -115,6 +117,10 @@ class _Preparation:
             0,
         )
 
+    def prepare_open_month_under_lease(self, request, lease):
+        assert type(lease) is StorageRootLease
+        return self.prepare_open_month(request)
+
 
 class _Historical:
     def __init__(self) -> None:
@@ -189,6 +195,51 @@ def test_first_open_month_download_persists_history_and_completed_current_bars(
     assert report.appended_count == 5
     assert (historical.calls, intraday.calls, token.calls) == (1, 1, 1)
     assert (tmp_path / report.metadata.relative_path).is_file()
+
+
+def test_download_under_caller_lease_uses_gate_and_shared_limiter(
+    tmp_path: Path,
+) -> None:
+    service, request, _, *_ = _service(tmp_path)
+    limiter_calls = 0
+
+    class Limiter:
+        def acquire(self, cancellation: object, remaining_wait: object) -> timedelta:
+            nonlocal limiter_calls
+            limiter_calls += 1
+            return timedelta(0)
+
+    service._publication_gate = threading.RLock()
+    service._limiter = Limiter()  # type: ignore[assignment]
+    invalid = service.download_under_lease(request, object())  # type: ignore[arg-type]
+    assert invalid.outcome is OpenMonthDownloadOutcomeV1.REJECTED
+
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.download_under_lease(request, lease)
+
+    assert report.outcome is OpenMonthDownloadOutcomeV1.SUCCEEDED
+    assert limiter_calls == 2
+
+
+def test_download_under_lost_caller_lease_returns_publication_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, request, _, *_ = _service(tmp_path)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    monkeypatch.setattr(
+        service,
+        "_advance_under_lease",
+        lambda *args: (_ for _ in ()).throw(RuntimeError()),
+    )
+    with acquired.lease as lease:
+        report = service.download_under_lease(request, lease)
+    assert report.outcome is OpenMonthDownloadOutcomeV1.FAILED
+    assert (
+        report.failure_code is subject.OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED
+    )
 
 
 def test_identical_cutoff_rerun_uses_only_local_evidence_and_zero_provider_calls(

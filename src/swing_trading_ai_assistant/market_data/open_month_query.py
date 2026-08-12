@@ -7,7 +7,8 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Protocol, cast
 
 from .catalog import DuckDBCatalog
-from .preview_admission import PreviewAdmissionPolicyV1
+from .equity_admission import EquityAdmissionPolicyV1
+from .instruments import Instrument
 from .provisional_store import load_provisional_partition
 from .public_contract import (
     CandleFieldV1,
@@ -37,6 +38,10 @@ class OpenMonthQueryClockV1(Protocol):
 class QueryPortV1(Protocol):
     def query(self, request: object) -> QueryReportV1: ...
 
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1: ...
+
 
 class CurrentAwareQueryServiceV1:
     """Use provisional evidence only for a current-month one-minute request."""
@@ -53,8 +58,20 @@ class CurrentAwareQueryServiceV1:
         self._clock = clock
 
     def query(self, request: object) -> QueryReportV1:
+        return self._query(request, None)
+
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._query(request, lease)
+
+    def _query(self, request: object, lease: StorageRootLease | None) -> QueryReportV1:
         if type(request) is not QueryRequestV1:
-            return self._closed_service.query(request)
+            return self._call_closed(request, lease)
         try:
             invocation = _invocation(self._clock.now())
             local_today = invocation.astimezone(_IST).date()
@@ -69,16 +86,16 @@ class CurrentAwareQueryServiceV1:
             and (request.to_date.year, request.to_date.month) == current_month
         ):
             if (request.from_date.year, request.from_date.month) != current_month:
-                return self._query_split_current_range(request, local_today)
+                return self._query_split_current_range(request, local_today, lease)
             try:
-                return self._open_month_service.query(request)
+                return self._call_open(request, lease)
             except Exception:
                 return _terminal(
                     PublicCommandStatusV1.FAILED,
                     PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
                 )
         try:
-            return self._closed_service.query(request)
+            return self._call_closed(request, lease)
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.FAILED,
@@ -86,14 +103,17 @@ class CurrentAwareQueryServiceV1:
             )
 
     def _query_split_current_range(
-        self, request: QueryRequestV1, local_today: date
+        self,
+        request: QueryRequestV1,
+        local_today: date,
+        lease: StorageRootLease | None,
     ) -> QueryReportV1:
         month_start = date(local_today.year, local_today.month, 1)
         try:
             closed_request = replace(request, to_date=month_start - timedelta(days=1))
             open_request = replace(request, from_date=month_start)
-            closed_report = self._closed_service.query(closed_request)
-            open_report = self._open_month_service.query(open_request)
+            closed_report = self._call_closed(closed_request, lease)
+            open_report = self._call_open(open_request, lease)
             return _combine_query_reports(request, closed_report, open_report)
         except Exception:
             return _terminal(
@@ -101,17 +121,49 @@ class CurrentAwareQueryServiceV1:
                 PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
+    def _call_closed(
+        self, request: object, lease: StorageRootLease | None
+    ) -> QueryReportV1:
+        return (
+            self._closed_service.query(request)
+            if lease is None
+            else self._closed_service.query_under_lease(request, lease)
+        )
+
+    def _call_open(
+        self, request: object, lease: StorageRootLease | None
+    ) -> QueryReportV1:
+        return (
+            self._open_month_service.query(request)
+            if lease is None
+            else self._open_month_service.query_under_lease(request, lease)
+        )
+
 
 class OpenMonthOneMinuteQueryServiceV1:
     """Return persisted bars even when the current exchange session is incomplete."""
 
     def __init__(
-        self, policy: PreviewAdmissionPolicyV1, *, clock: OpenMonthQueryClockV1
+        self, policy: EquityAdmissionPolicyV1, *, clock: OpenMonthQueryClockV1
     ) -> None:
         self._policy = policy
         self._clock = clock
 
     def query(self, request: object) -> QueryReportV1:
+        return self._query(request, None)
+
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._query(request, lease)
+
+    def _query(
+        self, request: object, supplied_lease: StorageRootLease | None
+    ) -> QueryReportV1:
         try:
             request = _request(request)
             invocation = _invocation(self._clock.now())
@@ -129,6 +181,10 @@ class OpenMonthOneMinuteQueryServiceV1:
             return _terminal(
                 PublicCommandStatusV1.REJECTED,
                 PublicFailureCodeV1.UNSUPPORTED_TIMEFRAME,
+            )
+        if supplied_lease is not None:
+            return self._read_supplied(
+                request, public_request, invocation, supplied_lease
             )
         lease_result = StorageRootLease.try_admit_read_existing(request.storage_root)
         if (
@@ -151,6 +207,21 @@ class OpenMonthOneMinuteQueryServiceV1:
                         attempt += 1
                         if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
                             raise
+        except Exception:
+            return _terminal(
+                PublicCommandStatusV1.UNAVAILABLE,
+                PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+            )
+
+    def _read_supplied(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        invocation: datetime,
+        lease: StorageRootLease,
+    ) -> QueryReportV1:
+        try:
+            return self._query_under_lease(request, public_request, invocation, lease)
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
@@ -187,6 +258,20 @@ class OpenMonthOneMinuteQueryServiceV1:
                 _failure(PublicFailureCodeV1.COVERAGE_INSUFFICIENT, (month.month,)),
                 0,
                 payload,
+            )
+        instrument = Instrument(
+            metadata.instrument_key,
+            metadata.security_id,
+            metadata.symbol,
+            metadata.exchange,
+            metadata.segment,
+            metadata.instrument_type,
+            isin=metadata.security_id,
+        )
+        if not self._policy.admits_instrument(instrument):
+            return _terminal(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
             )
         rows = load_provisional_partition(request.storage_root, lease, metadata)
         selected = tuple(

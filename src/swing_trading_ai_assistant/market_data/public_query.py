@@ -11,7 +11,7 @@ from typing import Any, Protocol, cast
 
 import duckdb as _duckdb
 
-from .preview_admission import PreviewAdmissionPolicyV1
+from .equity_admission import EquityAdmissionPolicyV1, Nifty50AdmissionPolicyV1
 from .public_contract import (
     CandleFieldV1,
     CoverageStateV1,
@@ -32,6 +32,7 @@ from .public_coverage import (
     VerifiedPartitionReadHandleV1,
     VerifiedPartitionV1,
 )
+from .storage_root_lease import StorageRootLease
 
 duckdb: Any = cast(Any, _duckdb)
 
@@ -102,6 +103,14 @@ class QueryCoveragePortV1(Protocol):
         admission: ExistingCoverageAdmissionV1,
     ) -> CoverageEvaluationV1: ...
 
+    def evaluate_under_admission_with_policy(
+        self,
+        request: CoverageRequestV1,
+        invocation_time: datetime,
+        admission: ExistingCoverageAdmissionV1,
+        policy: EquityAdmissionPolicyV1,
+    ) -> CoverageEvaluationV1: ...
+
     def open_verified_partition_under_admission(
         self,
         root: Path,
@@ -124,7 +133,7 @@ class OneMinuteQueryEnginePortV1(Protocol):
 class OneMinuteQueryServiceV1:
     def __init__(
         self,
-        policy: PreviewAdmissionPolicyV1,
+        policy: EquityAdmissionPolicyV1,
         evaluator: QueryCoveragePortV1,
         *,
         engine: OneMinuteQueryEnginePortV1,
@@ -136,6 +145,18 @@ class OneMinuteQueryServiceV1:
         self._clock = clock
 
     def query(self, request: object) -> QueryReportV1:
+        return self._query(request, None)
+
+    def query_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> QueryReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._query(request, lease)
+
+    def _query(self, request: object, lease: StorageRootLease | None) -> QueryReportV1:
         try:
             request = _validated_request(request)
         except ValueError:
@@ -172,8 +193,12 @@ class OneMinuteQueryServiceV1:
                 request.to_date,
                 request.storage_root,
             )
-            return self._query_under_admission(
-                request, public_request, coverage_request, invocation
+            return self._execute_query(
+                request,
+                public_request,
+                coverage_request,
+                invocation,
+                lease,
             )
         except CoverageEvaluationFailureV1 as error:
             return _terminal(error.status, error.code)
@@ -192,6 +217,26 @@ class OneMinuteQueryServiceV1:
                 PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
+    def _execute_query(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        coverage_request: CoverageRequestV1,
+        invocation: datetime,
+        lease: StorageRootLease | None,
+    ) -> QueryReportV1:
+        if lease is None:
+            return self._query_under_admission(
+                request, public_request, coverage_request, invocation
+            )
+        return self._query_with_admission(
+            request,
+            public_request,
+            coverage_request,
+            invocation,
+            ExistingCoverageAdmissionV1(request.storage_root, lease),
+        )
+
     def _query_under_admission(
         self,
         request: QueryRequestV1,
@@ -200,44 +245,68 @@ class OneMinuteQueryServiceV1:
         invocation: datetime,
     ) -> QueryReportV1:
         with self._evaluator.admit(request.storage_root) as admission:
+            return self._query_with_admission(
+                request,
+                public_request,
+                coverage_request,
+                invocation,
+                admission,
+            )
+
+    def _query_with_admission(
+        self,
+        request: QueryRequestV1,
+        public_request: PublicQueryRequestV1,
+        coverage_request: CoverageRequestV1,
+        invocation: datetime,
+        admission: QueryAdmissionV1,
+    ) -> QueryReportV1:
+        if isinstance(self._policy, Nifty50AdmissionPolicyV1):
+            evaluation = self._evaluator.evaluate_under_admission_with_policy(
+                coverage_request,
+                invocation,
+                cast(ExistingCoverageAdmissionV1, admission),
+                self._policy,
+            )
+        else:
             evaluation = self._evaluator.evaluate_under_admission(
                 coverage_request,
                 invocation,
                 cast(ExistingCoverageAdmissionV1, admission),
             )
-            evaluation = _validated_evaluation(evaluation)
-            empty_payload = QueryPayloadV1(public_request, 0, evaluation.months, ())
-            affected = tuple(
-                month.month
-                for month in evaluation.months
-                if month.coverage_state is not CoverageStateV1.VERIFIED
-            )
-            if affected:
-                return PublicCommandReportV1(
-                    "v1",
-                    "query",
-                    PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
-                    _failure(PublicFailureCodeV1.COVERAGE_INSUFFICIENT, affected),
-                    0,
-                    empty_payload,
-                )
-            rows = self._engine.execute(
-                public_request,
-                request.storage_root,
-                evaluation,
-                self._evaluator,
-                admission,
-            )
-            admission.ensure_live(request.storage_root)
-            payload = QueryPayloadV1(public_request, len(rows), evaluation.months, rows)
+        evaluation = _validated_evaluation(evaluation)
+        empty_payload = QueryPayloadV1(public_request, 0, evaluation.months, ())
+        affected = tuple(
+            month.month
+            for month in evaluation.months
+            if month.coverage_state is not CoverageStateV1.VERIFIED
+        )
+        if affected:
             return PublicCommandReportV1(
                 "v1",
                 "query",
-                PublicCommandStatusV1.SUCCEEDED,
-                None,
+                PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+                _failure(PublicFailureCodeV1.COVERAGE_INSUFFICIENT, affected),
                 0,
-                payload,
+                empty_payload,
             )
+        rows = self._engine.execute(
+            public_request,
+            request.storage_root,
+            evaluation,
+            self._evaluator,
+            admission,
+        )
+        admission.ensure_live(request.storage_root)
+        payload = QueryPayloadV1(public_request, len(rows), evaluation.months, rows)
+        return PublicCommandReportV1(
+            "v1",
+            "query",
+            PublicCommandStatusV1.SUCCEEDED,
+            None,
+            0,
+            payload,
+        )
 
 
 class DuckDBOneMinuteQueryEngineV1:

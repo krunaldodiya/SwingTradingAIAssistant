@@ -7,7 +7,8 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Protocol, cast
 
 from .catalog import DuckDBCatalog
-from .preview_admission import PreviewAdmissionPolicyV1
+from .equity_admission import EquityAdmissionPolicyV1
+from .instruments import Instrument
 from .provisional_metadata import ProvisionalPartitionMetadataV1
 from .provisional_store import load_provisional_partition
 from .public_contract import (
@@ -35,6 +36,10 @@ class CoverageClockV1(Protocol):
 class CoveragePortV1(Protocol):
     def coverage(self, request: object) -> CoverageReportV1: ...
 
+    def coverage_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> CoverageReportV1: ...
+
 
 class CurrentAwareCoverageServiceV1:
     """Route only the current local month to provisional coverage."""
@@ -51,8 +56,22 @@ class CurrentAwareCoverageServiceV1:
         self._clock = clock
 
     def coverage(self, request: object) -> CoverageReportV1:
+        return self._coverage(request, None)
+
+    def coverage_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> CoverageReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._coverage(request, lease)
+
+    def _coverage(
+        self, request: object, lease: StorageRootLease | None
+    ) -> CoverageReportV1:
         if type(request) is not CoverageRequestV1:
-            return self._closed_service.coverage(request)
+            return self._call_closed(request, lease)
         try:
             invocation = _invocation(self._clock.now())
         except ValueError:
@@ -64,16 +83,16 @@ class CurrentAwareCoverageServiceV1:
         current_month = (local_today.year, local_today.month)
         if (request.to_date.year, request.to_date.month) == current_month:
             if (request.from_date.year, request.from_date.month) != current_month:
-                return self._coverage_split_current_range(request, local_today)
+                return self._coverage_split_current_range(request, local_today, lease)
             try:
-                return self._open_month_service.coverage(request)
+                return self._call_open(request, lease)
             except Exception:
                 return _terminal(
                     PublicCommandStatusV1.FAILED,
                     PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
                 )
         try:
-            return self._closed_service.coverage(request)
+            return self._call_closed(request, lease)
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.FAILED,
@@ -81,14 +100,17 @@ class CurrentAwareCoverageServiceV1:
             )
 
     def _coverage_split_current_range(
-        self, request: CoverageRequestV1, local_today: date
+        self,
+        request: CoverageRequestV1,
+        local_today: date,
+        lease: StorageRootLease | None,
     ) -> CoverageReportV1:
         month_start = date(local_today.year, local_today.month, 1)
         try:
             closed_request = replace(request, to_date=month_start - timedelta(days=1))
             open_request = replace(request, from_date=month_start)
-            closed_report = self._closed_service.coverage(closed_request)
-            open_report = self._open_month_service.coverage(open_request)
+            closed_report = self._call_closed(closed_request, lease)
+            open_report = self._call_open(open_request, lease)
             return _combine_coverage_reports(request, closed_report, open_report)
         except Exception:
             return _terminal(
@@ -96,17 +118,49 @@ class CurrentAwareCoverageServiceV1:
                 PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
+    def _call_closed(
+        self, request: object, lease: StorageRootLease | None
+    ) -> CoverageReportV1:
+        return (
+            self._closed_service.coverage(request)
+            if lease is None
+            else self._closed_service.coverage_under_lease(request, lease)
+        )
+
+    def _call_open(
+        self, request: object, lease: StorageRootLease | None
+    ) -> CoverageReportV1:
+        return (
+            self._open_month_service.coverage(request)
+            if lease is None
+            else self._open_month_service.coverage_under_lease(request, lease)
+        )
+
 
 class OpenMonthCoverageServiceV1:
     """Verify and report the latest retained provisional partition."""
 
     def __init__(
-        self, policy: PreviewAdmissionPolicyV1, *, clock: CoverageClockV1
+        self, policy: EquityAdmissionPolicyV1, *, clock: CoverageClockV1
     ) -> None:
         self._policy = policy
         self._clock = clock
 
     def coverage(self, request: object) -> CoverageReportV1:
+        return self._coverage(request, None)
+
+    def coverage_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> CoverageReportV1:
+        if type(lease) is not StorageRootLease:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        return self._coverage(request, lease)
+
+    def _coverage(
+        self, request: object, supplied_lease: StorageRootLease | None
+    ) -> CoverageReportV1:
         try:
             if type(request) is not CoverageRequestV1:
                 raise ValueError
@@ -131,6 +185,17 @@ class OpenMonthCoverageServiceV1:
                 PublicCommandStatusV1.REJECTED,
                 PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
             )
+        return self._read(request, local_today, invocation, supplied_lease)
+
+    def _read(
+        self,
+        request: CoverageRequestV1,
+        local_today: date,
+        invocation: datetime,
+        supplied_lease: StorageRootLease | None,
+    ) -> CoverageReportV1:
+        if supplied_lease is not None:
+            return self._read_supplied(request, local_today, invocation, supplied_lease)
         acquired = StorageRootLease.try_admit_read_existing(request.storage_root)
         if acquired.outcome is not LeaseOutcome.ACQUIRED or acquired.lease is None:
             return _terminal(
@@ -149,6 +214,21 @@ class OpenMonthCoverageServiceV1:
                         attempt += 1
                         if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
                             raise
+        except Exception:
+            return _terminal(
+                PublicCommandStatusV1.UNAVAILABLE,
+                PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+            )
+
+    def _read_supplied(
+        self,
+        request: CoverageRequestV1,
+        local_today: date,
+        invocation: datetime,
+        lease: StorageRootLease,
+    ) -> CoverageReportV1:
+        try:
+            return self._coverage_under_lease(request, local_today, invocation, lease)
         except Exception:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
@@ -176,6 +256,20 @@ class OpenMonthCoverageServiceV1:
             catalog.ensure_read_identity()
         if metadata is None:
             return _missing_report(request)
+        instrument = Instrument(
+            metadata.instrument_key,
+            metadata.security_id,
+            metadata.symbol,
+            metadata.exchange,
+            metadata.segment,
+            metadata.instrument_type,
+            isin=metadata.security_id,
+        )
+        if not self._policy.admits_instrument(instrument):
+            return _terminal(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
+            )
         rows = load_provisional_partition(request.storage_root, lease, metadata)
         if (
             len(rows) != metadata.row_count

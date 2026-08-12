@@ -8,6 +8,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.download_preparation import (
     AuthoritativeScheduleInputV1,
@@ -34,6 +35,12 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleSession,
     canonical_schedule_bytes,
 )
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.universe_snapshot import (
+    Nifty50ConstituentV1,
+    Nifty50UniverseSnapshotV1,
+    Nifty50UniverseStoreV1,
+)
 
 _NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
 _TRADE_DATE = date(2026, 7, 1)
@@ -46,6 +53,51 @@ _RELIANCE = {
     "instrument_key": "NSE_EQ|INE002A01018",
     "trading_symbol": "RELIANCE",
 }
+
+
+def _isin(index: int) -> str:
+    prefix = f"INE{index:06d}A0"
+    for digit in "0123456789":
+        candidate = prefix + digit
+        expanded = "".join(
+            str(ord(value) - 55) if value.isalpha() else value for value in candidate
+        )
+        total = sum(
+            (int(value) * 2 // 10 + int(value) * 2 % 10) if position % 2 else int(value)
+            for position, value in enumerate(reversed(expanded))
+        )
+        if total % 10 == 0:
+            return candidate
+    raise AssertionError
+
+
+def _retain_universe(root: Path) -> None:
+    members = [Nifty50ConstituentV1("INE002A01018", "RELIANCE", "ENERGY")] + [
+        Nifty50ConstituentV1(_isin(index), f"SYM{index:02d}", "FINANCIALS")
+        for index in range(49)
+    ]
+    members.sort(key=lambda member: member.isin)
+    observed = datetime(2026, 6, 30, tzinfo=UTC)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        Nifty50UniverseStoreV1(root, acquired.lease, catalog).retain(
+            Nifty50UniverseSnapshotV1(
+                1,
+                "nifty-50",
+                date(2026, 7, 1),
+                date(2026, 9, 30),
+                "nse-archive",
+                "2026-q3",
+                observed,
+                observed,
+                "nse-archive",
+                "2026-q3",
+                observed,
+                observed,
+                tuple(members),
+            )
+        )
 
 
 class _Clock:
@@ -208,6 +260,7 @@ def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
 
     first = _invoke(capsys, _command(tmp_path, "download"), download_service=service)
     repeat = _invoke(capsys, _command(tmp_path, "download"), download_service=service)
+    _retain_universe(tmp_path)
     coverage = _invoke(capsys, _command(tmp_path, "coverage"))
     minute = _invoke(capsys, _command(tmp_path, "query", timeframe="1m"))
     daily = _invoke(capsys, _command(tmp_path, "query", timeframe="1d"))

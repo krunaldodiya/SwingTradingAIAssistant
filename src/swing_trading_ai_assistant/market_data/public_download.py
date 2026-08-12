@@ -49,6 +49,7 @@ from .range_ingestion import (
     PartitionResult,
     RunFailureCode,
 )
+from .storage_root_lease import StorageRootLease
 from .validation import EQUITY_MONTH_VALIDATION_POLICY_V1, ValidationReason
 
 MAX_TOUCHED_MONTHS_V1 = 12
@@ -175,9 +176,17 @@ class DownloadPreparationPortV1(Protocol):
         self, request: DownloadPreparationRequestV1
     ) -> DownloadPreparationReportV1: ...
 
+    def prepare_under_lease(
+        self, request: DownloadPreparationRequestV1, lease: StorageRootLease
+    ) -> DownloadPreparationReportV1: ...
+
 
 class IngestionCoordinatorPortV1(Protocol):
     def run(self, command: IngestionCommand) -> IngestionReport: ...
+
+    def run_under_lease(
+        self, command: IngestionCommand, lease: StorageRootLease
+    ) -> IngestionReport: ...
 
 
 @runtime_checkable
@@ -200,6 +209,23 @@ class SingleSymbolDownloadServiceV1:
         self._clock = clock
 
     def download(self, request: object) -> DownloadReportV1:
+        return self._download(request, None)
+
+    def download_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> DownloadReportV1:
+        """Run while a bounded parent workflow owns the exact storage root."""
+        if type(lease) is not StorageRootLease:
+            return _terminal_report(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.INVALID_INPUT,
+                attempts=0,
+            )
+        return self._download(request, lease)
+
+    def _download(
+        self, request: object, lease: StorageRootLease | None
+    ) -> DownloadReportV1:
         if type(request) is not SingleSymbolDownloadRequestV1:
             return _terminal_report(
                 PublicCommandStatusV1.REJECTED,
@@ -214,15 +240,18 @@ class SingleSymbolDownloadServiceV1:
                 attempts=0,
             )
         try:
-            prepared_report = self._preparation.prepare(
-                DownloadPreparationRequestV1(
-                    request.segment,
-                    request.symbol,
-                    request.from_date,
-                    request.to_date,
-                    request.storage_root,
-                    invocation_time,
-                )
+            preparation_request = DownloadPreparationRequestV1(
+                request.segment,
+                request.symbol,
+                request.from_date,
+                request.to_date,
+                request.storage_root,
+                invocation_time,
+            )
+            prepared_report = (
+                self._preparation.prepare(preparation_request)
+                if lease is None
+                else self._preparation.prepare_under_lease(preparation_request, lease)
             )
         except Exception:
             return _terminal_report(
@@ -246,7 +275,11 @@ class SingleSymbolDownloadServiceV1:
         prepared = prepared_report.prepared
         try:
             command = _ingestion_command(request, prepared)
-            source_report = self._coordinator.run(command)
+            source_report = (
+                self._coordinator.run(command)
+                if lease is None
+                else self._coordinator.run_under_lease(command, lease)
+            )
         except Exception:
             return _terminal_report(
                 PublicCommandStatusV1.FAILED,
@@ -266,9 +299,17 @@ class SingleSymbolDownloadServiceV1:
 class PublicDownloadPortV1(Protocol):
     def download(self, request: object) -> DownloadReportV1: ...
 
+    def download_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> DownloadReportV1: ...
+
 
 class OpenMonthDownloadPortV1(Protocol):
     def download(self, request: object) -> OpenMonthDownloadReportV1: ...
+
+    def download_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> OpenMonthDownloadReportV1: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +334,23 @@ class CurrentAwareSingleSymbolDownloadServiceV1:
         self._clock = clock
 
     def download(self, request: object) -> DownloadReportV1:
+        return self._download(request, None)
+
+    def download_under_lease(
+        self, request: object, lease: StorageRootLease
+    ) -> DownloadReportV1:
+        """Route a symbol while a parent workflow owns the storage root."""
+        if type(lease) is not StorageRootLease:
+            return _terminal_report(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.INVALID_INPUT,
+                attempts=0,
+            )
+        return self._download(request, lease)
+
+    def _download(
+        self, request: object, lease: StorageRootLease | None
+    ) -> DownloadReportV1:
         if type(request) is not SingleSymbolDownloadRequestV1:
             return _terminal_report(
                 PublicCommandStatusV1.REJECTED,
@@ -316,19 +374,24 @@ class CurrentAwareSingleSymbolDownloadServiceV1:
                 attempts=0,
             )
         if to_month != current_month:
-            return self._download_closed(request)
-        prepared = self._prepare_current_range(request, local_today)
+            return self._download_closed(request, lease)
+        prepared = self._prepare_current_range(request, local_today, lease)
         if isinstance(prepared, PublicCommandReportV1):
             return prepared
         open_request = prepared.open_request
         try:
-            source = self._open_month_service.download(
-                OpenMonthDownloadRequestV1(
-                    open_request.segment,
-                    open_request.symbol,
-                    open_request.from_date,
-                    open_request.to_date,
-                    open_request.storage_root,
+            open_month_request = OpenMonthDownloadRequestV1(
+                open_request.segment,
+                open_request.symbol,
+                open_request.from_date,
+                open_request.to_date,
+                open_request.storage_root,
+            )
+            source = (
+                self._open_month_service.download(open_month_request)
+                if lease is None
+                else self._open_month_service.download_under_lease(
+                    open_month_request, lease
                 )
             )
         except Exception:
@@ -357,10 +420,16 @@ class CurrentAwareSingleSymbolDownloadServiceV1:
         )
 
     def _download_closed(
-        self, request: SingleSymbolDownloadRequestV1
+        self,
+        request: SingleSymbolDownloadRequestV1,
+        lease: StorageRootLease | None,
     ) -> DownloadReportV1:
         try:
-            return self._closed_service.download(request)
+            return (
+                self._closed_service.download(request)
+                if lease is None
+                else self._closed_service.download_under_lease(request, lease)
+            )
         except Exception:
             return _terminal_report(
                 PublicCommandStatusV1.FAILED,
@@ -369,7 +438,10 @@ class CurrentAwareSingleSymbolDownloadServiceV1:
             )
 
     def _prepare_current_range(
-        self, request: SingleSymbolDownloadRequestV1, local_today: date
+        self,
+        request: SingleSymbolDownloadRequestV1,
+        local_today: date,
+        lease: StorageRootLease | None,
     ) -> _CurrentRangePreparationV1 | DownloadReportV1:
         current_month = (local_today.year, local_today.month)
         if (request.from_date.year, request.from_date.month) == current_month:
@@ -383,7 +455,11 @@ class CurrentAwareSingleSymbolDownloadServiceV1:
                 month_start - timedelta(days=1),
                 request.storage_root,
             )
-            closed_report = self._closed_service.download(closed_request)
+            closed_report = (
+                self._closed_service.download(closed_request)
+                if lease is None
+                else self._closed_service.download_under_lease(closed_request, lease)
+            )
         except Exception:
             return _terminal_report(
                 PublicCommandStatusV1.FAILED,
