@@ -10,6 +10,7 @@ from datetime import date, timedelta
 import pytest
 
 from swing_trading_ai_assistant.market_regime import canonical_json_lf
+from swing_trading_ai_assistant.market_regime import facts as facts_module
 from swing_trading_ai_assistant.market_regime.facts import (
     AuthorityIdentityV1,
     ComparabilityBreakingEventClassV1,
@@ -18,6 +19,7 @@ from swing_trading_ai_assistant.market_regime.facts import (
     CorporateActionStatusProofV1,
     DailyCloseFactV1,
     EvidenceClockV1,
+    ExpectedReviewedBuildV1,
     FactGraphAdmissionError,
     IdentityContinuityProofV1,
     MembershipFactV1,
@@ -30,7 +32,11 @@ from swing_trading_ai_assistant.market_regime.facts import (
     RevisionLineageProofV1,
     ScheduleCorrectionKindV1,
     ScheduleCorrectionV1,
+    SessionScheduleFactV1,
+    SourceObjectReceiptV1,
     TrustedPolicyBindingV1,
+    VerifiedMarketRegimeFactsV1,
+    VerifiedProvenanceReceiptV1,
     admit_session_schedule_v1,
     admit_verified_market_regime_facts_v1,
 )
@@ -38,6 +44,7 @@ from swing_trading_ai_assistant.market_regime.facts import (
 ZERO = "0" * 64
 ONE = "1" * 64
 TWO = "2" * 64
+_RECEIPTS: list[VerifiedProvenanceReceiptV1] = []
 
 
 def _isin(number: int) -> str:
@@ -79,17 +86,37 @@ def _provenance(
     *,
     required: bool = True,
     selector: str = "rows/0",
+    receipts: list[VerifiedProvenanceReceiptV1] | None = None,
+    revision_components: tuple[str, ...] = (),
+    object_projection: object | None = None,
 ) -> ProvenanceV1:
+    receipt = VerifiedProvenanceReceiptV1.from_projection_values(
+        source_row_selector=selector,
+        object_identity_projection="canonical-object-v1",
+        revision_identity_projection="canonical-revision-v1",
+        object_projection=(
+            {
+                "authority": authority.value,
+                "revision_nonce": revision,
+                "selector": selector,
+            }
+            if object_projection is None
+            else object_projection
+        ),
+        revision_components=revision_components,
+        supersedes_identity_sha256=None,
+    )
+    (receipts if receipts is not None else _RECEIPTS).append(receipt)
     return ProvenanceV1(
         authority=authority,
         source_identity="authoritative-source-v1",
         schema_version="schema-v1",
-        source_object_identity_sha256=hashlib.sha256(selector.encode()).hexdigest(),
+        source_object_identity_sha256=(
+            receipt.source_object_receipt.source_object_identity_sha256
+        ),
         source_row_selector=selector,
-        object_identity_sha256=hashlib.sha256(
-            (selector + ":object").encode()
-        ).hexdigest(),
-        revision_identity_sha256=revision,
+        object_identity_sha256=receipt.object_identity_sha256,
+        revision_identity_sha256=receipt.revision_identity_sha256,
         supersedes_identity_sha256=None,
         clock=_clock(required),
     )
@@ -156,31 +183,79 @@ def _weekdays() -> list[str]:
 
 
 def _valid_graph():
+    _RECEIPTS.clear()
     dates = _weekdays()
-    schedule_provenance = _provenance(
-        AuthorityIdentityV1.NSE_CM, "a" * 64, selector="schedule/base"
-    )
+    receipts: list[VerifiedProvenanceReceiptV1] = []
+
+    def _bound_provenance(
+        authority: AuthorityIdentityV1,
+        revision: str,
+        *,
+        required: bool = True,
+        selector: str = "rows/0",
+        revision_components: tuple[str, ...] = (),
+        object_projection: object,
+    ) -> ProvenanceV1:
+        return _provenance(
+            authority,
+            revision,
+            required=required,
+            selector=selector,
+            receipts=receipts,
+            revision_components=revision_components,
+            object_projection=object_projection,
+        )
+
     base_rows = [
         OfficialSessionBaseRowV1(
             session_date=session,
             open_at=f"{session}T03:45:00.000000Z",
             close_at=f"{session}T10:00:00.000000Z",
-            provenance=_provenance(
+            provenance=_bound_provenance(
                 AuthorityIdentityV1.NSE_CM,
                 f"{index + 100:064x}",
                 selector=f"schedule/{session}",
+                object_projection={
+                    "session_date": session,
+                    "open_at": f"{session}T03:45:00.000000Z",
+                    "close_at": f"{session}T10:00:00.000000Z",
+                },
             ),
         )
         for index, session in enumerate(dates)
     ]
+    schedule_provenance = _bound_provenance(
+        AuthorityIdentityV1.NSE_CM,
+        "a" * 64,
+        selector="schedule/base",
+        object_projection={
+            "authority": AuthorityIdentityV1.NSE_CM,
+            "base_rows": tuple(
+                {
+                    "session_date": row.session_date,
+                    "open_at": row.open_at,
+                    "close_at": row.close_at,
+                }
+                for row in base_rows
+            ),
+        },
+    )
     corrections = (
         ScheduleCorrectionV1(
             affected_session="2026-07-24",
             correction_kind=ScheduleCorrectionKindV1.CLOSURE,
             corrected_open_at=None,
             corrected_close_at=None,
-            provenance=_provenance(
-                AuthorityIdentityV1.NSE_CM, "b" * 64, selector="corrections/closure"
+            provenance=_bound_provenance(
+                AuthorityIdentityV1.NSE_CM,
+                "b" * 64,
+                selector="corrections/closure",
+                object_projection={
+                    "affected_session": "2026-07-24",
+                    "correction_kind": ScheduleCorrectionKindV1.CLOSURE,
+                    "corrected_open_at": None,
+                    "corrected_close_at": None,
+                },
             ),
         ),
         ScheduleCorrectionV1(
@@ -188,8 +263,16 @@ def _valid_graph():
             correction_kind=ScheduleCorrectionKindV1.SPECIAL_SESSION,
             corrected_open_at="2026-07-25T03:45:00.000000Z",
             corrected_close_at="2026-07-25T10:00:00.000000Z",
-            provenance=_provenance(
-                AuthorityIdentityV1.NSE_CM, "c" * 64, selector="corrections/special"
+            provenance=_bound_provenance(
+                AuthorityIdentityV1.NSE_CM,
+                "c" * 64,
+                selector="corrections/special",
+                object_projection={
+                    "affected_session": "2026-07-25",
+                    "correction_kind": ScheduleCorrectionKindV1.SPECIAL_SESSION,
+                    "corrected_open_at": "2026-07-25T03:45:00.000000Z",
+                    "corrected_close_at": "2026-07-25T10:00:00.000000Z",
+                },
             ),
         ),
         ScheduleCorrectionV1(
@@ -197,8 +280,16 @@ def _valid_graph():
             correction_kind=ScheduleCorrectionKindV1.OPEN_TIME,
             corrected_open_at="2026-08-12T04:00:00.000000Z",
             corrected_close_at=None,
-            provenance=_provenance(
-                AuthorityIdentityV1.NSE_CM, "d" * 64, selector="corrections/open"
+            provenance=_bound_provenance(
+                AuthorityIdentityV1.NSE_CM,
+                "d" * 64,
+                selector="corrections/open",
+                object_projection={
+                    "affected_session": "2026-08-12",
+                    "correction_kind": ScheduleCorrectionKindV1.OPEN_TIME,
+                    "corrected_open_at": "2026-08-12T04:00:00.000000Z",
+                    "corrected_close_at": None,
+                },
             ),
         ),
         ScheduleCorrectionV1(
@@ -206,8 +297,16 @@ def _valid_graph():
             correction_kind=ScheduleCorrectionKindV1.CLOSE_TIME,
             corrected_open_at=None,
             corrected_close_at="2026-08-12T10:15:00.000000Z",
-            provenance=_provenance(
-                AuthorityIdentityV1.NSE_CM, "e" * 64, selector="corrections/close"
+            provenance=_bound_provenance(
+                AuthorityIdentityV1.NSE_CM,
+                "e" * 64,
+                selector="corrections/close",
+                object_projection={
+                    "affected_session": "2026-08-12",
+                    "correction_kind": ScheduleCorrectionKindV1.CLOSE_TIME,
+                    "corrected_open_at": None,
+                    "corrected_close_at": "2026-08-12T10:15:00.000000Z",
+                },
             ),
         ),
     )
@@ -221,7 +320,16 @@ def _valid_graph():
         AuthorityIdentityV1.NSE_INDICES,
         "2026-08-12",
         members,
-        _provenance(AuthorityIdentityV1.NSE_INDICES, "f" * 64, selector="membership"),
+        _bound_provenance(
+            AuthorityIdentityV1.NSE_INDICES,
+            "f" * 64,
+            selector="membership",
+            object_projection={
+                "authority": AuthorityIdentityV1.NSE_INDICES,
+                "decision_session": "2026-08-12",
+                "members": members,
+            },
+        ),
     )
     prior = []
     current = []
@@ -237,11 +345,21 @@ def _valid_graph():
                 "CLOSE",
                 "100",
                 schedule.sessions[0].close_at,
-                _provenance(
+                _bound_provenance(
                     AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
                     f"{index + 500:064x}",
                     required=False,
                     selector=f"prior/{isin}",
+                    object_projection={
+                        "authority": AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
+                        "schema_version": "nse-session-ohlcv@v1",
+                        "isin": isin,
+                        "symbol": member.symbol,
+                        "session_date": schedule.sessions[0].session_date,
+                        "field": "CLOSE",
+                        "close": "100",
+                        "market_scope_ends_at": schedule.sessions[0].close_at,
+                    },
                 ),
             )
         )
@@ -255,11 +373,21 @@ def _valid_graph():
                 "CLOSE",
                 "101",
                 schedule.sessions[20].close_at,
-                _provenance(
+                _bound_provenance(
                     AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
                     f"{index + 600:064x}",
                     required=False,
                     selector=f"current/{isin}",
+                    object_projection={
+                        "authority": AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
+                        "schema_version": "nse-session-ohlcv@v1",
+                        "isin": isin,
+                        "symbol": member.symbol,
+                        "session_date": schedule.sessions[20].session_date,
+                        "field": "CLOSE",
+                        "close": "101",
+                        "market_scope_ends_at": schedule.sessions[20].close_at,
+                    },
                 ),
             )
         )
@@ -274,26 +402,42 @@ def _valid_graph():
             status="NO_BREAK",
             checked_event_identities=(),
             checked_events=(),
-            provenance=_provenance(
+            provenance=_bound_provenance(
                 AuthorityIdentityV1.NSE_CM,
                 f"{index + 700:064x}",
                 selector=f"status/{isin}",
+                object_projection={
+                    **common,
+                    "status": "NO_BREAK",
+                    "checked_event_identities": (),
+                    "checked_events": (),
+                },
             ),
         )
         completeness = NegativeCompletenessProofV1(
             **common,
             covered_event_classes="ALL_COMPARABILITY_BREAKING_ACTIONS_V1",
             completeness="COMPLETE",
-            provenance=_provenance(
+            provenance=_bound_provenance(
                 AuthorityIdentityV1.NSE_CM,
                 f"{index + 800:064x}",
                 selector=f"complete/{isin}",
+                object_projection={
+                    **common,
+                    "covered_event_classes": "ALL_COMPARABILITY_BREAKING_ACTIONS_V1",
+                    "completeness": "COMPLETE",
+                },
             ),
         )
-        revision_provenance = _provenance(
+        revision_provenance = _bound_provenance(
             AuthorityIdentityV1.NSE_CM,
             f"{index + 900:064x}",
             selector=f"revision/{isin}",
+            object_projection={
+                **common,
+                "checked_through": schedule.sessions[21].open_at,
+                "lineage_status": "CURRENT_AT_EVIDENCE_CUTOFF",
+            },
         )
         revision = RevisionLineageProofV1(
             **common,
@@ -307,10 +451,16 @@ def _valid_graph():
             prior_symbol=member.symbol,
             current_symbol=member.symbol,
             continuity_status="SAME_ISSUE_CONTINUITY_PROVEN",
-            provenance=_provenance(
+            provenance=_bound_provenance(
                 AuthorityIdentityV1.NSE_CM,
                 f"{index + 1000:064x}",
                 selector=f"continuity/{isin}",
+                object_projection={
+                    **common,
+                    "prior_symbol": member.symbol,
+                    "current_symbol": member.symbol,
+                    "continuity_status": "SAME_ISSUE_CONTINUITY_PROVEN",
+                },
             ),
         )
         comparability.append(
@@ -322,10 +472,25 @@ def _valid_graph():
                 negative_completeness_proof=completeness,
                 revision_proof=revision,
                 identity_continuity_proof=continuity,
-                provenance=_provenance(
+                provenance=_bound_provenance(
                     AuthorityIdentityV1.NSE_CM,
                     f"{index + 1100:064x}",
                     selector=f"comparability/{isin}",
+                    revision_components=(
+                        status.provenance.revision_identity_sha256,
+                        completeness.provenance.revision_identity_sha256,
+                        revision.provenance.revision_identity_sha256,
+                        continuity.provenance.revision_identity_sha256,
+                    ),
+                    object_projection={
+                        **common,
+                        "comparison_basis": "RAW_CLOSE_NO_BREAK_PROVEN",
+                        "status": "NO_BREAK",
+                        "status_proof": status,
+                        "negative_completeness_proof": completeness,
+                        "revision_proof": revision,
+                        "identity_continuity_proof": continuity,
+                    },
                 ),
             )
         )
@@ -340,6 +505,10 @@ def _valid_graph():
         "current_closes": tuple(current),
         "comparability": tuple(comparability),
         "policy_binding": _policy(),
+        "expected_reviewed_build": ExpectedReviewedBuildV1.from_manifest_bytes(
+            *_policy().manifest_bytes_tuple
+        ),
+        "verified_source_receipts": tuple(receipts),
         "input_identity_sha256": "9" * 64,
     }
 
@@ -357,7 +526,10 @@ def test_complete_exact_fact_graph_is_admitted_and_policy_bound() -> None:
     assert facts.schedule.sessions[20].open_at.endswith("04:00:00.000000Z")
     assert facts.schedule.sessions[20].close_at.endswith("10:15:00.000000Z")
     trace = facts.schedule.sessions[20].source_trace
-    assert trace.applied_correction_revision_identities == ("d" * 64, "e" * 64)
+    assert trace.applied_correction_revision_identities == tuple(
+        item.provenance.revision_identity_sha256
+        for item in facts.schedule.applied_corrections[2:]
+    )
     assert (
         facts.source_policy_identity_sha256
         == values["policy_binding"].source_policy_identity_sha256
@@ -1317,7 +1489,11 @@ def test_no_break_event_proof_rejects_canonicality_and_binding_faults(
         dataclasses.replace(fact, status_proof=status),
         *facts[1:],
     )
-    expected = "canonical" if fault == "duplicate" else "binding mismatch"
+    expected = (
+        "canonical|source projection"
+        if fault == "duplicate"
+        else "binding mismatch|source projection"
+    )
     with pytest.raises(FactGraphAdmissionError, match=expected):
         admit_verified_market_regime_facts_v1(**values)
 
@@ -1469,3 +1645,330 @@ def test_remaining_constructor_and_schedule_fold_branches() -> None:
     )
     with pytest.raises(FactGraphAdmissionError):
         admit_session_schedule_v1(bases, (special,), schedule.base_schedule_provenance)
+
+
+def test_expected_reviewed_build_is_an_independent_exact_trust_anchor() -> None:
+    binding = _policy()
+    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
+        binding.source_policy_manifest_bytes,
+        binding.validation_policy_manifest_bytes,
+        binding.semantic_policy_manifest_bytes,
+        binding.code_build_manifest_bytes,
+    )
+    changed_semantic = canonical_json_lf(
+        {
+            **_manifest_dict(binding.semantic_policy_manifest_bytes),
+            "classification_projection": "MUTATED-AND-REHASHED@v1",
+        }
+    )
+    with pytest.raises(FactGraphAdmissionError):
+        TrustedPolicyBindingV1.from_manifest_bytes(
+            binding.source_policy_manifest_bytes,
+            binding.validation_policy_manifest_bytes,
+            changed_semantic,
+            binding.code_build_manifest_bytes,
+            expected_reviewed_build=expected,
+        )
+
+
+def test_verified_facts_direct_constructor_is_not_an_admission_bypass() -> None:
+    values = _valid_graph()
+    with pytest.raises(FactGraphAdmissionError, match="admission"):
+        VerifiedMarketRegimeFactsV1(
+            values["request"],
+            values["membership"],
+            values["schedule"],
+            list(values["prior_closes"]),
+            list(values["current_closes"]),
+            list(values["comparability"]),
+            None,
+            "bad",
+            ZERO,
+            ZERO,
+            ZERO,
+        )
+
+
+def test_verified_receipt_requires_content_bound_canonical_projections() -> None:
+    with pytest.raises(FactGraphAdmissionError):
+        VerifiedProvenanceReceiptV1.from_projection_values(
+            source_row_selector="rows/0",
+            object_identity_projection="canonical-object-v1",
+            revision_identity_projection="canonical-revision-v1",
+            object_projection={"close": "100"},
+            revision_components=(),
+            supersedes_identity_sha256=None,
+            source_object_override=b"{}\n",
+        )
+
+
+def test_ark171_reviewed_build_is_independent_and_schedule_is_replayable() -> None:
+    values = _valid_graph()
+    policy = values["policy_binding"]
+    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
+        policy.source_policy_manifest_bytes,
+        policy.validation_policy_manifest_bytes,
+        policy.semantic_policy_manifest_bytes,
+        policy.code_build_manifest_bytes,
+    )
+    values["expected_reviewed_build"] = expected
+    facts = admit_verified_market_regime_facts_v1(**values)
+    assert facts.schedule.base_rows
+    assert len(facts.schedule.applied_corrections) <= 32
+    with pytest.raises((FactGraphAdmissionError, TypeError)):
+        VerifiedMarketRegimeFactsV1(  # type: ignore[call-arg]
+            facts.request,
+            facts.membership,
+            facts.schedule,
+            facts.prior_closes,
+            facts.current_closes,
+            facts.comparability,
+            facts.source_policy_identity_sha256,
+            facts.validation_policy_identity_sha256,
+            facts.policy_identity_sha256,
+            facts.code_identity_sha256,
+            facts.input_identity_sha256,
+        )
+
+
+def test_ark171_coordinated_manifest_rehash_is_not_authority() -> None:
+    values = _valid_graph()
+    original = values["policy_binding"]
+    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
+        original.source_policy_manifest_bytes,
+        original.validation_policy_manifest_bytes,
+        original.semantic_policy_manifest_bytes,
+        original.code_build_manifest_bytes,
+    )
+    code = _manifest_dict(original.code_build_manifest_bytes)
+    code["source_tree_identity_sha256"] = "3" * 64
+    values["policy_binding"] = TrustedPolicyBindingV1.from_manifest_bytes(
+        original.source_policy_manifest_bytes,
+        original.validation_policy_manifest_bytes,
+        original.semantic_policy_manifest_bytes,
+        canonical_json_lf(code),
+    )
+    values["expected_reviewed_build"] = expected
+    with pytest.raises(FactGraphAdmissionError, match="expected reviewed build"):
+        admit_verified_market_regime_facts_v1(**values)
+
+
+
+def test_source_receipt_and_projection_receipt_fail_closed_branches() -> None:
+    canonical = canonical_json_lf({"close": "100"})
+    with pytest.raises(FactGraphAdmissionError, match="immutable bytes"):
+        SourceObjectReceiptV1(ZERO, bytearray(canonical), "application/json")  # type: ignore[arg-type]
+    with pytest.raises(FactGraphAdmissionError, match="identity mismatch"):
+        SourceObjectReceiptV1(ZERO, canonical, "application/json")
+
+    valid = VerifiedProvenanceReceiptV1.from_projection_values(
+        source_row_selector="rows/0",
+        object_identity_projection="canonical-object-v1",
+        revision_identity_projection="canonical-revision-v1",
+        object_projection={"close": "100"},
+        revision_components=(),
+        supersedes_identity_sha256=None,
+    )
+    with pytest.raises(FactGraphAdmissionError, match="immutable bytes"):
+        dataclasses.replace(
+            valid,
+            object_identity_canonical_bytes=bytearray(
+                valid.object_identity_canonical_bytes
+            ),
+        )
+
+    def malformed_revision(revision: object) -> VerifiedProvenanceReceiptV1:
+        object_value = {"close": "100"}
+        object_bytes = canonical_json_lf(object_value)
+        revision_bytes = canonical_json_lf(revision)
+        source_bytes = canonical_json_lf(
+            {
+                "object_identity_projection": {
+                    "name": "canonical-object-v1",
+                    "value": object_value,
+                },
+                "revision_identity_projection": {
+                    "name": "canonical-revision-v1",
+                    "value": revision,
+                },
+                "source_row_selector": "rows/0",
+            }
+        )
+        source = SourceObjectReceiptV1(
+            hashlib.sha256(source_bytes).hexdigest(),
+            source_bytes,
+            "application/json",
+        )
+        return VerifiedProvenanceReceiptV1(
+            source,
+            "rows/0",
+            "canonical-object-v1",
+            "canonical-revision-v1",
+            object_bytes,
+            revision_bytes,
+        )
+
+    base_revision = {
+        "object_identity_sha256": hashlib.sha256(canonical).hexdigest(),
+        "revision_components": [],
+        "supersedes_identity_sha256": None,
+    }
+    bad_revisions = (
+        ({**base_revision, "object_identity_sha256": ZERO}, "revision/object"),
+        ({**base_revision, "revision_components": {}}, "must be an array"),
+        ({**base_revision, "revision_components": [ZERO, ZERO]}, "duplicate"),
+        ({**base_revision, "supersedes_identity_sha256": "bad"}, "[Ss]ha256|Sha256"),
+    )
+    for revision, message in bad_revisions:
+        with pytest.raises(FactGraphAdmissionError, match=message):
+            malformed_revision(revision)
+
+    superseding = VerifiedProvenanceReceiptV1.from_projection_values(
+        source_row_selector="rows/1",
+        object_identity_projection="canonical-object-v1",
+        revision_identity_projection="canonical-revision-v1",
+        object_projection={"close": "101"},
+        revision_components=(ZERO,),
+        supersedes_identity_sha256=ONE,
+    )
+    assert superseding.supersedes_identity_sha256 == ONE
+    assert superseding.revision_components == (ZERO,)
+
+
+def test_reviewed_build_and_schedule_bounds_fail_closed() -> None:
+    values = _valid_graph()
+    schedule = values["schedule"]
+    with pytest.raises(FactGraphAdmissionError, match="too many schedule corrections"):
+        SessionScheduleFactV1(
+            schedule.authority,
+            schedule.base_rows,
+            schedule.sessions,
+            (schedule.applied_corrections[0],) * 33,
+            schedule.base_schedule_provenance,
+        )
+
+    binding = values["policy_binding"]
+    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
+        *binding.manifest_bytes_tuple
+    )
+    object.__setattr__(
+        expected, "source_policy_manifest_canonical_bytes_hex", "not-hex"
+    )
+    with pytest.raises(FactGraphAdmissionError, match="invalid reviewed manifest hex"):
+        _ = expected.manifest_bytes_tuple
+
+    empty = ExpectedReviewedBuildV1.from_manifest_bytes(*binding.manifest_bytes_tuple)
+    object.__setattr__(empty, "source_policy_manifest_canonical_bytes_hex", "")
+    with pytest.raises(FactGraphAdmissionError, match="byte bound"):
+        TrustedPolicyBindingV1.from_manifest_bytes(
+            *binding.manifest_bytes_tuple,
+            expected_reviewed_build=empty,
+        )
+
+    wrong_identity = ExpectedReviewedBuildV1.from_manifest_bytes(
+        *binding.manifest_bytes_tuple
+    )
+    object.__setattr__(wrong_identity, "source_policy_identity_sha256", ZERO)
+    with pytest.raises(FactGraphAdmissionError, match="identity mismatch"):
+        TrustedPolicyBindingV1.from_manifest_bytes(
+            *binding.manifest_bytes_tuple,
+            expected_reviewed_build=wrong_identity,
+        )
+
+
+def test_verified_receipt_index_and_policy_binding_fail_closed() -> None:
+    values = _valid_graph()
+    receipt = values["verified_source_receipts"][0]
+    values["verified_source_receipts"] = (receipt,) * 1_025
+    with pytest.raises(FactGraphAdmissionError, match="too many verified"):
+        admit_verified_market_regime_facts_v1(**values)
+
+    values = _valid_graph()
+    receipt = values["verified_source_receipts"][0]
+    values["verified_source_receipts"] += (receipt,)
+    with pytest.raises(FactGraphAdmissionError, match="ambiguous verified"):
+        admit_verified_market_regime_facts_v1(**values)
+
+    values = _valid_graph()
+    values["verified_source_receipts"] = ()
+    with pytest.raises(FactGraphAdmissionError, match="no verified source receipt"):
+        admit_verified_market_regime_facts_v1(**values)
+
+    values = _valid_graph()
+    receipt = values["verified_source_receipts"][0]
+    object.__setattr__(receipt, "object_identity_projection", "unreviewed-v2")
+    with pytest.raises(FactGraphAdmissionError, match="reviewed policy"):
+        admit_verified_market_regime_facts_v1(**values)
+
+    values = _valid_graph()
+    object.__setattr__(values["schedule"].base_schedule_provenance, "object_identity_sha256", ZERO)
+    with pytest.raises(FactGraphAdmissionError, match="content identity mismatch"):
+        admit_verified_market_regime_facts_v1(**values)
+
+    values = _valid_graph()
+    unused = VerifiedProvenanceReceiptV1.from_projection_values(
+        source_row_selector="unused/0",
+        object_identity_projection="canonical-object-v1",
+        revision_identity_projection="canonical-revision-v1",
+        object_projection={"unused": True},
+        revision_components=(),
+        supersedes_identity_sha256=None,
+    )
+    values["verified_source_receipts"] += (unused,)
+    with pytest.raises(FactGraphAdmissionError, match="unreferenced"):
+        admit_verified_market_regime_facts_v1(**values)
+
+
+def test_no_break_event_validation_rejects_projection_order_and_binding_faults() -> None:
+    values = _valid_graph()
+    status = values["comparability"][0].status_proof
+    validate = getattr(facts_module, "_validate_status_events")
+    interval = (status.interval_from, status.interval_through)
+
+    with pytest.raises(FactGraphAdmissionError, match="identity projection"):
+        validate(dataclasses.replace(status, checked_event_identities=(ZERO,)), status.isin, interval)
+
+    def event(isin: str, effective_session: str) -> CorporateActionEventV1:
+        kind = tuple(ComparabilityBreakingEventClassV1)[0]
+        projection = {
+            "effective_session": effective_session,
+            "event_kind": kind,
+            "isin": isin,
+            "provenance": status.provenance,
+        }
+        return CorporateActionEventV1(
+            hashlib.sha256(canonical_json_lf(projection)).hexdigest(),
+            isin,
+            kind,
+            effective_session,
+            status.provenance,
+        )
+
+    valid_event = event(status.isin, status.interval_from)
+    duplicate_events = dataclasses.replace(
+        status,
+        checked_event_identities=(
+            valid_event.event_identity_sha256,
+            valid_event.event_identity_sha256,
+        ),
+        checked_events=(valid_event, valid_event),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="not canonical"):
+        validate(duplicate_events, status.isin, interval)
+
+    wrong_isin_event = event(_isin(999), status.interval_from)
+    wrong_binding = dataclasses.replace(
+        status,
+        checked_event_identities=(wrong_isin_event.event_identity_sha256,),
+        checked_events=(wrong_isin_event,),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="binding mismatch"):
+        validate(wrong_binding, status.isin, interval)
+
+    populated = dataclasses.replace(
+        status,
+        checked_event_identities=(valid_event.event_identity_sha256,),
+        checked_events=(valid_event,),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="NO_BREAK"):
+        validate(populated, status.isin, interval)

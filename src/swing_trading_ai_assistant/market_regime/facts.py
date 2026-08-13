@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import Any, cast
 
@@ -35,6 +35,7 @@ __all__ = [
     "CorporateActionStatusProofV1",
     "DailyCloseFactV1",
     "EvidenceClockV1",
+    "ExpectedReviewedBuildV1",
     "FactGraphAdmissionError",
     "IdentityContinuityProofV1",
     "MembershipFactV1",
@@ -51,6 +52,7 @@ __all__ = [
     "SessionScheduleFactV1",
     "TrustedPolicyBindingV1",
     "VerifiedMarketRegimeFactsV1",
+    "VerifiedProvenanceReceiptV1",
     "admit_session_schedule_v1",
     "admit_verified_market_regime_facts_v1",
 ]
@@ -193,6 +195,186 @@ class ProvenanceV1:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceObjectReceiptV1:
+    """Content-addressed canonical source bytes retained by the application adapter."""
+
+    source_object_identity_sha256: str
+    canonical_object_bytes: bytes
+    media_type: str
+
+    def __post_init__(self) -> None:
+        _guard(validate_sha256, self.source_object_identity_sha256)
+        if type(self.canonical_object_bytes) is not bytes:
+            raise FactGraphAdmissionError("source object bytes must be immutable bytes")
+        canonical_bytes = bytes(self.canonical_object_bytes)
+        _guard(parse_canonical_json_lf, canonical_bytes, max_bytes=1_048_576)
+        if (
+            hashlib.sha256(canonical_bytes).hexdigest()
+            != self.source_object_identity_sha256
+        ):
+            raise FactGraphAdmissionError("source object identity mismatch")
+        _guard(validate_bounded_ascii, self.media_type)
+        _required_text(self.media_type, "application/json", "source object media type")
+        object.__setattr__(self, "canonical_object_bytes", canonical_bytes)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedProvenanceReceiptV1:
+    """Canonical source content and the two projections selected by source policy."""
+
+    source_object_receipt: SourceObjectReceiptV1
+    source_row_selector: str
+    object_identity_projection: str
+    revision_identity_projection: str
+    object_identity_canonical_bytes: bytes
+    revision_identity_canonical_bytes: bytes
+
+    def __post_init__(self) -> None:
+        _instance(self.source_object_receipt, SourceObjectReceiptV1, "source receipt")
+        for value in (
+            self.source_row_selector,
+            self.object_identity_projection,
+            self.revision_identity_projection,
+        ):
+            _guard(validate_bounded_ascii, value)
+        if (
+            type(self.object_identity_canonical_bytes) is not bytes
+            or type(self.revision_identity_canonical_bytes) is not bytes
+        ):
+            raise FactGraphAdmissionError("projection content must be immutable bytes")
+        object_bytes = bytes(self.object_identity_canonical_bytes)
+        revision_bytes = bytes(self.revision_identity_canonical_bytes)
+        object_value = _guard(parse_canonical_json_lf, object_bytes, max_bytes=65_536)
+        revision_value = _guard(
+            parse_canonical_json_lf, revision_bytes, max_bytes=65_536
+        )
+        expected_source = {
+            "object_identity_projection": {
+                "name": self.object_identity_projection,
+                "value": object_value,
+            },
+            "revision_identity_projection": {
+                "name": self.revision_identity_projection,
+                "value": revision_value,
+            },
+            "source_row_selector": self.source_row_selector,
+        }
+        actual_source = _guard(
+            parse_canonical_json_lf,
+            self.source_object_receipt.canonical_object_bytes,
+            max_bytes=1_048_576,
+        )
+        if actual_source != expected_source:
+            raise FactGraphAdmissionError("source content/projection binding mismatch")
+        revision = _closed_dict(
+            revision_value,
+            {
+                "object_identity_sha256",
+                "revision_components",
+                "supersedes_identity_sha256",
+            },
+            "revision projection",
+        )
+        expected_object_identity = hashlib.sha256(object_bytes).hexdigest()
+        if revision["object_identity_sha256"] != expected_object_identity:
+            raise FactGraphAdmissionError("revision/object projection mismatch")
+        components_value = revision["revision_components"]
+        if not isinstance(components_value, list):
+            raise FactGraphAdmissionError("revision components must be an array")
+        components = cast("list[object]", components_value)
+        for component in components:
+            _guard(validate_sha256, component)
+        if len(components) != len(set(cast("list[str]", components))):
+            raise FactGraphAdmissionError("duplicate revision component")
+        supersedes = revision["supersedes_identity_sha256"]
+        if supersedes is not None:
+            _guard(validate_sha256, supersedes)
+        object.__setattr__(self, "object_identity_canonical_bytes", object_bytes)
+        object.__setattr__(self, "revision_identity_canonical_bytes", revision_bytes)
+
+    @classmethod
+    def from_projection_values(
+        cls,
+        *,
+        source_row_selector: str,
+        object_identity_projection: str,
+        revision_identity_projection: str,
+        object_projection: object,
+        revision_components: Sequence[str],
+        supersedes_identity_sha256: str | None,
+        source_object_override: bytes | None = None,
+    ) -> VerifiedProvenanceReceiptV1:
+        object_bytes = canonical_json_lf(object_projection)
+        object_identity = hashlib.sha256(object_bytes).hexdigest()
+        components = tuple(revision_components)
+        for component in components:
+            _guard(validate_sha256, component)
+        if supersedes_identity_sha256 is not None:
+            _guard(validate_sha256, supersedes_identity_sha256)
+        revision_value = {
+            "object_identity_sha256": object_identity,
+            "revision_components": list(components),
+            "supersedes_identity_sha256": supersedes_identity_sha256,
+        }
+        revision_bytes = canonical_json_lf(revision_value)
+        source_value = {
+            "object_identity_projection": {
+                "name": object_identity_projection,
+                "value": object_projection,
+            },
+            "revision_identity_projection": {
+                "name": revision_identity_projection,
+                "value": revision_value,
+            },
+            "source_row_selector": source_row_selector,
+        }
+        source_bytes = (
+            canonical_json_lf(source_value)
+            if source_object_override is None
+            else bytes(source_object_override)
+        )
+        source_receipt = SourceObjectReceiptV1(
+            hashlib.sha256(source_bytes).hexdigest(), source_bytes, "application/json"
+        )
+        return cls(
+            source_receipt,
+            source_row_selector,
+            object_identity_projection,
+            revision_identity_projection,
+            object_bytes,
+            revision_bytes,
+        )
+
+    @property
+    def object_identity_sha256(self) -> str:
+        return hashlib.sha256(self.object_identity_canonical_bytes).hexdigest()
+
+    @property
+    def revision_identity_sha256(self) -> str:
+        return hashlib.sha256(self.revision_identity_canonical_bytes).hexdigest()
+
+    @property
+    def revision_components(self) -> tuple[str, ...]:
+        value = _guard(
+            parse_canonical_json_lf,
+            self.revision_identity_canonical_bytes,
+            max_bytes=65_536,
+        )
+        revision = cast("dict[str, object]", value)
+        return tuple(cast("list[str]", revision["revision_components"]))
+
+    @property
+    def supersedes_identity_sha256(self) -> str | None:
+        value = _guard(
+            parse_canonical_json_lf,
+            self.revision_identity_canonical_bytes,
+            max_bytes=65_536,
+        )
+        revision = cast("dict[str, object]", value)
+        return cast("str | None", revision["supersedes_identity_sha256"])
+
+
+@dataclass(frozen=True, slots=True)
 class MembershipMemberV1:
     isin: str
     symbol: str
@@ -287,24 +469,25 @@ class OfficialSessionV1:
 @dataclass(frozen=True, slots=True)
 class SessionScheduleFactV1:
     authority: AuthorityIdentityV1
+    base_rows: tuple[OfficialSessionBaseRowV1, ...]
     sessions: tuple[OfficialSessionV1, ...]
     applied_corrections: tuple[ScheduleCorrectionV1, ...]
     base_schedule_provenance: ProvenanceV1
 
     def __post_init__(self) -> None:
         _instance(self.authority, AuthorityIdentityV1, "schedule authority")
-        object.__setattr__(
-            self, "sessions", _tuple(self.sessions, OfficialSessionV1, "sessions")
+        bases = _tuple(self.base_rows, OfficialSessionBaseRowV1, "base schedule rows")
+        sessions = _tuple(self.sessions, OfficialSessionV1, "sessions")
+        corrections = _tuple(
+            self.applied_corrections,
+            ScheduleCorrectionV1,
+            "applied corrections",
         )
-        object.__setattr__(
-            self,
-            "applied_corrections",
-            _tuple(
-                self.applied_corrections,
-                ScheduleCorrectionV1,
-                "applied corrections",
-            ),
-        )
+        if len(corrections) > 32:
+            raise FactGraphAdmissionError("too many schedule corrections")
+        object.__setattr__(self, "base_rows", bases)
+        object.__setattr__(self, "sessions", sessions)
+        object.__setattr__(self, "applied_corrections", corrections)
         _instance(self.base_schedule_provenance, ProvenanceV1, "schedule provenance")
 
 
@@ -577,6 +760,8 @@ class TrustedPolicyBindingV1:
         validation_policy_manifest_bytes: bytes,
         semantic_policy_manifest_bytes: bytes,
         code_build_manifest_bytes: bytes,
+        *,
+        expected_reviewed_build: ExpectedReviewedBuildV1 | None = None,
     ) -> TrustedPolicyBindingV1:
         try:
             source = parse_canonical_json_lf(
@@ -599,7 +784,7 @@ class TrustedPolicyBindingV1:
             raise FactGraphAdmissionError(
                 "invalid canonical trusted policy manifest"
             ) from exc
-        return cls(
+        binding = cls(
             bytes(source_policy_manifest_bytes),
             bytes(validation_policy_manifest_bytes),
             bytes(semantic_policy_manifest_bytes),
@@ -610,12 +795,124 @@ class TrustedPolicyBindingV1:
             hashlib.sha256(code_build_manifest_bytes).hexdigest(),
             bindings,
         )
+        if expected_reviewed_build is not None:
+            _validate_expected_reviewed_build(expected_reviewed_build)
+            if (
+                binding.manifest_identity_tuple
+                != expected_reviewed_build.identity_tuple
+            ):
+                raise FactGraphAdmissionError(
+                    "manifest identity differs from expected reviewed build"
+                )
+            if (
+                binding.manifest_bytes_tuple
+                != expected_reviewed_build.manifest_bytes_tuple
+            ):
+                raise FactGraphAdmissionError(
+                    "manifest content differs from expected reviewed build"
+                )
+        return binding
+
+    @property
+    def manifest_bytes_tuple(self) -> tuple[bytes, bytes, bytes, bytes]:
+        return (
+            self.source_policy_manifest_bytes,
+            self.validation_policy_manifest_bytes,
+            self.semantic_policy_manifest_bytes,
+            self.code_build_manifest_bytes,
+        )
+
+    @property
+    def manifest_identity_tuple(self) -> tuple[str, str, str, str]:
+        return (
+            self.source_policy_identity_sha256,
+            self.validation_policy_identity_sha256,
+            self.policy_identity_sha256,
+            self.code_identity_sha256,
+        )
 
     def binding(self, kind: EvidenceKindV1) -> _SourceBinding:
         return self.source_bindings[tuple(EvidenceKindV1).index(kind)]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
+class ExpectedReviewedBuildV1:
+    """The immutable four-manifest trust root sealed into a reviewed build."""
+
+    source_policy_manifest_canonical_bytes_hex: str
+    validation_policy_manifest_canonical_bytes_hex: str
+    semantic_policy_manifest_canonical_bytes_hex: str
+    code_build_manifest_canonical_bytes_hex: str
+    source_policy_identity_sha256: str
+    validation_policy_identity_sha256: str
+    policy_identity_sha256: str
+    code_identity_sha256: str
+
+    @classmethod
+    def from_manifest_bytes(
+        cls,
+        source_policy_manifest_bytes: bytes,
+        validation_policy_manifest_bytes: bytes,
+        semantic_policy_manifest_bytes: bytes,
+        code_build_manifest_bytes: bytes,
+    ) -> ExpectedReviewedBuildV1:
+        binding = TrustedPolicyBindingV1.from_manifest_bytes(
+            source_policy_manifest_bytes,
+            validation_policy_manifest_bytes,
+            semantic_policy_manifest_bytes,
+            code_build_manifest_bytes,
+        )
+        result = object.__new__(cls)
+        for name, value in zip(
+            (
+                "source_policy_manifest_canonical_bytes_hex",
+                "validation_policy_manifest_canonical_bytes_hex",
+                "semantic_policy_manifest_canonical_bytes_hex",
+                "code_build_manifest_canonical_bytes_hex",
+            ),
+            binding.manifest_bytes_tuple,
+            strict=True,
+        ):
+            object.__setattr__(result, name, value.hex())
+        for name, value in zip(
+            (
+                "source_policy_identity_sha256",
+                "validation_policy_identity_sha256",
+                "policy_identity_sha256",
+                "code_identity_sha256",
+            ),
+            binding.manifest_identity_tuple,
+            strict=True,
+        ):
+            object.__setattr__(result, name, value)
+        return result
+
+    @property
+    def manifest_bytes_tuple(self) -> tuple[bytes, bytes, bytes, bytes]:
+        try:
+            return tuple(
+                bytes.fromhex(value)
+                for value in (
+                    self.source_policy_manifest_canonical_bytes_hex,
+                    self.validation_policy_manifest_canonical_bytes_hex,
+                    self.semantic_policy_manifest_canonical_bytes_hex,
+                    self.code_build_manifest_canonical_bytes_hex,
+                )
+            )  # type: ignore[return-value]
+        except (TypeError, ValueError) as exc:
+            raise FactGraphAdmissionError("invalid reviewed manifest hex") from exc
+
+    @property
+    def identity_tuple(self) -> tuple[str, str, str, str]:
+        return (
+            self.source_policy_identity_sha256,
+            self.validation_policy_identity_sha256,
+            self.policy_identity_sha256,
+            self.code_identity_sha256,
+        )
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class VerifiedMarketRegimeFactsV1:
     request: MarketRegimeRequestV1
     membership: MembershipFactV1
@@ -628,6 +925,70 @@ class VerifiedMarketRegimeFactsV1:
     policy_identity_sha256: str
     code_identity_sha256: str
     input_identity_sha256: str
+
+    def __init__(
+        self,
+        request: object,
+        membership: object,
+        schedule: object,
+        prior_closes: object,
+        current_closes: object,
+        comparability: object,
+        source_policy_identity_sha256: object,
+        validation_policy_identity_sha256: object,
+        policy_identity_sha256: object,
+        code_identity_sha256: object,
+        input_identity_sha256: object,
+    ) -> None:
+        del (
+            request,
+            membership,
+            schedule,
+            prior_closes,
+            current_closes,
+            comparability,
+            source_policy_identity_sha256,
+            validation_policy_identity_sha256,
+            policy_identity_sha256,
+            code_identity_sha256,
+            input_identity_sha256,
+        )
+        raise FactGraphAdmissionError(
+            "verified facts can only be constructed by graph admission"
+        )
+
+    @classmethod
+    def _from_admission(
+        cls,
+        request: MarketRegimeRequestV1,
+        membership: MembershipFactV1,
+        schedule: SessionScheduleFactV1,
+        prior_closes: Sequence[DailyCloseFactV1],
+        current_closes: Sequence[DailyCloseFactV1],
+        comparability: Sequence[CorporateActionComparabilityFactV1],
+        identities: tuple[str, str, str, str, str],
+    ) -> VerifiedMarketRegimeFactsV1:
+        result = object.__new__(cls)
+        object.__setattr__(result, "request", request)
+        object.__setattr__(result, "membership", membership)
+        object.__setattr__(result, "schedule", schedule)
+        object.__setattr__(result, "prior_closes", tuple(prior_closes))
+        object.__setattr__(result, "current_closes", tuple(current_closes))
+        object.__setattr__(result, "comparability", tuple(comparability))
+        for name, value in zip(
+            (
+                "source_policy_identity_sha256",
+                "validation_policy_identity_sha256",
+                "policy_identity_sha256",
+                "code_identity_sha256",
+                "input_identity_sha256",
+            ),
+            identities,
+            strict=True,
+        ):
+            _guard(validate_sha256, value)
+            object.__setattr__(result, name, value)
+        return result
 
 
 def _validate_session_values(session_date: str, open_at: str, close_at: str) -> None:
@@ -783,7 +1144,11 @@ def admit_session_schedule_v1(
     ):
         raise FactGraphAdmissionError("sessions are not strictly ordered")
     return SessionScheduleFactV1(
-        AuthorityIdentityV1.NSE_CM, sessions, changes, base_schedule_provenance
+        AuthorityIdentityV1.NSE_CM,
+        bases,
+        sessions,
+        changes,
+        base_schedule_provenance,
     )
 
 
@@ -919,12 +1284,26 @@ def _validate_code_manifest(value: object) -> None:
         _guard(validate_sha256, data[key])
 
 
-def _validate_trusted_policy_binding(binding: TrustedPolicyBindingV1) -> None:
+def _validate_expected_reviewed_build(expected: ExpectedReviewedBuildV1) -> None:
+    _instance(expected, ExpectedReviewedBuildV1, "expected reviewed build")
+    manifest_bytes = expected.manifest_bytes_tuple
+    if any(not value or len(value) > 65_536 for value in manifest_bytes):
+        raise FactGraphAdmissionError("reviewed manifest byte bound violated")
+    rebuilt = TrustedPolicyBindingV1.from_manifest_bytes(*manifest_bytes)
+    if rebuilt.manifest_identity_tuple != expected.identity_tuple:
+        raise FactGraphAdmissionError("reviewed build identity mismatch")
+
+
+def _validate_trusted_policy_binding(
+    binding: TrustedPolicyBindingV1, expected: ExpectedReviewedBuildV1
+) -> None:
+    _validate_expected_reviewed_build(expected)
     rebuilt = TrustedPolicyBindingV1.from_manifest_bytes(
         binding.source_policy_manifest_bytes,
         binding.validation_policy_manifest_bytes,
         binding.semantic_policy_manifest_bytes,
         binding.code_build_manifest_bytes,
+        expected_reviewed_build=expected,
     )
     if rebuilt != binding:
         raise FactGraphAdmissionError("trusted policy binding identity mismatch")
@@ -949,11 +1328,58 @@ def _clock_before_cutoff(
         raise FactGraphAdmissionError("evidence clock is after cutoff")
 
 
+def _fact_object_projection(value: Any) -> dict[str, object]:
+    """Project typed content while excluding its provenance identity claims."""
+    excluded = {"provenance", "selected_revision_identity_sha256"}
+    return {
+        field.name: getattr(value, field.name)
+        for field in fields(value)
+        if field.name not in excluded
+    }
+
+
+def _schedule_base_object_projection(
+    base_rows: Sequence[OfficialSessionBaseRowV1],
+) -> dict[str, object]:
+    return {
+        "authority": AuthorityIdentityV1.NSE_CM,
+        "base_rows": tuple(_fact_object_projection(row) for row in base_rows),
+    }
+
+
+_ReceiptKey = tuple[str, str]
+
+
+def _index_receipts(
+    receipts: Sequence[VerifiedProvenanceReceiptV1],
+) -> dict[_ReceiptKey, VerifiedProvenanceReceiptV1]:
+    receipt_tuple = cast(
+        "tuple[VerifiedProvenanceReceiptV1, ...]",
+        _tuple(receipts, VerifiedProvenanceReceiptV1, "verified source receipts"),
+    )
+    if len(receipt_tuple) > 1_024:
+        raise FactGraphAdmissionError("too many verified source receipts")
+    result: dict[_ReceiptKey, VerifiedProvenanceReceiptV1] = {}
+    for receipt in receipt_tuple:
+        key = (
+            receipt.source_object_receipt.source_object_identity_sha256,
+            receipt.source_row_selector,
+        )
+        if key in result:
+            raise FactGraphAdmissionError("ambiguous verified source receipt")
+        result[key] = receipt
+    return result
+
+
 def _policy_provenance(
     provenance: ProvenanceV1,
     binding: _SourceBinding,
     cutoff: str,
     requirement: PublicationRequirementV1,
+    object_projection: object,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
+    revision_components: tuple[str, ...] = (),
 ) -> None:
     if (
         provenance.authority is not binding.derived_authority
@@ -963,6 +1389,32 @@ def _policy_provenance(
         raise FactGraphAdmissionError(
             "provenance is not bound to trusted source policy"
         )
+    key = (
+        provenance.source_object_identity_sha256,
+        provenance.source_row_selector,
+    )
+    receipt = receipts.get(key)
+    if receipt is None:
+        raise FactGraphAdmissionError("provenance has no verified source receipt")
+    if (
+        receipt.object_identity_projection != binding.object_identity_projection
+        or receipt.revision_identity_projection != binding.revision_identity_projection
+    ):
+        raise FactGraphAdmissionError("source projection differs from reviewed policy")
+    if receipt.object_identity_canonical_bytes != canonical_json_lf(object_projection):
+        raise FactGraphAdmissionError(
+            "source projection does not reproduce typed content"
+        )
+    if (
+        provenance.source_object_identity_sha256
+        != receipt.source_object_receipt.source_object_identity_sha256
+        or provenance.object_identity_sha256 != receipt.object_identity_sha256
+        or provenance.revision_identity_sha256 != receipt.revision_identity_sha256
+        or provenance.supersedes_identity_sha256 != receipt.supersedes_identity_sha256
+        or receipt.revision_components != revision_components
+    ):
+        raise FactGraphAdmissionError("provenance content identity mismatch")
+    used_receipts.add(key)
     _clock_before_cutoff(provenance, cutoff, requirement)
 
 
@@ -977,6 +1429,8 @@ def _validate_membership(
     decision: str,
     binding: _SourceBinding,
     cutoff: str,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
 ) -> set[str]:
     _authority(membership.authority, AuthorityIdentityV1.NSE_INDICES, "membership")
     if membership.decision_session != decision or len(membership.members) != 50:
@@ -992,7 +1446,13 @@ def _validate_membership(
     ):
         raise FactGraphAdmissionError("membership does not cover decision session")
     _policy_provenance(
-        membership.provenance, binding, cutoff, PublicationRequirementV1.REQUIRED
+        membership.provenance,
+        binding,
+        cutoff,
+        PublicationRequirementV1.REQUIRED,
+        _fact_object_projection(membership),
+        receipts,
+        used_receipts,
     )
     if membership.provenance.authority is not membership.authority:
         raise FactGraphAdmissionError("membership provenance authority mismatch")
@@ -1005,15 +1465,10 @@ def _validate_schedule_session_trace(
     by_revision: dict[str, ScheduleCorrectionV1],
     binding: _SourceBinding,
     cutoff: str,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
 ) -> tuple[str, ...]:
     trace = session.source_trace
-    if trace.base_row_provenance is not None:
-        _policy_provenance(
-            trace.base_row_provenance,
-            binding,
-            cutoff,
-            PublicationRequirementV1.REQUIRED,
-        )
     relevant = tuple(
         item
         for item in corrections
@@ -1038,24 +1493,50 @@ def _validate_schedule_session_trace(
     return trace.applied_correction_revision_identities
 
 
+def _validate_schedule_shape(schedule: SessionScheduleFactV1) -> None:
+    _authority(schedule.authority, AuthorityIdentityV1.NSE_CM, "schedule")
+    rebuilt = admit_session_schedule_v1(
+        schedule.base_rows,
+        schedule.applied_corrections,
+        schedule.base_schedule_provenance,
+    )
+    if rebuilt != schedule:
+        raise FactGraphAdmissionError("schedule does not equal canonical replay")
+    dates = tuple(item.session_date for item in schedule.sessions)
+    if dates != tuple(sorted(dates)) or len(set(dates)) != len(dates):
+        raise FactGraphAdmissionError("schedule sessions are not canonical")
+
+
 def _validate_schedule_graph(
     schedule: SessionScheduleFactV1,
     binding: _SourceBinding,
     cutoff: str,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
 ) -> None:
-    _authority(schedule.authority, AuthorityIdentityV1.NSE_CM, "schedule")
-    if len(schedule.sessions) != 22:
-        raise FactGraphAdmissionError("schedule does not contain 22 sessions")
-    dates = tuple(item.session_date for item in schedule.sessions)
-    if dates != tuple(sorted(dates)) or len(set(dates)) != len(dates):
-        raise FactGraphAdmissionError("schedule sessions are not canonical")
+    _validate_schedule_shape(schedule)
     _policy_provenance(
         schedule.base_schedule_provenance,
         binding,
         cutoff,
         PublicationRequirementV1.REQUIRED,
+        _schedule_base_object_projection(schedule.base_rows),
+        receipts,
+        used_receipts,
     )
+    for row in schedule.base_rows:
+        _policy_provenance(
+            row.provenance,
+            binding,
+            cutoff,
+            PublicationRequirementV1.REQUIRED,
+            _fact_object_projection(row),
+            receipts,
+            used_receipts,
+        )
     corrections = schedule.applied_corrections
+    if len(corrections) > 32:
+        raise FactGraphAdmissionError("too many schedule corrections")
     keys = tuple(_correction_key(item) for item in corrections)
     revisions = tuple(item.provenance.revision_identity_sha256 for item in corrections)
     if keys != tuple(sorted(keys)) or len(set(keys)) != len(keys):
@@ -1068,13 +1549,25 @@ def _validate_schedule_graph(
         revision
         for session in schedule.sessions
         for revision in _validate_schedule_session_trace(
-            session, corrections, by_revision, binding, cutoff
+            session,
+            corrections,
+            by_revision,
+            binding,
+            cutoff,
+            receipts,
+            used_receipts,
         )
     )
     for correction in corrections:
         _validate_correction_shape(correction)
         _policy_provenance(
-            correction.provenance, binding, cutoff, PublicationRequirementV1.REQUIRED
+            correction.provenance,
+            binding,
+            cutoff,
+            PublicationRequirementV1.REQUIRED,
+            _fact_object_projection(correction),
+            receipts,
+            used_receipts,
         )
         present = correction.affected_session in sessions_by_date
         if present is (correction.correction_kind is ScheduleCorrectionKindV1.CLOSURE):
@@ -1095,6 +1588,8 @@ def _validate_close_tuple(
     binding: _SourceBinding,
     cutoff: str,
     name: str,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
 ) -> dict[str, DailyCloseFactV1]:
     if len(closes) != 50:
         raise FactGraphAdmissionError(f"{name} must contain 50 facts")
@@ -1115,6 +1610,9 @@ def _validate_close_tuple(
             binding,
             cutoff,
             PublicationRequirementV1.NOT_APPLICABLE,
+            _fact_object_projection(close),
+            receipts,
+            used_receipts,
         )
         if close.provenance.authority is not close.authority:
             raise FactGraphAdmissionError(f"{name} provenance authority mismatch")
@@ -1163,14 +1661,27 @@ def _validate_comparability_fact(
     interval: tuple[str, str],
     binding: _SourceBinding,
     cutoff: str,
+    receipts: dict[_ReceiptKey, VerifiedProvenanceReceiptV1],
+    used_receipts: set[_ReceiptKey],
 ) -> None:
     _authority(fact.authority, AuthorityIdentityV1.NSE_CM, "comparability")
     if (fact.interval_from, fact.interval_through) != interval:
         raise FactGraphAdmissionError("comparability interval mismatch")
-    _policy_provenance(
-        fact.provenance, binding, cutoff, PublicationRequirementV1.REQUIRED
+    proofs = _proofs(fact)
+    proof_revisions = tuple(
+        proof.provenance.revision_identity_sha256 for proof in proofs
     )
-    for proof in _proofs(fact):
+    _policy_provenance(
+        fact.provenance,
+        binding,
+        cutoff,
+        PublicationRequirementV1.REQUIRED,
+        _fact_object_projection(fact),
+        receipts,
+        used_receipts,
+        proof_revisions,
+    )
+    for proof in proofs:
         if (
             proof.authority is not fact.authority
             or proof.isin != fact.isin
@@ -1178,7 +1689,13 @@ def _validate_comparability_fact(
         ):
             raise FactGraphAdmissionError("nested proof binding mismatch")
         _policy_provenance(
-            proof.provenance, binding, cutoff, PublicationRequirementV1.REQUIRED
+            proof.provenance,
+            binding,
+            cutoff,
+            PublicationRequirementV1.REQUIRED,
+            _fact_object_projection(proof),
+            receipts,
+            used_receipts,
         )
     _validate_status_events(fact.status_proof, fact.isin, interval)
     revision = fact.revision_proof
@@ -1204,18 +1721,23 @@ def admit_verified_market_regime_facts_v1(
     current_closes: Sequence[DailyCloseFactV1],
     comparability: Sequence[CorporateActionComparabilityFactV1],
     policy_binding: TrustedPolicyBindingV1,
+    expected_reviewed_build: ExpectedReviewedBuildV1,
+    verified_source_receipts: Sequence[VerifiedProvenanceReceiptV1],
     input_identity_sha256: str,
 ) -> VerifiedMarketRegimeFactsV1:
-    """Admit a complete, exact, policy-bound verified fact graph or fail closed."""
+    """Admit a complete, exact, sealed-build-bound fact graph or fail closed."""
     for value, expected, name in (
         (request, MarketRegimeRequestV1, "request"),
         (membership, MembershipFactV1, "membership"),
         (schedule, SessionScheduleFactV1, "schedule"),
         (policy_binding, TrustedPolicyBindingV1, "policy binding"),
+        (expected_reviewed_build, ExpectedReviewedBuildV1, "expected reviewed build"),
     ):
         _instance(value, expected, name)
     _guard(validate_sha256, input_identity_sha256)
-    _validate_trusted_policy_binding(policy_binding)
+    _validate_trusted_policy_binding(policy_binding, expected_reviewed_build)
+    receipts = _index_receipts(verified_source_receipts)
+    used_receipts: set[_ReceiptKey] = set()
     prior_tuple = cast(
         "tuple[DailyCloseFactV1, ...]",
         _tuple(prior_closes, DailyCloseFactV1, "prior closes"),
@@ -1244,13 +1766,19 @@ def admit_verified_market_regime_facts_v1(
     if not decision.close_at < cutoff:
         raise FactGraphAdmissionError("decision close must precede evidence cutoff")
     _validate_schedule_graph(
-        schedule, policy_binding.binding(EvidenceKindV1.SESSION_SCHEDULE), cutoff
+        schedule,
+        policy_binding.binding(EvidenceKindV1.SESSION_SCHEDULE),
+        cutoff,
+        receipts,
+        used_receipts,
     )
     isins = _validate_membership(
         membership,
         decision.session_date,
         policy_binding.binding(EvidenceKindV1.MEMBERSHIP),
         cutoff,
+        receipts,
+        used_receipts,
     )
     prior_map = _validate_close_tuple(
         prior_tuple,
@@ -1260,6 +1788,8 @@ def admit_verified_market_regime_facts_v1(
         policy_binding.binding(EvidenceKindV1.PRIOR_CLOSES),
         cutoff,
         "prior closes",
+        receipts,
+        used_receipts,
     )
     current_map = _validate_close_tuple(
         current_tuple,
@@ -1269,6 +1799,8 @@ def admit_verified_market_regime_facts_v1(
         policy_binding.binding(EvidenceKindV1.CURRENT_CLOSES),
         cutoff,
         "current closes",
+        receipts,
+        used_receipts,
     )
     if len(comparable_tuple) != 50:
         raise FactGraphAdmissionError("comparability must contain 50 facts")
@@ -1285,17 +1817,18 @@ def admit_verified_market_regime_facts_v1(
             interval,
             binding,
             cutoff,
+            receipts,
+            used_receipts,
         )
-    return VerifiedMarketRegimeFactsV1(
+    if used_receipts != set(receipts):
+        raise FactGraphAdmissionError("unreferenced verified source receipt")
+    identities = (*expected_reviewed_build.identity_tuple, input_identity_sha256)
+    return VerifiedMarketRegimeFactsV1._from_admission(  # pyright: ignore[reportPrivateUsage]
         request,
         membership,
         schedule,
         prior_tuple,
         current_tuple,
         comparable_tuple,
-        policy_binding.source_policy_identity_sha256,
-        policy_binding.validation_policy_identity_sha256,
-        policy_binding.policy_identity_sha256,
-        policy_binding.code_identity_sha256,
-        input_identity_sha256,
+        identities,
     )
