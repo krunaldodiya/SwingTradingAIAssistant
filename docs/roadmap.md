@@ -45,6 +45,18 @@ Write and approve the Market Regime specification before coding it:
 
 Implement and validate the module only after that specification is frozen.
 
+## Phase 3: Second module — Sector Analysis
+
+Freeze `nifty50-sector-participation@v1` as the minimal V1 fact contract inside
+architecture-locked Module 2, Sector Analysis. It is not an added or renamed
+eleventh module. It reuses the exact private Market Regime member directions,
+joins all 50 decision-session ISINs to point-in-time official NSE Indices
+Sector-tier evidence, and permits owner-private per-sector counts only.
+[Plan 14](plans/14-sector-participation-contract.md) and
+[Plan 15](plans/15-sector-participation-validation-protocol.md) define the
+owner-approved specification and validation protocol; implementation and real
+evidence are future and unstarted.
+
 ## Later modules
 
 Proceed in locked pipeline order, integrating and validating one module at a
