@@ -57,7 +57,9 @@ class OpportunityCensusReportV1:
     insufficient_outcome_count: int
     ambiguous_outcome_count: int
     strictly_gt_2_percent_count: int
-    return_distribution: object | None
+    return_distribution: CensusDistributionV1 | None
+    strict_threshold_windows: tuple[CensusWindowV1, ...]
+    additional_reason_counts: tuple[tuple[str, int], ...]
     evidence_seal_sha256: str
     data_manifest_sha256: str
     universe_evidence_sha256: tuple[str, ...]
@@ -122,6 +124,21 @@ class OpportunityCensusReportV1:
             != self.insufficient_anchor_count
             or self.strictly_gt_2_percent_count > self.observed_outcome_count
             or (self.observed_outcome_count == 0) != (self.return_distribution is None)
+            or (
+                self.return_distribution is not None
+                and type(self.return_distribution) is not CensusDistributionV1
+            )
+            or type(self.strict_threshold_windows) is not tuple
+            or any(
+                type(item) is not CensusWindowV1
+                for item in self.strict_threshold_windows
+            )
+            or len(self.strict_threshold_windows) != self.strictly_gt_2_percent_count
+            or type(self.additional_reason_counts) is not tuple
+            or any(
+                type(reason) is not str or type(count) is not int or count < 0
+                for reason, count in self.additional_reason_counts
+            )
             or self.evidence_status
             is not (
                 CensusEvidenceStatusV1.INSUFFICIENT_EVIDENCE
@@ -229,6 +246,11 @@ def build_strict_retained_census_v1(
         0,
         0,
         None,
+        (),
+        (
+            ("SCHEDULE_NOT_KNOWN_AT_DECISION_CUTOFF", late),
+            ("CORPORATE_ACTION_EVIDENCE_MISSING_OR_STALE", requested),
+        ),
         evidence_seal_sha256,
         data_manifest_sha256,
         universe_evidence_sha256,
@@ -284,7 +306,28 @@ def _report_value(value: OpportunityCensusReportV1) -> dict[str, object]:
         "provider_attempt_count": value.provider_attempt_count,
         "requested_stock_session_pairs": value.requested_stock_session_pairs,
         "research_role": value.research_role,
-        "return_distribution": value.return_distribution,
+        "return_distribution": None
+        if value.return_distribution is None
+        else {
+            field: getattr(value.return_distribution, field)
+            for field in value.return_distribution.__dataclass_fields__
+        },
+        "strict_threshold_windows": [
+            {
+                "symbol": item.symbol,
+                "isin": item.isin,
+                "decision_date": item.decision_date.isoformat(),
+                "entry_date": item.entry_date.isoformat(),
+                "exit_date": item.exit_date.isoformat(),
+                "gross_return_percent": item.gross_return_percent,
+                "observation_sha256": item.observation_sha256,
+            }
+            for item in value.strict_threshold_windows
+        ],
+        "additional_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in value.additional_reason_counts
+        ],
         "strictly_gt_2_percent_count": value.strictly_gt_2_percent_count,
         "warnings": [
             {"code": code, "message": message} for code, message in value.warnings

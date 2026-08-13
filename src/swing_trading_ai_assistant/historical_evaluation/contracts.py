@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
-from typing import ClassVar, Final
+from typing import ClassVar, Final, cast
 
 ANCHOR_ELIGIBILITY_SCHEMA_VERSION_V1: Final = 1
 ANCHOR_ELIGIBILITY_CONTRACT_VERSION_V1: Final = "nifty50-anchor-eligibility@v1"
@@ -468,6 +468,7 @@ class ResolvedOfficialSessionsV1:
     sessions: tuple[OfficialSessionV1, ...]
     known_at: datetime
     source_evidence_sha256: str
+    source_canonical_json: bytes
 
     def __post_init__(self) -> None:
         if (
@@ -479,7 +480,46 @@ class ResolvedOfficialSessionsV1:
             or type(self.known_at) is not datetime
             or type(self.source_evidence_sha256) is not str
             or _DIGEST.fullmatch(self.source_evidence_sha256) is None
+            or type(self.source_canonical_json) is not bytes
+            or hashlib.sha256(self.source_canonical_json).hexdigest()
+            != self.source_evidence_sha256
         ):
+            raise ValueError("invalid resolved official sessions")
+        try:
+            parsed: object = json.loads(self.source_canonical_json)
+            if type(parsed) is not dict:
+                raise ValueError
+            value = cast(dict[str, object], parsed)
+            raw_sessions = value.get("sessions")
+            if type(raw_sessions) is not list:
+                raise ValueError
+            values: list[OfficialSessionV1] = []
+            for raw_session in cast(list[object], raw_sessions):
+                if type(raw_session) is not dict:
+                    raise ValueError
+                item = cast(dict[str, object], raw_session)
+                trade_date, open_at, close_at = (
+                    item.get("trade_date"),
+                    item.get("open_at"),
+                    item.get("close_at"),
+                )
+                if (
+                    type(trade_date) is not str
+                    or type(open_at) is not str
+                    or type(close_at) is not str
+                ):
+                    raise ValueError
+                values.append(
+                    OfficialSessionV1(
+                        date.fromisoformat(trade_date),
+                        datetime.fromisoformat(open_at.replace("Z", "+00:00")),
+                        datetime.fromisoformat(close_at.replace("Z", "+00:00")),
+                    )
+                )
+            reconstructed = tuple(values)
+        except Exception as exc:
+            raise ValueError("invalid resolved official sessions") from exc
+        if reconstructed != self.sessions:
             raise ValueError("invalid resolved official sessions")
         object.__setattr__(self, "known_at", _utc(self.known_at, "known_at"))
 
@@ -606,6 +646,26 @@ class FiveSessionOutcomeObservationV1:
             )
         ):
             raise ValueError("invalid outcome observation")
+        if observed:
+            entry_trade_date = cast(date, self.entry_trade_date)
+            entry_at = cast(datetime, self.entry_at)
+            exit_trade_date = cast(date, self.exit_trade_date)
+            exit_at = cast(datetime, self.exit_at)
+            gross_return_percent = cast(str, self.gross_return_percent)
+            strictly_gt_2_percent = cast(bool, self.strictly_gt_2_percent)
+            try:
+                rendered_return = Decimal(gross_return_percent)
+            except Exception as exc:
+                raise ValueError("invalid outcome observation") from exc
+            if (
+                entry_trade_date >= exit_trade_date
+                or entry_at >= exit_at
+                or entry_at.astimezone(_IST).date() != entry_trade_date
+                or exit_at.astimezone(_IST).date() != exit_trade_date
+                or format(rendered_return, ".6f") != gross_return_percent
+                or strictly_gt_2_percent != (rendered_return > Decimal("2"))
+            ):
+                raise ValueError("invalid outcome observation")
 
     def canonical_json_bytes(self) -> bytes:
         return _canonical_bytes(

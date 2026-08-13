@@ -59,6 +59,7 @@ class RetainedCensusServiceV1:
             schedule_bytes = tuple(path.read_bytes() for path in request.schedule_paths)
             schedule_parsed = tuple(json.loads(value) for value in schedule_bytes)
             data_manifest_bytes = request.data_manifest_path.read_bytes()
+            data_manifest_parsed: object = json.loads(data_manifest_bytes)
             selections_raw = seal.get("selections")
             schedules_raw = seal.get("schedule_digests_sha256")
             source_raw = seal.get("source_evidence")
@@ -151,56 +152,76 @@ class RetainedCensusServiceV1:
                 != tuple(sorted(cast(list[str], schedules)))
                 or hashlib.sha256(data_manifest_bytes).hexdigest() != data_manifest
                 or type(universe_parsed) is not dict
+                or type(data_manifest_parsed) is not dict
                 or any(type(value) is not dict for value in schedule_parsed)
             ):
                 raise ValueError
             universe_value = cast(dict[str, object], universe_parsed)
+            manifest_value = cast(dict[str, object], data_manifest_parsed)
             schedule_values = tuple(
                 cast(dict[str, object], value) for value in schedule_parsed
             )
+            raw_constituents = universe_value.get("constituents")
+            raw_results = manifest_value.get("results")
+            if type(raw_constituents) is not list or type(raw_results) is not list:
+                raise ValueError
+            universe_identities: set[tuple[str, str]] = set()
+            for raw_member in cast(list[object], raw_constituents):
+                if type(raw_member) is not dict:
+                    raise ValueError
+                member = cast(dict[str, object], raw_member)
+                isin, symbol = member.get("isin"), member.get("symbol")
+                if type(isin) is not str or type(symbol) is not str:
+                    raise ValueError
+                universe_identities.add((isin, symbol))
+            manifest_symbols: set[str] = set()
+            for raw_result in cast(list[object], raw_results):
+                if type(raw_result) is not dict:
+                    raise ValueError
+                symbol = cast(dict[str, object], raw_result).get("symbol")
+                if type(symbol) is not str:
+                    raise ValueError
+                manifest_symbols.add(symbol)
+            official_dates: list[date] = []
+            for schedule_value in schedule_values:
+                raw_sessions = schedule_value.get("sessions")
+                if (
+                    type(raw_sessions) is not list
+                    or type(schedule_value.get("as_of")) is not str
+                ):
+                    raise ValueError
+                for raw_session in cast(list[object], raw_sessions):
+                    if type(raw_session) is not dict:
+                        raise ValueError
+                    session = cast(dict[str, object], raw_session)
+                    trade_date = session.get("trade_date")
+                    open_at = session.get("open_at")
+                    close_at = session.get("close_at")
+                    if (
+                        type(trade_date) is not str
+                        or type(open_at) is not str
+                        or type(close_at) is not str
+                    ):
+                        raise ValueError
+                    day = date.fromisoformat(trade_date)
+                    if not (_timestamp(open_at) < _timestamp(close_at)):
+                        raise ValueError
+                    official_dates.append(day)
             if (
-                len(cast(list[object], universe_value.get("constituents"))) != 50
+                len(universe_identities) != 50
+                or identities != universe_identities
+                or manifest_symbols != {symbol for _, symbol in identities}
+                or manifest_value.get("provider_attempt_count") != 0
                 or _timestamp(universe_value.get("membership_retrieved_at"))
                 != datetime(2026, 8, 12, 8, 56, 38, 181171, tzinfo=UTC)
-                or sum(
-                    len(cast(list[object], value.get("sessions")))
-                    for value in schedule_values
-                )
-                != 31
+                or tuple(sorted(set(official_dates))) != tuple(official_dates)
+                or len(official_dates) != 31
             ):
                 raise ValueError
             cutoff = request.observation_cutoff.astimezone(UTC)
             if _timestamp(seal.get("knowledge_cutoff")) > cutoff:
                 raise ValueError
-            july = (
-                1,
-                2,
-                3,
-                6,
-                7,
-                8,
-                9,
-                10,
-                13,
-                14,
-                15,
-                16,
-                17,
-                20,
-                21,
-                22,
-                23,
-                24,
-                27,
-                28,
-                29,
-                30,
-                31,
-            )
-            august = (3, 4, 5, 6, 7, 10, 11, 12)
-            sessions = tuple(date(2026, 7, d) for d in july) + tuple(
-                date(2026, 8, d) for d in august
-            )
+            sessions = tuple(official_dates)
             return build_strict_retained_census_v1(
                 stock_count=50,
                 decision_sessions=sessions,

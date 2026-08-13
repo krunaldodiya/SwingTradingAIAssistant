@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
@@ -66,15 +68,35 @@ def fact(
     )
 
 
+def resolved_sessions() -> ResolvedOfficialSessionsV1:
+    sessions = tuple(session(day) for day in (2, 3, 4, 5, 6))
+    payload = json.dumps(
+        {
+            "sessions": [
+                {
+                    "trade_date": item.trade_date.isoformat(),
+                    "open_at": item.open_at.isoformat(),
+                    "close_at": item.close_at.isoformat(),
+                }
+                for item in sessions
+            ]
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return ResolvedOfficialSessionsV1(
+        sessions,
+        datetime(2026, 7, 6, 10, tzinfo=UTC),
+        hashlib.sha256(payload).hexdigest(),
+        payload,
+    )
+
+
 def request() -> FiveSessionOutcomeRequestV1:
     return FiveSessionOutcomeRequestV1(
         eligible_anchor=eligible_anchor(),
         observation_cutoff=datetime(2026, 7, 10, 10, tzinfo=UTC),
-        resolved_official_sessions=ResolvedOfficialSessionsV1(
-            tuple(session(day) for day in (2, 3, 4, 5, 6)),
-            datetime(2026, 7, 6, 10, tzinfo=UTC),
-            "a" * 64,
-        ),
+        resolved_official_sessions=resolved_sessions(),
     )
 
 
@@ -293,3 +315,15 @@ def test_authoritative_schedule_tuple_and_known_at_are_bound_to_observation_iden
     )
     changed = calculate_five_session_outcome_v1(changed_request, changed_evidence)
     assert changed.observation_identity_sha256 != original.observation_identity_sha256
+
+
+def test_outcome_observation_rejects_impossible_dates_and_threshold() -> None:
+    result = calculate_five_session_outcome_v1(request(), evidence())
+    with pytest.raises(ValueError, match="outcome observation"):
+        replace(
+            result,
+            entry_trade_date=date(2099, 1, 1),
+            exit_trade_date=date(2000, 1, 1),
+            gross_return_percent="-999.000000",
+            strictly_gt_2_percent=True,
+        )
