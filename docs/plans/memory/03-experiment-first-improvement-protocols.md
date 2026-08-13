@@ -260,8 +260,13 @@ alternative, and a new proposal under Document 04:
   generative query expansion;
 - a graph backend, graph database, ontology service, community detection, or
   multi-hop inference beyond the exact-ID experiment;
-- plugin ecosystems or arbitrary retriever/consolidator callbacks;
-- server, MCP, remote API, hosted memory, sync, or multi-machine writers;
+- plugin ecosystems or arbitrary retriever/consolidator callbacks (the two
+  statically registered, reviewed host adapters in
+  [Document 06](06-harness-neutral-core-and-adapter-contract-prd.md) are a closed core
+  boundary, not a general plugin exception);
+- public CLI, server, MCP, remote API, hosted memory, sync, or multi-machine
+  writers; Document 06's optional private bounded host bridge is not a public
+  interface;
 - mental models, persona/user profiling, reflection, dreams, salience/importance
   learning, or proactive background recall; and
 - automatic event-valid-time extraction or semantic contradiction detection.

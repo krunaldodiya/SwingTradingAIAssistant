@@ -2,7 +2,8 @@
 
 Status: **sealed comparative-audit record; no implementation authority**
 Depends on: [suite evidence hierarchy](README.md) and
-[experiment gates](03-experiment-first-improvement-protocols.md)
+[experiment gates](03-experiment-first-improvement-protocols.md), plus the
+[harness-neutral adapter boundary](06-harness-neutral-core-and-adapter-contract-prd.md)
 
 ## Purpose and scope
 

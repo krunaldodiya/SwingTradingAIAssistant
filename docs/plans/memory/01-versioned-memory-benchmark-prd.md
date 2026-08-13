@@ -2,7 +2,10 @@
 
 Status: **accepted future specification; no implementation in this delivery**
 Proposed contract family: `prime-memory-benchmark@v1`
-Depends on: [suite authority](README.md) and [safety invariants](04-safety-migration-and-staged-delivery.md)
+Depends on: [suite authority](README.md),
+[safety invariants](04-safety-migration-and-staged-delivery.md), and the
+[host-adapter contract](06-harness-neutral-core-and-adapter-contract-prd.md) when an
+adapter implementation is under evaluation
 
 ## Purpose and decision
 
@@ -227,7 +230,9 @@ categories should be larger when a zero-failure gate is used.
 13. **Citation/gap behavior:** correct allowlisted citations, forged identifiers,
     unsupported claims, incomplete evidence, and explicit conflicts/gaps.
 14. **Capture fidelity:** boundary lengths, redaction, truncation, malformed EOF,
-    rewritten branches, exact duplicates, and content transformations.
+    rewritten branches, exact duplicates, content transformations, Prime/Pi
+    namespace collisions, version refusal, and same-store switching when host
+    adapters are evaluated.
 
 ## Split and leakage design
 
