@@ -1,5 +1,11 @@
 """Pure historical-evaluation domain contracts."""
 
+from .census import (
+    CensusEvidenceStatusV1,
+    CensusExecutionStatusV1,
+    OpportunityCensusReportV1,
+    build_strict_retained_census_v1,
+)
 from .contracts import (
     ANCHOR_ELIGIBILITY_CONTRACT_VERSION_V1,
     ANCHOR_ELIGIBILITY_SCHEMA_VERSION_V1,
@@ -24,6 +30,10 @@ from .contracts import (
 
 __all__ = [
     "ANCHOR_ELIGIBILITY_CONTRACT_VERSION_V1",
+    "CensusEvidenceStatusV1",
+    "CensusExecutionStatusV1",
+    "OpportunityCensusReportV1",
+    "build_strict_retained_census_v1",
     "ANCHOR_ELIGIBILITY_SCHEMA_VERSION_V1",
     "FIVE_SESSION_OUTCOME_POLICY_VERSION_V1",
     "FiveSessionOutcomeEvidenceV1",
