@@ -21,6 +21,7 @@ class _SanitizedParser(argparse.ArgumentParser):
 
 def _parser() -> argparse.ArgumentParser:
     parser = _SanitizedParser(prog="evidence-readiness", add_help=False)
+    parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument(
         "--sprint4-seal", "--seal", dest="sprint4_seal", type=Path, required=True
     )
@@ -40,9 +41,7 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--coverage-manifest", type=Path, required=True)
-    parser.add_argument("--code-identity", required=True)
-    parser.add_argument("--configuration-sha256", required=True)
-    parser.add_argument("--validation-policy-sha256", required=True)
+    parser.add_argument("--code-version-label", required=True)
     return parser
 
 
@@ -51,14 +50,13 @@ def main(argv: list[str] | None = None) -> int:
         arguments = _parser().parse_args(argv)
         manifest = PrerequisiteManifestServiceV1().run(
             PrerequisiteManifestRequestV1(
+                contract_path=arguments.contract,
                 sprint4_seal_path=arguments.sprint4_seal,
                 universe_path=arguments.universe,
                 july_schedule_path=arguments.july_schedule,
                 august_schedule_path=arguments.august_schedule,
                 coverage_manifest_path=arguments.coverage_manifest,
-                code_identity=arguments.code_identity,
-                configuration_sha256=arguments.configuration_sha256,
-                validation_policy_sha256=arguments.validation_policy_sha256,
+                code_version_label=arguments.code_version_label,
             )
         )
         sys.stdout.buffer.write(manifest.canonical_json_bytes())

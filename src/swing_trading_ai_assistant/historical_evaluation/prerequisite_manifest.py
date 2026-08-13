@@ -12,8 +12,10 @@ import json
 import os
 import re
 import stat
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, cast
 
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
@@ -29,12 +31,12 @@ PREREQUISITE_MANIFEST_CONTRACT_VERSION_V1: Final = (
 )
 READINESS_CONTRACT_VERSION_V1: Final = "forward-pit-evidence-readiness@v1"
 SOURCE_POLICY_VERSION_V1: Final = "prospective-pit-evidence-source-policy@v1"
-READINESS_CONTRACT_IDENTITY_SHA256_V1: Final = hashlib.sha256(
-    READINESS_CONTRACT_VERSION_V1.encode("ascii")
-).hexdigest()
-SOURCE_POLICY_IDENTITY_SHA256_V1: Final = hashlib.sha256(
-    SOURCE_POLICY_VERSION_V1.encode("ascii")
-).hexdigest()
+# Both labels are defined by the exact canonical Plan 11 repository bytes.
+_PLAN11_CONTRACT_SHA256: Final = (
+    "4430c270c236660e04c30fa9cccd053c742eeb49b0f6c70724b93218121ec6ae"
+)
+READINESS_CONTRACT_IDENTITY_SHA256_V1: Final = _PLAN11_CONTRACT_SHA256
+SOURCE_POLICY_IDENTITY_SHA256_V1: Final = _PLAN11_CONTRACT_SHA256
 
 _RETAINED_SEAL_SHA256: Final = (
     "3c0450aa4885dcfbf7f1e94673a2b4fec402b184dd7d224d849b4a44e537d809"
@@ -54,6 +56,61 @@ _RETAINED_COVERAGE_SHA256: Final = (
 _RETAINED_DATASET_IDENTITY_SHA256: Final = (
     "60e308121fb462283ed0295b02d71272ee13eed8e300f01420358cd0c2b5ae34"
 )
+_RETAINED_ACCOUNTING_SHA256: Final = (
+    "4ba819520e904929fc3fcdb977ab3d767e9f2f9bb4dfeba610571a3337b05762"
+)
+_RETAINED_EQUITY_IDENTITIES: Final = (
+    ("INE002A01018", "RELIANCE"),
+    ("INE009A01021", "INFY"),
+    ("INE018A01030", "LT"),
+    ("INE019A01038", "JSWSTEEL"),
+    ("INE021A01026", "ASIANPAINT"),
+    ("INE027H01010", "MAXHEALTH"),
+    ("INE030A01027", "HINDUNILVR"),
+    ("INE038A01020", "HINDALCO"),
+    ("INE040A01034", "HDFCBANK"),
+    ("INE044A01036", "SUNPHARMA"),
+    ("INE047A01021", "GRASIM"),
+    ("INE059A01026", "CIPLA"),
+    ("INE062A01020", "SBIN"),
+    ("INE066A01021", "EICHERMOT"),
+    ("INE075A01022", "WIPRO"),
+    ("INE081A01020", "TATASTEEL"),
+    ("INE089A01031", "DRREDDY"),
+    ("INE090A01021", "ICICIBANK"),
+    ("INE101A01026", "M&M"),
+    ("INE123W01016", "SBILIFE"),
+    ("INE154A01025", "ITC"),
+    ("INE155A01022", "TMPV"),
+    ("INE192A01025", "TATACONSUM"),
+    ("INE213A01029", "ONGC"),
+    ("INE237A01036", "KOTAKBANK"),
+    ("INE238A01034", "AXISBANK"),
+    ("INE239A01024", "NESTLEIND"),
+    ("INE263A01024", "BEL"),
+    ("INE280A01028", "TITAN"),
+    ("INE296A01032", "BAJFINANCE"),
+    ("INE397D01024", "BHARTIARTL"),
+    ("INE423A01024", "ADANIENT"),
+    ("INE437A01024", "APOLLOHOSP"),
+    ("INE467B01029", "TCS"),
+    ("INE481G01011", "ULTRACEMCO"),
+    ("INE522F01014", "COALINDIA"),
+    ("INE585B01010", "MARUTI"),
+    ("INE646L01027", "INDIGO"),
+    ("INE669C01036", "TECHM"),
+    ("INE721A01047", "SHRIRAMFIN"),
+    ("INE733E01010", "NTPC"),
+    ("INE742F01042", "ADANIPORTS"),
+    ("INE752E01010", "POWERGRID"),
+    ("INE758E01017", "JIOFIN"),
+    ("INE758T01015", "ETERNAL"),
+    ("INE795G01014", "HDFCLIFE"),
+    ("INE849A01020", "TRENT"),
+    ("INE860A01027", "HCLTECH"),
+    ("INE917I01010", "BAJAJ-AUTO"),
+    ("INE918I01026", "BAJAJFINSV"),
+)
 _MAX_SEAL_BYTES: Final = 128 * 1024
 _MAX_UNIVERSE_BYTES: Final = 64 * 1024
 _MAX_SCHEDULE_BYTES: Final = 1_000_000
@@ -72,72 +129,73 @@ _RETAINED_OBJECTS: Final = (
 )
 
 _PREREQUISITES: Final = (
-    {
-        "code": "GENUINE_DECLARATION_RECEIPT",
-        "required_evidence": (
+    (
+        "GENUINE_DECLARATION_RECEIPT",
+        (
             "DECLARED_AT",
             "RETAINED_AT",
             "TRUSTED_CLOCK_IDENTITY_SHA256",
             "RECEIPT_IDENTITY_SHA256",
         ),
-        "state": "MISSING",
-    },
-    {
-        "code": "MEMBERSHIP_PUBLICATION_RETRIEVAL_PROOF_TERMS",
-        "required_evidence": (
+        "MISSING",
+    ),
+    (
+        "MEMBERSHIP_PUBLICATION_RETRIEVAL_PROOF_TERMS",
+        (
             "AUTHORITATIVE_PUBLICATION_BYTES",
             "PUBLIC_AVAILABILITY_PROOF",
             "RETRIEVAL_RECEIPT",
             "REVISION_LINEAGE",
             "TERMS_LICENCE_REVIEW",
         ),
-        "state": "MISSING",
-    },
-    {
-        "code": "SECTOR_PUBLICATION_RETRIEVAL_PROOF_TERMS",
-        "required_evidence": (
+        "MISSING",
+    ),
+    (
+        "SECTOR_PUBLICATION_RETRIEVAL_PROOF_TERMS",
+        (
             "AUTHORITATIVE_CLASSIFICATION_BYTES",
             "PUBLIC_AVAILABILITY_PROOF",
             "RETRIEVAL_RECEIPT",
             "REVISION_LINEAGE",
             "TERMS_LICENCE_REVIEW",
         ),
-        "state": "MISSING",
-    },
-    {
-        "code": "SCHEDULE_PUBLICATION_RETRIEVAL_PROOF_TERMS",
-        "required_evidence": (
+        "MISSING",
+    ),
+    (
+        "SCHEDULE_PUBLICATION_RETRIEVAL_PROOF_TERMS",
+        (
             "NSE_CAPITAL_MARKET_SOURCE_BYTES",
             "PUBLIC_AVAILABILITY_PROOF",
             "RETRIEVAL_RECEIPT",
             "REVISION_OVERLAYS",
             "TERMS_LICENCE_REVIEW",
         ),
-        "state": "MISSING",
-    },
-    {
-        "code": "LATER_APPROVED_EVIDENCE_CAPABILITIES",
-        "required_evidence": (
+        "MISSING",
+    ),
+    (
+        "LATER_APPROVED_EVIDENCE_CAPABILITIES",
+        (
             "MEMBERSHIP_CAPABILITY_APPROVAL",
             "SECTOR_CAPABILITY_APPROVAL",
             "SCHEDULE_CAPABILITY_APPROVAL",
             "CORPORATE_ACTION_CAPABILITY_APPROVAL",
             "ANCHOR_SESSION_CAPABILITY_APPROVAL",
         ),
-        "state": "NOT_APPROVED",
-    },
-    {
-        "code": "SEPARATE_EVIDENCE_EXECUTION_AUTHORIZATION",
-        "required_evidence": (
+        "NOT_APPROVED",
+    ),
+    (
+        "SEPARATE_EVIDENCE_EXECUTION_AUTHORIZATION",
+        (
             "OWNER_DECISION_IDENTITY",
             "EXACT_MANIFEST_SCOPE",
             "BOUNDED_ATTEMPTS_AND_BYTES",
             "EXPIRY",
             "TRUSTED_VALIDATION_RECEIPT",
         ),
-        "state": "NOT_PRESENT",
-    },
+        "NOT_PRESENT",
+    ),
 )
+
 
 _ROLE_BOUNDARIES: Final = (
     "UPSTOX_MARKET_DATA_ONLY",
@@ -219,12 +277,28 @@ def _strict_json(raw: bytes, *, sorted_keys: bool) -> dict[str, object]:
 
 
 def _bounded_regular_file(path: Path, maximum: int) -> bytes:
-    """Read a bounded regular file without following the final path symlink."""
+    """Descriptor-walk parents and read a bounded regular leaf without symlinks."""
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise ValueError("no-follow unavailable")
-    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | nofollow
-    descriptor = os.open(path, flags)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise ValueError("safe path traversal unavailable")
+    parts = path.parts
+    if not parts or path.name in ("", ".", "..") or ".." in parts:
+        raise ValueError("inadmissible path")
+    directory_flags = os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0)
+    parent = os.open("/" if path.is_absolute() else ".", directory_flags)
+    try:
+        parent_parts = parts[1:-1] if path.is_absolute() else parts[:-1]
+        for component in parent_parts:
+            if component in ("", ".", ".."):
+                raise ValueError("inadmissible path component")
+            child = os.open(component, directory_flags, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | nofollow
+        descriptor = os.open(path.name, flags, dir_fd=parent)
+    finally:
+        os.close(parent)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= maximum:
@@ -423,25 +497,87 @@ def _validate_coverage(  # noqa: C901
         raise ValueError("coverage symbol mismatch")
 
 
+def _accounting_value(
+    accounting: tuple[Mapping[str, object], ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "candle_object_sha256": list(
+                cast(tuple[str, str], row["candle_object_sha256"])
+            ),
+            "isin": row["isin"],
+            "months": list(cast(tuple[str, str], row["months"])),
+            "symbol": row["symbol"],
+        }
+        for row in accounting
+    ]
+
+
+def _validate_accounting(accounting: object) -> tuple[Mapping[str, object], ...]:
+    if type(accounting) is not tuple:
+        raise ValueError("invalid retained accounting")
+    unknown_rows = cast(tuple[object, ...], accounting)
+    if len(unknown_rows) != 50:
+        raise ValueError("invalid retained accounting")
+    rows: list[Mapping[str, object]] = []
+    observed: list[tuple[str, str]] = []
+    exact_keys = {"candle_object_sha256", "isin", "months", "symbol"}
+    for unknown_row in unknown_rows:
+        if type(unknown_row) is not MappingProxyType:
+            raise ValueError("invalid retained accounting row")
+        row = cast(Mapping[str, object], unknown_row)
+        if set(row) != exact_keys:
+            raise ValueError("invalid retained accounting row")
+        hashes_value = row["candle_object_sha256"]
+        months = row["months"]
+        isin = row["isin"]
+        symbol = row["symbol"]
+        if type(hashes_value) is not tuple:
+            raise ValueError("invalid retained accounting row")
+        hashes = cast(tuple[object, ...], hashes_value)
+        if (
+            len(hashes) != 2
+            or not all(_valid_digest(item) for item in hashes)
+            or months != ("2026-07", "2026-08")
+            or type(isin) is not str
+            or type(symbol) is not str
+        ):
+            raise ValueError("invalid retained accounting row")
+        rows.append(row)
+        observed.append((isin, symbol))
+    if tuple(observed) != _RETAINED_EQUITY_IDENTITIES or len(set(observed)) != 50:
+        raise ValueError("retained universe mismatch")
+    if _sha(_canonical(_accounting_value(tuple(rows)))) != _RETAINED_ACCOUNTING_SHA256:
+        raise ValueError("retained accounting mismatch")
+    return tuple(rows)
+
+
 def _manifest_value(
     value: EvidenceReadinessPrerequisiteManifestV1, *, include_identity: bool
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "admission_state": value.admission_state,
         "authorization_state": value.authorization_state,
-        "bindings": {
+        "authority_bindings": {
             "application_contract_version": PREREQUISITE_MANIFEST_CONTRACT_VERSION_V1,
-            "code_identity": value.code_identity,
-            "configuration_sha256": value.configuration_sha256,
-            "readiness_contract_identity_sha256": READINESS_CONTRACT_IDENTITY_SHA256_V1,
-            "readiness_contract_version": READINESS_CONTRACT_VERSION_V1,
+            "plan11_contract_repository_bytes": {
+                "sha256": READINESS_CONTRACT_IDENTITY_SHA256_V1,
+                "version": READINESS_CONTRACT_VERSION_V1,
+            },
+            "plan11_source_policy_repository_bytes": {
+                "sha256": SOURCE_POLICY_IDENTITY_SHA256_V1,
+                "version": SOURCE_POLICY_VERSION_V1,
+            },
             "retained_dataset_identity_sha256": _RETAINED_DATASET_IDENTITY_SHA256,
             "retained_objects": [
                 {"role": role, "sha256": digest} for role, digest in _RETAINED_OBJECTS
             ],
-            "source_policy_identity_sha256": SOURCE_POLICY_IDENTITY_SHA256_V1,
-            "source_policy_version": SOURCE_POLICY_VERSION_V1,
-            "validation_policy_sha256": value.validation_policy_sha256,
+        },
+        "operator_claims": {
+            "classification": "UNVERIFIED_NOT_AUTHORITY",
+            "code_version_label": value.code_version_label,
+            "configuration_record_state": "ABSENT_UNVERIFIED_PREREQUISITE",
+            "validation_policy_record_state": "ABSENT_UNVERIFIED_PREREQUISITE",
         },
         "corporate_action_blockers": list(_CORPORATE_ACTION_BLOCKERS),
         "evaluator_state": value.evaluator_state,
@@ -449,11 +585,9 @@ def _manifest_value(
         "prerequisite_state": value.prerequisite_state,
         "prerequisites": [
             {
-                "code": item["code"],
-                "required_evidence": list(
-                    cast(tuple[str, ...], item["required_evidence"])
-                ),
-                "state": item["state"],
+                "code": item[0],
+                "required_evidence": list(item[1]),
+                "state": item[2],
             }
             for item in _PREREQUISITES
         ],
@@ -466,7 +600,9 @@ def _manifest_value(
         "report_rows": [],
         "request_descriptor_count": 0,
         "request_descriptors": [],
-        "retained_equity_accounting": list(value.retained_equity_accounting),
+        "retained_equity_accounting": _accounting_value(
+            value.retained_equity_accounting
+        ),
         "retained_equity_count": 50,
         "role_boundaries_and_nonclaims": list(_ROLE_BOUNDARIES),
         "sprint4_result": {
@@ -485,17 +621,17 @@ def _manifest_value(
 
 @dataclass(frozen=True, slots=True)
 class PrerequisiteManifestRequestV1:
+    contract_path: Path
     sprint4_seal_path: Path
     universe_path: Path
     july_schedule_path: Path
     august_schedule_path: Path
     coverage_manifest_path: Path
-    code_identity: str
-    configuration_sha256: str
-    validation_policy_sha256: str
+    code_version_label: str
 
     def __post_init__(self) -> None:
         paths = (
+            self.contract_path,
             self.sprint4_seal_path,
             self.universe_path,
             self.july_schedule_path,
@@ -503,35 +639,66 @@ class PrerequisiteManifestRequestV1:
             self.coverage_manifest_path,
         )
         if (
-            len(set(paths)) != 5
-            or type(self.code_identity) is not str
-            or _CODE_IDENTITY.fullmatch(self.code_identity) is None
-            or not _valid_digest(self.configuration_sha256)
-            or not _valid_digest(self.validation_policy_sha256)
+            len(set(paths)) != 6
+            or type(self.code_version_label) is not str
+            or _CODE_IDENTITY.fullmatch(self.code_version_label) is None
         ):
             raise ValueError("invalid prerequisite manifest request")
 
 
-@dataclass(frozen=True, slots=True)
-class EvidenceReadinessPrerequisiteManifestV1:
-    code_identity: str
-    configuration_sha256: str
-    validation_policy_sha256: str
-    retained_equity_accounting: tuple[dict[str, object], ...]
-    prerequisite_state: str = "DECLARATION_RECEIPT_MISSING"
-    admission_state: str = "NOT_EVALUATED"
-    evaluator_state: str = "NOT_EVALUATED"
-    readiness_state: str = "NOT_ASSESSED"
-    authorization_state: str = "NOT_ASSESSED"
-    execution_state: str = "NOT_REQUESTED"
+_SERVICE_CONSTRUCTION_TOKEN = object()
 
-    def __post_init__(self) -> None:
+
+@dataclass(frozen=True, slots=True, init=False)
+class EvidenceReadinessPrerequisiteManifestV1:
+    code_version_label: str
+    retained_equity_accounting: tuple[Mapping[str, object], ...]
+    prerequisite_state: str
+    admission_state: str
+    evaluator_state: str
+    readiness_state: str
+    authorization_state: str
+    execution_state: str
+    _construction_token: object
+
+    def __init__(
+        self,
+        *,
+        code_version_label: str,
+        retained_equity_accounting: tuple[Mapping[str, object], ...],
+        _construction_token: object,
+    ) -> None:
+        if _construction_token is not _SERVICE_CONSTRUCTION_TOKEN:
+            raise TypeError("service-only manifest construction")
+        frozen_rows = tuple(
+            MappingProxyType(
+                {
+                    "candle_object_sha256": tuple(
+                        cast(list[str], row["candle_object_sha256"])
+                    ),
+                    "isin": row["isin"],
+                    "months": tuple(cast(list[str], row["months"])),
+                    "symbol": row["symbol"],
+                }
+            )
+            for row in retained_equity_accounting
+        )
+        object.__setattr__(self, "code_version_label", code_version_label)
+        object.__setattr__(self, "retained_equity_accounting", frozen_rows)
+        object.__setattr__(self, "prerequisite_state", "DECLARATION_RECEIPT_MISSING")
+        object.__setattr__(self, "admission_state", "NOT_EVALUATED")
+        object.__setattr__(self, "evaluator_state", "NOT_EVALUATED")
+        object.__setattr__(self, "readiness_state", "NOT_ASSESSED")
+        object.__setattr__(self, "authorization_state", "NOT_ASSESSED")
+        object.__setattr__(self, "execution_state", "NOT_REQUESTED")
+        object.__setattr__(self, "_construction_token", _construction_token)
+        self._validate()
+
+    def _validate(self) -> None:
         if (
-            _CODE_IDENTITY.fullmatch(self.code_identity) is None
-            or not _valid_digest(self.configuration_sha256)
-            or not _valid_digest(self.validation_policy_sha256)
-            or type(self.retained_equity_accounting) is not tuple
-            or len(self.retained_equity_accounting) != 50
+            self._construction_token is not _SERVICE_CONSTRUCTION_TOKEN
+            or type(self.code_version_label) is not str
+            or _CODE_IDENTITY.fullmatch(self.code_version_label) is None
             or self.prerequisite_state != "DECLARATION_RECEIPT_MISSING"
             or self.admission_state != "NOT_EVALUATED"
             or self.evaluator_state != "NOT_EVALUATED"
@@ -540,20 +707,25 @@ class EvidenceReadinessPrerequisiteManifestV1:
             or self.execution_state != "NOT_REQUESTED"
         ):
             raise ValueError("invalid prerequisite manifest")
-        payload = _manifest_value(self, include_identity=False)
+        _validate_accounting(self.retained_equity_accounting)
+
+    @property
+    def manifest_identity_sha256(self) -> str:
+        self._validate()
+        return _sha(_canonical(_manifest_value(self, include_identity=False)))
+
+    def canonical_json_bytes(self) -> bytes:
+        self._validate()
+        payload = _manifest_value(self, include_identity=True)
         if (
             payload["report_row_count"] != 0
             or payload["request_descriptor_count"] != 0
             or payload["provider_attempts"] != 0
+            or payload["network_attempts"] != 0
+            or payload["storage_write_attempts"] != 0
         ):
             raise ValueError("invalid prerequisite manifest")
-
-    @property
-    def manifest_identity_sha256(self) -> str:
-        return _sha(_canonical(_manifest_value(self, include_identity=False)))
-
-    def canonical_json_bytes(self) -> bytes:
-        return _canonical(_manifest_value(self, include_identity=True))
+        return _canonical(payload)
 
 
 class PrerequisiteManifestServiceV1:
@@ -574,6 +746,7 @@ class PrerequisiteManifestServiceV1:
     ) -> EvidenceReadinessPrerequisiteManifestV1:
         if type(request) is not PrerequisiteManifestRequestV1:
             raise ValueError("invalid request")
+        contract_raw = _bounded_regular_file(request.contract_path, _MAX_SEAL_BYTES)
         seal_raw = _bounded_regular_file(request.sprint4_seal_path, _MAX_SEAL_BYTES)
         universe_raw = _bounded_regular_file(request.universe_path, _MAX_UNIVERSE_BYTES)
         july_raw = _bounded_regular_file(
@@ -586,6 +759,7 @@ class PrerequisiteManifestServiceV1:
             request.coverage_manifest_path, _MAX_COVERAGE_BYTES
         )
         supplied = (
+            _sha(contract_raw),
             _sha(seal_raw),
             _sha(universe_raw),
             _sha(july_raw),
@@ -593,6 +767,7 @@ class PrerequisiteManifestServiceV1:
             _sha(coverage_raw),
         )
         expected = (
+            _PLAN11_CONTRACT_SHA256,
             _RETAINED_SEAL_SHA256,
             _RETAINED_UNIVERSE_SHA256,
             _RETAINED_JULY_SCHEDULE_SHA256,
@@ -629,10 +804,9 @@ class PrerequisiteManifestServiceV1:
         by_symbol, accounting = _selection_accounting(selections, identities)
         _validate_coverage(coverage, identities, by_symbol)
         return EvidenceReadinessPrerequisiteManifestV1(
-            code_identity=request.code_identity,
-            configuration_sha256=request.configuration_sha256,
-            validation_policy_sha256=request.validation_policy_sha256,
+            code_version_label=request.code_version_label,
             retained_equity_accounting=accounting,
+            _construction_token=_SERVICE_CONSTRUCTION_TOKEN,
         )
 
 
