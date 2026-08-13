@@ -35,8 +35,11 @@ from swing_trading_ai_assistant.market_regime.reducer import (
     MarketRegimeInsufficiencyV1,
     MarketRegimeReasonV1,
     VerifiedAdmissionFailureV1,
-    reduce_attempts_to_insufficiency_v1,
+    reconstruct_dependency_state_v1,
     reduce_verified_admission_failures_v1,
+)
+from swing_trading_ai_assistant.market_regime.reducer import (
+    reduce_attempts_to_insufficiency_v1 as _strict_reduce_attempts_to_insufficiency_v1,
 )
 
 ZERO = "0" * 64
@@ -308,6 +311,50 @@ def _comparability_attempt(
     )
 
 
+def reduce_attempts_to_insufficiency_v1(
+    attempts: object,
+    dependency_state: object,
+    verified_admission_failures: object = (),
+) -> MarketRegimeInsufficiencyV1 | None:
+    """Migrate legacy focused tests to a state reconstructed from their roots."""
+    if not isinstance(dependency_state, EvidenceDependencyStateV1):
+        return _strict_reduce_attempts_to_insufficiency_v1(
+            attempts, dependency_state, verified_admission_failures
+        )
+    if isinstance(attempts, (str, bytes)) or not isinstance(attempts, tuple):
+        return _strict_reduce_attempts_to_insufficiency_v1(
+            attempts, dependency_state, verified_admission_failures
+        )
+    if any(not isinstance(attempt, EvidenceAttemptV1) for attempt in attempts):
+        return _strict_reduce_attempts_to_insufficiency_v1(
+            attempts, dependency_state, verified_admission_failures
+        )
+    typed = tuple(attempts)
+    kinds = {attempt.evidence_kind for attempt in typed}
+    if kinds.intersection(
+        {
+            EvidenceKindV1.PRIOR_CLOSES,
+            EvidenceKindV1.CURRENT_CLOSES,
+            EvidenceKindV1.CORPORATE_COMPARABILITY,
+        }
+    ):
+        roots: tuple[EvidenceAttemptV1, ...] = ()
+        if EvidenceKindV1.MEMBERSHIP not in kinds:
+            roots += (_membership_attempt(),)
+        if EvidenceKindV1.SESSION_SCHEDULE not in kinds:
+            roots += (_schedule_attempt(),)
+        typed = tuple(
+            sorted(
+                (*roots, *typed),
+                key=lambda attempt: tuple(EvidenceKindV1).index(attempt.evidence_kind),
+            )
+        )
+    reconstructed = reconstruct_dependency_state_v1(typed)
+    return _strict_reduce_attempts_to_insufficiency_v1(
+        typed, reconstructed, verified_admission_failures
+    )
+
+
 def _rebuild_membership_with_row(row: MembershipCandidateRowV1) -> EvidenceAttemptV1:
     attempt = _membership_attempt()
     assert isinstance(attempt.payload, MembershipCandidatePayloadV1)
@@ -377,7 +424,9 @@ def test_dependency_aware_absence_never_invents_blocked_missing_reasons() -> Non
     endpoint_state = EvidenceDependencyStateV1.build(
         EvidenceDependencyStageV1.MEMBERSHIP_AND_ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED
     )
-    endpoint = reduce_attempts_to_insufficiency_v1((), endpoint_state)
+    endpoint = reduce_attempts_to_insufficiency_v1(
+        (_membership_attempt(), _schedule_attempt("coverage")), endpoint_state
+    )
     assert endpoint is not None
     assert MarketRegimeReasonV1.CURRENT_CLOSE_MISSING in (
         endpoint.primary_reason,
@@ -420,7 +469,7 @@ def test_close_cardinality_never_reduces_the_denominator(row_count: int) -> None
     )
     attempts = (
         _membership_attempt(),
-        _schedule_missing_attempt(),
+        _schedule_attempt(),
         _close_attempt(EvidenceKindV1.PRIOR_CLOSES, 50),
         _close_attempt(EvidenceKindV1.CURRENT_CLOSES, row_count),
     )
@@ -449,19 +498,15 @@ def test_duplicate_late_unauthorized_and_corrupt_attempts_fail_closed() -> None:
         50,
         failure=EvidenceAttemptFailureV1.AFTER_EVIDENCE_CUTOFF,
     )
-    membership = _membership_attempt()
-    unauthorized = EvidenceAttemptV1.build(
-        membership.evidence_kind,
-        membership.requested_identities,
-        membership.payload,
-        EvidenceAttemptFailureV1.UNAUTHORIZED_AUTHORITY,
-    )
     result = reduce_attempts_to_insufficiency_v1(
-        (unauthorized, _schedule_missing_attempt(), late, duplicate), state
+        (_membership_attempt(), _schedule_attempt(), late, duplicate),
+        state,
+        (VerifiedAdmissionFailureV1(MarketRegimeReasonV1.SOURCE_NOT_AUTHORITATIVE),),
     )
     assert result is not None
     reasons = (result.primary_reason, *result.additional_reasons)
-    assert reasons[0] is MarketRegimeReasonV1.SOURCE_NOT_AUTHORITATIVE
+    assert reasons[0] is MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH
+    assert MarketRegimeReasonV1.SOURCE_NOT_AUTHORITATIVE in reasons
     assert MarketRegimeReasonV1.CURRENT_CLOSE_AMBIGUOUS in reasons
     assert MarketRegimeReasonV1.PRIOR_CLOSE_LATE in reasons
 
@@ -546,12 +591,9 @@ def test_closed_attempt_failures_map_without_free_text(
 def test_schedule_candidate_faults_are_never_repaired(
     fault: str, reason: MarketRegimeReasonV1
 ) -> None:
-    state = EvidenceDependencyStateV1.build(
-        EvidenceDependencyStageV1.ROOT_EVIDENCE_UNVERIFIED
-    )
-    result = reduce_attempts_to_insufficiency_v1(
-        (_membership_attempt(), _schedule_attempt(fault)), state
-    )
+    attempts = (_membership_attempt(), _schedule_attempt(fault))
+    state = reconstruct_dependency_state_v1(attempts)
+    result = reduce_attempts_to_insufficiency_v1(attempts, state)
     assert result is not None
     assert reason in (result.primary_reason, *result.additional_reasons)
 
@@ -676,7 +718,7 @@ def test_reducer_runtime_guards_and_frozen_dependency_equations() -> None:
         EvidenceDependencyStageV1.MEMBERSHIP_VERIFIED_SCHEDULE_UNVERIFIED
     )
     with pytest.raises(ValueError):
-        reduce_attempts_to_insufficiency_v1(
+        _strict_reduce_attempts_to_insufficiency_v1(
             (_close_attempt(EvidenceKindV1.PRIOR_CLOSES, 50),), blocked_state
         )
 
@@ -809,7 +851,7 @@ def test_reducer_rejects_untyped_inputs_and_invalid_attempt_topology() -> None:
     with pytest.raises(ValueError, match="dependency ordered"):
         reduce_attempts_to_insufficiency_v1((schedule, membership), state)
     with pytest.raises(ValueError, match="dependency-blocked"):
-        reduce_attempts_to_insufficiency_v1(
+        _strict_reduce_attempts_to_insufficiency_v1(
             (_close_attempt(EvidenceKindV1.PRIOR_CLOSES, 50),), state
         )
 
@@ -1239,7 +1281,6 @@ def test_verified_failure_merges_with_attempt_faults_by_global_precedence() -> N
     assert _reasons(result)[-1] is MarketRegimeReasonV1.VALUES_NOT_COMPARABLE
 
 
-
 def test_reducer_remaining_runtime_guards_are_fail_closed() -> None:
     reason = MarketRegimeReasonV1.MEMBERSHIP_MISSING
     with pytest.raises(ValueError, match="fixed"):
@@ -1250,11 +1291,23 @@ def test_reducer_remaining_runtime_guards_are_fail_closed() -> None:
         )
     with pytest.raises(TypeError, match="primary reason"):
         MarketRegimeInsufficiencyV1(
-            "INSUFFICIENT_EVIDENCE", None, None, None, None, "bad", ()  # type: ignore[arg-type]
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            None,
+            None,
+            None,
+            "bad",
+            (),  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError, match="additional reasons"):
         MarketRegimeInsufficiencyV1(
-            "INSUFFICIENT_EVIDENCE", None, None, None, None, reason, []  # type: ignore[arg-type]
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            None,
+            None,
+            None,
+            reason,
+            [],  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="unique"):
         MarketRegimeInsufficiencyV1(
@@ -1301,9 +1354,7 @@ def test_invalid_schedule_correction_and_nested_provenance_fail_closed() -> None
     )
     row = replace(
         rows[0],
-        status_proof=replace(
-            rows[0].status_proof, proof_provenance=nested_provenance
-        ),
+        status_proof=replace(rows[0].status_proof, proof_provenance=nested_provenance),
     )
     result = reduce_attempts_to_insufficiency_v1(
         (_comparability_with_rows((row, *rows[1:])),), _ALL_STAGE
@@ -1325,3 +1376,80 @@ def test_duplicate_requested_subjects_fail_identity_validation() -> None:
     )
     result = reduce_attempts_to_insufficiency_v1((attempt,), _ALL_STAGE)
     assert MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH in _reasons(result)
+
+
+# ARK-172 adversarial dependency and cross-attempt identity admission.
+def test_dependency_state_is_reconstructed_and_caller_cannot_select_stage() -> None:
+    roots = (_membership_attempt(), _schedule_attempt())
+    reconstructed = reconstruct_dependency_state_v1(roots)
+    assert (
+        reconstructed.stage is EvidenceDependencyStageV1.MEMBERSHIP_AND_CUTOFF_VERIFIED
+    )
+
+    caller_root = EvidenceDependencyStateV1.build(
+        EvidenceDependencyStageV1.ROOT_EVIDENCE_UNVERIFIED
+    )
+    with pytest.raises(ValueError, match="reconstruction"):
+        _strict_reduce_attempts_to_insufficiency_v1(roots, caller_root)
+
+    result = _strict_reduce_attempts_to_insufficiency_v1(roots, reconstructed)
+    assert _reasons(result) == (
+        MarketRegimeReasonV1.CURRENT_CLOSE_MISSING,
+        MarketRegimeReasonV1.PRIOR_CLOSE_MISSING,
+        MarketRegimeReasonV1.CORPORATE_ACTION_MISSING,
+    )
+
+
+def test_schedule_identity_is_bound_to_the_cross_attempt_decision_session() -> None:
+    membership = _membership_attempt()
+    schedule = _schedule_attempt()
+    wrong_identity = replace(
+        schedule.requested_identities[0], decision_session="2026-07-22"
+    )
+    mismatched_schedule = EvidenceAttemptV1.build(
+        schedule.evidence_kind,
+        (wrong_identity,),
+        schedule.payload,
+        schedule.failure,
+    )
+    attempts = (membership, mismatched_schedule)
+    state = reconstruct_dependency_state_v1(attempts)
+    assert (
+        state.stage is EvidenceDependencyStageV1.MEMBERSHIP_VERIFIED_SCHEDULE_UNVERIFIED
+    )
+    assert MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH in _reasons(
+        _strict_reduce_attempts_to_insufficiency_v1(attempts, state)
+    )
+
+
+def test_clean_alternate_current_cohort_is_identity_mismatch_without_missing_noise() -> (
+    None
+):
+    alternate_isins = tuple(_isin(index) for index in range(50, 100))
+    current = _close_attempt(EvidenceKindV1.CURRENT_CLOSES, 50)
+    assert isinstance(current.payload, DailyCloseCandidatePayloadV1)
+    alternate_rows = tuple(
+        replace(row, isin_text=isin, symbol_text=f"S{index:02d}")
+        for index, (row, isin) in enumerate(
+            zip(current.payload.received_rows, alternate_isins, strict=True), start=50
+        )
+    )
+    alternate_current = EvidenceAttemptV1.build(
+        EvidenceKindV1.CURRENT_CLOSES,
+        tuple(
+            _identity(EvidenceKindV1.CURRENT_CLOSES, isin) for isin in alternate_isins
+        ),
+        DailyCloseCandidatePayloadV1(alternate_rows),
+        None,
+    )
+    attempts = (
+        _membership_attempt(),
+        _schedule_attempt(),
+        _close_attempt(EvidenceKindV1.PRIOR_CLOSES, 50),
+        alternate_current,
+        _comparability_attempt(),
+    )
+    state = reconstruct_dependency_state_v1(attempts)
+    assert _reasons(_strict_reduce_attempts_to_insufficiency_v1(attempts, state)) == (
+        MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH,
+    )

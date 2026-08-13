@@ -368,8 +368,7 @@ def _provenance_reasons(
         or identity_values[0] is None
         or identity_values[1] is None
         or any(
-            value is not None
-            and not _candidate_value_is_valid(validate_sha256, value)
+            value is not None and not _candidate_value_is_valid(validate_sha256, value)
             for value in identity_values
         )
     ):
@@ -585,7 +584,11 @@ def _comparability_reasons(  # noqa: C901
             row.status_text != "NO_BREAK"
             or status.status_text != "NO_BREAK"
             or bool(status.checked_events)
-            or (status.isin_text, status.interval_from_text, status.interval_through_text)
+            or (
+                status.isin_text,
+                status.interval_from_text,
+                status.interval_through_text,
+            )
             != interval
             or status.authority_text != AuthorityIdentityV1.NSE_CM.value
         ):
@@ -690,13 +693,9 @@ def _verified_reason_set(failures: object) -> set[MarketRegimeReasonV1]:
     return {failure.reason for failure in typed}
 
 
-def _validated_attempts(
-    attempts: object, dependency_state: object
-) -> tuple[tuple[EvidenceAttemptV1, ...], EvidenceDependencyStateV1]:
+def _typed_attempt_sequence(attempts: object) -> tuple[EvidenceAttemptV1, ...]:
     if isinstance(attempts, (str, bytes)) or not isinstance(attempts, Sequence):
         raise TypeError("attempts must be a sequence of typed attempts")
-    if not isinstance(dependency_state, EvidenceDependencyStateV1):
-        raise TypeError("invalid dependency state")
     copied = tuple(cast("Sequence[object]", attempts))
     if any(not isinstance(attempt, EvidenceAttemptV1) for attempt in copied):
         raise TypeError("attempts must contain typed evidence attempts")
@@ -706,9 +705,112 @@ def _validated_attempts(
         raise ValueError("attempt kinds must be unique")
     if kinds != tuple(sorted(kinds, key=_ALL_KINDS.index)):
         raise ValueError("attempts must be dependency ordered")
-    if any(kind in dependency_state.dependency_blocked_kinds for kind in kinds):
+    return typed
+
+
+def _membership_is_verified(attempt: EvidenceAttemptV1 | None) -> bool:
+    return (
+        attempt is not None
+        and isinstance(attempt.payload, MembershipCandidatePayloadV1)
+        and attempt.failure is None
+        and not _attempt_reasons(attempt)
+    )
+
+
+def _schedule_endpoint_stage(
+    attempt: EvidenceAttemptV1 | None,
+) -> EndpointResolutionStageV1:
+    if (
+        attempt is None
+        or not isinstance(attempt.payload, ScheduleCandidatePayloadV1)
+        or attempt.failure is not None
+        or not _request_identity_is_valid(attempt)
+    ):
+        return EndpointResolutionStageV1.SCHEDULE_UNVERIFIED
+    reasons = _attempt_reasons(attempt)
+    if not reasons:
+        return EndpointResolutionStageV1.CUTOFF_VERIFIED
+
+    # S[0]..S[20] are sufficient to derive all downstream request identities.
+    # S[21] is needed only for the cutoff, so its absence must not block them.
+    base = attempt.payload.base_schedule
+    if base is None or attempt.payload.corrections or len(base.received_rows) < 21:
+        return EndpointResolutionStageV1.SCHEDULE_UNVERIFIED
+    rows = base.received_rows[:21]
+    dates = tuple(row.session_date_text for row in rows)
+    if (
+        len(set(dates)) != 21
+        or dates != tuple(sorted(dates))
+        or dates[20] != attempt.requested_identities[0].decision_session
+        or any(
+            not _candidate_value_is_valid(validate_local_date, row.session_date_text)
+            or not _candidate_value_is_valid(validate_utc_instant, row.open_at_text)
+            or not _candidate_value_is_valid(validate_utc_instant, row.close_at_text)
+            or row.open_at_text >= row.close_at_text
+            for row in rows
+        )
+        or _provenances_reasons(
+            (base.base_schedule_provenance, *(row.row_provenance for row in rows)),
+            AuthorityIdentityV1.NSE_CM,
+        )
+    ):
+        return EndpointResolutionStageV1.SCHEDULE_UNVERIFIED
+    return EndpointResolutionStageV1.ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED
+
+
+def reconstruct_dependency_state_v1(attempts: object) -> EvidenceDependencyStateV1:
+    """Purely reconstruct the frozen dependency graph from admitted root attempts."""
+    typed = _typed_attempt_sequence(attempts)
+    by_kind = {attempt.evidence_kind: attempt for attempt in typed}
+    membership_verified = _membership_is_verified(
+        by_kind.get(EvidenceKindV1.MEMBERSHIP)
+    )
+    membership_attempt = by_kind.get(EvidenceKindV1.MEMBERSHIP)
+    schedule_attempt = by_kind.get(EvidenceKindV1.SESSION_SCHEDULE)
+    endpoint_stage = _schedule_endpoint_stage(schedule_attempt)
+    if (
+        membership_attempt is not None
+        and schedule_attempt is not None
+        and membership_attempt.requested_identities[0].decision_session
+        != schedule_attempt.requested_identities[0].decision_session
+    ):
+        endpoint_stage = EndpointResolutionStageV1.SCHEDULE_UNVERIFIED
+    stage = {
+        (False, EndpointResolutionStageV1.SCHEDULE_UNVERIFIED): (
+            EvidenceDependencyStageV1.ROOT_EVIDENCE_UNVERIFIED
+        ),
+        (False, EndpointResolutionStageV1.ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED): (
+            EvidenceDependencyStageV1.ENDPOINTS_VERIFIED_MEMBERSHIP_UNVERIFIED
+        ),
+        (False, EndpointResolutionStageV1.CUTOFF_VERIFIED): (
+            EvidenceDependencyStageV1.CUTOFF_VERIFIED_MEMBERSHIP_UNVERIFIED
+        ),
+        (True, EndpointResolutionStageV1.SCHEDULE_UNVERIFIED): (
+            EvidenceDependencyStageV1.MEMBERSHIP_VERIFIED_SCHEDULE_UNVERIFIED
+        ),
+        (True, EndpointResolutionStageV1.ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED): (
+            EvidenceDependencyStageV1.MEMBERSHIP_AND_ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED
+        ),
+        (True, EndpointResolutionStageV1.CUTOFF_VERIFIED): (
+            EvidenceDependencyStageV1.MEMBERSHIP_AND_CUTOFF_VERIFIED
+        ),
+    }[(membership_verified, endpoint_stage)]
+    return EvidenceDependencyStateV1.build(stage)
+
+
+def _validated_attempts(
+    attempts: object, dependency_state: object
+) -> tuple[tuple[EvidenceAttemptV1, ...], EvidenceDependencyStateV1]:
+    if not isinstance(dependency_state, EvidenceDependencyStateV1):
+        raise TypeError("invalid dependency state")
+    typed = _typed_attempt_sequence(attempts)
+    reconstructed = reconstruct_dependency_state_v1(typed)
+    if dependency_state != reconstructed:
+        raise ValueError("supplied dependency state does not equal reconstruction")
+    kinds = tuple(attempt.evidence_kind for attempt in typed)
+    if any(kind in reconstructed.dependency_blocked_kinds for kind in kinds):
         raise ValueError("dependency-blocked attempts are fictional")
-    return typed, dependency_state
+    return typed, reconstructed
 
 
 def _attempt_reasons(attempt: EvidenceAttemptV1) -> set[MarketRegimeReasonV1]:
@@ -727,6 +829,107 @@ def _attempt_reasons(attempt: EvidenceAttemptV1) -> set[MarketRegimeReasonV1]:
     return reasons
 
 
+def _cross_attempt_identity_reasons(  # noqa: C901
+    attempts: tuple[EvidenceAttemptV1, ...],
+) -> set[MarketRegimeReasonV1]:
+    by_kind = {attempt.evidence_kind: attempt for attempt in attempts}
+    roots = tuple(
+        attempt for kind in _ROOT_KINDS if (attempt := by_kind.get(kind)) is not None
+    )
+    if not roots:
+        return set()
+    decision_session = roots[0].requested_identities[0].decision_session
+    if any(
+        identity.decision_session != decision_session
+        for attempt in attempts
+        for identity in attempt.requested_identities
+    ):
+        return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+
+    membership = by_kind.get(EvidenceKindV1.MEMBERSHIP)
+    schedule = by_kind.get(EvidenceKindV1.SESSION_SCHEDULE)
+    membership_isins: tuple[str, ...] | None = None
+    if membership is not None and isinstance(
+        membership.payload, MembershipCandidatePayloadV1
+    ):
+        membership_isins = tuple(
+            sorted(row.isin_text for row in membership.payload.received_rows)
+        )
+
+    comparison_session: str | None = None
+    scheduled_decision_session: str | None = None
+    if (
+        schedule is not None
+        and isinstance(schedule.payload, ScheduleCandidatePayloadV1)
+        and schedule.payload.base_schedule is not None
+    ):
+        rows = schedule.payload.base_schedule.received_rows
+        if len(rows) >= 21:
+            ordered = tuple(sorted(row.session_date_text for row in rows))
+            comparison_session = ordered[0]
+            scheduled_decision_session = ordered[20]
+            if scheduled_decision_session != decision_session:
+                return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+
+    for kind in _DOWNSTREAM_KINDS:
+        attempt = by_kind.get(kind)
+        if attempt is None:
+            continue
+        requested_isins = tuple(
+            sorted(
+                identity.subject_isin
+                for identity in attempt.requested_identities
+                if identity.subject_isin is not None
+            )
+        )
+        if membership_isins is not None and requested_isins != membership_isins:
+            return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+        payload = attempt.payload
+        received_isins: tuple[str, ...] | None = None
+        if isinstance(
+            payload,
+            (DailyCloseCandidatePayloadV1, ComparabilityCandidatePayloadV1),
+        ):
+            received_isins = tuple(
+                sorted(row.isin_text for row in payload.received_rows)
+            )
+        if (
+            membership_isins is not None
+            and received_isins is not None
+            and received_isins != membership_isins
+        ):
+            return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+        if (
+            kind is EvidenceKindV1.PRIOR_CLOSES
+            and comparison_session is not None
+            and any(
+                identity.subject_session != comparison_session
+                for identity in attempt.requested_identities
+            )
+        ):
+            return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+        if kind is EvidenceKindV1.CURRENT_CLOSES:
+            expected = scheduled_decision_session or decision_session
+            if any(
+                identity.subject_session != expected
+                for identity in attempt.requested_identities
+            ):
+                return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+        if (
+            kind is EvidenceKindV1.CORPORATE_COMPARABILITY
+            and isinstance(attempt.payload, ComparabilityCandidatePayloadV1)
+            and comparison_session is not None
+            and scheduled_decision_session is not None
+            and any(
+                row.interval_from_text != comparison_session
+                or row.interval_through_text != scheduled_decision_session
+                for row in attempt.payload.received_rows
+            )
+        ):
+            return {MarketRegimeReasonV1.EVIDENCE_IDENTITY_MISMATCH}
+    return set()
+
+
 def reduce_attempts_to_insufficiency_v1(  # noqa: C901
     attempts: object,
     dependency_state: object,
@@ -734,6 +937,7 @@ def reduce_attempts_to_insufficiency_v1(  # noqa: C901
 ) -> MarketRegimeInsufficiencyV1 | None:
     copied, state = _validated_attempts(attempts, dependency_state)
     reasons = _verified_reason_set(verified_admission_failures)
+    reasons.update(_cross_attempt_identity_reasons(copied))
     by_kind = {attempt.evidence_kind: attempt for attempt in copied}
     for kind in state.expected_attempt_kinds:
         attempt = by_kind.get(kind)
