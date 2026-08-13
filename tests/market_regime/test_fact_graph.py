@@ -1339,3 +1339,133 @@ def test_decision_close_must_precede_next_session_cutoff() -> None:
     )
     with pytest.raises(FactGraphAdmissionError, match="decision close"):
         admit_verified_market_regime_facts_v1(**values)
+
+
+def test_remaining_graph_branches_fail_closed() -> None:
+    values = _valid_graph()
+
+    def reject(**changes: object) -> None:
+        graph = dict(values)
+        graph.update(changes)
+        with pytest.raises(FactGraphAdmissionError):
+            admit_verified_market_regime_facts_v1(**graph)
+
+    membership = values["membership"]
+    reject(
+        membership=dataclasses.replace(
+            membership,
+            provenance=dataclasses.replace(
+                membership.provenance, authority=AuthorityIdentityV1.NSE_CM
+            ),
+        )
+    )
+    prior = values["prior_closes"]
+    reject(
+        prior_closes=(
+            dataclasses.replace(
+                prior[0],
+                provenance=dataclasses.replace(
+                    prior[0].provenance, authority=AuthorityIdentityV1.NSE_CM
+                ),
+            ),
+            *prior[1:],
+        )
+    )
+    current = values["current_closes"]
+    reject(current_closes=current[:-1] + (current[0],))
+    comparable = values["comparability"]
+    reject(comparability=comparable[:-1] + (comparable[0],))
+
+    schedule = values["schedule"]
+    sessions = schedule.sessions
+    reject(
+        schedule=dataclasses.replace(
+            schedule, sessions=(sessions[1], sessions[0], *sessions[2:])
+        )
+    )
+    corrections = schedule.applied_corrections
+    reject(
+        schedule=dataclasses.replace(
+            schedule,
+            applied_corrections=(corrections[1], corrections[0], *corrections[2:]),
+        )
+    )
+    special_session = sessions[7]
+    reject(
+        schedule=dataclasses.replace(
+            schedule,
+            sessions=(
+                *sessions[:7],
+                dataclasses.replace(
+                    special_session,
+                    source_trace=dataclasses.replace(
+                        special_session.source_trace,
+                        base_row_provenance=schedule.base_schedule_provenance,
+                    ),
+                ),
+                *sessions[8:],
+            ),
+        )
+    )
+    traced_session = sessions[20]
+    reject(
+        schedule=dataclasses.replace(
+            schedule,
+            sessions=(
+                *sessions[:20],
+                dataclasses.replace(
+                    traced_session,
+                    source_trace=dataclasses.replace(
+                        traced_session.source_trace,
+                        applied_correction_revision_identities=(
+                            corrections[1].provenance.revision_identity_sha256,
+                            corrections[3].provenance.revision_identity_sha256,
+                        ),
+                    ),
+                ),
+                *sessions[21:],
+            ),
+        )
+    )
+    reject(schedule=dataclasses.replace(schedule, applied_corrections=corrections[:-1]))
+
+
+def test_remaining_constructor_and_schedule_fold_branches() -> None:
+    with pytest.raises(FactGraphAdmissionError):
+        MembershipFactV1(AuthorityIdentityV1.NSE_INDICES, "2026-01-01", (), object())  # type: ignore[arg-type]
+    with pytest.raises(FactGraphAdmissionError):
+        DailyCloseFactV1(
+            AuthorityIdentityV1.NSE_CM,
+            "wrong-schema",
+            _isin(1),
+            "ONE",
+            "2026-01-01",
+            "CLOSE",
+            "1",
+            "2026-01-01T10:00:00.000000Z",
+            _provenance(AuthorityIdentityV1.NSE_CM, "7" * 64),
+        )
+    with pytest.raises(FactGraphAdmissionError):
+        TrustedPolicyBindingV1.from_manifest_bytes(
+            canonical_json_lf([]),
+            _policy().validation_policy_manifest_bytes,
+            _policy().semantic_policy_manifest_bytes,
+            _policy().code_build_manifest_bytes,
+        )
+    values = _valid_graph()
+    schedule = values["schedule"]
+    bases = tuple(
+        OfficialSessionBaseRowV1(
+            item.session_date,
+            item.open_at,
+            item.close_at,
+            item.source_trace.base_row_provenance,
+        )
+        for item in schedule.sessions
+        if item.source_trace.base_row_provenance is not None
+    )
+    special = dataclasses.replace(
+        schedule.applied_corrections[1], corrected_close_at=None
+    )
+    with pytest.raises(FactGraphAdmissionError):
+        admit_session_schedule_v1(bases, (special,), schedule.base_schedule_provenance)
