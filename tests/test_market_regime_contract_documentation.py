@@ -267,3 +267,160 @@ def test_candidate_row_schema_names_are_defined_once() -> None:
     ):
         assert text.count(name) == 1
     assert "Pure\nvalidation converts only clean candidates" in text
+
+
+VALIDATION_PROTOCOL = (
+    ROOT / "docs" / "plans" / "13-market-regime-validation-protocol.md"
+)
+
+
+def _validation_text() -> str:
+    return VALIDATION_PROTOCOL.read_text()
+
+
+def _validation_section(heading: str) -> str:
+    """Return one validation-protocol level-two section."""
+    match = re.search(
+        rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\Z)",
+        _validation_text(),
+    )
+    assert match is not None, f"missing validation section: {heading}"
+    return " ".join(match.group(1).split())
+
+
+def test_validation_protocol_is_preregistered_without_an_observed_result() -> None:
+    text = " ".join(_validation_text().split())
+    for required in (
+        "Status: **ARK-167 PREREGISTERED — NO IMPLEMENTATION OR OBSERVED OUTCOME**",
+        "Contract under validation: `nifty50-market-regime@v1`",
+        "must be sealed before any label or downstream outcome is computed or inspected",
+        "31 sessions from 2026-07-01 through 2026-08-12",
+        "1,550",
+        "cannot yield an observed Market Regime report",
+        "No observed report accompanies this protocol",
+    ):
+        assert required in text
+
+
+def test_layer_a_exhaustively_preregisters_pure_mechanics() -> None:
+    section = _validation_section("Layer A — exhaustive synthetic mechanics")
+    for required in (
+        "all 1,326 non-negative integer triples",
+        "advances + declines + unchanged == 50",
+        "29/30 and 30/29 threshold boundaries",
+        "exact Decimal equality",
+        "exactly 20 authoritative official-session transitions",
+        "next authoritative open",
+        "Permutation property",
+        "Metamorphic property",
+        "canonical external JSON",
+        "closed primary-reason precedence",
+        "identity and digest binding",
+        "deep mutation",
+        "limit and limit-plus-one",
+        "public report redaction",
+        "future-data mutation",
+        "adversarial fixtures",
+    ):
+        assert required in section
+    assert "a sample of count triples" not in section
+
+
+def test_layer_b_freezes_future_real_market_admission_gate() -> None:
+    section = _validation_section("Layer B — future real-market evidence gate")
+    for required in (
+        "point-in-time membership for every requested decision session",
+        "authoritative corrected schedule through the next official open",
+        "exactly 100 admitted close facts",
+        "corporate-action status proof",
+        "negative-completeness proof",
+        "revision-lineage proof",
+        "identity-continuity proof",
+        "knowledge, publication, retrieval, and retention timestamps",
+        "licence and authorization",
+        "evidence, policy, configuration, code, and report identities",
+        "at least ten consecutive years",
+        "COVID-19 crash and recovery",
+        "2022 global tightening and Ukraine shock",
+        "2023 quiet/low-volatility market",
+        "2024 Indian general-election shock",
+        "continuous range rather than hand-picked event windows",
+    ):
+        assert required in section
+
+
+def test_dataset_dates_splits_embargo_and_walk_forward_are_precommitted() -> None:
+    section = _validation_section(
+        "Sealing, chronological splits, and research sequence"
+    )
+    for required in (
+        "exact first and last requested decision-session dates",
+        "before labels, counts, durations, transitions, or later returns are computed",
+        "No random split",
+        "60% development / 20% validation / 20% untouched test",
+        "two embargo bands of exactly 20 official sessions",
+        "development = floor(0.60 × E)",
+        "validation = floor(0.20 × E)",
+        "test = E - development - validation",
+        "untouched test is opened exactly once",
+        "annual expanding walk-forward begins only after",
+        "must not retroactively select, drop, shorten, or extend",
+    ):
+        assert required in section
+
+
+def test_metrics_do_not_invent_accuracy_or_tune_for_profit() -> None:
+    section = _validation_section("Preregistered measurements and interpretation")
+    for required in (
+        "coverage and insufficiency rate",
+        "primary-reason distribution",
+        "label share",
+        "run-duration distribution",
+        "transition matrix",
+        "byte-identical replay",
+        "stability under source revision",
+        "There is no accuracy metric",
+        "no external ground-truth regime label exists",
+        "Returns, hit rate, Sharpe, drawdown, profit, and strategy outcomes",
+        "must not select or tune",
+    ):
+        assert required in section
+
+    downstream = _validation_section("Separate downstream usefulness experiment")
+    for required in (
+        "entirely separate",
+        "newly preregistered out-of-sample experiment",
+        "realistic costs and slippage",
+        "cannot validate, repair, or redefine Market Regime semantics",
+        "cannot tune the 20-session lookback, 30-of-50 threshold, equality rule",
+    ):
+        assert required in downstream
+
+
+def test_stop_conditions_order_and_owner_gates_are_explicit() -> None:
+    stops = _validation_section("Stop conditions")
+    for required in (
+        "Stop Layer A on the first failed invariant",
+        "Do not start Layer B",
+        "ten-year continuous minimum or named variety gate is unmet",
+        "source or acquisition decision is unresolved",
+        "outcomes were exposed before sealing",
+        "fail closed",
+        "No substitution, imputation, denominator reduction, or date reselection",
+    ):
+        assert required in stops
+
+    order = _validation_section("Implementation order and owner gates")
+    expected = (
+        "1. Freeze this protocol",
+        "2. Implement the pure contracts and Layer A tests",
+        "3. Obtain owner approval of the source policy",
+        "4. Obtain separate owner approval for acquisition",
+        "5. Acquire and seal",
+        "6. Run Layer B admission and semantic measurements",
+        "7. Open the untouched test once",
+        "8. Only then preregister any annual expanding walk-forward",
+        "9. Treat any downstream usefulness study as a new slice",
+    )
+    positions = [order.index(item) for item in expected]
+    assert positions == sorted(positions)
