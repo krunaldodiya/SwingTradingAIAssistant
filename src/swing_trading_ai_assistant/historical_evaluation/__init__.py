@@ -24,6 +24,7 @@ from .contracts import (
     OfficialSessionV1,
     OutcomeSessionFactV1,
     PointInTimeEvidenceV1,
+    ResolvedOfficialSessionsV1,
     calculate_five_session_outcome_v1,
     classify_anchor_eligibility_v1,
 )
@@ -51,5 +52,6 @@ __all__ = [
     "EvidenceAvailabilityV1",
     "OfficialSessionV1",
     "PointInTimeEvidenceV1",
+    "ResolvedOfficialSessionsV1",
     "classify_anchor_eligibility_v1",
 ]

@@ -59,6 +59,17 @@ class OpportunityCensusReportV1:
     strictly_gt_2_percent_count: int
     return_distribution: object | None
     evidence_seal_sha256: str
+    data_manifest_sha256: str
+    universe_evidence_sha256: tuple[str, ...]
+    schedule_evidence_sha256: tuple[str, ...]
+    candle_evidence_sha256: tuple[str, ...]
+    corporate_action_evidence_sha256: tuple[str, ...]
+    observation_cutoff: datetime
+    requested_from: date
+    requested_to: date
+    census_contract_version: str
+    anchor_contract_version: str
+    outcome_policy_version: str
     configuration_sha256: str
     code_sha: str
     provider_attempt_count: int
@@ -122,6 +133,29 @@ class OpportunityCensusReportV1:
             or self.provider_attempt_count != 0
             or self.warnings != _WARNINGS
             or _DIGEST.fullmatch(self.evidence_seal_sha256) is None
+            or _DIGEST.fullmatch(self.data_manifest_sha256) is None
+            or any(
+                type(items) is not tuple
+                or items != tuple(sorted(set(items)))
+                or any(
+                    type(item) is not str or _DIGEST.fullmatch(item) is None
+                    for item in items
+                )
+                for items in (
+                    self.universe_evidence_sha256,
+                    self.schedule_evidence_sha256,
+                    self.candle_evidence_sha256,
+                    self.corporate_action_evidence_sha256,
+                )
+            )
+            or type(self.observation_cutoff) is not datetime
+            or self.observation_cutoff.tzinfo is None
+            or type(self.requested_from) is not date
+            or type(self.requested_to) is not date
+            or self.requested_from > self.requested_to
+            or self.census_contract_version != "nifty50-five-session-census@v1"
+            or self.anchor_contract_version != "nifty50-anchor-eligibility@v1"
+            or self.outcome_policy_version != "next-open-fifth-close-gross@v1"
             or _DIGEST.fullmatch(self.configuration_sha256) is None
             or _CODE_SHA.fullmatch(self.code_sha) is None
         ):
@@ -144,6 +178,12 @@ def build_strict_retained_census_v1(
     universe_known_at: datetime,
     corporate_action_evidence_available: bool,
     evidence_seal_sha256: str,
+    data_manifest_sha256: str,
+    universe_evidence_sha256: tuple[str, ...],
+    schedule_evidence_sha256: tuple[str, ...],
+    candle_evidence_sha256: tuple[str, ...],
+    corporate_action_evidence_sha256: tuple[str, ...],
+    observation_cutoff: datetime,
     code_sha: str,
     configuration_sha256: str,
 ) -> OpportunityCensusReportV1:
@@ -190,6 +230,17 @@ def build_strict_retained_census_v1(
         0,
         None,
         evidence_seal_sha256,
+        data_manifest_sha256,
+        universe_evidence_sha256,
+        schedule_evidence_sha256,
+        candle_evidence_sha256,
+        corporate_action_evidence_sha256,
+        observation_cutoff,
+        decision_sessions[0],
+        decision_sessions[-1],
+        "nifty50-five-session-census@v1",
+        "nifty50-anchor-eligibility@v1",
+        "next-open-fifth-close-gross@v1",
         configuration_sha256,
         code_sha,
         0,
@@ -203,6 +254,21 @@ def _report_value(value: OpportunityCensusReportV1) -> dict[str, object]:
         "configuration_sha256": value.configuration_sha256,
         "eligible_anchor_count": value.eligible_anchor_count,
         "evidence_seal_sha256": value.evidence_seal_sha256,
+        "data_manifest_sha256": value.data_manifest_sha256,
+        "universe_evidence_sha256": list(value.universe_evidence_sha256),
+        "schedule_evidence_sha256": list(value.schedule_evidence_sha256),
+        "candle_evidence_sha256": list(value.candle_evidence_sha256),
+        "corporate_action_evidence_sha256": list(
+            value.corporate_action_evidence_sha256
+        ),
+        "observation_cutoff": value.observation_cutoff.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        ),
+        "requested_from": value.requested_from.isoformat(),
+        "requested_to": value.requested_to.isoformat(),
+        "census_contract_version": value.census_contract_version,
+        "anchor_contract_version": value.anchor_contract_version,
+        "outcome_policy_version": value.outcome_policy_version,
         "evidence_status": value.evidence_status.value,
         "excluded_predeclared_anchor_count": value.excluded_predeclared_anchor_count,
         "execution_status": value.execution_status.value,

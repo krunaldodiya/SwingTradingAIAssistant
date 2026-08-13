@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .application import RetainedCensusRequestV1, RetainedCensusServiceV1
@@ -12,12 +13,24 @@ from .application import RetainedCensusRequestV1, RetainedCensusServiceV1
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="historical-census")
     parser.add_argument("--seal", type=Path, required=True)
+    parser.add_argument("--universe", type=Path, required=True)
+    parser.add_argument("--schedule", type=Path, action="append", required=True)
+    parser.add_argument("--data-manifest", type=Path, required=True)
+    parser.add_argument("--observation-cutoff", required=True)
     parser.add_argument("--code-sha", required=True)
     parser.add_argument("--configuration-sha256", required=True)
     try:
         args = parser.parse_args(argv)
         report = RetainedCensusServiceV1().run(
-            RetainedCensusRequestV1(args.seal, args.code_sha, args.configuration_sha256)
+            RetainedCensusRequestV1(
+                args.seal,
+                args.universe,
+                tuple(args.schedule),
+                args.data_manifest,
+                datetime.fromisoformat(args.observation_cutoff.replace("Z", "+00:00")),
+                args.code_sha,
+                args.configuration_sha256,
+            )
         )
         sys.stdout.buffer.write(report.canonical_json_bytes() + b"\n")
         return 0

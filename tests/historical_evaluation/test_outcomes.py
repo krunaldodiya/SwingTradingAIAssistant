@@ -16,6 +16,7 @@ from swing_trading_ai_assistant.historical_evaluation import (
     OfficialSessionV1,
     OutcomeSessionFactV1,
     PointInTimeEvidenceV1,
+    ResolvedOfficialSessionsV1,
     calculate_five_session_outcome_v1,
     classify_anchor_eligibility_v1,
 )
@@ -69,9 +70,11 @@ def request() -> FiveSessionOutcomeRequestV1:
     return FiveSessionOutcomeRequestV1(
         eligible_anchor=eligible_anchor(),
         observation_cutoff=datetime(2026, 7, 10, 10, tzinfo=UTC),
-        expected_sessions=tuple(session(day) for day in (2, 3, 4, 5, 6)),
-        authoritative_schedule_digest_sha256="a" * 64,
-        authoritative_schedule_known_at=datetime(2026, 7, 6, 10, tzinfo=UTC),
+        resolved_official_sessions=ResolvedOfficialSessionsV1(
+            tuple(session(day) for day in (2, 3, 4, 5, 6)),
+            datetime(2026, 7, 6, 10, tzinfo=UTC),
+            "a" * 64,
+        ),
     )
 
 
@@ -81,7 +84,7 @@ def evidence(*, exit_text: str = "102.000001") -> FiveSessionOutcomeEvidenceV1:
         raw_corporate_action_in_window=False,
         corporate_action_evidence_digest_sha256="f" * 64,
         corporate_action_evidence_known_at=datetime(2026, 7, 6, 10, tzinfo=UTC),
-        authoritative_schedule_digest_sha256="a" * 64,
+        authoritative_schedule_digest_sha256=request().resolved_official_sessions.digest_sha256,
     )
 
 
@@ -269,3 +272,24 @@ def test_outcome_rejects_schedule_proof_digest_mismatch() -> None:
             request(),
             replace(evidence(), authoritative_schedule_digest_sha256="b" * 64),
         )
+
+
+def test_authoritative_schedule_tuple_and_known_at_are_bound_to_observation_identity() -> (
+    None
+):
+    original_request = request()
+    original_evidence = evidence()
+    original = calculate_five_session_outcome_v1(original_request, original_evidence)
+    changed_schedule = replace(
+        original_request.resolved_official_sessions,
+        known_at=datetime(2026, 7, 1, 10, tzinfo=UTC),
+    )
+    changed_request = replace(
+        original_request, resolved_official_sessions=changed_schedule
+    )
+    changed_evidence = replace(
+        original_evidence,
+        authoritative_schedule_digest_sha256=changed_schedule.digest_sha256,
+    )
+    changed = calculate_five_session_outcome_v1(changed_request, changed_evidence)
+    assert changed.observation_identity_sha256 != original.observation_identity_sha256

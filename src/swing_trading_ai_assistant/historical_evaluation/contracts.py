@@ -462,12 +462,45 @@ class OutcomeSessionFactV1:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedOfficialSessionsV1:
+    """A content-addressed authoritative schedule resolution known by a cutoff."""
+
+    sessions: tuple[OfficialSessionV1, ...]
+    known_at: datetime
+    source_evidence_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.sessions) is not tuple
+            or len(self.sessions) < 5
+            or any(type(item) is not OfficialSessionV1 for item in self.sessions)
+            or tuple(item.trade_date for item in self.sessions)
+            != tuple(sorted({item.trade_date for item in self.sessions}))
+            or type(self.known_at) is not datetime
+            or type(self.source_evidence_sha256) is not str
+            or _DIGEST.fullmatch(self.source_evidence_sha256) is None
+        ):
+            raise ValueError("invalid resolved official sessions")
+        object.__setattr__(self, "known_at", _utc(self.known_at, "known_at"))
+
+    @property
+    def digest_sha256(self) -> str:
+        return hashlib.sha256(
+            _canonical_bytes(
+                {
+                    "known_at": _timestamp(self.known_at),
+                    "sessions": [_session_value(item) for item in self.sessions],
+                    "source_evidence_sha256": self.source_evidence_sha256,
+                }
+            )
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class FiveSessionOutcomeRequestV1:
     eligible_anchor: AnchorEligibilityObservationV1
     observation_cutoff: datetime
-    expected_sessions: tuple[OfficialSessionV1, ...]
-    authoritative_schedule_digest_sha256: str
-    authoritative_schedule_known_at: datetime
+    resolved_official_sessions: ResolvedOfficialSessionsV1
     policy_version: str = FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
     horizon_sessions: int = 5
     threshold_decimal: str = "0.02"
@@ -480,30 +513,20 @@ class FiveSessionOutcomeRequestV1:
             or self.policy_version != FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
             or self.horizon_sessions != 5
             or self.threshold_decimal != "0.02"
-            or type(self.expected_sessions) is not tuple
-            or len(self.expected_sessions) != 5
-            or type(self.authoritative_schedule_digest_sha256) is not str
-            or _DIGEST.fullmatch(self.authoritative_schedule_digest_sha256) is None
-            or type(self.authoritative_schedule_known_at) is not datetime
-            or any(
-                type(item) is not OfficialSessionV1 for item in self.expected_sessions
-            )
-            or tuple(item.trade_date for item in self.expected_sessions)
-            != tuple(sorted({item.trade_date for item in self.expected_sessions}))
+            or type(self.resolved_official_sessions) is not ResolvedOfficialSessionsV1
             or any(
                 item.trade_date <= self.eligible_anchor.decision_session.trade_date
-                for item in self.expected_sessions
+                for item in self.resolved_official_sessions.sessions[:5]
             )
         ):
             raise ValueError("outcome request requires eligible anchor")
         cutoff = _utc(self.observation_cutoff, "observation_cutoff")
-        schedule_known_at = _utc(
-            self.authoritative_schedule_known_at, "authoritative_schedule_known_at"
-        )
-        if cutoff <= self.eligible_anchor.decision_cutoff or schedule_known_at > cutoff:
+        if (
+            cutoff <= self.eligible_anchor.decision_cutoff
+            or self.resolved_official_sessions.known_at > cutoff
+        ):
             raise ValueError("invalid outcome observation cutoff")
         object.__setattr__(self, "observation_cutoff", cutoff)
-        object.__setattr__(self, "authoritative_schedule_known_at", schedule_known_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,7 +670,7 @@ def calculate_five_session_outcome_v1(
         raise ValueError("invalid outcome calculator input")
     if (
         tuple(item.session for item in evidence.sessions)
-        != request.expected_sessions[: len(evidence.sessions)]
+        != request.resolved_official_sessions.sessions[: len(evidence.sessions)]
         or any(
             item.session.close_at > request.observation_cutoff
             for item in evidence.sessions
@@ -655,7 +678,7 @@ def calculate_five_session_outcome_v1(
         or any(item.known_at > request.observation_cutoff for item in evidence.sessions)
         or evidence.corporate_action_evidence_known_at > request.observation_cutoff
         or evidence.authoritative_schedule_digest_sha256
-        != request.authoritative_schedule_digest_sha256
+        != request.resolved_official_sessions.digest_sha256
     ):
         raise ValueError("invalid outcome evidence")
     anchor_digest = request.eligible_anchor.observation_digest_sha256

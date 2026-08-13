@@ -57,6 +57,12 @@ def report() -> OpportunityCensusReportV1:
         universe_known_at=datetime(2026, 8, 12, 8, 56, 38, tzinfo=UTC),
         corporate_action_evidence_available=False,
         evidence_seal_sha256=SEAL,
+        data_manifest_sha256="d" * 64,
+        universe_evidence_sha256=("1" * 64,),
+        schedule_evidence_sha256=("2" * 64,),
+        candle_evidence_sha256=("3" * 64,),
+        corporate_action_evidence_sha256=(),
+        observation_cutoff=datetime(2026, 8, 12, 15, 30, tzinfo=UTC),
         code_sha=CODE,
         configuration_sha256="c" * 64,
     )
