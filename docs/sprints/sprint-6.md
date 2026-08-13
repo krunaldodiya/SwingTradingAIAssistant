@@ -1,6 +1,6 @@
 # Sprint 6 — Market Regime v1 specification
 
-Status: **DELIVERED SPECIFICATION CANDIDATE — ARK-168 RELEASE GATE IN PROGRESS**
+Status: **COMPLETE — MERGED BY PR #93**
 Planned window: 2026-08-14 through 2026-08-20
 Confidence date for review/CI wait: 2026-08-21
 Authoritative planning base: `21cd9f9acbb976e9f29298e0f45dbcdf83167897`
@@ -176,8 +176,14 @@ implementation, new sources, evidence acquisition, portfolios, or orders.
   `ac60ca9e6ec623fd36e8a1ab14caf464bd4260b0`.
 - ARK-167: `09:45:57.984Z`–`10:09:42.820Z`; independently approved at exact SHA
   `c309d452ca831954d9fc44bb396b09e6971fcec1`.
-- ARK-168 started at `2026-08-13T10:09:46.655Z`; release/CI/merge actuals are
-  recorded after completion.
+- ARK-168: `10:09:46.655Z`–`10:31:33.323Z`; PR #93 merged at
+  `10:31:11Z` as `46daa690b75ae1bedbdbb76633b167bfac5a6a1d`.
+- Sum of Linear issue elapsed intervals: `01:01:15.065`.
+- Hosted Quality/build: passed in `00:07:28`; GitGuardian: passed in
+  `00:01:26`.
+- Final local gate: 2,130 tests, 92.28% branch coverage, Ruff format/lint,
+  strict Pyright, Vulture at 80%, build, isolated Python 3.11 wheel install,
+  and public CLI smoke passed.
 
 Rework was concentrated in ARK-166 and was scientifically material rather than
 cosmetic: independent review caught an unreachable close-time evidence cutoff,
