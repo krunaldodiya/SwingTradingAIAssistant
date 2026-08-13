@@ -293,65 +293,13 @@ EvidenceAttemptV1 {
 }
 ```
 
-Each payload variant and received row is also closed and typed:
-
-```text
-MembershipCandidateRowV1 {
-  isin: Isin
-  symbol: CanonicalSymbol
-  effective_from: LocalDate
-  effective_through: LocalDate | null
-  provenance: ProvenanceV1
-}
-MembershipCandidatePayloadV1 {
-  received_rows: tuple[MembershipCandidateRowV1, 0..51]
-}
-
-ScheduleCandidateRowV1 {
-  session_date: LocalDate
-  open_at: UtcInstant
-  close_at: UtcInstant
-  applied_corrections: tuple[ScheduleCorrectionV1, 0..32]
-  provenance: ProvenanceV1
-}
-ScheduleCandidatePayloadV1 {
-  received_rows: tuple[ScheduleCandidateRowV1, 0..51]
-}
-
-DailyCloseCandidateRowV1 {
-  isin: Isin
-  symbol: CanonicalSymbol
-  session_date: LocalDate
-  field: Literal["CLOSE"]
-  close: CanonicalDecimal
-  market_scope_ends_at: UtcInstant
-  provenance: ProvenanceV1
-}
-DailyCloseCandidatePayloadV1 {
-  received_rows: tuple[DailyCloseCandidateRowV1, 0..51]
-}
-
-ComparabilityCandidateRowV1 {
-  isin: Isin
-  interval_from: LocalDate
-  interval_through: LocalDate
-  comparison_basis: Literal["RAW_CLOSE_NO_BREAK_PROVEN"]
-  status: Literal["NO_BREAK"]
-  status_proof: CorporateActionStatusProofV1
-  negative_completeness_proof: NegativeCompletenessProofV1
-  revision_proof: RevisionLineageProofV1
-  identity_continuity_proof: IdentityContinuityProofV1
-}
-ComparabilityCandidatePayloadV1 {
-  received_rows: tuple[ComparabilityCandidateRowV1, 0..51]
-}
-```
-
-These forward references resolve to the exact immutable proof/provenance schemas
-in “Verified typed market facts”; they are not mappings or opaque provider rows.
-An invalid row that cannot satisfy even this structural shape is represented by
-the envelope's `INVALID_SOURCE_ROW` failure, optionally alongside the other
-well-formed received rows.
+Each candidate payload and row is closed at the attempted-evidence layer using
+the bounded `*_text` and `ProvenanceCandidateV1` fields defined above. This is
+intentional: it preserves invalid, late, duplicate, and mismatched source rows
+without claiming that they already satisfy admitted market semantics. Pure
+validation converts only clean candidates into the strict immutable fact types
+in “Verified typed market facts”; conversion failure yields the corresponding
+closed insufficiency reason and never a partially verified fact.
 
 The kind pins the payload variant and exact requested identities.
 `MEMBERSHIP` requests one `DECISION_MEMBERSHIP` scope identity.

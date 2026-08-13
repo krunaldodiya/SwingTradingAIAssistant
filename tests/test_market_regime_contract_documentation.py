@@ -254,3 +254,16 @@ def test_candidate_rows_and_cross_binding_are_fully_frozen() -> None:
         "selected_revision_identity_sha256 == revision_proof.provenance.revision_identity_sha256",
     ):
         assert required in text
+
+
+def test_candidate_row_schema_names_are_defined_once() -> None:
+    text = POLICY.read_text()
+    for name in (
+        "MembershipCandidateRowV1 {",
+        "ScheduleCandidateRowV1 {",
+        "DailyCloseCandidateRowV1 {",
+        "ComparabilityCandidateRowV1 {",
+        "ProvenanceCandidateV1 {",
+    ):
+        assert text.count(name) == 1
+    assert "Pure\nvalidation converts only clean candidates" in text
