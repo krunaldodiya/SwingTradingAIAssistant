@@ -39,6 +39,14 @@ Use high reasoning effort for market-logic implementation, architecture, unresol
 every review. Use medium for mechanical edits, renames, test scaffolding, docs, config, and straightforward
 adapters; raise it when evidence shows the task is not mechanical.
 
+Roles are capability and authority contracts, not permanent model names. The active checked-in configuration
+remains the proven GPT-only fallback until another provider passes qualification. The accepted target is Fable
+for routine read-only planning/review, Opus for high-risk planning/final review, and GPT-5.6 Sol as the sole
+implementation/repair writer. Deterministic tools and hosted CI—not an LLM—own test and release pass/fail.
+See the [cross-provider routing decision](notes/2026-08-13-cross-provider-model-routing-decision.md) for work
+allocation, activation evidence, subscription/cost caveats, and fallback rules. Do not change runtime role TOMLs
+merely because a model appears in a catalogue or a plan is advertised.
+
 ## Test-first and two-speed gates
 
 For every behavior change use red-green-refactor: write a focused failing test, make the smallest passing
