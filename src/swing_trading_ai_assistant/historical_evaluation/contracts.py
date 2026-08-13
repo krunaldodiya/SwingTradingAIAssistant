@@ -626,7 +626,7 @@ class FiveSessionOutcomeEvidenceV1:
         ).hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class FiveSessionOutcomeObservationV1:
     state: FiveSessionOutcomeStateV1
     reason: FiveSessionOutcomeReasonV1
@@ -748,6 +748,39 @@ class FiveSessionOutcomeObservationV1:
         return hashlib.sha256(self.canonical_json_bytes()).hexdigest()
 
 
+def _new_outcome_observation(
+    state: FiveSessionOutcomeStateV1,
+    reason: FiveSessionOutcomeReasonV1,
+    anchor_observation_sha256: str,
+    evidence_digest_sha256: str,
+    evidence_canonical_json: bytes,
+    entry_trade_date: date | None,
+    entry_at: datetime | None,
+    exit_trade_date: date | None,
+    exit_at: datetime | None,
+    gross_return_percent: str | None,
+    strictly_gt_2_percent: bool | None,
+) -> FiveSessionOutcomeObservationV1:
+    value = object.__new__(FiveSessionOutcomeObservationV1)
+    for field, item in (
+        ("state", state),
+        ("reason", reason),
+        ("anchor_observation_sha256", anchor_observation_sha256),
+        ("evidence_digest_sha256", evidence_digest_sha256),
+        ("evidence_canonical_json", evidence_canonical_json),
+        ("entry_trade_date", entry_trade_date),
+        ("entry_at", entry_at),
+        ("exit_trade_date", exit_trade_date),
+        ("exit_at", exit_at),
+        ("gross_return_percent", gross_return_percent),
+        ("strictly_gt_2_percent", strictly_gt_2_percent),
+        ("policy_version", FIVE_SESSION_OUTCOME_POLICY_VERSION_V1),
+    ):
+        object.__setattr__(value, field, item)
+    value.__post_init__()
+    return value
+
+
 def _valid_outcome_state_reason(
     state: FiveSessionOutcomeStateV1, reason: FiveSessionOutcomeReasonV1
 ) -> bool:
@@ -843,7 +876,7 @@ def calculate_five_session_outcome_v1(
         Decimal("0.000001"), rounding=ROUND_HALF_EVEN
     )
     rendered = format(percent, ".6f")
-    return FiveSessionOutcomeObservationV1(
+    return _new_outcome_observation(
         FiveSessionOutcomeStateV1.OBSERVED,
         FiveSessionOutcomeReasonV1.NONE,
         anchor_digest,
@@ -865,7 +898,7 @@ def _terminal_outcome(
     evidence_digest: str,
     evidence_canonical_json: bytes,
 ) -> FiveSessionOutcomeObservationV1:
-    return FiveSessionOutcomeObservationV1(
+    return _new_outcome_observation(
         state,
         reason,
         anchor_digest,

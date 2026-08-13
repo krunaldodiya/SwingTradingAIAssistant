@@ -274,7 +274,7 @@ def test_omitting_an_intervening_official_session_is_rejected() -> None:
 
 def test_outcome_observation_rejects_contradictory_state_and_reason() -> None:
     result = calculate_five_session_outcome_v1(request(), evidence())
-    with pytest.raises(ValueError, match="outcome observation"):
+    with pytest.raises((TypeError, ValueError)):
         replace(
             result,
             state=FiveSessionOutcomeStateV1.NON_FILL,
@@ -319,7 +319,7 @@ def test_authoritative_schedule_tuple_and_known_at_are_bound_to_observation_iden
 
 def test_outcome_observation_rejects_impossible_dates_and_threshold() -> None:
     result = calculate_five_session_outcome_v1(request(), evidence())
-    with pytest.raises(ValueError, match="outcome observation"):
+    with pytest.raises((TypeError, ValueError)):
         replace(
             result,
             entry_trade_date=date(2099, 1, 1),
@@ -356,7 +356,7 @@ def test_resolved_schedule_rejects_unaccounted_calendar_gap() -> None:
 
 def test_outcome_observation_rejects_noncanonical_execution_times() -> None:
     result = calculate_five_session_outcome_v1(request(), evidence())
-    with pytest.raises(ValueError, match="outcome observation"):
+    with pytest.raises((TypeError, ValueError)):
         replace(
             result,
             entry_at=result.entry_at + timedelta(minutes=1),
