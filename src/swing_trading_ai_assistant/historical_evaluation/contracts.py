@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from typing import ClassVar, Final
 
@@ -406,3 +407,279 @@ def _utc(value: datetime, field: str) -> datetime:
         return value.astimezone(UTC)
     except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError(f"{field} cannot be converted to UTC") from exc
+
+
+FIVE_SESSION_OUTCOME_POLICY_VERSION_V1: Final = "next-open-fifth-close-gross@v1"
+_PRICE = re.compile(r"(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,12})?\Z")
+
+
+class FiveSessionOutcomeStateV1(StrEnum):
+    OBSERVED = "OBSERVED"
+    NON_FILL = "NON_FILL"
+    INCOMPLETE_HORIZON = "INCOMPLETE_HORIZON"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class FiveSessionOutcomeReasonV1(StrEnum):
+    NONE = "NONE"
+    EXACT_NEXT_OPEN_MISSING = "EXACT_NEXT_OPEN_MISSING"
+    FIVE_COMPLETED_SESSIONS_UNAVAILABLE = "FIVE_COMPLETED_SESSIONS_UNAVAILABLE"
+    SESSION_EVIDENCE_INCOMPLETE = "SESSION_EVIDENCE_INCOMPLETE"
+    RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS = "RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS"
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeSessionFactV1:
+    session: OfficialSessionV1
+    exact_open_text: str | None
+    exact_terminal_close_text: str | None
+    complete: bool
+    evidence_digest_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.session) is not OfficialSessionV1
+            or type(self.complete) is not bool
+            or type(self.evidence_digest_sha256) is not str
+            or _DIGEST.fullmatch(self.evidence_digest_sha256) is None
+            or not _valid_optional_price(self.exact_open_text)
+            or not _valid_optional_price(self.exact_terminal_close_text)
+        ):
+            raise ValueError("invalid outcome session fact")
+
+
+@dataclass(frozen=True, slots=True)
+class FiveSessionOutcomeRequestV1:
+    eligible_anchor: AnchorEligibilityObservationV1
+    observation_cutoff: datetime
+    policy_version: str = FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
+    horizon_sessions: int = 5
+    threshold_decimal: str = "0.02"
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.eligible_anchor) is not AnchorEligibilityObservationV1
+            or self.eligible_anchor.status is not AnchorEligibilityStatusV1.ELIGIBLE
+            or type(self.observation_cutoff) is not datetime
+            or self.policy_version != FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
+            or self.horizon_sessions != 5
+            or self.threshold_decimal != "0.02"
+        ):
+            raise ValueError("outcome request requires eligible anchor")
+        cutoff = _utc(self.observation_cutoff, "observation_cutoff")
+        if cutoff <= self.eligible_anchor.decision_cutoff:
+            raise ValueError("invalid outcome observation cutoff")
+        object.__setattr__(self, "observation_cutoff", cutoff)
+
+
+@dataclass(frozen=True, slots=True)
+class FiveSessionOutcomeEvidenceV1:
+    sessions: tuple[OutcomeSessionFactV1, ...]
+    raw_corporate_action_in_window: bool
+    corporate_action_evidence_digest_sha256: str
+
+    def __post_init__(self) -> None:
+        dates = tuple(item.session.trade_date for item in self.sessions)
+        if (
+            type(self.sessions) is not tuple
+            or len(self.sessions) > 5
+            or any(type(item) is not OutcomeSessionFactV1 for item in self.sessions)
+            or dates != tuple(sorted(set(dates)))
+            or type(self.raw_corporate_action_in_window) is not bool
+            or type(self.corporate_action_evidence_digest_sha256) is not str
+            or _DIGEST.fullmatch(self.corporate_action_evidence_digest_sha256) is None
+        ):
+            raise ValueError("invalid outcome evidence")
+
+    def digest_sha256(self) -> str:
+        return hashlib.sha256(
+            _canonical_bytes(_outcome_evidence_value(self))
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class FiveSessionOutcomeObservationV1:
+    state: FiveSessionOutcomeStateV1
+    reason: FiveSessionOutcomeReasonV1
+    anchor_observation_sha256: str
+    evidence_digest_sha256: str
+    entry_trade_date: date | None
+    entry_at: datetime | None
+    exit_trade_date: date | None
+    exit_at: datetime | None
+    gross_return_percent: str | None
+    strictly_gt_2_percent: bool | None
+    policy_version: str = FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
+
+    def __post_init__(self) -> None:
+        observed = self.state is FiveSessionOutcomeStateV1.OBSERVED
+        if (
+            type(self.state) is not FiveSessionOutcomeStateV1
+            or type(self.reason) is not FiveSessionOutcomeReasonV1
+            or (observed != (self.reason is FiveSessionOutcomeReasonV1.NONE))
+            or any(
+                type(value) is not str or _DIGEST.fullmatch(value) is None
+                for value in (
+                    self.anchor_observation_sha256,
+                    self.evidence_digest_sha256,
+                )
+            )
+            or self.policy_version != FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
+            or observed
+            != (
+                type(self.entry_trade_date) is date
+                and type(self.entry_at) is datetime
+                and type(self.exit_trade_date) is date
+                and type(self.exit_at) is datetime
+                and type(self.gross_return_percent) is str
+                and type(self.strictly_gt_2_percent) is bool
+            )
+        ):
+            raise ValueError("invalid outcome observation")
+
+    def canonical_json_bytes(self) -> bytes:
+        return _canonical_bytes(
+            {
+                "anchor_observation_sha256": self.anchor_observation_sha256,
+                "entry_at": None
+                if self.entry_at is None
+                else _timestamp(self.entry_at),
+                "entry_trade_date": None
+                if self.entry_trade_date is None
+                else self.entry_trade_date.isoformat(),
+                "evidence_digest_sha256": self.evidence_digest_sha256,
+                "exit_at": None if self.exit_at is None else _timestamp(self.exit_at),
+                "exit_trade_date": None
+                if self.exit_trade_date is None
+                else self.exit_trade_date.isoformat(),
+                "gross_return_percent": self.gross_return_percent,
+                "policy_version": self.policy_version,
+                "reason": self.reason.value,
+                "state": self.state.value,
+                "strictly_gt_2_percent": self.strictly_gt_2_percent,
+            }
+        )
+
+    @property
+    def observation_identity_sha256(self) -> str:
+        return hashlib.sha256(self.canonical_json_bytes()).hexdigest()
+
+
+def calculate_five_session_outcome_v1(
+    request: FiveSessionOutcomeRequestV1,
+    evidence: FiveSessionOutcomeEvidenceV1,
+) -> FiveSessionOutcomeObservationV1:
+    if (
+        type(request) is not FiveSessionOutcomeRequestV1
+        or type(evidence) is not FiveSessionOutcomeEvidenceV1
+    ):
+        raise ValueError("invalid outcome calculator input")
+    if any(
+        item.session.trade_date <= request.eligible_anchor.decision_session.trade_date
+        for item in evidence.sessions
+    ) or any(
+        item.session.close_at > request.observation_cutoff for item in evidence.sessions
+    ):
+        raise ValueError("invalid outcome evidence")
+    anchor_digest = request.eligible_anchor.observation_digest_sha256
+    evidence_digest = evidence.digest_sha256()
+    if len(evidence.sessions) < 5:
+        return _terminal_outcome(
+            FiveSessionOutcomeStateV1.INCOMPLETE_HORIZON,
+            FiveSessionOutcomeReasonV1.FIVE_COMPLETED_SESSIONS_UNAVAILABLE,
+            anchor_digest,
+            evidence_digest,
+        )
+    if any(not item.complete for item in evidence.sessions):
+        return _terminal_outcome(
+            FiveSessionOutcomeStateV1.INSUFFICIENT_EVIDENCE,
+            FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE,
+            anchor_digest,
+            evidence_digest,
+        )
+    first, last = evidence.sessions[0], evidence.sessions[-1]
+    if first.exact_open_text is None:
+        return _terminal_outcome(
+            FiveSessionOutcomeStateV1.NON_FILL,
+            FiveSessionOutcomeReasonV1.EXACT_NEXT_OPEN_MISSING,
+            anchor_digest,
+            evidence_digest,
+        )
+    if last.exact_terminal_close_text is None:
+        return _terminal_outcome(
+            FiveSessionOutcomeStateV1.INSUFFICIENT_EVIDENCE,
+            FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE,
+            anchor_digest,
+            evidence_digest,
+        )
+    if evidence.raw_corporate_action_in_window:
+        return _terminal_outcome(
+            FiveSessionOutcomeStateV1.AMBIGUOUS,
+            FiveSessionOutcomeReasonV1.RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS,
+            anchor_digest,
+            evidence_digest,
+        )
+    entry = Decimal(first.exact_open_text)
+    exit_value = Decimal(last.exact_terminal_close_text)
+    percent = ((exit_value / entry - Decimal(1)) * Decimal(100)).quantize(
+        Decimal("0.000001"), rounding=ROUND_HALF_EVEN
+    )
+    rendered = format(percent, ".6f")
+    return FiveSessionOutcomeObservationV1(
+        FiveSessionOutcomeStateV1.OBSERVED,
+        FiveSessionOutcomeReasonV1.NONE,
+        anchor_digest,
+        evidence_digest,
+        first.session.trade_date,
+        first.session.open_at,
+        last.session.trade_date,
+        last.session.close_at - timedelta(minutes=1),
+        rendered,
+        exit_value * Decimal(100) > entry * Decimal(102),
+    )
+
+
+def _terminal_outcome(
+    state: FiveSessionOutcomeStateV1,
+    reason: FiveSessionOutcomeReasonV1,
+    anchor_digest: str,
+    evidence_digest: str,
+) -> FiveSessionOutcomeObservationV1:
+    return FiveSessionOutcomeObservationV1(
+        state,
+        reason,
+        anchor_digest,
+        evidence_digest,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+def _valid_optional_price(value: object) -> bool:
+    if value is None:
+        return True
+    if type(value) is not str or _PRICE.fullmatch(value) is None:
+        return False
+    return Decimal(value) > 0
+
+
+def _outcome_evidence_value(value: FiveSessionOutcomeEvidenceV1) -> dict[str, object]:
+    return {
+        "corporate_action_evidence_digest_sha256": value.corporate_action_evidence_digest_sha256,
+        "raw_corporate_action_in_window": value.raw_corporate_action_in_window,
+        "sessions": [
+            {
+                "complete": item.complete,
+                "evidence_digest_sha256": item.evidence_digest_sha256,
+                "exact_open_text": item.exact_open_text,
+                "exact_terminal_close_text": item.exact_terminal_close_text,
+                "session": _session_value(item.session),
+            }
+            for item in value.sessions
+        ],
+    }

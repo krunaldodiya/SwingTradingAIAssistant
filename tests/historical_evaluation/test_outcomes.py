@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
+
+from swing_trading_ai_assistant.historical_evaluation import (
+    AnchorEligibilityEvidenceV1,
+    AnchorEligibilityRequestV1,
+    EvidenceAvailabilityV1,
+    FiveSessionOutcomeEvidenceV1,
+    FiveSessionOutcomeReasonV1,
+    FiveSessionOutcomeRequestV1,
+    FiveSessionOutcomeStateV1,
+    OfficialSessionV1,
+    OutcomeSessionFactV1,
+    PointInTimeEvidenceV1,
+    calculate_five_session_outcome_v1,
+    classify_anchor_eligibility_v1,
+)
+
+
+def session(day: int) -> OfficialSessionV1:
+    return OfficialSessionV1(
+        date(2026, 7, day),
+        datetime(2026, 7, day, 3, 45, tzinfo=UTC),
+        datetime(2026, 7, day, 10, tzinfo=UTC),
+    )
+
+
+def eligible_anchor():
+    def available(digest: str) -> PointInTimeEvidenceV1:
+        return PointInTimeEvidenceV1(
+            EvidenceAvailabilityV1.AVAILABLE,
+            datetime(2026, 7, 1, 9, tzinfo=UTC),
+            digest,
+        )
+
+    request = AnchorEligibilityRequestV1(
+        1, "INE002A01018", "RELIANCE", session(1), session(1).close_at
+    )
+    evidence = AnchorEligibilityEvidenceV1(
+        available("1" * 64),
+        available("2" * 64),
+        available("3" * 64),
+        available("4" * 64),
+        True,
+        True,
+        True,
+    )
+    return classify_anchor_eligibility_v1(request, evidence)
+
+
+def fact(
+    day: int, *, open_text: str = "100", close_text: str = "101"
+) -> OutcomeSessionFactV1:
+    return OutcomeSessionFactV1(
+        session=session(day),
+        exact_open_text=open_text,
+        exact_terminal_close_text=close_text,
+        complete=True,
+        evidence_digest_sha256=f"{day:064x}",
+    )
+
+
+def request() -> FiveSessionOutcomeRequestV1:
+    return FiveSessionOutcomeRequestV1(
+        eligible_anchor=eligible_anchor(),
+        observation_cutoff=datetime(2026, 7, 10, 10, tzinfo=UTC),
+    )
+
+
+def evidence(*, exit_text: str = "102.000001") -> FiveSessionOutcomeEvidenceV1:
+    return FiveSessionOutcomeEvidenceV1(
+        sessions=(fact(2), fact(3), fact(4), fact(5), fact(6, close_text=exit_text)),
+        raw_corporate_action_in_window=False,
+        corporate_action_evidence_digest_sha256="f" * 64,
+    )
+
+
+def test_next_open_fifth_close_is_observed_and_strictly_above_two_percent() -> None:
+    result = calculate_five_session_outcome_v1(request(), evidence())
+    assert result.state is FiveSessionOutcomeStateV1.OBSERVED
+    assert result.reason is FiveSessionOutcomeReasonV1.NONE
+    assert result.entry_trade_date == date(2026, 7, 2)
+    assert result.exit_trade_date == date(2026, 7, 6)
+    assert result.gross_return_percent == "2.000001"
+    assert result.strictly_gt_2_percent is True
+    assert b'"entry_price"' not in result.canonical_json_bytes()
+    assert len(result.observation_identity_sha256) == 64
+
+
+def test_exact_two_percent_is_not_strictly_above_threshold() -> None:
+    result = calculate_five_session_outcome_v1(request(), evidence(exit_text="102"))
+    assert result.gross_return_percent == "2.000000"
+    assert result.strictly_gt_2_percent is False
+
+
+def test_missing_exact_next_open_is_non_fill_without_fall_forward() -> None:
+    facts = evidence()
+    result = calculate_five_session_outcome_v1(
+        request(),
+        replace(
+            facts,
+            sessions=(
+                replace(facts.sessions[0], exact_open_text=None),
+                *facts.sessions[1:],
+            ),
+        ),
+    )
+    assert result.state is FiveSessionOutcomeStateV1.NON_FILL
+    assert result.reason is FiveSessionOutcomeReasonV1.EXACT_NEXT_OPEN_MISSING
+    assert result.gross_return_percent is None
+
+
+def test_fewer_than_five_completed_sessions_is_an_accounted_tail() -> None:
+    result = calculate_five_session_outcome_v1(
+        request(), replace(evidence(), sessions=evidence().sessions[:4])
+    )
+    assert result.state is FiveSessionOutcomeStateV1.INCOMPLETE_HORIZON
+    assert (
+        result.reason is FiveSessionOutcomeReasonV1.FIVE_COMPLETED_SESSIONS_UNAVAILABLE
+    )
+
+
+def test_missing_intermediate_session_evidence_is_insufficient() -> None:
+    facts = evidence()
+    result = calculate_five_session_outcome_v1(
+        request(),
+        replace(
+            facts,
+            sessions=(
+                *facts.sessions[:2],
+                replace(facts.sessions[2], complete=False),
+                *facts.sessions[3:],
+            ),
+        ),
+    )
+    assert result.state is FiveSessionOutcomeStateV1.INSUFFICIENT_EVIDENCE
+    assert result.reason is FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE
+
+
+def test_raw_corporate_action_window_is_ambiguous() -> None:
+    result = calculate_five_session_outcome_v1(
+        request(), replace(evidence(), raw_corporate_action_in_window=True)
+    )
+    assert result.state is FiveSessionOutcomeStateV1.AMBIGUOUS
+    assert (
+        result.reason
+        is FiveSessionOutcomeReasonV1.RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS
+    )
+
+
+def test_outcome_rejects_noneligible_anchor_and_wrong_session_order() -> None:
+    missing = PointInTimeEvidenceV1(EvidenceAvailabilityV1.MISSING, None, None)
+    available = PointInTimeEvidenceV1(
+        EvidenceAvailabilityV1.AVAILABLE,
+        datetime(2026, 7, 1, 9, tzinfo=UTC),
+        "1" * 64,
+    )
+    anchor = eligible_anchor()
+    insufficient = classify_anchor_eligibility_v1(
+        AnchorEligibilityRequestV1(
+            1,
+            anchor.isin,
+            anchor.symbol,
+            anchor.decision_session,
+            anchor.decision_cutoff,
+        ),
+        AnchorEligibilityEvidenceV1(
+            available, available, available, missing, True, True, True
+        ),
+    )
+    with pytest.raises(ValueError, match="eligible anchor"):
+        replace(request(), eligible_anchor=insufficient)
+    bad = evidence()
+    with pytest.raises(ValueError, match="outcome evidence"):
+        replace(bad, sessions=(bad.sessions[1], bad.sessions[0], *bad.sessions[2:]))
+
+
+def test_data_after_fifth_terminal_candle_cannot_mutate_observation() -> None:
+    first = calculate_five_session_outcome_v1(request(), evidence())
+    later = replace(
+        request(), observation_cutoff=request().observation_cutoff + timedelta(days=10)
+    )
+    second = calculate_five_session_outcome_v1(later, evidence())
+    assert first.gross_return_percent == second.gross_return_percent
+    assert first.strictly_gt_2_percent == second.strictly_gt_2_percent
+
+
+def test_outcome_sessions_must_be_strictly_after_anchor_and_complete_by_cutoff() -> (
+    None
+):
+    facts = evidence()
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            request(), replace(facts, sessions=(fact(1), *facts.sessions[1:]))
+        )
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            replace(request(), observation_cutoff=datetime(2026, 7, 5, 10, tzinfo=UTC)),
+            facts,
+        )
