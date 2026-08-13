@@ -71,8 +71,8 @@ def test_strict_retained_census_accounts_for_every_pair_and_no_outcomes() -> Non
     assert value.excluded_predeclared_anchor_count == 0
     assert value.insufficient_anchor_count == 1550
     assert value.primary_reason_counts == (
-        ("UNIVERSE_NOT_KNOWN_AT_CUTOFF", 1500),
-        ("CORPORATE_ACTIONS_MISSING", 50),
+        ("UNIVERSE_NOT_KNOWN_AT_DECISION_CUTOFF", 1500),
+        ("CORPORATE_ACTION_EVIDENCE_MISSING_OR_STALE", 50),
     )
     assert value.observed_outcome_count == 0
     assert value.strictly_gt_2_percent_count == 0
@@ -150,3 +150,10 @@ def test_generic_census_rejects_duplicate_pairs() -> None:
     value = CensusOutcomeV1("AAA", "INE000A00001", date(2026, 7, 1), "NON_FILL")
     with pytest.raises(ValueError, match="census outcomes"):
         reduce_opportunity_outcomes_v1((value, value))
+
+
+def test_census_rejects_arbitrary_reason_and_evidence_state() -> None:
+    with pytest.raises(ValueError, match="census report"):
+        replace(report(), primary_reason_counts=(("arbitrary", -1), ("anything", 1551)))
+    with pytest.raises(ValueError, match="census report"):
+        replace(report(), evidence_status=CensusEvidenceStatusV1.OBSERVED)

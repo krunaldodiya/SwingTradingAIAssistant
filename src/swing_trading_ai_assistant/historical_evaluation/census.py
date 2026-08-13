@@ -57,7 +57,7 @@ class OpportunityCensusReportV1:
     insufficient_outcome_count: int
     ambiguous_outcome_count: int
     strictly_gt_2_percent_count: int
-    return_distribution: None
+    return_distribution: object | None
     evidence_seal_sha256: str
     configuration_sha256: str
     code_sha: str
@@ -93,10 +93,32 @@ class OpportunityCensusReportV1:
             + self.incomplete_horizon_outcome_count
             + self.insufficient_outcome_count
             + self.ambiguous_outcome_count
+            or type(self.primary_reason_counts) is not tuple
+            or any(
+                type(reason) is not str
+                or reason
+                not in {
+                    "UNIVERSE_NOT_KNOWN_AT_DECISION_CUTOFF",
+                    "CORPORATE_ACTION_EVIDENCE_MISSING_OR_STALE",
+                }
+                or type(count) is not int
+                or count < 0
+                for reason, count in self.primary_reason_counts
+            )
+            or len({reason for reason, _ in self.primary_reason_counts})
+            != len(self.primary_reason_counts)
             or sum(count for _, count in self.primary_reason_counts)
             != self.insufficient_anchor_count
             or self.strictly_gt_2_percent_count > self.observed_outcome_count
-            or self.return_distribution is not None
+            or (self.observed_outcome_count == 0) != (self.return_distribution is None)
+            or self.evidence_status
+            is not (
+                CensusEvidenceStatusV1.INSUFFICIENT_EVIDENCE
+                if self.observed_outcome_count == 0
+                else CensusEvidenceStatusV1.OBSERVED
+                if self.observed_outcome_count == self.requested_stock_session_pairs
+                else CensusEvidenceStatusV1.PARTIAL
+            )
             or self.provider_attempt_count != 0
             or self.warnings != _WARNINGS
             or _DIGEST.fullmatch(self.evidence_seal_sha256) is None
@@ -157,8 +179,8 @@ def build_strict_retained_census_v1(
         0,
         requested,
         (
-            ("UNIVERSE_NOT_KNOWN_AT_CUTOFF", late),
-            ("CORPORATE_ACTIONS_MISSING", missing_actions),
+            ("UNIVERSE_NOT_KNOWN_AT_DECISION_CUTOFF", late),
+            ("CORPORATE_ACTION_EVIDENCE_MISSING_OR_STALE", missing_actions),
         ),
         0,
         0,

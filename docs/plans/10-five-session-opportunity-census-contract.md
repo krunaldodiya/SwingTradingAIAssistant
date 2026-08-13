@@ -182,7 +182,9 @@ therefore does not make an otherwise valid anchor ineligible.
 - timezone-aware UTC `observation_cutoff`;
 - `policy_version = "next-open-fifth-close-gross@v1"`;
 - `horizon_sessions = 5`; and
-- `threshold_decimal = "0.02"`.
+- `threshold_decimal = "0.02"`; and
+- an exact five-session tuple bound to the authoritative schedule evidence digest
+  and its UTC knowledge timestamp.
 
 No outcome request is valid for an insufficient or excluded anchor.
 

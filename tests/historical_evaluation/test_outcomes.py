@@ -70,6 +70,8 @@ def request() -> FiveSessionOutcomeRequestV1:
         eligible_anchor=eligible_anchor(),
         observation_cutoff=datetime(2026, 7, 10, 10, tzinfo=UTC),
         expected_sessions=tuple(session(day) for day in (2, 3, 4, 5, 6)),
+        authoritative_schedule_digest_sha256="a" * 64,
+        authoritative_schedule_known_at=datetime(2026, 7, 6, 10, tzinfo=UTC),
     )
 
 
@@ -79,6 +81,7 @@ def evidence(*, exit_text: str = "102.000001") -> FiveSessionOutcomeEvidenceV1:
         raw_corporate_action_in_window=False,
         corporate_action_evidence_digest_sha256="f" * 64,
         corporate_action_evidence_known_at=datetime(2026, 7, 6, 10, tzinfo=UTC),
+        authoritative_schedule_digest_sha256="a" * 64,
     )
 
 
@@ -200,7 +203,7 @@ def test_outcome_sessions_must_be_strictly_after_anchor_and_complete_by_cutoff()
         calculate_five_session_outcome_v1(
             request(), replace(facts, sessions=(fact(1), *facts.sessions[1:]))
         )
-    with pytest.raises(ValueError, match="outcome evidence"):
+    with pytest.raises(ValueError, match="outcome observation cutoff"):
         calculate_five_session_outcome_v1(
             replace(request(), observation_cutoff=datetime(2026, 7, 5, 10, tzinfo=UTC)),
             facts,
@@ -241,4 +244,28 @@ def test_omitting_an_intervening_official_session_is_rejected() -> None:
                     facts.sessions[4],
                 ),
             ),
+        )
+
+
+def test_outcome_observation_rejects_contradictory_state_and_reason() -> None:
+    result = calculate_five_session_outcome_v1(request(), evidence())
+    with pytest.raises(ValueError, match="outcome observation"):
+        replace(
+            result,
+            state=FiveSessionOutcomeStateV1.NON_FILL,
+            reason=FiveSessionOutcomeReasonV1.FIVE_COMPLETED_SESSIONS_UNAVAILABLE,
+            entry_trade_date=None,
+            entry_at=None,
+            exit_trade_date=None,
+            exit_at=None,
+            gross_return_percent=None,
+            strictly_gt_2_percent=None,
+        )
+
+
+def test_outcome_rejects_schedule_proof_digest_mismatch() -> None:
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            request(),
+            replace(evidence(), authoritative_schedule_digest_sha256="b" * 64),
         )

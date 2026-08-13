@@ -465,10 +465,12 @@ class OutcomeSessionFactV1:
 class FiveSessionOutcomeRequestV1:
     eligible_anchor: AnchorEligibilityObservationV1
     observation_cutoff: datetime
+    expected_sessions: tuple[OfficialSessionV1, ...]
+    authoritative_schedule_digest_sha256: str
+    authoritative_schedule_known_at: datetime
     policy_version: str = FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
     horizon_sessions: int = 5
     threshold_decimal: str = "0.02"
-    expected_sessions: tuple[OfficialSessionV1, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -480,6 +482,9 @@ class FiveSessionOutcomeRequestV1:
             or self.threshold_decimal != "0.02"
             or type(self.expected_sessions) is not tuple
             or len(self.expected_sessions) != 5
+            or type(self.authoritative_schedule_digest_sha256) is not str
+            or _DIGEST.fullmatch(self.authoritative_schedule_digest_sha256) is None
+            or type(self.authoritative_schedule_known_at) is not datetime
             or any(
                 type(item) is not OfficialSessionV1 for item in self.expected_sessions
             )
@@ -492,9 +497,13 @@ class FiveSessionOutcomeRequestV1:
         ):
             raise ValueError("outcome request requires eligible anchor")
         cutoff = _utc(self.observation_cutoff, "observation_cutoff")
-        if cutoff <= self.eligible_anchor.decision_cutoff:
+        schedule_known_at = _utc(
+            self.authoritative_schedule_known_at, "authoritative_schedule_known_at"
+        )
+        if cutoff <= self.eligible_anchor.decision_cutoff or schedule_known_at > cutoff:
             raise ValueError("invalid outcome observation cutoff")
         object.__setattr__(self, "observation_cutoff", cutoff)
+        object.__setattr__(self, "authoritative_schedule_known_at", schedule_known_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,6 +512,7 @@ class FiveSessionOutcomeEvidenceV1:
     raw_corporate_action_in_window: bool
     corporate_action_evidence_digest_sha256: str
     corporate_action_evidence_known_at: datetime
+    authoritative_schedule_digest_sha256: str
 
     def __post_init__(self) -> None:
         dates = tuple(item.session.trade_date for item in self.sessions)
@@ -515,6 +525,8 @@ class FiveSessionOutcomeEvidenceV1:
             or type(self.corporate_action_evidence_digest_sha256) is not str
             or type(self.corporate_action_evidence_known_at) is not datetime
             or _DIGEST.fullmatch(self.corporate_action_evidence_digest_sha256) is None
+            or type(self.authoritative_schedule_digest_sha256) is not str
+            or _DIGEST.fullmatch(self.authoritative_schedule_digest_sha256) is None
         ):
             raise ValueError("invalid outcome evidence")
         object.__setattr__(
@@ -551,7 +563,7 @@ class FiveSessionOutcomeObservationV1:
         if (
             type(self.state) is not FiveSessionOutcomeStateV1
             or type(self.reason) is not FiveSessionOutcomeReasonV1
-            or (observed != (self.reason is FiveSessionOutcomeReasonV1.NONE))
+            or not _valid_outcome_state_reason(self.state, self.reason)
             or any(
                 type(value) is not str or _DIGEST.fullmatch(value) is None
                 for value in (
@@ -600,6 +612,30 @@ class FiveSessionOutcomeObservationV1:
         return hashlib.sha256(self.canonical_json_bytes()).hexdigest()
 
 
+def _valid_outcome_state_reason(
+    state: FiveSessionOutcomeStateV1, reason: FiveSessionOutcomeReasonV1
+) -> bool:
+    return (state, reason) in {
+        (FiveSessionOutcomeStateV1.OBSERVED, FiveSessionOutcomeReasonV1.NONE),
+        (
+            FiveSessionOutcomeStateV1.NON_FILL,
+            FiveSessionOutcomeReasonV1.EXACT_NEXT_OPEN_MISSING,
+        ),
+        (
+            FiveSessionOutcomeStateV1.INCOMPLETE_HORIZON,
+            FiveSessionOutcomeReasonV1.FIVE_COMPLETED_SESSIONS_UNAVAILABLE,
+        ),
+        (
+            FiveSessionOutcomeStateV1.INSUFFICIENT_EVIDENCE,
+            FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE,
+        ),
+        (
+            FiveSessionOutcomeStateV1.AMBIGUOUS,
+            FiveSessionOutcomeReasonV1.RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS,
+        ),
+    }
+
+
 def calculate_five_session_outcome_v1(
     request: FiveSessionOutcomeRequestV1,
     evidence: FiveSessionOutcomeEvidenceV1,
@@ -618,6 +654,8 @@ def calculate_five_session_outcome_v1(
         )
         or any(item.known_at > request.observation_cutoff for item in evidence.sessions)
         or evidence.corporate_action_evidence_known_at > request.observation_cutoff
+        or evidence.authoritative_schedule_digest_sha256
+        != request.authoritative_schedule_digest_sha256
     ):
         raise ValueError("invalid outcome evidence")
     anchor_digest = request.eligible_anchor.observation_digest_sha256
@@ -713,6 +751,7 @@ def _outcome_evidence_value(value: FiveSessionOutcomeEvidenceV1) -> dict[str, ob
             value.corporate_action_evidence_known_at
         ),
         "raw_corporate_action_in_window": value.raw_corporate_action_in_window,
+        "authoritative_schedule_digest_sha256": value.authoritative_schedule_digest_sha256,
         "sessions": [
             {
                 "complete": item.complete,
