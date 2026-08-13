@@ -57,6 +57,7 @@ def fact(
 ) -> OutcomeSessionFactV1:
     return OutcomeSessionFactV1(
         session=session(day),
+        known_at=datetime(2026, 7, day, 10, tzinfo=UTC),
         exact_open_text=open_text,
         exact_terminal_close_text=close_text,
         complete=True,
@@ -68,6 +69,7 @@ def request() -> FiveSessionOutcomeRequestV1:
     return FiveSessionOutcomeRequestV1(
         eligible_anchor=eligible_anchor(),
         observation_cutoff=datetime(2026, 7, 10, 10, tzinfo=UTC),
+        expected_sessions=tuple(session(day) for day in (2, 3, 4, 5, 6)),
     )
 
 
@@ -76,6 +78,7 @@ def evidence(*, exit_text: str = "102.000001") -> FiveSessionOutcomeEvidenceV1:
         sessions=(fact(2), fact(3), fact(4), fact(5), fact(6, close_text=exit_text)),
         raw_corporate_action_in_window=False,
         corporate_action_evidence_digest_sha256="f" * 64,
+        corporate_action_evidence_known_at=datetime(2026, 7, 6, 10, tzinfo=UTC),
     )
 
 
@@ -201,4 +204,41 @@ def test_outcome_sessions_must_be_strictly_after_anchor_and_complete_by_cutoff()
         calculate_five_session_outcome_v1(
             replace(request(), observation_cutoff=datetime(2026, 7, 5, 10, tzinfo=UTC)),
             facts,
+        )
+
+
+def test_late_session_or_corporate_action_evidence_is_rejected() -> None:
+    facts = evidence()
+    late = request().observation_cutoff + timedelta(microseconds=1)
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            request(),
+            replace(
+                facts,
+                sessions=(
+                    replace(facts.sessions[0], known_at=late),
+                    *facts.sessions[1:],
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            request(), replace(facts, corporate_action_evidence_known_at=late)
+        )
+
+
+def test_omitting_an_intervening_official_session_is_rejected() -> None:
+    facts = evidence()
+    with pytest.raises(ValueError, match="outcome evidence"):
+        calculate_five_session_outcome_v1(
+            request(),
+            replace(
+                facts,
+                sessions=(
+                    facts.sessions[0],
+                    facts.sessions[2],
+                    facts.sessions[3],
+                    facts.sessions[4],
+                ),
+            ),
         )

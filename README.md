@@ -92,6 +92,20 @@ only retained point-in-time evidence.
 Research modules, strategy rules, recommendations, and broker execution are not
 implemented.
 
+
+## Sprint 4 historical evidence census
+
+The provider-free `historical-census` command consumes an explicit retained evidence seal and emits the canonical strict point-in-time census. It never downloads data. The retained Sprint 4 sample is classified `EXPLORATORY_DEVELOPMENT`; its result cannot support prediction, claimed accuracy, strategy or profitability acceptance, or a trade recommendation.
+
+```bash
+uv run historical-census \
+  --seal /path/to/retained-nifty50-evidence-seal-v1.json \
+  --code-sha <40-hex-git-sha> \
+  --configuration-sha256 <64-hex-configuration-digest>
+```
+
+The command fails closed when the seal is missing or malformed and reports zero provider attempts on successful output. Exact semantics and evidence limitations are frozen in [Plan 10](docs/plans/10-five-session-opportunity-census-contract.md).
+
 ## Downloader v1 quickstart
 
 Requirements:

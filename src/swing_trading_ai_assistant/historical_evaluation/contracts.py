@@ -309,7 +309,13 @@ def classify_anchor_eligibility_v1(
     )
 
     reasons.sort(key=_reason_order)
-    if reasons:
+    if schedule_available and evidence.anchor_is_official_session is False:
+        status = AnchorEligibilityStatusV1.EXCLUDED_PREDECLARED
+        reasons = [AnchorEligibilityReasonV1.ANCHOR_NOT_OFFICIAL_SESSION]
+    elif universe_available and evidence.is_nifty50_member is False:
+        status = AnchorEligibilityStatusV1.EXCLUDED_PREDECLARED
+        reasons = [AnchorEligibilityReasonV1.NOT_NIFTY50_MEMBER]
+    elif reasons:
         status = AnchorEligibilityStatusV1.INSUFFICIENT_EVIDENCE
     elif evidence.is_nifty50_member is False:
         status = AnchorEligibilityStatusV1.EXCLUDED_PREDECLARED
@@ -360,7 +366,10 @@ def _valid_status_reasons(
     if status is AnchorEligibilityStatusV1.ELIGIBLE:
         return not reasons
     if status is AnchorEligibilityStatusV1.EXCLUDED_PREDECLARED:
-        return reasons == (AnchorEligibilityReasonV1.NOT_NIFTY50_MEMBER,)
+        return reasons in (
+            (AnchorEligibilityReasonV1.NOT_NIFTY50_MEMBER,),
+            (AnchorEligibilityReasonV1.ANCHOR_NOT_OFFICIAL_SESSION,),
+        )
     return bool(reasons) and AnchorEligibilityReasonV1.NOT_NIFTY50_MEMBER not in reasons
 
 
@@ -432,6 +441,7 @@ class FiveSessionOutcomeReasonV1(StrEnum):
 @dataclass(frozen=True, slots=True)
 class OutcomeSessionFactV1:
     session: OfficialSessionV1
+    known_at: datetime
     exact_open_text: str | None
     exact_terminal_close_text: str | None
     complete: bool
@@ -440,6 +450,7 @@ class OutcomeSessionFactV1:
     def __post_init__(self) -> None:
         if (
             type(self.session) is not OfficialSessionV1
+            or type(self.known_at) is not datetime
             or type(self.complete) is not bool
             or type(self.evidence_digest_sha256) is not str
             or _DIGEST.fullmatch(self.evidence_digest_sha256) is None
@@ -447,6 +458,7 @@ class OutcomeSessionFactV1:
             or not _valid_optional_price(self.exact_terminal_close_text)
         ):
             raise ValueError("invalid outcome session fact")
+        object.__setattr__(self, "known_at", _utc(self.known_at, "known_at"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,6 +468,7 @@ class FiveSessionOutcomeRequestV1:
     policy_version: str = FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
     horizon_sessions: int = 5
     threshold_decimal: str = "0.02"
+    expected_sessions: tuple[OfficialSessionV1, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -465,6 +478,17 @@ class FiveSessionOutcomeRequestV1:
             or self.policy_version != FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
             or self.horizon_sessions != 5
             or self.threshold_decimal != "0.02"
+            or type(self.expected_sessions) is not tuple
+            or len(self.expected_sessions) != 5
+            or any(
+                type(item) is not OfficialSessionV1 for item in self.expected_sessions
+            )
+            or tuple(item.trade_date for item in self.expected_sessions)
+            != tuple(sorted({item.trade_date for item in self.expected_sessions}))
+            or any(
+                item.trade_date <= self.eligible_anchor.decision_session.trade_date
+                for item in self.expected_sessions
+            )
         ):
             raise ValueError("outcome request requires eligible anchor")
         cutoff = _utc(self.observation_cutoff, "observation_cutoff")
@@ -478,6 +502,7 @@ class FiveSessionOutcomeEvidenceV1:
     sessions: tuple[OutcomeSessionFactV1, ...]
     raw_corporate_action_in_window: bool
     corporate_action_evidence_digest_sha256: str
+    corporate_action_evidence_known_at: datetime
 
     def __post_init__(self) -> None:
         dates = tuple(item.session.trade_date for item in self.sessions)
@@ -488,9 +513,18 @@ class FiveSessionOutcomeEvidenceV1:
             or dates != tuple(sorted(set(dates)))
             or type(self.raw_corporate_action_in_window) is not bool
             or type(self.corporate_action_evidence_digest_sha256) is not str
+            or type(self.corporate_action_evidence_known_at) is not datetime
             or _DIGEST.fullmatch(self.corporate_action_evidence_digest_sha256) is None
         ):
             raise ValueError("invalid outcome evidence")
+        object.__setattr__(
+            self,
+            "corporate_action_evidence_known_at",
+            _utc(
+                self.corporate_action_evidence_known_at,
+                "corporate_action_evidence_known_at",
+            ),
+        )
 
     def digest_sha256(self) -> str:
         return hashlib.sha256(
@@ -575,11 +609,15 @@ def calculate_five_session_outcome_v1(
         or type(evidence) is not FiveSessionOutcomeEvidenceV1
     ):
         raise ValueError("invalid outcome calculator input")
-    if any(
-        item.session.trade_date <= request.eligible_anchor.decision_session.trade_date
-        for item in evidence.sessions
-    ) or any(
-        item.session.close_at > request.observation_cutoff for item in evidence.sessions
+    if (
+        tuple(item.session for item in evidence.sessions)
+        != request.expected_sessions[: len(evidence.sessions)]
+        or any(
+            item.session.close_at > request.observation_cutoff
+            for item in evidence.sessions
+        )
+        or any(item.known_at > request.observation_cutoff for item in evidence.sessions)
+        or evidence.corporate_action_evidence_known_at > request.observation_cutoff
     ):
         raise ValueError("invalid outcome evidence")
     anchor_digest = request.eligible_anchor.observation_digest_sha256
@@ -671,12 +709,16 @@ def _valid_optional_price(value: object) -> bool:
 def _outcome_evidence_value(value: FiveSessionOutcomeEvidenceV1) -> dict[str, object]:
     return {
         "corporate_action_evidence_digest_sha256": value.corporate_action_evidence_digest_sha256,
+        "corporate_action_evidence_known_at": _timestamp(
+            value.corporate_action_evidence_known_at
+        ),
         "raw_corporate_action_in_window": value.raw_corporate_action_in_window,
         "sessions": [
             {
                 "complete": item.complete,
                 "evidence_digest_sha256": item.evidence_digest_sha256,
                 "exact_open_text": item.exact_open_text,
+                "known_at": _timestamp(item.known_at),
                 "exact_terminal_close_text": item.exact_terminal_close_text,
                 "session": _session_value(item.session),
             }

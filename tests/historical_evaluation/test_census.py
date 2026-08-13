@@ -12,6 +12,10 @@ from swing_trading_ai_assistant.historical_evaluation import (
     OpportunityCensusReportV1,
     build_strict_retained_census_v1,
 )
+from swing_trading_ai_assistant.historical_evaluation.census import (
+    CensusOutcomeV1,
+    reduce_opportunity_outcomes_v1,
+)
 
 SEAL = "60e308121fb462283ed0295b02d71272ee13eed8e300f01420358cd0c2b5ae34"
 CODE = "be12cf1cbd460139a86786956b030e7d3aac6717"
@@ -105,3 +109,44 @@ def test_census_rejects_incomplete_accounting_and_nonzero_provider_attempts() ->
         replace(report(), insufficient_anchor_count=1549)
     with pytest.raises(ValueError, match="census report"):
         replace(report(), provider_attempt_count=1)
+
+
+def test_generic_observed_census_distribution_and_windows_are_deterministic() -> None:
+    values = (
+        CensusOutcomeV1(
+            "AAA",
+            "INE000A00001",
+            date(2026, 7, 1),
+            "OBSERVED",
+            "-1.000000",
+            False,
+            date(2026, 7, 2),
+            date(2026, 7, 8),
+            "1" * 64,
+        ),
+        CensusOutcomeV1(
+            "BBB",
+            "INE000A00002",
+            date(2026, 7, 1),
+            "OBSERVED",
+            "2.000001",
+            True,
+            date(2026, 7, 2),
+            date(2026, 7, 8),
+            "2" * 64,
+        ),
+        CensusOutcomeV1("CCC", "INE000A00003", date(2026, 7, 1), "NON_FILL"),
+    )
+    result = reduce_opportunity_outcomes_v1(tuple(reversed(values)))
+    assert result.observed_count == 2
+    assert result.strictly_gt_2_count == 1
+    assert result.distribution is not None
+    assert result.distribution.minimum == "-1.000000"
+    assert result.distribution.mean == "0.500000"
+    assert result.strict_windows[0].symbol == "BBB"
+
+
+def test_generic_census_rejects_duplicate_pairs() -> None:
+    value = CensusOutcomeV1("AAA", "INE000A00001", date(2026, 7, 1), "NON_FILL")
+    with pytest.raises(ValueError, match="census outcomes"):
+        reduce_opportunity_outcomes_v1((value, value))

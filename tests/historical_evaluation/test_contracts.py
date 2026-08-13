@@ -163,11 +163,8 @@ def test_anchor_missing_session_and_bar_are_accounted_for_without_reading_future
         ),
     )
 
-    assert result.status is AnchorEligibilityStatusV1.INSUFFICIENT_EVIDENCE
-    assert result.reasons == (
-        AnchorEligibilityReasonV1.ANCHOR_NOT_OFFICIAL_SESSION,
-        AnchorEligibilityReasonV1.ANCHOR_BAR_MISSING,
-    )
+    assert result.status is AnchorEligibilityStatusV1.EXCLUDED_PREDECLARED
+    assert result.reasons == (AnchorEligibilityReasonV1.ANCHOR_NOT_OFFICIAL_SESSION,)
 
 
 def test_confirmed_nonmember_is_predeclared_exclusion() -> None:

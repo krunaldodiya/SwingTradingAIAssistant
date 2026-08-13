@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from typing import Final
 
@@ -207,3 +208,155 @@ def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=True, allow_nan=False, separators=(",", ":"), sort_keys=True
     ).encode()
+
+
+@dataclass(frozen=True, slots=True)
+class CensusOutcomeV1:
+    symbol: str
+    isin: str
+    decision_date: date
+    state: str
+    gross_return_percent: str | None = None
+    strictly_gt_2_percent: bool | None = None
+    entry_date: date | None = None
+    exit_date: date | None = None
+    observation_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        observed = self.state == "OBSERVED"
+        if (
+            self.state
+            not in {
+                "OBSERVED",
+                "NON_FILL",
+                "INCOMPLETE_HORIZON",
+                "INSUFFICIENT_EVIDENCE",
+                "AMBIGUOUS",
+            }
+            or observed
+            != (
+                type(self.gross_return_percent) is str
+                and type(self.strictly_gt_2_percent) is bool
+            )
+            or observed
+            != (type(self.entry_date) is date and type(self.exit_date) is date)
+            or observed
+            != (
+                type(self.observation_sha256) is str
+                and _DIGEST.fullmatch(self.observation_sha256) is not None
+            )
+        ):
+            raise ValueError("invalid census outcome")
+
+
+@dataclass(frozen=True, slots=True)
+class CensusDistributionV1:
+    count: int
+    minimum: str
+    p25: str
+    median: str
+    p75: str
+    mean: str
+    maximum: str
+    negative_count: int
+    zero_count: int
+    positive_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CensusWindowV1:
+    symbol: str
+    isin: str
+    decision_date: date
+    entry_date: date
+    exit_date: date
+    gross_return_percent: str
+    observation_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class GenericOpportunityCensusV1:
+    outcomes: tuple[CensusOutcomeV1, ...]
+    observed_count: int
+    strictly_gt_2_count: int
+    distribution: CensusDistributionV1 | None
+    strict_windows: tuple[CensusWindowV1, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.outcomes) is not tuple
+            or any(type(item) is not CensusOutcomeV1 for item in self.outcomes)
+            or self.outcomes
+            != tuple(
+                sorted(self.outcomes, key=lambda item: (item.decision_date, item.isin))
+            )
+            or self.observed_count
+            != sum(item.state == "OBSERVED" for item in self.outcomes)
+            or self.strictly_gt_2_count
+            != sum(item.strictly_gt_2_percent is True for item in self.outcomes)
+            or (self.observed_count == 0) != (self.distribution is None)
+        ):
+            raise ValueError("invalid generic census")
+
+
+def reduce_opportunity_outcomes_v1(
+    outcomes: tuple[CensusOutcomeV1, ...],
+) -> GenericOpportunityCensusV1:
+    if type(outcomes) is not tuple or len(
+        {(x.isin, x.decision_date) for x in outcomes}
+    ) != len(outcomes):
+        raise ValueError("invalid census outcomes")
+    ordered = tuple(sorted(outcomes, key=lambda item: (item.decision_date, item.isin)))
+    observed = tuple(item for item in ordered if item.state == "OBSERVED")
+    values = sorted(
+        Decimal(item.gross_return_percent)
+        for item in observed
+        if item.gross_return_percent is not None
+    )
+    distribution = None
+    if values:
+
+        def render(value: Decimal) -> str:
+            return format(
+                value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_EVEN), ".6f"
+            )
+
+        def rank(p: Decimal) -> Decimal:
+            index = max(
+                0,
+                int((p * len(values)).to_integral_value(rounding="ROUND_CEILING")) - 1,
+            )
+            return values[index]
+
+        distribution = CensusDistributionV1(
+            len(values),
+            render(values[0]),
+            render(rank(Decimal("0.25"))),
+            render(rank(Decimal("0.5"))),
+            render(rank(Decimal("0.75"))),
+            render(sum(values, Decimal(0)) / Decimal(len(values))),
+            render(values[-1]),
+            sum(v < 0 for v in values),
+            sum(v == 0 for v in values),
+            sum(v > 0 for v in values),
+        )
+    windows = tuple(
+        CensusWindowV1(
+            item.symbol,
+            item.isin,
+            item.decision_date,
+            item.entry_date,
+            item.exit_date,
+            item.gross_return_percent,
+            item.observation_sha256,
+        )
+        for item in observed
+        if item.strictly_gt_2_percent is True
+        and item.entry_date is not None
+        and item.exit_date is not None
+        and item.gross_return_percent is not None
+        and item.observation_sha256 is not None
+    )
+    return GenericOpportunityCensusV1(
+        ordered, len(observed), len(windows), distribution, windows
+    )
