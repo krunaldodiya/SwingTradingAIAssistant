@@ -27,6 +27,7 @@ dev = [
 [project.scripts]
 market-data = "swing_trading_ai_assistant.market_data.cli:main"
 historical-census = "swing_trading_ai_assistant.historical_evaluation.cli:main"
+evidence-readiness = "swing_trading_ai_assistant.historical_evaluation.prospective_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swing_trading_ai_assistant"]
