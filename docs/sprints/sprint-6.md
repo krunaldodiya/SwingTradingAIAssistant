@@ -1,8 +1,8 @@
 # Sprint 6 — Market Regime v1 specification
 
-Status: **PROPOSED — OWNER EPIC APPROVAL REQUIRED; DELIVERY NOT STARTED**  
-Planned window: 2026-08-14 through 2026-08-20  
-Confidence date for review/CI wait: 2026-08-21  
+Status: **DELIVERED SPECIFICATION CANDIDATE — ARK-168 RELEASE GATE IN PROGRESS**
+Planned window: 2026-08-14 through 2026-08-20
+Confidence date for review/CI wait: 2026-08-21
 Authoritative planning base: `21cd9f9acbb976e9f29298e0f45dbcdf83167897`
 
 ## Goal
@@ -161,9 +161,32 @@ public diagnostics, and unsupported performance claims.
   forex, crypto, portfolio/account connection, or broker execution; and
 - ARK-152, ARK-153, and ARK-154, which remain separate debt/direction work.
 
-## Planning approval gate
+## Planning approval gate — satisfied
 
-Do not create a delivery worktree, move the first Sprint 6 issue to `In Progress`,
-or write the Market Regime contract until the owner approves the five product
-decisions above. Planning may create the proposed Linear milestones/issues in
-`Todo`; that does not authorize implementation.
+The owner approved the five product decisions in Prime session
+`019fec82-f298-7015-840f-541ab4c9a33f` before ARK-165 started. This approval
+covered the specification increment only and did not authorize classifier
+implementation, new sources, evidence acquisition, portfolios, or orders.
+
+## Delivery evidence and actuals
+
+- ARK-165: `2026-08-13T09:29:56.044Z`–`09:35:08.711Z` (scope/input policy).
+- ARK-166: `09:35:11.433Z`–`09:45:42.327Z` in Linear; subsequent adversarial
+  remediation was retained through exact approved SHA
+  `ac60ca9e6ec623fd36e8a1ab14caf464bd4260b0`.
+- ARK-167: `09:45:57.984Z`–`10:09:42.820Z`; independently approved at exact SHA
+  `c309d452ca831954d9fc44bb396b09e6971fcec1`.
+- ARK-168 started at `2026-08-13T10:09:46.655Z`; release/CI/merge actuals are
+  recorded after completion.
+
+Rework was concentrated in ARK-166 and was scientifically material rather than
+cosmetic: independent review caught an unreachable close-time evidence cutoff,
+an unrepresentable insufficiency path, opaque evidence semantics, ambiguous
+canonicalization, incomplete cross-bindings, and duplicate schema definitions.
+All were corrected before approval. ARK-167 review then separated external
+future-data mutation from injected late evidence, bounded Decimal
+metamorphisms, and froze exact cutoff boundary tests.
+
+No provider/API call, credential access, download, market-data-root write,
+portfolio/account access, order operation, classifier implementation, runtime
+classification, observed label, or effectiveness claim occurred.
