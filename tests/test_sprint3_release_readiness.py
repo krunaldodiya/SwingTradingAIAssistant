@@ -112,7 +112,8 @@ def test_distribution_ci_secrets_and_future_scope_are_release_bounded() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         project = tomllib.load(file)["project"]
     assert project["scripts"] == {
-        "market-data": "swing_trading_ai_assistant.market_data.cli:main"
+        "historical-census": "swing_trading_ai_assistant.historical_evaluation.cli:main",
+        "market-data": "swing_trading_ai_assistant.market_data.cli:main",
     }
 
     ci = " ".join(CI.read_text().split())
