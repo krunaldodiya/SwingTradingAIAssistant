@@ -439,3 +439,276 @@ def test_validation_protocol_freezes_cutoff_and_safe_metamorphic_edges() -> None
         "one microsecond after the decision\nclose as invalid",
     ):
         assert required in text
+
+
+def test_ark_169_candidate_to_verified_provenance_is_complete() -> None:
+    attempts = _section("Request, typed attempts, and structural admission")
+    facts = _section("Verified typed market facts")
+    for required in (
+        "revision_identity_sha256: Sha256 | null",
+        "supersedes_identity_sha256: Sha256 | null",
+        "ScheduleBaseCandidateV1",
+        "ScheduleCorrectionCandidateV1",
+        "base_schedule: ScheduleBaseCandidateV1 | null",
+        "corrections: tuple[ScheduleCorrectionCandidateV1, 0..32]",
+        "base_schedule_provenance",
+        "applied_corrections",
+    ):
+        assert required in attempts or required in facts
+    assert (
+        "every candidate provenance field has a named verified destination" in attempts
+    )
+    assert "Unconsumed candidate provenance is forbidden" in attempts
+    assert _text().count("ScheduleCorrectionCandidateV1 {") == 1
+    assert "ScheduleCorrectionCandidateRowV1" not in _text()
+
+
+def test_ark_169_comparability_candidates_carry_full_proof_content() -> None:
+    section = _section("Request, typed attempts, and structural admission")
+    for required in (
+        "CorporateActionStatusProofCandidateV1",
+        "NegativeCompletenessProofCandidateV1",
+        "RevisionLineageProofCandidateV1",
+        "IdentityContinuityProofCandidateV1",
+        "status_proof: CorporateActionStatusProofCandidateV1",
+        "negative_completeness_proof: NegativeCompletenessProofCandidateV1",
+        "revision_proof: RevisionLineageProofCandidateV1",
+        "identity_continuity_proof: IdentityContinuityProofCandidateV1",
+    ):
+        assert required in section
+    assert "proof identity alone" in section
+
+
+def test_ark_169_private_bundle_and_verified_input_are_cryptographically_bound() -> (
+    None
+):
+    section = " ".join(_section("Private input and public report").split())
+    for required in (
+        "MarketRegimeEvidenceBundleV1 {",
+        "evidence_attempts: tuple[EvidenceAttemptV1, 1..5]",
+        "MarketRegimeReducerInputV1 {",
+        "evidence_bundle_identity_sha256: Sha256",
+        "verified_facts: VerifiedMarketRegimeFactsV1 | null",
+        "same projection is made",
+        "cannot be supplied as an independently trusted object",
+    ):
+        assert required in section
+
+
+def test_ark_169_endpoint_and_publication_nullability_are_stage_exact() -> None:
+    private = _section("Private input and public report")
+    cutoff = _section("Decision market endpoint and feasible evidence cutoff")
+    for required in (
+        "SCHEDULE_UNVERIFIED",
+        "ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED",
+        "CUTOFF_VERIFIED",
+        "comparison_session = null, decision_market_close = null, evidence_cutoff = null",
+        "comparison_session and decision_market_close are non-null; evidence_cutoff = null",
+        "comparison_session, decision_market_close, and evidence_cutoff are all non-null",
+    ):
+        assert required in private
+    for required in (
+        'publication_requirement: Literal["REQUIRED", "NOT_APPLICABLE"]',
+        "REQUIRED => published_at is non-null",
+        "NOT_APPLICABLE => published_at is null",
+        "MembershipFactV1",
+        "ScheduleCorrectionV1",
+        "DailyCloseFactV1",
+        "CorporateActionComparabilityFactV1",
+    ):
+        assert required in cutoff
+
+
+def test_ark_169_absent_attempt_reasons_are_dependency_aware() -> None:
+    attempts = " ".join(
+        _section("Request, typed attempts, and structural admission").split()
+    )
+    reasons = " ".join(_section("Closed reason enum and precedence").split())
+    for required in (
+        "DEPENDENCY_NOT_DERIVABLE",
+        "absence is not a request failure",
+        "does not add `CURRENT_CLOSE_MISSING`, `PRIOR_CLOSE_MISSING`, or `CORPORATE_ACTION_MISSING`",
+        "including when S[21]'s next open remains unresolved",
+        "the corresponding `*_MISSING` reason",
+    ):
+        assert required in attempts or required in reasons
+
+
+def test_ark_169_trusted_identity_derivation_is_content_based() -> None:
+    section = _section("Canonical JSON, ordering, and identity profile")
+    for required in (
+        "`source_object_identity_sha256` is recomputed",
+        "`object_identity_sha256` is recomputed",
+        "`revision_identity_sha256` is recomputed",
+        "supersedes_identity_sha256 is a lineage reference",
+        "never trusted as the identity of the current object",
+        "authority is derived from the admitted source-policy mapping",
+        "caller-supplied authority_text is only a claim",
+    ):
+        assert required in section
+
+
+def test_ark_169_comparability_event_taxonomy_is_closed() -> None:
+    section = _section("Frozen classification rule")
+    for required in (
+        "ComparabilityBreakingEventClassV1",
+        "CASH_DIVIDEND_OR_DISTRIBUTION",
+        "STOCK_SPLIT_OR_CONSOLIDATION",
+        "BONUS_ISSUE",
+        "RIGHTS_ISSUE",
+        "DEMERGER_OR_SPIN_OFF",
+        "MERGER_AMALGAMATION_OR_SCHEME",
+        "CAPITAL_REDUCTION_OR_SECURITY_SUBSTITUTION",
+        "the complete closed taxonomy",
+        "Unknown or newly introduced event classes fail closed",
+    ):
+        assert required in section
+
+
+def test_ark_169_validation_protocol_covers_new_admission_edges() -> None:
+    section = _validation_section("Layer A — exhaustive synthetic mechanics")
+    for required in (
+        "candidate-to-verified provenance",
+        "base schedule and every applied correction",
+        "full comparability proof candidates",
+        "private-bundle-to-reducer-input binding",
+        "three endpoint-nullability stages",
+        "dependency-blocked absent attempts",
+        "publication-clock nullability by evidence class",
+        "closed comparability-event taxonomy",
+        "single canonical bundle identity projection excludes only its identity field",
+        "four sealed manifests and expected reviewed build",
+        "unique schedule fold has no duplicate base date",
+        "complete row/source trace",
+        "NO_BREAK` has an empty event set",
+        "exact six-stage dependency graph",
+        "expected-versus-blocked missing reason mapping",
+    ):
+        assert required in section
+
+
+def test_ark_169_uses_one_non_circular_bundle_identity_projection() -> None:
+    section = " ".join(_section("Private input and public report").split())
+    for required in (
+        "CanonicalEvidenceBundleIdentityProjectionV1(bundle)",
+        "contains every closed `MarketRegimeEvidenceBundleV1` field except only",
+        "`input_identity_sha256`",
+        "SHA256(canonical_json_lf(CanonicalEvidenceBundleIdentityProjectionV1(bundle)))",
+        "bundle.input_identity_sha256 == expected_bundle_identity",
+        "reducer_input.evidence_bundle_identity_sha256 == expected_bundle_identity",
+    ):
+        assert required in section
+    assert (
+        "recomputed from the exact canonical `MarketRegimeEvidenceBundleV1` bytes"
+        not in section
+    )
+
+
+def test_ark_169_trusted_manifests_prevent_caller_selected_coordinated_rehash() -> None:
+    section = " ".join(
+        _section("Trusted manifests and expected reviewed build").split()
+    )
+    for required in (
+        "SourcePolicyManifestV1 {",
+        "ValidationPolicyManifestV1 {",
+        "SemanticPolicyManifestV1 {",
+        "CodeBuildManifestV1 {",
+        "ExpectedReviewedBuildV1 {",
+        "sealed into the reviewed application build",
+        "not a request, bundle, attempt, or reducer-input field",
+        "derived from the sealed expected manifest bytes",
+        "Coordinated replacement and rehashing",
+        "cannot grant authority",
+        "source identity, schema version, authority, and revision-identity derivation",
+        "bindings: tuple[SourcePolicyBindingV1, 5]",
+        "Evidence kind alone selects that binding",
+        "caller cannot choose a source or schema",
+    ):
+        assert required in section
+
+
+def test_ark_169_schedule_resolution_has_unique_rows_and_complete_trace() -> None:
+    facts = " ".join(_section("Verified typed market facts").split())
+    equations = " ".join(
+        _section("Cross-fact equations and validation invariants").split()
+    )
+    for required in (
+        "OfficialSessionSourceTraceV1 {",
+        "base_row_provenance: ProvenanceV1 | null",
+        "applied_correction_revision_identities: tuple[Sha256, 0..2]",
+        "source_trace: OfficialSessionSourceTraceV1",
+        "source_object_identity_sha256: Sha256",
+        "source_row_selector: BoundedAscii",
+    ):
+        assert required in facts
+    for required in (
+        "duplicate base `session_date` is `SCHEDULE_AMBIGUOUS`",
+        "B = the unique map",
+        "CLOSURE deletes",
+        "SPECIAL_SESSION inserts",
+        "OPEN_TIME replaces only",
+        "CLOSE_TIME replaces only",
+        "sessions == the 22-row strictly ascending projection of fold(B, C)",
+        "exactly equals the ordered correction revision identities applied",
+        "each traced identity resolves to exactly one applied_corrections provenance.revision_identity_sha256",
+        "every non-CLOSURE applied correction is referenced by exactly one matching output source_trace",
+    ):
+        assert required in equations
+
+
+def test_ark_169_no_break_proof_binds_empty_ordered_event_set() -> None:
+    section = " ".join(
+        _section("Cross-fact equations and validation invariants").split()
+    )
+    for required in (
+        "checked_event_identities == tuple(event.event_identity_sha256 for event in checked_events)",
+        "checked_events are strictly sorted",
+        "event identities are unique",
+        "event.isin == status_proof.isin",
+        "effective_session is inside the inclusive proof interval",
+        "status == NO_BREAK => checked_events == ()",
+        "status == NO_BREAK => checked_event_identities == ()",
+        "event_identity_sha256 is recomputed from the canonical event projection excluding only itself",
+    ):
+        assert required in section
+
+
+def test_ark_169_dependency_stage_schema_and_graph_are_exact() -> None:
+    section = " ".join(_section("Private input and public report").split())
+    reasons = " ".join(_section("Closed reason enum and precedence").split())
+    for required in (
+        "EvidenceDependencyStageV1 = Literal[",
+        '"ROOT_EVIDENCE_UNVERIFIED"',
+        '"ENDPOINTS_VERIFIED_MEMBERSHIP_UNVERIFIED"',
+        '"MEMBERSHIP_VERIFIED_SCHEDULE_UNVERIFIED"',
+        '"MEMBERSHIP_AND_ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED"',
+        '"CUTOFF_VERIFIED_MEMBERSHIP_UNVERIFIED"',
+        '"MEMBERSHIP_AND_CUTOFF_VERIFIED"',
+        "MEMBERSHIP_AND_ENDPOINTS_VERIFIED_NEXT_OPEN_UNRESOLVED",
+        "PRIOR_CLOSES, CURRENT_CLOSES, and CORPORATE_COMPARABILITY are expected",
+        "next-open failure does not make those three kinds dependency-blocked",
+    ):
+        assert required in section
+    for required in (
+        "MEMBERSHIP missing at every stage where it is expected => MEMBERSHIP_MISSING",
+        "SESSION_SCHEDULE missing at every stage where it is expected => SCHEDULE_MISSING",
+        "PRIOR_CLOSES missing when dependency-expected => PRIOR_CLOSE_MISSING",
+        "CURRENT_CLOSES missing when dependency-expected => CURRENT_CLOSE_MISSING",
+        "CORPORATE_COMPARABILITY missing when dependency-expected => CORPORATE_ACTION_MISSING",
+        "missing while dependency-blocked => no `*_MISSING` reason",
+    ):
+        assert required in reasons
+
+
+def test_ark_169_schedule_correction_provenance_is_exactly_projected() -> None:
+    equations = " ".join(
+        _section("Cross-fact equations and validation invariants").split()
+    )
+    for required in (
+        "each ScheduleCorrectionV1 has exactly one matching ScheduleCorrectionCandidateV1",
+        "(affected_session, correction_kind)",
+        "verified correction.provenance == parse(candidate.row_provenance)",
+        "full field-for-field equality",
+        "receipt, selector, source identity, schema, object, revision, supersession, publication requirement, and all clocks",
+    ):
+        assert required in equations

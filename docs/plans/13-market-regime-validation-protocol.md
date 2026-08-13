@@ -51,6 +51,22 @@ the finite state space permits. Generated inputs use only typed immutable facts
 or deliberately invalid candidate envelopes. Passing Layer A validates
 mechanics only.
 
+The generated admission suite covers candidate-to-verified provenance, the base
+schedule and every applied correction, full comparability proof candidates,
+private-bundle-to-reducer-input binding, all three endpoint-nullability stages,
+dependency-blocked absent attempts, publication-clock nullability by evidence
+class, and the closed comparability-event taxonomy. It separately proves the
+single canonical bundle identity projection excludes only its identity field;
+the four sealed manifests and expected reviewed build reject caller-selected
+manifests and coordinated rehashing; the unique schedule fold has no duplicate
+base date and gives every resolved session a complete row/source trace; and a
+verified `NO_BREAK` has an empty event set with exact ordered identity/event
+binding. The exact six-stage dependency graph tests endpoint-derived downstream
+requests before the next open resolves, plus expected-versus-blocked missing
+reason mapping at every stage. Every case asserts exact admitted content or the
+exact fail-closed outcome; no digest, caller identity, or absent dependent
+request stands in for evidence.
+
 ### Exhaustive rule oracle
 
 Enumerate all 1,326 non-negative integer triples satisfying `advances +
