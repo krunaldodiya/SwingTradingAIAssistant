@@ -13,6 +13,8 @@ def args(path: Path = REAL_SEAL) -> list[str]:
     return [
         "--seal",
         str(path),
+        "--evidence-seal-sha256",
+        "3c0450aa4885dcfbf7f1e94673a2b4fec402b184dd7d224d849b4a44e537d809",
         "--universe",
         str(FIXTURES / "universe.json"),
         "--schedule",

@@ -100,6 +100,7 @@ The provider-free `historical-census` command consumes an explicit retained evid
 ```bash
 uv run historical-census \
   --seal /path/to/retained-nifty50-evidence-seal-v1.json \
+  --evidence-seal-sha256 <64-hex-seal-file-digest> \
   --universe /path/to/nifty50-universe.json \
   --schedule /path/to/july-schedule.json \
   --schedule /path/to/august-schedule.json \

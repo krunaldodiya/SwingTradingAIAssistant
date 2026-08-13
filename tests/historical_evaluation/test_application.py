@@ -17,6 +17,7 @@ REAL_SEAL = FIXTURES / "retained-seal.json"
 def request(path: Path = REAL_SEAL) -> RetainedCensusRequestV1:
     return RetainedCensusRequestV1(
         path,
+        "3c0450aa4885dcfbf7f1e94673a2b4fec402b184dd7d224d849b4a44e537d809",
         FIXTURES / "universe.json",
         (FIXTURES / "schedule-july.json", FIXTURES / "schedule-august.json"),
         FIXTURES / "coverage-manifest.json",

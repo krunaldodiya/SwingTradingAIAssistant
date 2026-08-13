@@ -13,6 +13,7 @@ from .application import RetainedCensusRequestV1, RetainedCensusServiceV1
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="historical-census")
     parser.add_argument("--seal", type=Path, required=True)
+    parser.add_argument("--evidence-seal-sha256", required=True)
     parser.add_argument("--universe", type=Path, required=True)
     parser.add_argument("--schedule", type=Path, action="append", required=True)
     parser.add_argument("--data-manifest", type=Path, required=True)
@@ -24,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         report = RetainedCensusServiceV1().run(
             RetainedCensusRequestV1(
                 args.seal,
+                args.evidence_seal_sha256,
                 args.universe,
                 tuple(args.schedule),
                 args.data_manifest,

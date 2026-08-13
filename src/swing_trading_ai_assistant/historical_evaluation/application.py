@@ -15,6 +15,7 @@ from .census import OpportunityCensusReportV1, build_strict_retained_census_v1
 @dataclass(frozen=True, slots=True)
 class RetainedCensusRequestV1:
     seal_path: Path
+    evidence_seal_sha256: str
     universe_path: Path
     schedule_paths: tuple[Path, ...]
     data_manifest_path: Path
@@ -47,6 +48,8 @@ class RetainedCensusServiceV1:
     ) -> OpportunityCensusReportV1:
         try:
             raw = request.seal_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != request.evidence_seal_sha256:
+                raise ValueError
             parsed: object = json.loads(raw)
             if type(parsed) is not dict:
                 raise ValueError
@@ -203,7 +206,7 @@ class RetainedCensusServiceV1:
                 decision_sessions=sessions,
                 universe_known_at=datetime(2026, 8, 12, 8, 56, 38, 181171, tzinfo=UTC),
                 corporate_action_evidence_available=False,
-                evidence_seal_sha256=cast(str, seal["dataset_identity_sha256"]),
+                evidence_seal_sha256=request.evidence_seal_sha256,
                 data_manifest_sha256=data_manifest,
                 universe_evidence_sha256=(universe_digest,),
                 schedule_evidence_sha256=tuple(sorted(cast(list[str], schedules))),
