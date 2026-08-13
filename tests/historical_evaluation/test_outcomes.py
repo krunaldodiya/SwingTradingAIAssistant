@@ -69,7 +69,7 @@ def fact(
 
 
 def resolved_sessions() -> ResolvedOfficialSessionsV1:
-    sessions = tuple(session(day) for day in (2, 3, 4, 5, 6))
+    sessions = tuple(session(day) for day in (1, 2, 3, 4, 5, 6))
     payload = json.dumps(
         {
             "sessions": [

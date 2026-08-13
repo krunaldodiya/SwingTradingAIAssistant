@@ -11,6 +11,20 @@ from typing import cast
 
 from .census import OpportunityCensusReportV1, build_strict_retained_census_v1
 
+_RETAINED_SEAL_SHA256 = (
+    "3c0450aa4885dcfbf7f1e94673a2b4fec402b184dd7d224d849b4a44e537d809"
+)
+_RETAINED_UNIVERSE_SHA256 = (
+    "936a32c8dee5d852221a159434064be79380fe75a40029c1e0b506c0086e0b30"
+)
+_RETAINED_SCHEDULE_SHA256 = (
+    "09f7e6b8477d4588668957f3d063acd3982d4cb7c7f1ebcde49f3dbc496e5930",
+    "7c8cdef86c3874f9542a9544821805bfc23787975e29d0f297164776b5816db9",
+)
+_RETAINED_MANIFEST_SHA256 = (
+    "ee0425ecbe7e4a269b40f92a895023d7b75a986531d1b9638403e8382e3a2fab"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class RetainedCensusRequestV1:
@@ -48,7 +62,10 @@ class RetainedCensusServiceV1:
     ) -> OpportunityCensusReportV1:
         try:
             raw = request.seal_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != request.evidence_seal_sha256:
+            if (
+                request.evidence_seal_sha256 != _RETAINED_SEAL_SHA256
+                or hashlib.sha256(raw).hexdigest() != request.evidence_seal_sha256
+            ):
                 raise ValueError
             parsed: object = json.loads(raw)
             if type(parsed) is not dict:
@@ -143,13 +160,17 @@ class RetainedCensusServiceV1:
             data_manifest = source.get("bounded_coverage_report_sha256")
             if (
                 type(data_manifest) is not str
+                or universe_digest != _RETAINED_UNIVERSE_SHA256
                 or hashlib.sha256(universe_bytes).hexdigest() != universe_digest
                 or tuple(
                     sorted(
                         hashlib.sha256(value).hexdigest() for value in schedule_bytes
                     )
                 )
-                != tuple(sorted(cast(list[str], schedules)))
+                != _RETAINED_SCHEDULE_SHA256
+                or tuple(sorted(cast(list[str], schedules)))
+                != _RETAINED_SCHEDULE_SHA256
+                or data_manifest != _RETAINED_MANIFEST_SHA256
                 or hashlib.sha256(data_manifest_bytes).hexdigest() != data_manifest
                 or type(universe_parsed) is not dict
                 or type(data_manifest_parsed) is not dict
@@ -216,6 +237,8 @@ class RetainedCensusServiceV1:
                 != datetime(2026, 8, 12, 8, 56, 38, 181171, tzinfo=UTC)
                 or tuple(sorted(set(official_dates))) != tuple(official_dates)
                 or len(official_dates) != 31
+                or official_dates[0] != date(2026, 7, 1)
+                or official_dates[-1] != date(2026, 8, 12)
             ):
                 raise ValueError
             cutoff = request.observation_cutoff.astimezone(UTC)

@@ -473,7 +473,7 @@ class ResolvedOfficialSessionsV1:
     def __post_init__(self) -> None:
         if (
             type(self.sessions) is not tuple
-            or len(self.sessions) < 5
+            or len(self.sessions) < 6
             or any(type(item) is not OfficialSessionV1 for item in self.sessions)
             or tuple(item.trade_date for item in self.sessions)
             != tuple(sorted({item.trade_date for item in self.sessions}))
@@ -554,9 +554,11 @@ class FiveSessionOutcomeRequestV1:
             or self.horizon_sessions != 5
             or self.threshold_decimal != "0.02"
             or type(self.resolved_official_sessions) is not ResolvedOfficialSessionsV1
+            or self.resolved_official_sessions.sessions[0]
+            != self.eligible_anchor.decision_session
             or any(
                 item.trade_date <= self.eligible_anchor.decision_session.trade_date
-                for item in self.resolved_official_sessions.sessions[:5]
+                for item in self.resolved_official_sessions.sessions[1:6]
             )
         ):
             raise ValueError("outcome request requires eligible anchor")
@@ -613,6 +615,7 @@ class FiveSessionOutcomeObservationV1:
     reason: FiveSessionOutcomeReasonV1
     anchor_observation_sha256: str
     evidence_digest_sha256: str
+    evidence_canonical_json: bytes
     entry_trade_date: date | None
     entry_at: datetime | None
     exit_trade_date: date | None
@@ -634,6 +637,9 @@ class FiveSessionOutcomeObservationV1:
                     self.evidence_digest_sha256,
                 )
             )
+            or type(self.evidence_canonical_json) is not bytes
+            or hashlib.sha256(self.evidence_canonical_json).hexdigest()
+            != self.evidence_digest_sha256
             or self.policy_version != FIVE_SESSION_OUTCOME_POLICY_VERSION_V1
             or observed
             != (
@@ -664,6 +670,28 @@ class FiveSessionOutcomeObservationV1:
                 or exit_at.astimezone(_IST).date() != exit_trade_date
                 or format(rendered_return, ".6f") != gross_return_percent
                 or strictly_gt_2_percent != (rendered_return > Decimal("2"))
+            ):
+                raise ValueError("invalid outcome observation")
+            try:
+                evidence_value = json.loads(self.evidence_canonical_json)
+                sessions = evidence_value["sessions"]
+                source_entry = Decimal(sessions[0]["exact_open_text"])
+                source_exit = Decimal(sessions[-1]["exact_terminal_close_text"])
+                expected_return = (
+                    (source_exit / source_entry - Decimal(1)) * Decimal(100)
+                ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_EVEN)
+                source_entry_date = date.fromisoformat(
+                    sessions[0]["session"]["trade_date"]
+                )
+                source_exit_date = date.fromisoformat(
+                    sessions[-1]["session"]["trade_date"]
+                )
+            except Exception as exc:
+                raise ValueError("invalid outcome observation") from exc
+            if (
+                entry_trade_date != source_entry_date
+                or exit_trade_date != source_exit_date
+                or rendered_return != expected_return
             ):
                 raise ValueError("invalid outcome observation")
 
@@ -730,7 +758,7 @@ def calculate_five_session_outcome_v1(
         raise ValueError("invalid outcome calculator input")
     if (
         tuple(item.session for item in evidence.sessions)
-        != request.resolved_official_sessions.sessions[: len(evidence.sessions)]
+        != request.resolved_official_sessions.sessions[1 : 1 + len(evidence.sessions)]
         or any(
             item.session.close_at > request.observation_cutoff
             for item in evidence.sessions
@@ -749,6 +777,7 @@ def calculate_five_session_outcome_v1(
             FiveSessionOutcomeReasonV1.FIVE_COMPLETED_SESSIONS_UNAVAILABLE,
             anchor_digest,
             evidence_digest,
+            _canonical_bytes(_outcome_evidence_value(evidence)),
         )
     if any(not item.complete for item in evidence.sessions):
         return _terminal_outcome(
@@ -756,6 +785,7 @@ def calculate_five_session_outcome_v1(
             FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE,
             anchor_digest,
             evidence_digest,
+            _canonical_bytes(_outcome_evidence_value(evidence)),
         )
     first, last = evidence.sessions[0], evidence.sessions[-1]
     if first.exact_open_text is None:
@@ -764,6 +794,7 @@ def calculate_five_session_outcome_v1(
             FiveSessionOutcomeReasonV1.EXACT_NEXT_OPEN_MISSING,
             anchor_digest,
             evidence_digest,
+            _canonical_bytes(_outcome_evidence_value(evidence)),
         )
     if last.exact_terminal_close_text is None:
         return _terminal_outcome(
@@ -771,6 +802,7 @@ def calculate_five_session_outcome_v1(
             FiveSessionOutcomeReasonV1.SESSION_EVIDENCE_INCOMPLETE,
             anchor_digest,
             evidence_digest,
+            _canonical_bytes(_outcome_evidence_value(evidence)),
         )
     if evidence.raw_corporate_action_in_window:
         return _terminal_outcome(
@@ -778,6 +810,7 @@ def calculate_five_session_outcome_v1(
             FiveSessionOutcomeReasonV1.RAW_CORPORATE_ACTION_WINDOW_AMBIGUOUS,
             anchor_digest,
             evidence_digest,
+            _canonical_bytes(_outcome_evidence_value(evidence)),
         )
     entry = Decimal(first.exact_open_text)
     exit_value = Decimal(last.exact_terminal_close_text)
@@ -790,6 +823,7 @@ def calculate_five_session_outcome_v1(
         FiveSessionOutcomeReasonV1.NONE,
         anchor_digest,
         evidence_digest,
+        _canonical_bytes(_outcome_evidence_value(evidence)),
         first.session.trade_date,
         first.session.open_at,
         last.session.trade_date,
@@ -804,12 +838,14 @@ def _terminal_outcome(
     reason: FiveSessionOutcomeReasonV1,
     anchor_digest: str,
     evidence_digest: str,
+    evidence_canonical_json: bytes,
 ) -> FiveSessionOutcomeObservationV1:
     return FiveSessionOutcomeObservationV1(
         state,
         reason,
         anchor_digest,
         evidence_digest,
+        evidence_canonical_json,
         None,
         None,
         None,
