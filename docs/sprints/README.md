@@ -25,3 +25,7 @@ increment and future process decisions.
   accepted historical evidence and the downloader-v1 release candidate is in
   final publication verification; Plan 01 continues to block research-module
   implementation until that release closes.
+
+- Sprint 4 — Five-session opportunity census — closed by [PR #91](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/91), merged as `82f62107eb78ef696121edf096de7801d370970d`; the sealed result was 1,550/1,550 insufficient evidence and made no predictive claim.
+- Sprint 5 — Prospective Evidence Readiness v1 — closed by [PR #92](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/92), merged as `21cd9f9acbb976e9f29298e0f45dbcdf83167897`; the provider-free prerequisite manifest fails closed with `DECLARATION_RECEIPT_MISSING` and zero attempts.
+- [Sprint 6 — Market Regime v1 specification](sprint-6.md) — proposed owner-approval boundary; delivery has not started.
