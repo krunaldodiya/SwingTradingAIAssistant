@@ -246,7 +246,7 @@ def _reject_constant(_: str) -> None:
 def parse_canonical_json_lf(  # noqa: C901
     raw: object, *, max_bytes: int, max_depth: int = 16
 ) -> object:
-    if not isinstance(raw, bytes):
+    if not isinstance(raw, bytes):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise SchemaAdmissionError("canonical bytes required")
     if len(raw) > max_bytes:
         raise BoundsAdmissionError("canonical input too large")
