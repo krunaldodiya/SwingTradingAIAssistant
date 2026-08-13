@@ -19,7 +19,10 @@ from .boundary import (
     validate_sha256,
     validate_utc_instant,
 )
-from .facts import VerifiedMarketRegimeFactsV1
+from .facts import (
+    VerifiedMarketRegimeFactsV1,
+    validate_verified_market_regime_facts_v1,
+)
 
 __all__ = [
     "MarketRegimeLabelV1",
@@ -213,24 +216,29 @@ class MarketRegimeReportV1:
 
     @classmethod
     def verify_identity(cls, raw: object) -> bool:
-        """Verify canonical report bytes without normalizing or exposing private data."""
+        """Parse and semantically verify one closed canonical public report."""
         if type(raw) is not bytes:
             return False
         try:
             value = parse_canonical_json_lf(raw, max_bytes=65_536)
-        except ValueError:
+            if not isinstance(value, dict):
+                return False
+            fields = cast("dict[str, object]", value)
+            if set(fields) != set(cls._FIELDS):
+                return False
+            label_value = fields["regime_label"]
+            reasons_value = fields["additional_reasons"]
+            if not isinstance(label_value, str) or not isinstance(reasons_value, list):
+                return False
+            if reasons_value:
+                return False
+            normalized = dict(fields)
+            normalized["regime_label"] = MarketRegimeLabelV1(label_value)
+            normalized["additional_reasons"] = ()
+            cls(**normalized)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
             return False
-        if not isinstance(value, dict):
-            return False
-        typed = cast("dict[str, object]", value)
-        if set(typed) != set(cls._FIELDS):
-            return False
-        claimed = typed.get("report_identity_sha256")
-        if not isinstance(claimed, str):
-            return False
-        projection = dict(typed)
-        del projection["report_identity_sha256"]
-        return hashlib.sha256(canonical_json_lf(projection)).hexdigest() == claimed
+        return True
 
 
 def reduce_observed_market_regime_v1(
@@ -239,6 +247,7 @@ def reduce_observed_market_regime_v1(
     """Reduce one complete verified fact graph with exact Decimal comparisons."""
     if not isinstance(facts, VerifiedMarketRegimeFactsV1):
         raise TypeError("observed reduction requires VerifiedMarketRegimeFactsV1")
+    validate_verified_market_regime_facts_v1(facts)
     sessions = facts.schedule.sessions
     prior = facts.prior_closes
     current = facts.current_closes

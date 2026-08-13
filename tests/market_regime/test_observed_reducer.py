@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
 import json
 import socket
 from dataclasses import FrozenInstanceError, replace
@@ -10,7 +11,7 @@ from decimal import Decimal
 from functools import lru_cache
 
 import pytest
-from test_fact_graph import _valid_graph
+from test_fact_graph import _event, _isin, _valid_graph
 
 from swing_trading_ai_assistant.market_regime import (
     FactGraphAdmissionError,
@@ -18,6 +19,7 @@ from swing_trading_ai_assistant.market_regime import (
     MarketRegimeReportV1,
     VerifiedMarketRegimeFactsV1,
     admit_verified_market_regime_facts_v1,
+    canonical_json_lf,
     reduce_observed_market_regime_v1,
 )
 
@@ -394,6 +396,196 @@ def test_reducer_rejects_endpoint_member_and_close_adversarial_tampering() -> No
                 facts, current_closes=(bad_endpoint, *facts.current_closes[1:])
             )
         )
+
+
+def test_reducer_defense_in_depth_guards_reject_forged_verified_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = _admitted()
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_regime.observed."
+        "validate_verified_market_regime_facts_v1",
+        lambda value: value,
+    )
+    bad_close_isin = replace(facts.current_closes[0], isin=facts.current_closes[1].isin)
+    bad_close_endpoint = replace(
+        facts.current_closes[0],
+        market_scope_ends_at=facts.schedule.sessions[19].close_at,
+    )
+    forged_cases = (
+        (
+            _facts_override(
+                facts,
+                schedule=replace(facts.schedule, sessions=facts.schedule.sessions[:-1]),
+            ),
+            "cardinalities",
+        ),
+        (
+            _facts_override(
+                facts,
+                membership=replace(facts.membership, decision_session="2026-08-11"),
+            ),
+            "endpoint equations",
+        ),
+        (
+            _facts_override(
+                facts,
+                current_closes=(bad_close_isin, *facts.current_closes[1:]),
+            ),
+            "member equations",
+        ),
+        (
+            _facts_override(
+                facts,
+                current_closes=(bad_close_endpoint, *facts.current_closes[1:]),
+            ),
+            "close endpoint",
+        ),
+    )
+    for forged, message in forged_cases:
+        with pytest.raises(ValueError, match=message):
+            reduce_observed_market_regime_v1(forged)
+
+
+def test_reducer_revalidates_forged_schedule_and_comparability_at_boundary() -> None:
+    facts = _admitted()
+    sessions = facts.schedule.sessions
+    duplicate_schedule = replace(
+        facts.schedule,
+        sessions=(sessions[0], sessions[0], *sessions[2:]),
+    )
+    first = facts.comparability[0]
+    unbound_comparability = replace(first, interval_from=sessions[1].session_date)
+
+    members = facts.membership.members
+    foreign_isin = _isin(999)
+    foreign_prior = replace(facts.prior_closes[-1], isin=foreign_isin)
+    foreign_comparability = replace(facts.comparability[-1], isin=foreign_isin)
+    unbound_status = replace(first.status_proof, isin=foreign_isin)
+    unbound_proof_fact = replace(first, status_proof=unbound_status)
+    duplicate_revision_proof = replace(
+        first.negative_completeness_proof,
+        provenance=first.status_proof.provenance,
+    )
+    duplicate_revision_fact = replace(
+        first, negative_completeness_proof=duplicate_revision_proof
+    )
+    stale_revision_fact = replace(
+        first,
+        revision_proof=replace(
+            first.revision_proof, checked_through="2000-01-01T00:00:00.000000Z"
+        ),
+    )
+    broken_continuity_fact = replace(
+        first,
+        identity_continuity_proof=replace(
+            first.identity_continuity_proof, prior_symbol="ZZZ"
+        ),
+    )
+    checked_event = _event(first)
+    no_break_with_event = replace(
+        first,
+        status_proof=replace(
+            first.status_proof,
+            checked_event_identities=(checked_event.event_identity_sha256,),
+            checked_events=(checked_event,),
+        ),
+    )
+    tampered = (
+        _facts_override(facts, schedule=duplicate_schedule),
+        _facts_override(
+            facts,
+            comparability=(unbound_comparability, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            membership=replace(
+                facts.membership,
+                provenance=replace(
+                    facts.membership.provenance, source_identity="untrusted-source-v1"
+                ),
+            ),
+        ),
+        _facts_override(facts, source_policy_identity_sha256="f" * 64),
+        _facts_override(
+            facts,
+            membership=replace(
+                facts.membership,
+                members=(
+                    replace(members[0], symbol=members[1].symbol),
+                    *members[1:],
+                ),
+            ),
+        ),
+        _facts_override(
+            facts,
+            membership=replace(
+                facts.membership,
+                members=(
+                    replace(members[0], effective_from="9999-12-31"),
+                    *members[1:],
+                ),
+            ),
+        ),
+        _facts_override(
+            facts,
+            prior_closes=(*facts.prior_closes[:-1], foreign_prior),
+        ),
+        _facts_override(
+            facts,
+            comparability=(unbound_proof_fact, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            comparability=(duplicate_revision_fact, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            comparability=(stale_revision_fact, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            comparability=(broken_continuity_fact, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            comparability=(no_break_with_event, *facts.comparability[1:]),
+        ),
+        _facts_override(
+            facts,
+            comparability=(*facts.comparability[:-1], foreign_comparability),
+        ),
+    )
+    for index, forged in enumerate(tampered):
+        try:
+            reduce_observed_market_regime_v1(forged)
+        except ValueError:
+            continue
+        pytest.fail(f"forged case {index} was accepted")
+
+
+def test_public_identity_verifier_rejects_coordinated_semantic_rehash() -> None:
+    report = reduce_observed_market_regime_v1(_admitted())
+    original = json.loads(report.canonical_json_bytes())
+    leaked_isin = _admitted().membership.members[0].isin
+    assert leaked_isin not in report.calculation_version
+
+    changes = (
+        {"calculation_version": f"{report.calculation_version}/{leaked_isin}"},
+        {"regime_label": 1},
+        {"additional_reasons": ["VALUES_NOT_COMPARABLE"]},
+    )
+    for change in changes:
+        body = dict(original)
+        body.update(change)
+        projection = dict(body)
+        del projection["report_identity_sha256"]
+        body["report_identity_sha256"] = hashlib.sha256(
+            canonical_json_lf(projection)
+        ).hexdigest()
+        raw = canonical_json_lf(body)
+        assert not MarketRegimeReportV1.verify_identity(raw)
+    assert leaked_isin in canonical_json_lf({**original, **changes[0]}).decode("utf-8")
 
 
 def test_cutoff_clock_accepts_equality_and_rejects_plus_one_microsecond() -> None:

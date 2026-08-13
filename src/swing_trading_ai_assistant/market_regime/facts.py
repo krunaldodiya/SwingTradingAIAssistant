@@ -55,6 +55,7 @@ __all__ = [
     "VerifiedProvenanceReceiptV1",
     "admit_session_schedule_v1",
     "admit_verified_market_regime_facts_v1",
+    "validate_verified_market_regime_facts_v1",
 ]
 
 
@@ -1028,6 +1029,7 @@ class VerifiedMarketRegimeFactsV1:
         ):
             _guard(validate_sha256, value)
             object.__setattr__(result, name, value)
+        validate_verified_market_regime_facts_v1(result)
         return result
 
 
@@ -1659,7 +1661,14 @@ def _validate_close_tuple(
     return {item.isin: item for item in closes}
 
 
-def _proofs(fact: CorporateActionComparabilityFactV1) -> tuple[Any, ...]:
+def _proofs(
+    fact: CorporateActionComparabilityFactV1,
+) -> tuple[
+    CorporateActionStatusProofV1,
+    NegativeCompletenessProofV1,
+    RevisionLineageProofV1,
+    IdentityContinuityProofV1,
+]:
     return (
         fact.status_proof,
         fact.negative_completeness_proof,
@@ -1751,6 +1760,396 @@ def _validate_comparability_fact(
         or current.symbol != continuity.current_symbol
     ):
         raise FactGraphAdmissionError("symbol continuity mismatch")
+
+
+def _revalidate_dataclass(value: object, expected: type[object], name: str) -> None:
+    """Re-run leaf invariants after crossing an in-process trust boundary."""
+    _instance(value, expected, name)
+    post_init = getattr(expected, "__post_init__", None)
+    if post_init is not None:
+        _guard(post_init, value)
+
+
+def _validate_embedded_provenance(
+    provenance: ProvenanceV1,
+    authority: AuthorityIdentityV1,
+    requirement: PublicationRequirementV1,
+    cutoff: str,
+    name: str,
+) -> None:
+    _revalidate_dataclass(provenance, ProvenanceV1, f"{name} provenance")
+    _revalidate_dataclass(provenance.clock, EvidenceClockV1, f"{name} evidence clock")
+    _authority(provenance.authority, authority, name)
+    if (
+        provenance.source_identity != "authoritative-source-v1"
+        or provenance.schema_version != "schema-v1"
+    ):
+        raise FactGraphAdmissionError(f"{name} provenance policy mismatch")
+    _clock_before_cutoff(provenance, cutoff, requirement)
+
+
+def _verified_collections(
+    facts: VerifiedMarketRegimeFactsV1,
+) -> tuple[
+    tuple[DailyCloseFactV1, ...],
+    tuple[DailyCloseFactV1, ...],
+    tuple[CorporateActionComparabilityFactV1, ...],
+]:
+    prior = cast(
+        "tuple[DailyCloseFactV1, ...]",
+        _tuple(facts.prior_closes, DailyCloseFactV1, "prior closes"),
+    )
+    current = cast(
+        "tuple[DailyCloseFactV1, ...]",
+        _tuple(facts.current_closes, DailyCloseFactV1, "current closes"),
+    )
+    comparable = cast(
+        "tuple[CorporateActionComparabilityFactV1, ...]",
+        _tuple(
+            facts.comparability,
+            CorporateActionComparabilityFactV1,
+            "comparability facts",
+        ),
+    )
+    if (
+        len(facts.schedule.sessions) != 22
+        or len(facts.membership.members) != 50
+        or any(len(items) != 50 for items in (prior, current, comparable))
+    ):
+        raise FactGraphAdmissionError(
+            "verified facts require exact 22/50 cardinalities"
+        )
+    return prior, current, comparable
+
+
+def _validate_verified_build_identities(facts: VerifiedMarketRegimeFactsV1) -> None:
+    identities = (
+        facts.source_policy_identity_sha256,
+        facts.validation_policy_identity_sha256,
+        facts.policy_identity_sha256,
+        facts.code_identity_sha256,
+        facts.input_identity_sha256,
+    )
+    for identity in identities:
+        _guard(validate_sha256, identity)
+    reviewed = ExpectedReviewedBuildV1.from_manifest_bytes(
+        *_SEALED_REVIEWED_MANIFEST_BYTES_V1
+    )
+    if identities[:4] != reviewed.identity_tuple:
+        raise FactGraphAdmissionError("verified graph build identities are not sealed")
+
+
+def _validate_verified_membership(
+    membership: MembershipFactV1,
+) -> tuple[tuple[MembershipMemberV1, ...], dict[str, str]]:
+    members = membership.members
+    for member in members:
+        _revalidate_dataclass(member, MembershipMemberV1, "member")
+    _validate_sorted_unique(members, "members")
+    symbols = tuple(member.symbol for member in members)
+    if len(set(symbols)) != 50:
+        raise FactGraphAdmissionError("membership symbols are not unique")
+    return members, {member.isin: member.symbol for member in members}
+
+
+def _validate_verified_schedule(schedule: SessionScheduleFactV1) -> None:
+    for row in schedule.base_rows:
+        _revalidate_dataclass(row, OfficialSessionBaseRowV1, "base schedule row")
+    for correction in schedule.applied_corrections:
+        _revalidate_dataclass(correction, ScheduleCorrectionV1, "schedule correction")
+    for session in schedule.sessions:
+        _revalidate_dataclass(session, OfficialSessionV1, "official session")
+        _revalidate_dataclass(
+            session.source_trace, OfficialSessionSourceTraceV1, "session trace"
+        )
+    _validate_schedule_shape(schedule)
+
+
+def _validate_verified_endpoints(
+    facts: VerifiedMarketRegimeFactsV1,
+    members: tuple[MembershipMemberV1, ...],
+    decision: OfficialSessionV1,
+    cutoff: str,
+) -> None:
+    if (
+        facts.request.decision_session != decision.session_date
+        or facts.membership.decision_session != decision.session_date
+        or not decision.close_at < cutoff
+    ):
+        raise FactGraphAdmissionError("verified endpoint equations are inconsistent")
+    if any(
+        member.effective_from > decision.session_date
+        or (
+            member.effective_through is not None
+            and member.effective_through < decision.session_date
+        )
+        for member in members
+    ):
+        raise FactGraphAdmissionError("membership does not cover decision session")
+
+
+def _validate_verified_membership_source(
+    membership: MembershipFactV1, cutoff: str
+) -> None:
+    _authority(membership.authority, AuthorityIdentityV1.NSE_INDICES, "membership")
+    _validate_embedded_provenance(
+        membership.provenance,
+        AuthorityIdentityV1.NSE_INDICES,
+        PublicationRequirementV1.REQUIRED,
+        cutoff,
+        "membership",
+    )
+
+
+def _validate_verified_schedule_sources(
+    schedule: SessionScheduleFactV1, cutoff: str
+) -> None:
+    _authority(schedule.authority, AuthorityIdentityV1.NSE_CM, "schedule")
+    _validate_embedded_provenance(
+        schedule.base_schedule_provenance,
+        AuthorityIdentityV1.NSE_CM,
+        PublicationRequirementV1.REQUIRED,
+        cutoff,
+        "base schedule",
+    )
+    for row in schedule.base_rows:
+        _validate_embedded_provenance(
+            row.provenance,
+            AuthorityIdentityV1.NSE_CM,
+            PublicationRequirementV1.REQUIRED,
+            cutoff,
+            "base schedule row",
+        )
+    for correction in schedule.applied_corrections:
+        _validate_embedded_provenance(
+            correction.provenance,
+            AuthorityIdentityV1.NSE_CM,
+            PublicationRequirementV1.REQUIRED,
+            cutoff,
+            "schedule correction",
+        )
+
+
+def _validate_verified_close_set(
+    closes: tuple[DailyCloseFactV1, ...],
+    expected_isins: set[str],
+    member_symbols: dict[str, str],
+    session_date: str,
+    market_scope_ends_at: str,
+    cutoff: str,
+    name: str,
+) -> None:
+    try:
+        _validate_sorted_unique(closes, name)
+    except FactGraphAdmissionError as exc:
+        raise FactGraphAdmissionError(
+            "verified member equations are inconsistent"
+        ) from exc
+    if {close.isin for close in closes} != expected_isins:
+        raise FactGraphAdmissionError("verified member equations are inconsistent")
+    for close in closes:
+        _revalidate_dataclass(close, DailyCloseFactV1, name)
+        _authority(
+            close.authority,
+            AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
+            name,
+        )
+        if (
+            close.session_date != session_date
+            or close.market_scope_ends_at != market_scope_ends_at
+            or close.symbol != member_symbols[close.isin]
+        ):
+            raise FactGraphAdmissionError("verified close endpoint is inconsistent")
+        _validate_embedded_provenance(
+            close.provenance,
+            AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
+            PublicationRequirementV1.NOT_APPLICABLE,
+            cutoff,
+            name,
+        )
+
+
+def _validate_verified_proof(
+    proof: object,
+    expected: type[object],
+    fact: CorporateActionComparabilityFactV1,
+    interval: tuple[str, str],
+    cutoff: str,
+    name: str,
+) -> None:
+    _revalidate_dataclass(proof, expected, name)
+    typed = cast(
+        "CorporateActionStatusProofV1 | NegativeCompletenessProofV1 | RevisionLineageProofV1 | IdentityContinuityProofV1",
+        proof,
+    )
+    if (
+        typed.authority is not fact.authority
+        or typed.isin != fact.isin
+        or (typed.interval_from, typed.interval_through) != interval
+    ):
+        raise FactGraphAdmissionError("nested proof binding mismatch")
+    _validate_embedded_provenance(
+        typed.provenance,
+        AuthorityIdentityV1.NSE_CM,
+        PublicationRequirementV1.REQUIRED,
+        cutoff,
+        "comparability proof",
+    )
+
+
+def _validate_verified_proofs(
+    fact: CorporateActionComparabilityFactV1,
+    interval: tuple[str, str],
+    cutoff: str,
+) -> None:
+    proofs = _proofs(fact)
+    revisions = tuple(proof.provenance.revision_identity_sha256 for proof in proofs)
+    if len(set(revisions)) != len(revisions):
+        raise FactGraphAdmissionError("duplicate comparability proof revision")
+    _validate_verified_proof(
+        fact.status_proof,
+        CorporateActionStatusProofV1,
+        fact,
+        interval,
+        cutoff,
+        "status proof",
+    )
+    _validate_verified_proof(
+        fact.negative_completeness_proof,
+        NegativeCompletenessProofV1,
+        fact,
+        interval,
+        cutoff,
+        "negative completeness proof",
+    )
+    _validate_verified_proof(
+        fact.revision_proof,
+        RevisionLineageProofV1,
+        fact,
+        interval,
+        cutoff,
+        "revision proof",
+    )
+    _validate_verified_proof(
+        fact.identity_continuity_proof,
+        IdentityContinuityProofV1,
+        fact,
+        interval,
+        cutoff,
+        "identity continuity proof",
+    )
+
+
+def _validate_verified_comparability_fact(
+    fact: CorporateActionComparabilityFactV1,
+    prior: DailyCloseFactV1,
+    current: DailyCloseFactV1,
+    interval: tuple[str, str],
+    cutoff: str,
+) -> None:
+    _revalidate_dataclass(
+        fact, CorporateActionComparabilityFactV1, "comparability fact"
+    )
+    _authority(fact.authority, AuthorityIdentityV1.NSE_CM, "comparability")
+    if (fact.interval_from, fact.interval_through) != interval:
+        raise FactGraphAdmissionError("comparability interval mismatch")
+    _validate_embedded_provenance(
+        fact.provenance,
+        AuthorityIdentityV1.NSE_CM,
+        PublicationRequirementV1.REQUIRED,
+        cutoff,
+        "comparability",
+    )
+    _validate_verified_proofs(fact, interval, cutoff)
+    for event in fact.status_proof.checked_events:
+        _revalidate_dataclass(event, CorporateActionEventV1, "checked event")
+    _validate_status_events(fact.status_proof, fact.isin, interval)
+    revision = fact.revision_proof
+    if (
+        revision.selected_revision_identity_sha256
+        != revision.provenance.revision_identity_sha256
+        or revision.checked_through != cutoff
+    ):
+        raise FactGraphAdmissionError("revision lineage/cutoff mismatch")
+    continuity = fact.identity_continuity_proof
+    if (
+        continuity.prior_symbol != prior.symbol
+        or continuity.current_symbol != current.symbol
+    ):
+        raise FactGraphAdmissionError("symbol continuity mismatch")
+
+
+def _validate_verified_comparability(
+    comparable: tuple[CorporateActionComparabilityFactV1, ...],
+    expected_isins: set[str],
+    prior: tuple[DailyCloseFactV1, ...],
+    current: tuple[DailyCloseFactV1, ...],
+    interval: tuple[str, str],
+    cutoff: str,
+) -> None:
+    _validate_sorted_unique(comparable, "comparability")
+    if {fact.isin for fact in comparable} != expected_isins:
+        raise FactGraphAdmissionError("comparability ISIN set mismatch")
+    prior_by_isin = {close.isin: close for close in prior}
+    current_by_isin = {close.isin: close for close in current}
+    for fact in comparable:
+        _validate_verified_comparability_fact(
+            fact,
+            prior_by_isin[fact.isin],
+            current_by_isin[fact.isin],
+            interval,
+            cutoff,
+        )
+
+
+def validate_verified_market_regime_facts_v1(
+    facts: object,
+) -> VerifiedMarketRegimeFactsV1:
+    """Purely revalidate every reducer-relevant equation in a verified graph."""
+    _instance(facts, VerifiedMarketRegimeFactsV1, "verified facts")
+    typed = cast("VerifiedMarketRegimeFactsV1", facts)
+    _revalidate_dataclass(typed.request, MarketRegimeRequestV1, "request")
+    _revalidate_dataclass(typed.membership, MembershipFactV1, "membership")
+    _revalidate_dataclass(typed.schedule, SessionScheduleFactV1, "schedule")
+    prior, current, comparable = _verified_collections(typed)
+    _validate_verified_build_identities(typed)
+    members, member_symbols = _validate_verified_membership(typed.membership)
+    _validate_verified_schedule(typed.schedule)
+    comparison, decision, next_session = (
+        typed.schedule.sessions[index] for index in (0, 20, 21)
+    )
+    cutoff = next_session.open_at
+    _validate_verified_endpoints(typed, members, decision, cutoff)
+    _validate_verified_membership_source(typed.membership, cutoff)
+    _validate_verified_schedule_sources(typed.schedule, cutoff)
+    expected_isins = set(member_symbols)
+    _validate_verified_close_set(
+        prior,
+        expected_isins,
+        member_symbols,
+        comparison.session_date,
+        comparison.close_at,
+        cutoff,
+        "prior closes",
+    )
+    _validate_verified_close_set(
+        current,
+        expected_isins,
+        member_symbols,
+        decision.session_date,
+        decision.close_at,
+        cutoff,
+        "current closes",
+    )
+    _validate_verified_comparability(
+        comparable,
+        expected_isins,
+        prior,
+        current,
+        (comparison.session_date, decision.session_date),
+        cutoff,
+    )
+    return typed
 
 
 def admit_verified_market_regime_facts_v1(
