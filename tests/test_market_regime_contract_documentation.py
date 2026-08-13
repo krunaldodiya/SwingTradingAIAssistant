@@ -424,3 +424,18 @@ def test_stop_conditions_order_and_owner_gates_are_explicit() -> None:
     )
     positions = [order.index(item) for item in expected]
     assert positions == sorted(positions)
+
+
+def test_validation_protocol_freezes_cutoff_and_safe_metamorphic_edges() -> None:
+    text = VALIDATION_PROTOCOL.read_text()
+    for required in (
+        "scaled values remain valid",
+        "first precision,\n  scale, or byte overflow",
+        "external future-data store",
+        "post-cutoff row into an attempted candidate bundle",
+        "equals `evidence_cutoff` exactly",
+        "smallest representable microsecond after",
+        "equals `decision_market_close` as admissible",
+        "one microsecond after the decision\nclose as invalid",
+    ):
+        assert required in text

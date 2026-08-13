@@ -77,7 +77,14 @@ rejection cases rather than comparison inputs.
 
 Generated authoritative schedules cover ordinary sessions, weekends, proven
 holidays, declared closures, applicable special sessions, corrected opens and
-closes, and correction supersession. Each passing case steps exactly 20
+closes, and correction supersession. For every applicable `published_at`,
+`response_completed_at`, `retrieved_at`, and `retained_at` clock, the suite
+requires acceptance when the instant equals `evidence_cutoff` exactly and the
+frozen late reason when it is the smallest representable microsecond after the
+cutoff. It separately tests a current price fact whose `market_scope_ends_at`
+equals `decision_market_close` as admissible, one microsecond after the decision
+close as invalid, and any next-session-open or later market observation as
+forbidden even when its evidence clocks meet the cutoff. Each passing case steps exactly 20
 authoritative official-session transitions from the decision session to the
 comparison session and derives the evidence cutoff from the next authoritative
 open. Elapsed days and weekdays are never substitutes. Missing, conflicting,
@@ -94,11 +101,17 @@ The generated suite freezes all of the following:
   facts produces the same counts, label, and semantic identity through the
   local builder, while a permutation of canonical external JSON is rejected
   rather than silently sorted.
-- **Metamorphic property:** multiplying every prior/current Decimal pair by the
-  same admitted positive power of ten preserves member directions and label;
-  replacing one advance pair with an equal pair changes only the predicted
-  advance/unchanged counts; adding evidence strictly after the knowledge cutoff
-  changes no admitted result.
+- **Metamorphic property:** for generated pairs whose scaled values remain valid
+  `CanonicalDecimal` values within every digit, scale, and byte bound,
+  multiplying both prior/current values by the same positive power of ten
+  preserves member directions and label. Products at the first precision,
+  scale, or byte overflow are separate exact structural-rejection cases.
+  Replacing one advance pair with an equal pair changes only the predicted
+  advance/unchanged counts. Mutating an external future-data store that is not
+  part of the sealed reducer input changes no admitted result; injecting a
+  post-cutoff row into an attempted candidate bundle changes its identity and
+  yields the exact frozen late/invalid insufficiency reason, while injecting it
+  into canonical verified facts is rejected.
 - **Canonical representation:** canonical external JSON round-trips byte for
   byte, local unordered collections are sorted before serialization, and
   duplicate keys, unknown fields, alternate Decimal spellings, malformed UTF-8,
