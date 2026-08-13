@@ -1753,7 +1753,6 @@ def test_ark171_coordinated_manifest_rehash_is_not_authority() -> None:
         admit_verified_market_regime_facts_v1(**values)
 
 
-
 def test_source_receipt_and_projection_receipt_fail_closed_branches() -> None:
     canonical = canonical_json_lf({"close": "100"})
     with pytest.raises(FactGraphAdmissionError, match="immutable bytes"):
@@ -1901,7 +1900,9 @@ def test_verified_receipt_index_and_policy_binding_fail_closed() -> None:
         admit_verified_market_regime_facts_v1(**values)
 
     values = _valid_graph()
-    object.__setattr__(values["schedule"].base_schedule_provenance, "object_identity_sha256", ZERO)
+    object.__setattr__(
+        values["schedule"].base_schedule_provenance, "object_identity_sha256", ZERO
+    )
     with pytest.raises(FactGraphAdmissionError, match="content identity mismatch"):
         admit_verified_market_regime_facts_v1(**values)
 
@@ -1919,14 +1920,20 @@ def test_verified_receipt_index_and_policy_binding_fail_closed() -> None:
         admit_verified_market_regime_facts_v1(**values)
 
 
-def test_no_break_event_validation_rejects_projection_order_and_binding_faults() -> None:
+def test_no_break_event_validation_rejects_projection_order_and_binding_faults() -> (
+    None
+):
     values = _valid_graph()
     status = values["comparability"][0].status_proof
-    validate = getattr(facts_module, "_validate_status_events")
+    validate = vars(facts_module)["_validate_status_events"]
     interval = (status.interval_from, status.interval_through)
 
     with pytest.raises(FactGraphAdmissionError, match="identity projection"):
-        validate(dataclasses.replace(status, checked_event_identities=(ZERO,)), status.isin, interval)
+        validate(
+            dataclasses.replace(status, checked_event_identities=(ZERO,)),
+            status.isin,
+            interval,
+        )
 
     def event(isin: str, effective_session: str) -> CorporateActionEventV1:
         kind = tuple(ComparabilityBreakingEventClassV1)[0]
@@ -1972,3 +1979,201 @@ def test_no_break_event_validation_rejects_projection_order_and_binding_faults()
     )
     with pytest.raises(FactGraphAdmissionError, match="NO_BREAK"):
         validate(populated, status.isin, interval)
+
+
+def test_schedule_trace_validation_rejects_tampering() -> None:
+    values = _valid_graph()
+    schedule = values["schedule"]
+    validate = vars(facts_module)["_validate_schedule_session_trace"]
+
+    ordinary = schedule.sessions[0]
+    wrong_revision = dataclasses.replace(
+        ordinary,
+        source_trace=OfficialSessionSourceTraceV1(
+            ordinary.source_trace.base_row_provenance,
+            (ZERO,),
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="correction trace mismatch"):
+        validate(
+            wrong_revision,
+            schedule.applied_corrections,
+            {},
+            None,
+            "",
+            {},
+            set(),
+        )
+
+    missing_base = dataclasses.replace(
+        ordinary,
+        source_trace=OfficialSessionSourceTraceV1(None, ()),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="base-row trace mismatch"):
+        validate(
+            missing_base,
+            schedule.applied_corrections,
+            {},
+            None,
+            "",
+            {},
+            set(),
+        )
+
+    corrected = next(
+        session for session in schedule.sessions if session.session_date == "2026-08-12"
+    )
+    with pytest.raises(FactGraphAdmissionError, match="unresolved"):
+        validate(
+            corrected,
+            schedule.applied_corrections,
+            {},
+            None,
+            "",
+            {},
+            set(),
+        )
+
+
+def test_comparability_validation_rejects_deep_binding_faults(monkeypatch) -> None:
+    values = _valid_graph()
+    fact = values["comparability"][0]
+    prior = values["prior_closes"][0]
+    current = values["current_closes"][0]
+    interval = (fact.interval_from, fact.interval_through)
+    validate = vars(facts_module)["_validate_comparability_fact"]
+    monkeypatch.setattr(
+        facts_module, "_policy_provenance", lambda *args, **kwargs: None
+    )
+
+    wrong_nested = dataclasses.replace(
+        fact,
+        negative_completeness_proof=dataclasses.replace(
+            fact.negative_completeness_proof,
+            isin=_isin(999),
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="nested proof binding"):
+        validate(wrong_nested, prior, current, interval, None, "", {}, set())
+
+    wrong_revision = dataclasses.replace(
+        fact,
+        revision_proof=dataclasses.replace(
+            fact.revision_proof,
+            checked_through="2026-08-12T12:02:00.000000Z",
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="lineage/cutoff"):
+        validate(
+            wrong_revision,
+            prior,
+            current,
+            interval,
+            None,
+            "2026-08-12T12:03:00.000000Z",
+            {},
+            set(),
+        )
+
+    wrong_symbol = dataclasses.replace(
+        fact,
+        identity_continuity_proof=dataclasses.replace(
+            fact.identity_continuity_proof,
+            prior_symbol="OTHER",
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="symbol continuity"):
+        validate(
+            wrong_symbol,
+            prior,
+            current,
+            interval,
+            None,
+            fact.revision_proof.checked_through,
+            {},
+            set(),
+        )
+
+
+def test_remaining_cross_fact_authority_and_proof_branches(monkeypatch) -> None:
+    values = _valid_graph()
+    monkeypatch.setattr(
+        facts_module, "_policy_provenance", lambda *args, **kwargs: None
+    )
+
+    membership = values["membership"]
+    changed_membership = dataclasses.replace(
+        membership,
+        provenance=dataclasses.replace(
+            membership.provenance, authority=AuthorityIdentityV1.NSE_CM
+        ),
+    )
+    validate_membership = vars(facts_module)["_validate_membership"]
+    with pytest.raises(
+        FactGraphAdmissionError, match="membership provenance authority"
+    ):
+        validate_membership(
+            changed_membership,
+            membership.decision_session,
+            None,
+            "",
+            {},
+            set(),
+        )
+
+    closes = values["prior_closes"]
+    changed_close = dataclasses.replace(
+        closes[0],
+        provenance=dataclasses.replace(
+            closes[0].provenance, authority=AuthorityIdentityV1.NSE_CM
+        ),
+    )
+    validate_closes = vars(facts_module)["_validate_close_tuple"]
+    with pytest.raises(FactGraphAdmissionError, match="provenance authority"):
+        validate_closes(
+            (changed_close, *closes[1:]),
+            {item.isin for item in closes},
+            changed_close.session_date,
+            changed_close.market_scope_ends_at,
+            None,
+            "",
+            "prior",
+            {},
+            set(),
+        )
+
+    fact = values["comparability"][0]
+    prior = values["prior_closes"][0]
+    current = values["current_closes"][0]
+    interval = (fact.interval_from, fact.interval_through)
+    validate_comparability = vars(facts_module)["_validate_comparability_fact"]
+    changed_proof = dataclasses.replace(
+        fact,
+        negative_completeness_proof=dataclasses.replace(
+            fact.negative_completeness_proof,
+            authority=AuthorityIdentityV1.ADMITTED_EQUITY_FACT_PIPELINE,
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="nested proof binding"):
+        validate_comparability(
+            changed_proof, prior, current, interval, None, "", {}, set()
+        )
+
+    changed_revision = dataclasses.replace(
+        fact,
+        revision_proof=dataclasses.replace(
+            fact.revision_proof,
+            selected_revision_identity_sha256=ZERO,
+        ),
+    )
+    with pytest.raises(FactGraphAdmissionError, match="lineage/cutoff"):
+        validate_comparability(
+            changed_revision,
+            prior,
+            current,
+            interval,
+            None,
+            fact.revision_proof.checked_through,
+            {},
+            set(),
+        )
