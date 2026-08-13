@@ -237,6 +237,52 @@ EvidenceAttemptFailureV1 = Literal[
   "CLOCK_UNTRUSTED", "LICENCE_UNRESOLVED"
 ]
 
+MembershipCandidateRowV1 {
+  isin_text: BoundedAscii
+  symbol_text: BoundedAscii
+  effective_from_text: BoundedAscii
+  effective_through_text: BoundedAscii | null
+  row_provenance: ProvenanceCandidateV1
+}
+ScheduleCandidateRowV1 {
+  session_date_text: BoundedAscii
+  open_at_text: BoundedAscii
+  close_at_text: BoundedAscii
+  row_provenance: ProvenanceCandidateV1
+}
+DailyCloseCandidateRowV1 {
+  isin_text: BoundedAscii
+  symbol_text: BoundedAscii
+  session_date_text: BoundedAscii
+  close_text: BoundedAscii
+  row_provenance: ProvenanceCandidateV1
+}
+ComparabilityCandidateRowV1 {
+  isin_text: BoundedAscii
+  interval_from_text: BoundedAscii
+  interval_through_text: BoundedAscii
+  status_text: BoundedAscii
+  status_proof_identity: Sha256 | null
+  completeness_proof_identity: Sha256 | null
+  revision_proof_identity: Sha256 | null
+  continuity_proof_identity: Sha256 | null
+  row_provenance: ProvenanceCandidateV1
+}
+ProvenanceCandidateV1 {
+  authority_text: BoundedAscii
+  source_identity: BoundedAscii
+  schema_version_text: BoundedAscii
+  object_identity_sha256: Sha256 | null
+  published_at_text: BoundedAscii | null
+  response_completed_at_text: BoundedAscii | null
+  retrieved_at_text: BoundedAscii | null
+  retained_at_text: BoundedAscii | null
+}
+MembershipCandidatePayloadV1 { received_rows: tuple[MembershipCandidateRowV1, 0..51] }
+ScheduleCandidatePayloadV1 { received_rows: tuple[ScheduleCandidateRowV1, 0..51] }
+DailyCloseCandidatePayloadV1 { received_rows: tuple[DailyCloseCandidateRowV1, 0..51] }
+ComparabilityCandidatePayloadV1 { received_rows: tuple[ComparabilityCandidateRowV1, 0..51] }
+
 EvidenceAttemptV1 {
   evidence_kind: same closed kind enum
   requested_identities: tuple[EvidenceRequestIdentityV1, 1..50]
@@ -316,10 +362,12 @@ pretend to know their dates before schedule evidence resolves them.
 cohort ISINs at their respective resolved endpoint. `CORPORATE_COMPARABILITY`
 requests exactly those 50 resolved ISINs over `[S[0], S[20]]`. Thus every
 attempt records what was actually requested, not a generic source label.
-Requested identities are strictly sorted and unique. Each payload holds
-`received_rows: tuple[TypedCandidateRowV1, 0..51]` of its pinned row type.
-Candidate rows are structurally typed but not asserted to be complete, unique,
-timely, authoritative, or semantically valid.
+Requested identities are strictly sorted and unique. Each payload uses the exactly defined candidate-row type above. Candidate
+fields are bounded strings so malformed market values can be retained as domain
+evidence rather than becoming parser failures. Candidate rows are structurally
+typed but are not asserted to be complete, unique, timely, authoritative, or
+semantically valid. Their full canonical payload, including duplicates, is bound
+by `attempt_identity_sha256`.
 
 At least one of `payload` and `failure` must be non-null. A clean attempt has a
 payload and null failure; a missing attempt has null payload and
@@ -424,6 +472,9 @@ NegativeCompletenessProofV1 {
 
 RevisionLineageProofV1 {
   authority: Literal["NSE_CM"]
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
   selected_revision_identity_sha256: Sha256
   checked_through: UtcInstant
   lineage_status: Literal["CURRENT_AT_EVIDENCE_CUTOFF"]
@@ -508,7 +559,11 @@ current session for every ISIN == decision_session
 prior market_scope_ends_at == S[0].close_at
 current market_scope_ends_at == decision_market_close
 comparability interval == [comparison_session, decision_session]
-all proof ISINs and intervals == their containing comparability fact
+status, completeness, revision, and continuity proof ISINs and intervals == their containing comparability fact
+prior DailyCloseFactV1.symbol == identity_continuity_proof.prior_symbol for the same ISIN
+current DailyCloseFactV1.symbol == identity_continuity_proof.current_symbol for the same ISIN
+revision_proof.selected_revision_identity_sha256 == revision_proof.provenance.revision_identity_sha256
+status/completeness/continuity proof provenance revision identities are included in the containing comparability fact identity
 revision_proof.checked_through == evidence_cutoff
 all mandatory evidence clocks <= evidence_cutoff
 membership interval for every member covers decision_session
@@ -639,7 +694,7 @@ profile:
 1. UTF-8 only, no BOM, exactly one trailing LF; hashes include that LF.
 2. Object keys lexicographically sorted by Unicode code point; compact `,` and `:` separators; no insignificant whitespace.
 3. Strings must already be Unicode NFC. Invalid UTF-8, non-NFC, unpaired surrogates, and forbidden control characters are rejected, not repaired.
-4. Duplicate keys, unknown/missing fields, invalid nullability, duplicate semantic identities, and bound violations are rejected before hashing.
+4. Duplicate JSON object keys, unknown/missing fields, invalid nullability, and bound violations are rejected before hashing. Duplicate semantic identities are rejected in requests and verified facts, but are intentionally representable in `received_rows` inside an attempt; their ordered full rows are hashed and then yield a typed domain insufficiency reason.
 5. JSON floats, NaN, Infinity, exponent notation, negative zero, and implementation-specific numeric spellings are forbidden. Counts are integers; market values are `CanonicalDecimal` strings.
 6. Dates, instants, enums, ISINs, symbols, authorities, and digests use their exact lexical forms.
 7. Every external array must already be in its schema order: attempts by declared kind, sessions by date, members and fact tuples by ISIN, corrections by their stated key, requested identities by their complete field tuple, and reasons by declaration order. Noncanonical ordering in external bytes is rejected; a parser never silently sorts admitted bytes.

@@ -86,7 +86,10 @@ def test_attempt_envelope_represents_domain_insufficiency_without_schema_lie() -
         "ScheduleCandidatePayloadV1",
         "DailyCloseCandidatePayloadV1",
         "ComparabilityCandidatePayloadV1",
-        "received_rows: tuple[TypedCandidateRowV1, 0..51]",
+        "received_rows: tuple[MembershipCandidateRowV1, 0..51]",
+        "received_rows: tuple[ScheduleCandidateRowV1, 0..51]",
+        "received_rows: tuple[DailyCloseCandidateRowV1, 0..51]",
+        "received_rows: tuple[ComparabilityCandidateRowV1, 0..51]",
         "49-row, 51-row, and duplicate-row outcomes",
         "Zero or 49 rows, 51 rows, duplicates",
         "domain insufficiency reasons",
@@ -232,3 +235,22 @@ def test_reason_order_bounds_and_readiness_are_explicit() -> None:
         "Synthetic fixtures may later prove mechanics only",
     ):
         assert required in handoff
+
+
+def test_candidate_rows_and_cross_binding_are_fully_frozen() -> None:
+    text = POLICY.read_text()
+    for required in (
+        "MembershipCandidateRowV1",
+        "ScheduleCandidateRowV1",
+        "DailyCloseCandidateRowV1",
+        "ComparabilityCandidateRowV1",
+        "ProvenanceCandidateV1",
+        "including duplicates",
+        "Duplicate semantic identities are rejected in requests and verified facts",
+        "intentionally representable in `received_rows`",
+        'RevisionLineageProofV1 {\n  authority: Literal["NSE_CM"]\n  isin: Isin',
+        "prior DailyCloseFactV1.symbol == identity_continuity_proof.prior_symbol",
+        "current DailyCloseFactV1.symbol == identity_continuity_proof.current_symbol",
+        "selected_revision_identity_sha256 == revision_proof.provenance.revision_identity_sha256",
+    ):
+        assert required in text
