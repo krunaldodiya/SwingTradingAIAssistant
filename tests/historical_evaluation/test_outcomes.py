@@ -327,3 +327,38 @@ def test_outcome_observation_rejects_impossible_dates_and_threshold() -> None:
             gross_return_percent="-999.000000",
             strictly_gt_2_percent=True,
         )
+
+
+def test_resolved_schedule_rejects_unaccounted_calendar_gap() -> None:
+    sessions = tuple(session(day) for day in (1, 2, 4, 5, 6, 7))
+    payload = json.dumps(
+        {
+            "sessions": [
+                {
+                    "trade_date": item.trade_date.isoformat(),
+                    "open_at": item.open_at.isoformat(),
+                    "close_at": item.close_at.isoformat(),
+                }
+                for item in sessions
+            ]
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    with pytest.raises(ValueError, match="resolved official sessions"):
+        ResolvedOfficialSessionsV1(
+            sessions,
+            datetime(2026, 7, 7, 10, tzinfo=UTC),
+            hashlib.sha256(payload).hexdigest(),
+            payload,
+        )
+
+
+def test_outcome_observation_rejects_noncanonical_execution_times() -> None:
+    result = calculate_five_session_outcome_v1(request(), evidence())
+    with pytest.raises(ValueError, match="outcome observation"):
+        replace(
+            result,
+            entry_at=result.entry_at + timedelta(minutes=1),
+            exit_at=result.exit_at - timedelta(minutes=1),
+        )

@@ -163,3 +163,10 @@ def test_census_rejects_arbitrary_reason_and_evidence_state() -> None:
         replace(report(), primary_reason_counts=(("arbitrary", -1), ("anything", 1551)))
     with pytest.raises(ValueError, match="census report"):
         replace(report(), evidence_status=CensusEvidenceStatusV1.OBSERVED)
+
+
+def test_census_rejects_raw_price_reason_injection() -> None:
+    with pytest.raises(ValueError, match="census report"):
+        replace(
+            report(), additional_reason_counts=(("RAW_OHLC_ENTRY_PRICE=100.00", 0),)
+        )

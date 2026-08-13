@@ -470,7 +470,7 @@ class ResolvedOfficialSessionsV1:
     source_evidence_sha256: str
     source_canonical_json: bytes
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 -- fail-closed schedule reconstruction
         if (
             type(self.sessions) is not tuple
             or len(self.sessions) < 6
@@ -491,7 +491,8 @@ class ResolvedOfficialSessionsV1:
                 raise ValueError
             value = cast(dict[str, object], parsed)
             raw_sessions = value.get("sessions")
-            if type(raw_sessions) is not list:
+            raw_closures = value.get("closures", [])
+            if type(raw_sessions) is not list or type(raw_closures) is not list:
                 raise ValueError
             values: list[OfficialSessionV1] = []
             for raw_session in cast(list[object], raw_sessions):
@@ -517,6 +518,22 @@ class ResolvedOfficialSessionsV1:
                     )
                 )
             reconstructed = tuple(values)
+            closure_dates: set[date] = set()
+            for raw_closure in cast(list[object], raw_closures):
+                if type(raw_closure) is not dict:
+                    raise ValueError
+                closure = cast(dict[str, object], raw_closure)
+                trade_date = closure.get("trade_date")
+                if type(trade_date) is not str:
+                    raise ValueError
+                closure_dates.add(date.fromisoformat(trade_date))
+            cursor = reconstructed[0].trade_date
+            through = reconstructed[-1].trade_date
+            covered = {item.trade_date for item in reconstructed} | closure_dates
+            while cursor <= through:
+                if cursor not in covered:
+                    raise ValueError
+                cursor += timedelta(days=1)
         except Exception as exc:
             raise ValueError("invalid resolved official sessions") from exc
         if reconstructed != self.sessions:
@@ -686,12 +703,20 @@ class FiveSessionOutcomeObservationV1:
                 source_exit_date = date.fromisoformat(
                     sessions[-1]["session"]["trade_date"]
                 )
+                source_entry_at = datetime.fromisoformat(
+                    sessions[0]["session"]["open_at"].replace("Z", "+00:00")
+                )
+                source_exit_at = datetime.fromisoformat(
+                    sessions[-1]["session"]["close_at"].replace("Z", "+00:00")
+                ) - timedelta(minutes=1)
             except Exception as exc:
                 raise ValueError("invalid outcome observation") from exc
             if (
                 entry_trade_date != source_entry_date
                 or exit_trade_date != source_exit_date
                 or rendered_return != expected_return
+                or entry_at != source_entry_at
+                or exit_at != source_exit_at
             ):
                 raise ValueError("invalid outcome observation")
 

@@ -136,7 +136,14 @@ class OpportunityCensusReportV1:
             or len(self.strict_threshold_windows) != self.strictly_gt_2_percent_count
             or type(self.additional_reason_counts) is not tuple
             or any(
-                type(reason) is not str or type(count) is not int or count < 0
+                type(reason) is not str
+                or reason
+                not in {
+                    "SCHEDULE_NOT_KNOWN_AT_DECISION_CUTOFF",
+                    "CORPORATE_ACTION_EVIDENCE_MISSING_OR_STALE",
+                }
+                or type(count) is not int
+                or count < 0
                 for reason, count in self.additional_reason_counts
             )
             or self.evidence_status
