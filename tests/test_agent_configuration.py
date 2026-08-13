@@ -236,3 +236,30 @@ def test_cross_provider_target_is_accepted_but_not_falsely_activated() -> None:
     assert agents["default_subagent_model"] == "gpt-5.6-terra"
     assert read_toml(AGENTS / "terra-implementer.toml")["model"] == "gpt-5.6-terra"
     assert read_toml(AGENTS / "high-risk-reviewer.toml")["model"] == "gpt-5.6-sol"
+
+
+def test_subscription_transition_is_dated_but_does_not_grant_commercial_authority() -> (
+    None
+):
+    decision = " ".join(
+        (
+            ROOT
+            / "docs"
+            / "notes"
+            / "2026-08-13-cross-provider-model-routing-decision.md"
+        )
+        .read_text()
+        .split()
+    )
+    for required in (
+        "USD 200 plan",
+        "2026-09-04",
+        "downgrade GPT to the USD 100 plan",
+        "purchase the USD 100 Anthropic plan",
+        "owner-supplied planning facts",
+        "does not authorize the agent to purchase, cancel, downgrade, renew",
+        "does not activate cross-provider routing automatically",
+        "separately billed extra usage",
+        "retain the GPT-only fallback",
+    ):
+        assert required in decision

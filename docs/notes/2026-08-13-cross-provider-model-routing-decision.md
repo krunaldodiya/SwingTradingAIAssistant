@@ -16,6 +16,32 @@ gates, credentials, or autonomous authority. No non-GPT provider is currently
 authenticated. Catalogue visibility is not proof of access, subscription
 coverage, tool compatibility, or economic value.
 
+
+## Owner-approved subscription transition
+
+The current GPT subscription is the USD 200 plan and remains the only
+configured model access through its stated expiry on **2026-09-04**. The owner
+intends, after that expiry, to move to this USD 200/month allocation:
+
+- downgrade GPT to the USD 100 plan for GPT-5.6 Sol execution and fallback
+  coordination; and
+- purchase the USD 100 Anthropic plan intended for Fable/Opus planning and
+  review.
+
+These amounts and date are owner-supplied planning facts, not vendor-verified
+price, entitlement, renewal, tax, quota, or model-availability claims. This
+record does not authorize the agent to purchase, cancel, downgrade, renew, log
+in, access billing, or handle credentials. The owner performs each commercial
+and authentication action.
+
+The transition also does not activate cross-provider routing automatically.
+After purchase, confirm the exact Anthropic plan exposes Fable 5 and Opus 5 to
+Prime Agent, whether third-party harness use consumes the plan or separately
+billed extra usage, applicable limits, tool support, and successful
+qualification under the activation gate below. If any condition fails, retain
+the GPT-only fallback and return the evidence to the owner rather than assuming
+access or spending authority.
+
 ## Accepted target routing
 
 | Responsibility | Default | Escalation and limits |
