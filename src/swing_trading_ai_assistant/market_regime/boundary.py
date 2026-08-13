@@ -490,6 +490,16 @@ class MarketRegimeRequestV1:
             raise SchemaAdmissionError("invalid request constants")
         validate_local_date(self.decision_session)
         validate_sha256(self.request_identity_sha256)
+        projection = {
+            "contract_version": self.VERSION,
+            "decision_session": self.decision_session,
+            "segment": "NSE_EQ",
+        }
+        if (
+            hashlib.sha256(canonical_json_lf(projection)).hexdigest()
+            != self.request_identity_sha256
+        ):
+            raise IdentityAdmissionError("request identity mismatch")
 
     def to_dict(self) -> dict[str, Any]:
         return cast("dict[str, Any]", _plain(self))
@@ -910,6 +920,59 @@ class EvidenceAttemptV1:
     payload: Payload | None
     failure: EvidenceAttemptFailureV1 | None
     attempt_identity_sha256: str
+
+    def __post_init__(self) -> None:  # noqa: C901
+        if not isinstance(self.evidence_kind, EvidenceKindV1):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise SchemaAdmissionError("invalid evidence kind")
+        if type(self.requested_identities) is not tuple:
+            raise SchemaAdmissionError(
+                "requested identities must be an immutable tuple"
+            )
+        if not 1 <= len(self.requested_identities) <= 50:
+            raise BoundsAdmissionError("requested identities outside bounds")
+        if any(
+            not isinstance(item, EvidenceRequestIdentityV1)  # pyright: ignore[reportUnnecessaryIsInstance]
+            for item in self.requested_identities
+        ):
+            raise SchemaAdmissionError("invalid requested identity")
+        if (
+            tuple(sorted(self.requested_identities, key=lambda item: item.key()))
+            != self.requested_identities
+        ):
+            raise CanonicalJsonAdmissionError("requested identities are not canonical")
+        if len(set(self.requested_identities)) != len(self.requested_identities) or any(
+            item.evidence_kind is not self.evidence_kind
+            for item in self.requested_identities
+        ):
+            raise SchemaAdmissionError("invalid requested identities")
+        expected: type[Payload] = {
+            EvidenceKindV1.MEMBERSHIP: MembershipCandidatePayloadV1,
+            EvidenceKindV1.SESSION_SCHEDULE: ScheduleCandidatePayloadV1,
+            EvidenceKindV1.PRIOR_CLOSES: DailyCloseCandidatePayloadV1,
+            EvidenceKindV1.CURRENT_CLOSES: DailyCloseCandidatePayloadV1,
+            EvidenceKindV1.CORPORATE_COMPARABILITY: ComparabilityCandidatePayloadV1,
+        }[self.evidence_kind]
+        if self.payload is not None and not isinstance(self.payload, expected):
+            raise SchemaAdmissionError("payload variant does not match kind")
+        if self.failure is not None and not isinstance(
+            self.failure,
+            EvidenceAttemptFailureV1,  # pyright: ignore[reportUnnecessaryIsInstance]
+        ):
+            raise SchemaAdmissionError("invalid attempt failure")
+        if self.payload is None and self.failure is None:
+            raise SchemaAdmissionError("payload and failure cannot both be null")
+        validate_sha256(self.attempt_identity_sha256)
+        projection = {
+            "evidence_kind": self.evidence_kind,
+            "failure": self.failure,
+            "payload": self.payload,
+            "requested_identities": self.requested_identities,
+        }
+        if (
+            hashlib.sha256(canonical_json_lf(projection)).hexdigest()
+            != self.attempt_identity_sha256
+        ):
+            raise IdentityAdmissionError("attempt identity mismatch")
 
     @classmethod
     def build(

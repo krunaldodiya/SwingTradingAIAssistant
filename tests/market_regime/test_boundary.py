@@ -864,6 +864,47 @@ def test_external_attempt_canonical_size_depth_and_payload_kind_errors() -> None
         EvidenceAttemptV1.from_canonical_json_bytes(over_depth)
 
 
+def test_direct_top_level_constructors_enforce_deep_schema_and_identity() -> None:
+    request = MarketRegimeRequestV1.build("2026-08-12")
+    with pytest.raises(IdentityAdmissionError):
+        dataclasses.replace(request, request_identity_sha256=ZERO)
+
+    valid = EvidenceAttemptV1.build(
+        EvidenceKindV1.MEMBERSHIP,
+        [
+            EvidenceRequestIdentityV1(
+                EvidenceKindV1.MEMBERSHIP,
+                AuthorityIdentityV1.NSE_INDICES,
+                "2026-08-12",
+                EvidenceScopeV1.DECISION_MEMBERSHIP,
+                None,
+                None,
+            )
+        ],
+        MembershipCandidatePayloadV1([]),
+        None,
+    )
+    assert dataclasses.replace(valid) == valid
+    with pytest.raises(SchemaAdmissionError):
+        EvidenceAttemptV1(
+            "MEMBERSHIP",  # type: ignore[arg-type]
+            ("not-an-identity",),  # type: ignore[arg-type]
+            {"mutable": "payload"},  # type: ignore[arg-type]
+            "BAD",  # type: ignore[arg-type]
+            ZERO,
+        )
+    with pytest.raises(IdentityAdmissionError):
+        dataclasses.replace(valid, attempt_identity_sha256=ZERO)
+    with pytest.raises(SchemaAdmissionError):
+        EvidenceAttemptV1(
+            valid.evidence_kind,
+            list(valid.requested_identities),  # type: ignore[arg-type]
+            valid.payload,
+            valid.failure,
+            valid.attempt_identity_sha256,
+        )
+
+
 def test_source_receipt_all_type_lexical_and_identity_paths() -> None:
     body = b"x"
     receipt = SourceObjectReceiptV1.build(body, "text/plain")
