@@ -912,6 +912,16 @@ class ExpectedReviewedBuildV1:
         )
 
 
+# These four canonical byte sequences are part of the reviewed application build.
+# They are deliberately not accepted from a request or evidence bundle.
+_SEALED_REVIEWED_MANIFEST_BYTES_V1: tuple[bytes, bytes, bytes, bytes] = (
+    b'{"bindings":[{"derived_authority":"NSE_INDICES","evidence_kind":"MEMBERSHIP","object_identity_projection":"canonical-object-v1","revision_identity_projection":"canonical-revision-v1","schema_version":"schema-v1","source_identity":"authoritative-source-v1"},{"derived_authority":"NSE_CM","evidence_kind":"SESSION_SCHEDULE","object_identity_projection":"canonical-object-v1","revision_identity_projection":"canonical-revision-v1","schema_version":"schema-v1","source_identity":"authoritative-source-v1"},{"derived_authority":"ADMITTED_EQUITY_FACT_PIPELINE","evidence_kind":"PRIOR_CLOSES","object_identity_projection":"canonical-object-v1","revision_identity_projection":"canonical-revision-v1","schema_version":"schema-v1","source_identity":"authoritative-source-v1"},{"derived_authority":"ADMITTED_EQUITY_FACT_PIPELINE","evidence_kind":"CURRENT_CLOSES","object_identity_projection":"canonical-object-v1","revision_identity_projection":"canonical-revision-v1","schema_version":"schema-v1","source_identity":"authoritative-source-v1"},{"derived_authority":"NSE_CM","evidence_kind":"CORPORATE_COMPARABILITY","object_identity_projection":"canonical-object-v1","revision_identity_projection":"canonical-revision-v1","schema_version":"schema-v1","source_identity":"authoritative-source-v1"}],"manifest_version":"nifty50-source-policy@v1"}\n',
+    b'{"bounds_profile":"nifty50-market-regime-bounds@v1","canonical_profile":"nifty50-canonical-json@v1","manifest_version":"nifty50-market-regime-validation@v1","reason_precedence":["EVIDENCE_IDENTITY_MISMATCH","SOURCE_NOT_AUTHORITATIVE","PUBLICATION_UNPROVEN","CLOCK_UNTRUSTED","LICENCE_UNRESOLVED","MEMBERSHIP_MISSING","MEMBERSHIP_LATE","MEMBERSHIP_AMBIGUOUS","MEMBERSHIP_CORRUPT","MEMBERSHIP_COUNT_INVALID","SCHEDULE_MISSING","SCHEDULE_LATE","SCHEDULE_COVERAGE_INCOMPLETE","SCHEDULE_AMBIGUOUS","SCHEDULE_CORRUPT","COMPARISON_SESSION_UNRESOLVED","CURRENT_CLOSE_MISSING","CURRENT_CLOSE_LATE","CURRENT_CLOSE_INCOMPLETE","CURRENT_CLOSE_AMBIGUOUS","CURRENT_CLOSE_CORRUPT","PRIOR_CLOSE_MISSING","PRIOR_CLOSE_LATE","PRIOR_CLOSE_INCOMPLETE","PRIOR_CLOSE_AMBIGUOUS","PRIOR_CLOSE_CORRUPT","CORPORATE_ACTION_MISSING","CORPORATE_ACTION_LATE","CORPORATE_ACTION_STATUS_UNPROVEN","CORPORATE_ACTION_COMPLETENESS_UNPROVEN","CORPORATE_ACTION_REVISION_UNPROVEN","CORPORATE_ACTION_AMBIGUOUS","CORPORATE_ACTION_CORRUPT","IDENTITY_CONTINUITY_UNPROVEN","VALUES_NOT_COMPARABLE"]}\n',
+    b'{"calculation_version":"nifty50-market-regime-classifier@v1","classification_projection":"20-OFFICIAL-CLOSE-30-OF-50@v1","contract_version":"nifty50-market-regime@v1"}\n',
+    b'{"build_recipe_identity_sha256":"0000000000000000000000000000000000000000000000000000000000000000","classifier_entrypoint":"market-regime-v1","dependency_lock_identity_sha256":"1111111111111111111111111111111111111111111111111111111111111111","manifest_version":"nifty50-market-regime-build@v1","source_tree_identity_sha256":"2222222222222222222222222222222222222222222222222222222222222222"}\n',
+)
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class VerifiedMarketRegimeFactsV1:
     request: MarketRegimeRequestV1
@@ -968,13 +978,43 @@ class VerifiedMarketRegimeFactsV1:
         comparability: Sequence[CorporateActionComparabilityFactV1],
         identities: tuple[str, str, str, str, str],
     ) -> VerifiedMarketRegimeFactsV1:
+        _instance(request, MarketRegimeRequestV1, "request")
+        _instance(membership, MembershipFactV1, "membership")
+        _instance(schedule, SessionScheduleFactV1, "schedule")
+        prior_tuple = cast(
+            "tuple[DailyCloseFactV1, ...]",
+            _tuple(prior_closes, DailyCloseFactV1, "prior closes"),
+        )
+        current_tuple = cast(
+            "tuple[DailyCloseFactV1, ...]",
+            _tuple(current_closes, DailyCloseFactV1, "current closes"),
+        )
+        comparability_tuple = cast(
+            "tuple[CorporateActionComparabilityFactV1, ...]",
+            _tuple(
+                comparability, CorporateActionComparabilityFactV1, "comparability facts"
+            ),
+        )
+        if (
+            len(schedule.sessions) != 22
+            or len(membership.members) != 50
+            or any(
+                len(items) != 50
+                for items in (prior_tuple, current_tuple, comparability_tuple)
+            )
+        ):
+            raise FactGraphAdmissionError(
+                "verified facts require exact 22/50 cardinalities"
+            )
+        if type(identities) is not tuple or len(identities) != 5:
+            raise FactGraphAdmissionError("verified identity tuple is invalid")
         result = object.__new__(cls)
         object.__setattr__(result, "request", request)
         object.__setattr__(result, "membership", membership)
         object.__setattr__(result, "schedule", schedule)
-        object.__setattr__(result, "prior_closes", tuple(prior_closes))
-        object.__setattr__(result, "current_closes", tuple(current_closes))
-        object.__setattr__(result, "comparability", tuple(comparability))
+        object.__setattr__(result, "prior_closes", prior_tuple)
+        object.__setattr__(result, "current_closes", current_tuple)
+        object.__setattr__(result, "comparability", comparability_tuple)
         for name, value in zip(
             (
                 "source_policy_identity_sha256",
@@ -1721,7 +1761,6 @@ def admit_verified_market_regime_facts_v1(
     current_closes: Sequence[DailyCloseFactV1],
     comparability: Sequence[CorporateActionComparabilityFactV1],
     policy_binding: TrustedPolicyBindingV1,
-    expected_reviewed_build: ExpectedReviewedBuildV1,
     verified_source_receipts: Sequence[VerifiedProvenanceReceiptV1],
     input_identity_sha256: str,
 ) -> VerifiedMarketRegimeFactsV1:
@@ -1731,11 +1770,13 @@ def admit_verified_market_regime_facts_v1(
         (membership, MembershipFactV1, "membership"),
         (schedule, SessionScheduleFactV1, "schedule"),
         (policy_binding, TrustedPolicyBindingV1, "policy binding"),
-        (expected_reviewed_build, ExpectedReviewedBuildV1, "expected reviewed build"),
     ):
         _instance(value, expected, name)
     _guard(validate_sha256, input_identity_sha256)
-    _validate_trusted_policy_binding(policy_binding, expected_reviewed_build)
+    sealed_expected_reviewed_build = ExpectedReviewedBuildV1.from_manifest_bytes(
+        *_SEALED_REVIEWED_MANIFEST_BYTES_V1
+    )
+    _validate_trusted_policy_binding(policy_binding, sealed_expected_reviewed_build)
     receipts = _index_receipts(verified_source_receipts)
     used_receipts: set[_ReceiptKey] = set()
     prior_tuple = cast(
@@ -1822,7 +1863,7 @@ def admit_verified_market_regime_facts_v1(
         )
     if used_receipts != set(receipts):
         raise FactGraphAdmissionError("unreferenced verified source receipt")
-    identities = (*expected_reviewed_build.identity_tuple, input_identity_sha256)
+    identities = (*sealed_expected_reviewed_build.identity_tuple, input_identity_sha256)
     return VerifiedMarketRegimeFactsV1._from_admission(  # pyright: ignore[reportPrivateUsage]
         request,
         membership,

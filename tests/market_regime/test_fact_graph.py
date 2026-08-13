@@ -505,9 +505,6 @@ def _valid_graph():
         "current_closes": tuple(current),
         "comparability": tuple(comparability),
         "policy_binding": _policy(),
-        "expected_reviewed_build": ExpectedReviewedBuildV1.from_manifest_bytes(
-            *_policy().manifest_bytes_tuple
-        ),
         "verified_source_receipts": tuple(receipts),
         "input_identity_sha256": "9" * 64,
     }
@@ -1704,14 +1701,6 @@ def test_verified_receipt_requires_content_bound_canonical_projections() -> None
 
 def test_ark171_reviewed_build_is_independent_and_schedule_is_replayable() -> None:
     values = _valid_graph()
-    policy = values["policy_binding"]
-    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
-        policy.source_policy_manifest_bytes,
-        policy.validation_policy_manifest_bytes,
-        policy.semantic_policy_manifest_bytes,
-        policy.code_build_manifest_bytes,
-    )
-    values["expected_reviewed_build"] = expected
     facts = admit_verified_market_regime_facts_v1(**values)
     assert facts.schedule.base_rows
     assert len(facts.schedule.applied_corrections) <= 32
@@ -1734,12 +1723,6 @@ def test_ark171_reviewed_build_is_independent_and_schedule_is_replayable() -> No
 def test_ark171_coordinated_manifest_rehash_is_not_authority() -> None:
     values = _valid_graph()
     original = values["policy_binding"]
-    expected = ExpectedReviewedBuildV1.from_manifest_bytes(
-        original.source_policy_manifest_bytes,
-        original.validation_policy_manifest_bytes,
-        original.semantic_policy_manifest_bytes,
-        original.code_build_manifest_bytes,
-    )
     code = _manifest_dict(original.code_build_manifest_bytes)
     code["source_tree_identity_sha256"] = "3" * 64
     values["policy_binding"] = TrustedPolicyBindingV1.from_manifest_bytes(
@@ -1748,7 +1731,6 @@ def test_ark171_coordinated_manifest_rehash_is_not_authority() -> None:
         original.semantic_policy_manifest_bytes,
         canonical_json_lf(code),
     )
-    values["expected_reviewed_build"] = expected
     with pytest.raises(FactGraphAdmissionError, match="expected reviewed build"):
         admit_verified_market_regime_facts_v1(**values)
 
@@ -2177,3 +2159,25 @@ def test_remaining_cross_fact_authority_and_proof_branches(monkeypatch) -> None:
             {},
             set(),
         )
+
+
+def test_private_verified_factory_rejects_arbitrary_values() -> None:
+    with pytest.raises(FactGraphAdmissionError):
+        VerifiedMarketRegimeFactsV1._from_admission(  # pyright: ignore[reportPrivateUsage]
+            None,
+            None,
+            None,
+            [],
+            [],
+            [],
+            (ZERO,) * 5,  # type: ignore[arg-type]
+        )
+
+
+def test_admission_has_no_caller_selectable_reviewed_build() -> None:
+    values = _valid_graph()
+    values["expected_reviewed_build"] = ExpectedReviewedBuildV1.from_manifest_bytes(
+        *values["policy_binding"].manifest_bytes_tuple
+    )
+    with pytest.raises(TypeError):
+        admit_verified_market_regime_facts_v1(**values)
