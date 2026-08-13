@@ -4,12 +4,11 @@ Status: **ARK-166 APPROVED — FROZEN FACT CONTRACT**
 Decisions: ARK-165 (scope and input policy), ARK-166 (complete V1 fact contract)
 Contract version: `nifty50-market-regime@v1`
 
-This document extends, does not replace, the ARK-165 source and scope decision.
-It freezes the only Market Regime V1 classification rule, its private evidence
-boundary, public report, identities, failure behavior, and implementation
-handoff. It approves no source adapter, classifier implementation, provider
-call, acquisition, CLI, API, MCP surface, or runtime. Implementation remains a
-later strict-TDD task.
+This document extends, and does not replace, ARK-165. It freezes the Market
+Regime V1 rule, evidence boundary, typed facts, deterministic failure behavior,
+identities, and implementation handoff. It approves no source adapter,
+classifier implementation, provider call, acquisition, CLI, API, MCP surface,
+or runtime. Implementation remains a later strict-TDD task.
 
 ## Boundary evaluation and rule decision
 
@@ -20,21 +19,22 @@ later strict-TDD task.
 - Decision: **accepted — freeze an exact 20-official-session comparison and an inclusive 30-of-50 supermajority for V1.**
 
 Twenty official-session transitions are roughly one swing month while remaining
-simple and interpretable. Thirty of 50 is an exact 60% supermajority that demands
-breadth beyond a bare majority. These are design priors, not fitted parameters;
-no retained outcome analysis, effectiveness claim, accuracy claim,
-profitability claim, or prediction justifies them. The smaller alternatives of
-one-session direction or 26-of-50 were rejected as respectively too noisy and
-too close to a bare majority; multiple windows, optimized thresholds, weights,
-and confidence scores were rejected as extra degrees of freedom. A future
-empirical change requires a new contract version and out-of-sample governance.
+simple and interpretable. Thirty of 50 is an exact 60% supermajority. These are
+design priors, not fitted parameters; no retained outcome analysis,
+effectiveness, accuracy, profitability, or prediction claim justifies them.
+One-session direction and 26-of-50 were rejected as respectively too noisy and
+too close to a bare majority. Multiple windows, optimized thresholds, weights,
+and confidence scores were rejected as extra degrees of freedom. An empirical
+change requires a new contract version and out-of-sample governance.
 
 ## Purpose, scope, and non-claims
 
-Market Regime answers only: *at the exact close of one completed authoritative
-NSE Capital Market decision session, how many of the exactly 50 point-in-time
-Nifty 50 members have a comparable close above, below, or equal to their close
-exactly 20 official sessions earlier?*
+Market Regime answers only: *for one completed authoritative NSE Capital Market
+decision session, how many of the exactly 50 point-in-time Nifty 50 members have
+a comparable close above, below, or equal to their close exactly 20 official
+sessions earlier?* The market endpoint is the exact decision-session close. The
+evidence used to establish that completed fact is collected only through the
+separate fixed post-close boundary defined below.
 
 It is an end-of-day descriptive market-context fact, not a signal, forecast,
 strategy, opportunity score, recommendation, financial advice, risk override,
@@ -52,32 +52,32 @@ profitability, trade timing, market safety, or suitability.
 
 ## Frozen classification rule
 
-### Exact endpoints
+### Exact endpoints and cohort
 
-Let `S[0] < ... < S[20]` be exactly 21 consecutive authoritative completed NSE
-Capital Market official sessions. `S[20]` is `decision_session` and `S[0]` is
-`comparison_session`. Thus the endpoint distance is exactly **20 official sessions**: the comparison session is the session reached by stepping backward
-20 times in the authoritative session sequence. It is not 20 elapsed calendar
-days, 20 weekdays, a duration, or “approximately a month.” Holidays, exchange
-closures, and non-session dates do not consume a step. A special Capital Market
-session consumes one step only when authoritative schedule evidence proves it.
-An unresolved date, special-session scope, closure, timing change, conflict, or
-missing intermediate session fails closed; a built-in calendar cannot fill it.
+Let `S[0] < ... < S[20] < S[21]` be 22 consecutive authoritative NSE Capital
+Market official sessions. `S[20]` is `decision_session`, `S[0]` is
+`comparison_session`, and `S[21]` is used only to derive the post-close evidence
+boundary. The comparison endpoint is reached by stepping backward exactly
+**20 official sessions** from the decision session. It is not 20 elapsed days,
+20 weekdays, a duration, or “approximately a month.” Holidays, closures, and
+non-session dates consume no step. A special Capital Market session consumes a
+step only when the authoritative schedule and its applicable corrections prove
+it. An unresolved date, special-session scope, closure, timing correction, or
+next-session open fails closed; a built-in calendar cannot fill it.
 
-The decision cohort is exactly 50 unique ISIN-first Nifty 50 members whose
-point-in-time membership interval covers `decision_session`. Membership at the
-older endpoint is neither required nor inferred: the question follows the exact
-decision-session cohort backward, one observation per decision-session member.
-A symbol change never changes ISIN identity, and an unresolved identity
-continuity is insufficient. No current-list backfill, substitution, deduplication,
-imputation, survivorship filter, weighting, reduced denominator, or 49-of-49
-classification is allowed.
+The cohort is exactly 50 unique ISIN-first Nifty 50 members whose point-in-time
+membership intervals cover `decision_session`. Membership at the older endpoint
+is neither required nor inferred: the exact decision-session cohort is followed
+backward. A symbol change never changes ISIN identity, and unresolved identity
+continuity is insufficient. No current-list backfill, substitution,
+deduplication, imputation, survivorship filter, weighting, reduced denominator,
+or 49-of-49 classification is allowed.
 
 ### Comparable close and equality
 
-For each decision-session member `i`, V1 compares the two exact finite positive
-`Decimal` values designated as `CLOSE` by verified complete
-`nse-session-ohlcv@v1` daily facts:
+For every cohort member `i`, V1 compares two exact finite positive Decimal
+values designated as `CLOSE` by verified complete `nse-session-ohlcv@v1` daily
+facts:
 
 ```text
 current_i = comparable CLOSE(i, S[20])
@@ -88,30 +88,26 @@ DECLINE   iff Decimal(current_i) < Decimal(prior_i)
 UNCHANGED iff Decimal(current_i) == Decimal(prior_i)
 ```
 
-Comparison is exact Decimal ordering after admission of canonical decimal text.
-There is no binary float, tolerance, tick-size rounding, percentage return,
-quantization, adjusted epsilon, or unrounded hidden value. Numeric equality is
-explicitly `UNCHANGED`. Source spellings such as `100.0` normalize to the one
-private canonical value `100` before identity construction; a noncanonical
-spelling inside a canonical input object is rejected. Equality contributes to
-neither directional count and cannot be broken by symbol order or a previous
-label.
+There is no binary float, tolerance, tick rounding, percentage return,
+quantization, adjusted epsilon, or hidden value. Numeric equality is
+`UNCHANGED`. Every admitted decimal has one canonical textual form; for example,
+`100` is admitted while external canonical bytes containing `100.0` for that
+value are rejected. Equality therefore never depends on alternate admitted
+scales.
 
-V1's sole comparability path is
-`RAW_CLOSE_NO_BREAK_PROVEN`: authoritative cutoff-safe corporate-action and
-identity-continuity evidence must positively prove no split, bonus, rights,
-symbol/ISIN discontinuity, or other comparability-breaking event over the
-inclusive interval from `S[0]` through `S[20]`. The raw daily facts remain
-immutable. V1 does not adjust prices. If a potentially breaking event exists,
-status/terms are unresolved, negative completeness is unproven, or the raw
-values are otherwise not economically comparable, the entire result is
-`INSUFFICIENT_EVIDENCE`. An adjusted or back-adjusted series is not admitted by
-this contract; admitting one requires a new source-policy decision and contract
-version.
+V1's sole comparability path is `RAW_CLOSE_NO_BREAK_PROVEN`.
+`CorporateActionComparabilityFactV1` must positively bind the ISIN and inclusive
+endpoint interval to `NO_BREAK`, and must carry its typed status, negative
+completeness, revision, and identity-continuity proofs. The raw daily facts stay
+immutable. V1 does not adjust prices. A potentially breaking event, unresolved
+terms, incomplete negative evidence, unproved revision lineage, or unproved
+identity continuity makes the whole result `INSUFFICIENT_EVIDENCE`. Adjusted or
+back-adjusted series are not admitted.
 
 ### Counts, state, and label
 
-Only after every gate passes, define integer counts over exactly 50 members:
+Only after every evidence gate passes are counts defined over exactly 50
+members:
 
 ```text
 advances  = count(direction_i == ADVANCE)
@@ -123,64 +119,78 @@ BROAD_DECLINE       iff declines >= 30
 MIXED_PARTICIPATION otherwise
 ```
 
-The comparisons are ordered as written. With exactly 50 mutually exclusive
-observations, `advances >= 30` and `declines >= 30` cannot both be true; this
-impossibility is a validation invariant, not a tie-break convention. Threshold
-inclusivity is exact: 30 advances is `BROAD_ADVANCE`, 30 declines is
-`BROAD_DECLINE`, and 29/29 or any other case with both directional counts below
-30 is `MIXED_PARTICIPATION`. Fifty unchanged observations are
-`MIXED_PARTICIPATION`.
+The comparisons are ordered as written. With 50 mutually exclusive
+observations, both directional thresholds cannot hold. Thirty advances is
+`BROAD_ADVANCE`; 30 declines is `BROAD_DECLINE`; every case with both below 30,
+including 50 unchanged, is `MIXED_PARTICIPATION`.
 
 The closed `evidence_state` enum is `OBSERVED | INSUFFICIENT_EVIDENCE`. The
 closed observed `regime_label` enum is
 `BROAD_ADVANCE | BROAD_DECLINE | MIXED_PARTICIPATION`. For `OBSERVED`, the label
-and all three counts are non-null. For `INSUFFICIENT_EVIDENCE`,
-`regime_label = null` and `advances = declines = unchanged = null`; partial
-counts, a prior label, a confidence score, and a best-effort label are forbidden.
-Insufficiency is a successful fact outcome, not an exception. Structurally
-invalid requests are rejected before evaluation and produce no report.
+and all counts are non-null. For `INSUFFICIENT_EVIDENCE`, `regime_label = null`
+and `advances = declines = unchanged = null`; partial counts, a prior label,
+confidence, and best effort are forbidden. Insufficiency is a successful domain
+fact outcome, not an exception.
 
-## Exact time and availability boundary
+## Decision market endpoint and feasible evidence cutoff
 
-`decision_cutoff` is reconstructed, never caller-authored: it is the exact close
-instant of `decision_session` from the applicable retained authoritative NSE
-Capital Market base schedule plus all applicable corrections and special-session
-overlays. Exchange-local rules are evaluated in `Asia/Kolkata`; canonical
-instants are UTC strings `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Evaluation is post-close,
-but running later never moves the cutoff. `knowledge_cutoff` is exactly equal to
-`decision_cutoff` and is not a separate request field.
+The market endpoint and knowledge boundary are intentionally different:
 
-A mandatory fact is admissible only if its applicable/effective scope covers the
-claimed member, session, or interval and its admissible knowledge time is at or
-before `decision_cutoff`. Admissible knowledge time is the latest mandatory
-clock among authoritative public availability, response completion, retrieval,
-and immutable retention for that evidence class. A clock absent from a source
-with no independently proved publication time cannot be invented. Publisher
-business dates, HTTP `Date`/`Last-Modified`, filesystem times, report time,
-replay wall clock, commit time, or caller-authored `known_at` do not prove
-availability. Evidence first available, completed, retrieved, retained, revised,
-or disambiguated after cutoff is late for this report even if it describes an
-earlier session. Later corrections produce new input and report identities and
-never rewrite the prior point-in-time result.
+```text
+decision_market_close = S[20].close_at
+evidence_cutoff       = S[21].open_at
+knowledge_cutoff      = evidence_cutoff
+```
 
-The current endpoint must be the complete exact decision-session daily fact; the
-prior endpoint must be the complete exact `comparison_session` daily fact.
-Neither nearest-date fallback nor previous available candle is allowed. Both
-may be known by the decision cutoff, but no activity after the respective
-authoritative closes may be included.
+All three values are reconstructed from `SessionScheduleFactV1`; none is a
+request or caller field. `S[21]` is the next official Capital Market session
+under the retained authoritative base schedule plus every applicable retained
+correction, closure, timing change, and special-session overlay.
+`evidence_cutoff` must be strictly later than `decision_market_close`. This fixed
+post-close interval makes publication and immutable capture of the completed
+daily close feasible while preventing the cutoff from drifting with evaluation
+time. If the next official open or an applicable correction cannot be proved,
+the result is insufficient rather than guessed.
 
-## Closed conceptual schemas
+For every mandatory evidence item, authoritative publication (when the class
+has a publication clock), response completion, retrieval, and immutable
+retention must each be at or before `evidence_cutoff`. Applicability/effective
+scope must also cover the claimed member, session, or interval. A missing clock
+cannot be invented. Publisher business dates, HTTP `Date`/`Last-Modified`,
+filesystem times, report time, replay wall clock, commit time, and caller
+`known_at` do not prove availability. Evidence first published, completed,
+retrieved, retained, revised, or disambiguated after the evidence cutoff is late
+for this report. Later corrections produce new identities and never rewrite a
+prior point-in-time result.
 
-These schemas are conceptual immutable domain contracts for later implementation,
-not code added by ARK-166. Every object is closed: an unknown field, missing
-required field, duplicate field, unknown enum, wrong type, or invalid nullability
-is an admission error. `tuple[T, N]` is an ordered immutable tuple of exact
-length `N`; `Sha256` is 64 lowercase hexadecimal characters; `LocalDate` is
-`YYYY-MM-DD`; `UtcInstant` has exactly six fractional digits and `Z`;
-`CanonicalDecimal` is finite positive normalized base-10 decimal text matched by
-`(?:0\.[0-9]*[1-9]|[1-9][0-9]*(?:\.[0-9]*[1-9])?)`: no sign, exponent,
-leading integer zero, trailing fractional zero, or decimal point for an integer;
-it is compared as an exact Decimal. `null` appears only where shown.
+The wider knowledge boundary does **not** widen any price fact. A
+`DailyCloseFactV1` may describe only one named completed official session. The
+current fact's market-event scope ends exactly at
+`decision_market_close`; the prior fact ends at `S[0].close_at`. No trade, bar,
+quote, auction result, or other trading observation from `S[21]` may enter any
+price or comparability fact. The next session contributes schedule metadata only
+for deriving its open. Nearest-date fallback and “previous available candle” are
+forbidden.
+
+## Lexical types and closed authorities
+
+Every conceptual object below is closed: unknown or missing fields, duplicate
+JSON keys, unknown enums, wrong types, and invalid nullability are structural
+admission errors. The following lexical contracts are exact:
+
+- `Sha256`: `^[0-9a-f]{64}$`.
+- `LocalDate`: zero-padded `YYYY-MM-DD` that is a real Gregorian date.
+- `UtcInstant`: `YYYY-MM-DDTHH:MM:SS.ffffffZ`, exactly six fractional digits.
+- `Isin`: `^[A-Z]{2}[A-Z0-9]{9}[0-9]$`, exactly 12 ASCII characters, plus a valid ISO 6166/Luhn check digit.
+- `CanonicalSymbol`: `^[A-Z0-9][A-Z0-9&.-]{0,31}$`, 1 through 32 ASCII bytes.
+- `BoundedAscii`: `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$`, 1 through 256 ASCII bytes.
+- `CanonicalDecimal`: `^(?:0\.[0-9]*[1-9]|[1-9][0-9]*(?:\.[0-9]*[1-9])?)$`, at most 32 ASCII bytes, at most 20 significant digits, scale 0 through 10, finite, and strictly positive.
+
+The only `AuthorityIdentityV1` values are `NSE_INDICES`, `NSE_CM`, and
+`ADMITTED_EQUITY_FACT_PIPELINE`. Arbitrary authority strings are forbidden.
+`tuple[T, a..b]` is immutable with the stated inclusive size bound.
+
+## Request, typed attempts, and structural admission
 
 ### Immutable request
 
@@ -193,58 +203,264 @@ MarketRegimeRequestV1 {
 }
 ```
 
-The request identity is SHA-256 over canonical request content excluding only
-`request_identity_sha256`. The request cannot contain a cutoff, comparison date,
-cohort, symbol list, label, counts, threshold, lookback, raw OHLC, source
-locator, provider choice, or arbitrary configuration. Those are derived or
-policy-pinned, never caller-selected.
+The request identity hashes canonical request content excluding only its own
+field. The request cannot contain a cutoff, comparison date, cohort, symbols,
+label, counts, lookback, threshold, raw OHLC, source locator, provider, or
+configuration.
 
-### Private evidence input
+### Attempt envelope for absent, late, invalid, and irregular evidence
+
+External byte parsing is deliberately separated from domain completeness.
+Malformed UTF-8/JSON, a noncanonical byte sequence, unknown fields, an invalid
+lexical value, over-depth input, or more than 51 received rows is a structural
+parse failure and produces no `MarketRegimeReportV1`. After structural parsing,
+a well-formed `EvidenceAttemptV1` can truthfully preserve missing, late, invalid,
+49-row, 51-row, and duplicate-row outcomes without pretending that an exact
+verified fact already exists.
 
 ```text
-EvidenceRefV1 {
-  object_identity_sha256: Sha256
-  source_identity: BoundedAscii
-  source_authority: BoundedAscii
-  schema_version: BoundedAscii
-  calculation_version: BoundedAscii | null
+EvidenceRequestIdentityV1 {
+  evidence_kind: Literal["MEMBERSHIP", "SESSION_SCHEDULE", "PRIOR_CLOSES",
+                         "CURRENT_CLOSES", "CORPORATE_COMPARABILITY"]
+  authority: AuthorityIdentityV1
+  decision_session: LocalDate
+  scope: Literal["DECISION_MEMBERSHIP", "TWENTY_PREDECESSORS_DECISION_NEXT",
+                 "PRIOR_ENDPOINT_CLOSE", "CURRENT_ENDPOINT_CLOSE",
+                 "COMPARABILITY_INTERVAL"]
+  subject_isin: Isin | null
+  subject_session: LocalDate | null
+}
+
+EvidenceAttemptFailureV1 = Literal[
+  "NOT_RETURNED", "AFTER_EVIDENCE_CUTOFF", "INVALID_SOURCE_ROW",
+  "IDENTITY_MISMATCH", "UNAUTHORIZED_AUTHORITY", "PUBLICATION_UNPROVEN",
+  "CLOCK_UNTRUSTED", "LICENCE_UNRESOLVED"
+]
+
+EvidenceAttemptV1 {
+  evidence_kind: same closed kind enum
+  requested_identities: tuple[EvidenceRequestIdentityV1, 1..50]
+  payload: MembershipCandidatePayloadV1 | ScheduleCandidatePayloadV1 |
+           DailyCloseCandidatePayloadV1 | ComparabilityCandidatePayloadV1 | null
+  failure: EvidenceAttemptFailureV1 | null
+  attempt_identity_sha256: Sha256
+}
+```
+
+Each payload variant and received row is also closed and typed:
+
+```text
+MembershipCandidateRowV1 {
+  isin: Isin
+  symbol: CanonicalSymbol
   effective_from: LocalDate
   effective_through: LocalDate | null
+  provenance: ProvenanceV1
+}
+MembershipCandidatePayloadV1 {
+  received_rows: tuple[MembershipCandidateRowV1, 0..51]
+}
+
+ScheduleCandidateRowV1 {
+  session_date: LocalDate
+  open_at: UtcInstant
+  close_at: UtcInstant
+  applied_corrections: tuple[ScheduleCorrectionV1, 0..32]
+  provenance: ProvenanceV1
+}
+ScheduleCandidatePayloadV1 {
+  received_rows: tuple[ScheduleCandidateRowV1, 0..51]
+}
+
+DailyCloseCandidateRowV1 {
+  isin: Isin
+  symbol: CanonicalSymbol
+  session_date: LocalDate
+  field: Literal["CLOSE"]
+  close: CanonicalDecimal
+  market_scope_ends_at: UtcInstant
+  provenance: ProvenanceV1
+}
+DailyCloseCandidatePayloadV1 {
+  received_rows: tuple[DailyCloseCandidateRowV1, 0..51]
+}
+
+ComparabilityCandidateRowV1 {
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
+  comparison_basis: Literal["RAW_CLOSE_NO_BREAK_PROVEN"]
+  status: Literal["NO_BREAK"]
+  status_proof: CorporateActionStatusProofV1
+  negative_completeness_proof: NegativeCompletenessProofV1
+  revision_proof: RevisionLineageProofV1
+  identity_continuity_proof: IdentityContinuityProofV1
+}
+ComparabilityCandidatePayloadV1 {
+  received_rows: tuple[ComparabilityCandidateRowV1, 0..51]
+}
+```
+
+These forward references resolve to the exact immutable proof/provenance schemas
+in “Verified typed market facts”; they are not mappings or opaque provider rows.
+An invalid row that cannot satisfy even this structural shape is represented by
+the envelope's `INVALID_SOURCE_ROW` failure, optionally alongside the other
+well-formed received rows.
+
+The kind pins the payload variant and exact requested identities.
+`MEMBERSHIP` requests one `DECISION_MEMBERSHIP` scope identity.
+`SESSION_SCHEDULE` requests one `TWENTY_PREDECESSORS_DECISION_NEXT` scope identity;
+its payload must ultimately prove 22 exact session rows, but the request does not
+pretend to know their dates before schedule evidence resolves them.
+`PRIOR_CLOSES` and `CURRENT_CLOSES` each request exactly the same 50 resolved
+cohort ISINs at their respective resolved endpoint. `CORPORATE_COMPARABILITY`
+requests exactly those 50 resolved ISINs over `[S[0], S[20]]`. Thus every
+attempt records what was actually requested, not a generic source label.
+Requested identities are strictly sorted and unique. Each payload holds
+`received_rows: tuple[TypedCandidateRowV1, 0..51]` of its pinned row type.
+Candidate rows are structurally typed but not asserted to be complete, unique,
+timely, authoritative, or semantically valid.
+
+At least one of `payload` and `failure` must be non-null. A clean attempt has a
+payload and null failure; a missing attempt has null payload and
+`NOT_RETURNED`; a late or invalid attempt may retain its bounded payload and a
+typed failure. The reducer validates the requested/received identity equations.
+Zero or 49 rows, 51 rows, duplicates, missing requested identities, extra
+identities, or a typed failure produce ordered domain insufficiency reasons,
+null label, and null counts. They are not structural parse failures and they are
+never repaired by truncation, deduplication, or denominator reduction.
+
+## Verified typed market facts
+
+Candidate payloads can support classification only when pure validation
+constructs the following immutable facts. These facts contain the referenced
+market semantics; an `EvidenceRefV1` or caller digest alone can never stand in
+for their content.
+
+```text
+EvidenceClockV1 {
   published_at: UtcInstant | null
   response_completed_at: UtcInstant
   retrieved_at: UtcInstant
   retained_at: UtcInstant
+}
+
+ProvenanceV1 {
+  authority: AuthorityIdentityV1
+  source_identity: BoundedAscii
+  schema_version: BoundedAscii
+  object_identity_sha256: Sha256
   revision_identity_sha256: Sha256
   supersedes_identity_sha256: Sha256 | null
+  clock: EvidenceClockV1
+}
+
+MembershipMemberV1 {
+  isin: Isin
+  symbol: CanonicalSymbol
+  effective_from: LocalDate
+  effective_through: LocalDate | null
+}
+
+MembershipFactV1 {
+  authority: Literal["NSE_INDICES"]
+  decision_session: LocalDate
+  members: tuple[MembershipMemberV1, 50]
+  provenance: ProvenanceV1
+}
+
+ScheduleCorrectionV1 {
+  affected_session: LocalDate
+  correction_kind: Literal["CLOSURE", "SPECIAL_SESSION", "OPEN_TIME", "CLOSE_TIME"]
+  corrected_open_at: UtcInstant | null
+  corrected_close_at: UtcInstant | null
+  provenance: ProvenanceV1
 }
 
 OfficialSessionV1 {
   session_date: LocalDate
   open_at: UtcInstant
   close_at: UtcInstant
-  schedule_evidence: EvidenceRefV1
 }
 
-MemberComparisonEvidenceV1 {
+SessionScheduleFactV1 {
+  authority: Literal["NSE_CM"]
+  sessions: tuple[OfficialSessionV1, 22]
+  applied_corrections: tuple[ScheduleCorrectionV1, 0..32]
+  base_schedule_provenance: ProvenanceV1
+}
+
+DailyCloseFactV1 {
+  authority: Literal["ADMITTED_EQUITY_FACT_PIPELINE"]
+  schema_version: Literal["nse-session-ohlcv@v1"]
   isin: Isin
   symbol: CanonicalSymbol
-  comparison_basis: Literal["RAW_CLOSE_NO_BREAK_PROVEN"]
-  prior_session: LocalDate
-  prior_close: CanonicalDecimal
-  prior_close_fact: EvidenceRefV1
-  current_session: LocalDate
-  current_close: CanonicalDecimal
-  current_close_fact: EvidenceRefV1
-  comparability_policy_version: Literal["nifty50-raw-close-comparability@v1"]
-  comparability_evidence: tuple[EvidenceRefV1, 1..16]
+  session_date: LocalDate
+  field: Literal["CLOSE"]
+  close: CanonicalDecimal
+  market_scope_ends_at: UtcInstant
+  provenance: ProvenanceV1
 }
 
-MarketRegimeEvidenceBundleV1 {
+CorporateActionStatusProofV1 {
+  authority: Literal["NSE_CM"]
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
+  status: Literal["NO_BREAK"]
+  checked_event_identities: tuple[Sha256, 0..16]
+  provenance: ProvenanceV1
+}
+
+NegativeCompletenessProofV1 {
+  authority: Literal["NSE_CM"]
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
+  covered_event_classes: Literal["ALL_COMPARABILITY_BREAKING_ACTIONS_V1"]
+  completeness: Literal["COMPLETE"]
+  provenance: ProvenanceV1
+}
+
+RevisionLineageProofV1 {
+  authority: Literal["NSE_CM"]
+  selected_revision_identity_sha256: Sha256
+  checked_through: UtcInstant
+  lineage_status: Literal["CURRENT_AT_EVIDENCE_CUTOFF"]
+  provenance: ProvenanceV1
+}
+
+IdentityContinuityProofV1 {
+  authority: Literal["NSE_CM"]
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
+  prior_symbol: CanonicalSymbol
+  current_symbol: CanonicalSymbol
+  continuity_status: Literal["SAME_ISSUE_CONTINUITY_PROVEN"]
+  provenance: ProvenanceV1
+}
+
+CorporateActionComparabilityFactV1 {
+  authority: Literal["NSE_CM"]
+  isin: Isin
+  interval_from: LocalDate
+  interval_through: LocalDate
+  comparison_basis: Literal["RAW_CLOSE_NO_BREAK_PROVEN"]
+  status: Literal["NO_BREAK"]
+  status_proof: CorporateActionStatusProofV1
+  negative_completeness_proof: NegativeCompletenessProofV1
+  revision_proof: RevisionLineageProofV1
+  identity_continuity_proof: IdentityContinuityProofV1
+}
+
+VerifiedMarketRegimeFactsV1 {
   request: MarketRegimeRequestV1
-  decision_cutoff: UtcInstant
-  official_sessions: tuple[OfficialSessionV1, 21]
-  membership_evidence: EvidenceRefV1
-  members: tuple[MemberComparisonEvidenceV1, 50]
+  membership: MembershipFactV1
+  schedule: SessionScheduleFactV1
+  prior_closes: tuple[DailyCloseFactV1, 50]
+  current_closes: tuple[DailyCloseFactV1, 50]
+  comparability: tuple[CorporateActionComparabilityFactV1, 50]
   source_policy_identity_sha256: Sha256
   validation_policy_identity_sha256: Sha256
   policy_identity_sha256: Sha256
@@ -253,32 +469,84 @@ MarketRegimeEvidenceBundleV1 {
 }
 ```
 
-`official_sessions` is strictly ascending and consecutive under the selected
-schedule revision. `members` is strictly ascending by ISIN and contains 50
-unique ISINs and 50 unique canonical symbols. Evidence reference tuples are
-sorted by `(source_identity, effective_from, object_identity_sha256)` and contain
-no duplicate identity. The private input is the only layer that may contain the
-two close values and detailed source receipts. It contains no open, high, low,
-volume, intraday row, provider payload, credential, writable path, or
-caller-authored conclusion.
+The pure domain admission/reducer receives already parsed typed attempts and
+resolved typed facts/bytes. A bounded application adapter must open explicitly
+identified content-addressed objects, verify checksums, parse canonical bytes,
+and close them before the reducer is called. No unresolved path, URI, locator,
+callback, stream, or opaque evidence reference enters the reducer. The reducer
+performs no I/O, provider lookup, filesystem read, network access, clock read,
+or calendar lookup. It validates facts, emits either the observed result or the
+ordered insufficiency reasons with null classification, and never catches a
+structural byte parse failure as insufficiency.
 
-`policy_identity_sha256` is a code-pinned digest over the complete frozen
-semantic manifest: contract/calculation versions, exact field names and enums,
-20-session rule, `CLOSE`, Decimal operators and equality, exact-50 rule,
-30-count inclusive thresholds, comparability path, reason order, canonical JSON
-profile, and validation limits. `code_identity_sha256` identifies the exact
-reviewed classifier build when implementation later exists. Neither may be
-accepted merely because a caller supplied matching-looking text.
+## Cross-fact equations and validation invariants
 
-`input_identity_sha256` is SHA-256 over the entire canonical
-`MarketRegimeEvidenceBundleV1` excluding only `input_identity_sha256`; consequently it
-binds the request, all private values, every selected evidence and revision,
-source and validation policies, the frozen policy, and exact code identity.
-Referenced content-addressed bytes are reopened with checksum, no-follow, and
-scope validation; coordinated object replacement plus recomputed caller digests
-cannot change admitted semantics.
+All derived fields are reconstructed, never trusted:
 
-### Public fact report
+```text
+membership.authority == NSE_INDICES
+schedule.authority == NSE_CM
+all daily.authority == ADMITTED_EQUITY_FACT_PIPELINE
+all comparability.authority == NSE_CM
+all nested provenance.authority == the containing fact/proof authority
+
+schedule.sessions == exactly S[0]..S[21], strictly ascending and consecutive
+comparison_session == S[0].session_date
+decision_session == S[20].session_date
+decision_market_close == S[20].close_at
+evidence_cutoff == knowledge_cutoff == S[21].open_at
+decision_market_close < evidence_cutoff
+
+len(membership.members) == 50
+member ISINs and symbols are each unique and strictly ISIN-sorted
+set(prior close ISINs) == set(current close ISINs)
+                       == set(comparability ISINs)
+                       == set(membership ISINs)
+all four 50-item tuples are strictly ISIN-sorted
+prior session for every ISIN == comparison_session
+current session for every ISIN == decision_session
+prior market_scope_ends_at == S[0].close_at
+current market_scope_ends_at == decision_market_close
+comparability interval == [comparison_session, decision_session]
+all proof ISINs and intervals == their containing comparability fact
+revision_proof.checked_through == evidence_cutoff
+all mandatory evidence clocks <= evidence_cutoff
+membership interval for every member covers decision_session
+
+OBSERVED => advances + declines + unchanged == 50
+OBSERVED => exactly one recomputed direction per member
+OBSERVED => label and all counts are non-null
+OBSERVED => primary_reason is null and additional_reasons == ()
+INSUFFICIENT_EVIDENCE => label and all counts are null
+INSUFFICIENT_EVIDENCE => primary_reason is non-null
+```
+
+Schedule corrections are strictly sorted by `(affected_session,
+correction_kind, revision_identity_sha256)`, unique, and applied rather than
+merely listed. Daily and corporate facts are cross-bound by ISIN, interval,
+symbol continuity, revision, and authority. No next-session trading observation
+is admissible. A caller-supplied count, label, endpoint, cutoff, authority,
+comparability boolean, or digest-looking text has no authority.
+
+## Private input and public report
+
+`MarketRegimeEvidenceBundleV1` is the canonical private object containing the
+request and `evidence_attempts: tuple[EvidenceAttemptV1, 1..5]` in dependency
+order, plus source, validation, policy, code, and input identities. Membership
+and schedule attempts come first. An endpoint or comparability attempt may
+appear only after its exact 50 requested identities can be derived from verified
+membership and schedule candidates; if that dependency is insufficient, the
+later attempt is absent rather than fictional. No kind appears more than once. It may contain candidate close values and provenance but no open, high,
+low, volume, intraday row, credentials, writable path, or caller conclusion.
+`input_identity_sha256` hashes the entire canonical private bundle excluding
+only itself.
+
+The frozen semantic `policy_identity_sha256` binds contract/calculation
+versions, fields, enums, 20-session rule, `CLOSE`, decimal operators, exact-50
+rule, inclusive threshold, comparability path, reason order, canonical profile,
+and bounds. `code_identity_sha256` identifies the reviewed future classifier
+build. Neither is accepted solely because a caller supplies matching-looking
+text.
 
 ```text
 MarketRegimeReportV1 {
@@ -292,7 +560,8 @@ MarketRegimeReportV1 {
   code_identity_sha256: Sha256
   decision_session: LocalDate
   comparison_session: LocalDate | null
-  decision_cutoff: UtcInstant | null
+  decision_market_close: UtcInstant | null
+  evidence_cutoff: UtcInstant | null
   lookback_official_sessions: Literal[20]
   required_member_count: Literal[50]
   threshold_count: Literal[30]
@@ -307,19 +576,15 @@ MarketRegimeReportV1 {
 }
 ```
 
-The public report contains aggregate facts and identities only. It never exposes
-raw OHLC, either close value, per-member direction, member symbols/ISINs,
-provider payloads, credentials, filesystem paths, free-form diagnostics, or an
-AI-authored conclusion. `report_identity_sha256` is SHA-256 over the complete
-canonical report excluding only itself. The report therefore binds request,
-input, source policy, validation policy, frozen rule policy, code, state, label,
-counts, reasons, endpoints, and cutoff. Identical admitted input bytes under the
-same exact code produce byte-identical reports.
+The public report exposes aggregate facts and identities only: never raw OHLC,
+close values, per-member direction, symbols/ISINs, provider payloads,
+credentials, paths, free-form diagnostics, or an AI conclusion. The report
+identity hashes the canonical report excluding itself. Identical admitted bytes
+under identical policy and code produce byte-identical reports.
 
 ## Closed reason enum and precedence
 
-`MarketRegimeReasonV1` is the following declaration-ordered closed enum. The
-order shown is the exact primary-reason precedence, first matching reason wins:
+The exact first-match precedence is declaration order:
 
 ```text
 EVIDENCE_IDENTITY_MISMATCH
@@ -359,92 +624,56 @@ IDENTITY_CONTINUITY_UNPROVEN
 VALUES_NOT_COMPARABLE
 ```
 
-For an observed report, `primary_reason = null` and `additional_reasons = ()`.
-For an insufficient report, `primary_reason` is the earliest applicable enum and
-`additional_reasons` contains every other applicable reason once, in the same
-declaration order. Discovery order, input order, hash-map order, and provider
-order never affect reasons. Unknown conditions cannot become arbitrary strings;
-a condition not representable in V1 fails admission or requires a new version.
-Malformed request/canonical JSON is `REQUEST_INVALID` at the application
-admission boundary and produces no `MarketRegimeReportV1`, so it is deliberately
-not a fact-reason enum member.
+Observed reports have no reasons. Insufficient reports use the earliest
+applicable reason as primary and list every other applicable reason once in
+declaration order. Discovery, candidate-row, map, and provider ordering do not
+affect output. Malformed request or external canonical bytes are
+`REQUEST_INVALID` at application admission and produce no report, so that value
+is deliberately not a fact-reason member.
 
-## Canonical JSON and identity profile
+## Canonical JSON, ordering, and identity profile
 
-All request, private input, policy manifest, and report identity material uses
-one profile:
+All request, attempt, fact, policy, and report identity material uses one
+profile:
 
-1. UTF-8 bytes only, no BOM, with exactly one trailing LF in the serialized object; identity hashes include that LF.
-2. Object keys sorted lexicographically by Unicode code point and compact separators `,` and `:` with no insignificant whitespace.
-3. All strings must already be Unicode NFC; non-NFC text, unpaired surrogates, forbidden control characters, and invalid UTF-8 are rejected rather than silently repaired.
-4. Duplicate object keys, unknown fields, missing fields, duplicate semantic identities, and duplicate set members are rejected before hashing; “last key wins” is forbidden.
-5. JSON floats are forbidden. NaN, positive/negative Infinity, exponent notation, negative zero, and implementation-specific numeric spellings are forbidden. Counts are JSON integers; market values are canonical decimal strings and become exact Decimal values only after bounded validation.
-6. Booleans and `null` use JSON lowercase spellings. Dates, instants, enums, ISINs, symbols, and SHA-256 values use their schema-defined canonical forms; arbitrary locale or timezone rendering is forbidden.
-7. Arrays preserve schema semantics: session and member tuples use their required sort order; reason tuples use declaration order; evidence tuples use their stated sort key. Shuffled equivalent admitted inputs canonicalize to the same bytes, while order-sensitive data cannot be silently reordered.
-8. The serializer uses minimal JSON escaping for required quotation mark, reverse solidus, and control escapes and otherwise emits NFC UTF-8 directly. A parser must reject trailing tokens and nesting or size limit violations.
+1. UTF-8 only, no BOM, exactly one trailing LF; hashes include that LF.
+2. Object keys lexicographically sorted by Unicode code point; compact `,` and `:` separators; no insignificant whitespace.
+3. Strings must already be Unicode NFC. Invalid UTF-8, non-NFC, unpaired surrogates, and forbidden control characters are rejected, not repaired.
+4. Duplicate keys, unknown/missing fields, invalid nullability, duplicate semantic identities, and bound violations are rejected before hashing.
+5. JSON floats, NaN, Infinity, exponent notation, negative zero, and implementation-specific numeric spellings are forbidden. Counts are integers; market values are `CanonicalDecimal` strings.
+6. Dates, instants, enums, ISINs, symbols, authorities, and digests use their exact lexical forms.
+7. Every external array must already be in its schema order: attempts by declared kind, sessions by date, members and fact tuples by ISIN, corrections by their stated key, requested identities by their complete field tuple, and reasons by declaration order. Noncanonical ordering in external bytes is rejected; a parser never silently sorts admitted bytes.
+8. A local typed builder may accept an unordered caller collection, defensively copy it, sort it **before serialization**, and emit the single canonical byte sequence. Once bytes exist, admission either accepts that exact sequence or rejects it. Replay reads the original identified bytes and performs no normalization.
+9. Minimal JSON escaping is used; parsers reject trailing tokens, excessive size, and excessive nesting.
 
-A supplied identity is a claim. Admission reconstructs canonical bytes and checks
-the digest; it never trusts a digest in place of validating content. Later
-revisions create new immutable objects, input identity, and report identity.
-Offline replay opens only explicitly identified objects and never searches for a
-newer file, consults the network, reads the current clock, or mutates old bytes.
+Thus shuffled external evidence bytes are rejected. Shuffled inputs to a typed
+builder can produce identical canonical output only because normalization occurs
+before bytes and identity exist. External decimal spelling is likewise never
+normalized during admission. A supplied digest is only a claim; content is
+validated and the digest reconstructed. Offline replay never searches for newer
+files, consults the network/current clock, or mutates retained bytes.
 
 ## Immutability, copy safety, and bounds
 
-All conceptual records are frozen value objects. Constructors make a defensive copy: they defensively copy and deeply validate caller mappings/sequences before converting them to tuples;
-no caller-owned mutable alias is retained. Nested evidence records are immutable.
-Accessors return immutable values or defensive copies, never internal mutable
-state. Evaluation does not mutate a request, evidence object, input bundle, or
-report. Reuse of a mutable builder after construction cannot alter identities or
-results. A later application persistence adapter must use validated copy-on-write
-publication; it cannot mutate or replace an existing identity. Concurrent and
-repeated evaluation of the same admitted bytes must be byte-identical.
+All records are frozen values. Constructors defensively copy and deeply validate
+caller mappings/sequences before tuple construction; no mutable alias is kept.
+Accessors return immutable values or copies. Reusing a builder cannot alter
+identities. A later persistence adapter uses validated copy-on-write publication
+and rejects symlinks/non-regular inputs with no-follow reads.
 
-V1 bounds are exact and tested at the limit and limit-plus-one:
+Exact limits, including limit-plus-one tests, are:
 
-- one request, one decision session, one comparison session, exactly 21 session records, exactly 50 member records, and exactly two close facts per member;
-- exactly 50 unique valid ISINs and symbols; each member has 1 through 16 comparability evidence references and at most 800 total;
-- request canonical bytes at most 4 KiB, private evidence bundle at most 2 MiB, policy manifest at most 64 KiB, and public report at most 64 KiB;
-- JSON nesting depth at most 16, at most 1,024 total evidence references, and no additional-reason tuple longer than 34;
-- identifiers and enum text at most 64 ASCII bytes, canonical symbols at most 32 ASCII bytes, source/authority/schema/calculation identifiers at most 256 ASCII bytes, and no source locator in the public report;
-- canonical decimal text at most 32 ASCII bytes, finite and strictly greater than zero, with at most 20 significant digits and scale from 0 through 10; and
-- provider attempts, network attempts, storage-write attempts, clock reads, random values, and environment-dependent fallback attempts are exactly zero in the pure evaluator.
+- one request, 1 through 5 dependency-ordered evidence attempts, exactly 22 verified sessions, exactly 50 verified members, 50 prior closes, 50 current closes, and 50 comparability facts;
+- each attempt payload contains 0 through 51 candidate rows; 51 is representable but semantically insufficient wherever exactly 50 are required;
+- at most 16 checked corporate-action event identities per member and at most 32 schedule corrections;
+- request bytes at most 4 KiB, private bundle at most 2 MiB, policy manifest and public report each at most 64 KiB;
+- JSON nesting at most 16 and additional reasons at most 34;
+- lexical bounds are exactly those in “Lexical types and closed authorities”; and
+- provider attempts, network attempts, storage writes, filesystem reads, clock reads, random values, and calendar fallback attempts are exactly zero in the pure reducer.
 
-Oversize, over-depth, malformed, duplicate, noncanonical, or unknown request
-input is rejected before path allocation. A well-formed admitted request with
-missing or bad mandatory market evidence receives bounded
-`INSUFFICIENT_EVIDENCE`; it is never repaired by truncation.
-
-## Validation invariants
-
-A later implementation must reconstruct rather than trust all derived fields and
-must reject a report or internal result unless all applicable equations hold:
-
-```text
-comparison_session == official_sessions[0].session_date
-decision_session   == official_sessions[20].session_date
-decision_cutoff    == official_sessions[20].close_at
-knowledge_cutoff   == decision_cutoff
-len(official_sessions) == 21
-len(members) == 50 == count(unique isin) == count(unique symbol)
-prior_session_i == comparison_session for every i
-current_session_i == decision_session for every i
-
-OBSERVED => advances + declines + unchanged == 50
-OBSERVED => exactly one direction per member
-OBSERVED => regime_label is non-null and counts are all non-null
-OBSERVED => primary_reason is null and additional_reasons == ()
-INSUFFICIENT_EVIDENCE => regime_label is null
-INSUFFICIENT_EVIDENCE => advances == declines == unchanged == null
-INSUFFICIENT_EVIDENCE => primary_reason is non-null
-```
-
-An observed label is recomputed from the counts, and every direction is
-recomputed from private Decimal values. Digests, endpoint positions, schedule
-consecutiveness, cutoff clocks, memberships, `CLOSE` field identity, exact daily
-fact versions, corporate-action interval coverage, revision lineage, and all
-nullability/count invariants are deeply checked. A caller-supplied count, label,
-endpoint, cutoff, or comparability boolean has no authority.
+Oversize, over-depth, malformed, or noncanonical external bytes are rejected
+before domain evaluation. A structurally valid attempt with missing or bad
+mandatory evidence returns bounded `INSUFFICIENT_EVIDENCE` and is never repaired.
 
 ## Edge-case truth table
 
@@ -453,72 +682,66 @@ endpoint, cutoff, or comparability boolean has no authority.
 | 30 advance, 20 decline | `OBSERVED / BROAD_ADVANCE` |
 | 30 advance, 19 decline, 1 unchanged | `OBSERVED / BROAD_ADVANCE` |
 | 20 advance, 30 decline | `OBSERVED / BROAD_DECLINE` |
-| 29 advance, 29 decline is impossible with 50; 25/25/0 | `OBSERVED / MIXED_PARTICIPATION` |
+| 25 advance, 25 decline | `OBSERVED / MIXED_PARTICIPATION` |
 | 29 advance, 0 decline, 21 unchanged | `OBSERVED / MIXED_PARTICIPATION` |
 | 0 advance, 0 decline, 50 unchanged | `OBSERVED / MIXED_PARTICIPATION` |
-| Equal Decimal endpoint values with different admitted scale | one `UNCHANGED` |
-| 20 elapsed days but not exactly 20 official-session transitions | reject/fail closed; never classify |
+| External decimal `100.0` when canonical value is `100` | structural rejection; no report |
+| 20 elapsed days but not 20 official transitions | insufficient; never classify |
 | Proven holiday between endpoints | skip it; it consumes no session step |
-| Unresolved closure, special session, timing overlay, or 20th predecessor | `INSUFFICIENT_EVIDENCE / null` |
-| 49 valid members, 51 rows, duplicate ISIN/symbol, or current-list backfill | `INSUFFICIENT_EVIDENCE / null` |
+| Unresolved special session, timing overlay, predecessor, or next official open | `INSUFFICIENT_EVIDENCE / null` |
+| Current close published and retained after decision close but by next official open | eligible if every other gate passes |
+| Evidence first published or retained after next official open | `INSUFFICIENT_EVIDENCE / null` |
+| Any next-session trading observation in a price fact | `INSUFFICIENT_EVIDENCE / null` |
+| 49 rows, 51 rows, or duplicate ISIN/symbol in a well-formed attempt | `INSUFFICIENT_EVIDENCE / null`, never admission contradiction |
 | One missing, late, corrupt, conflicting, incomplete, unauthorized, or incomparable close | `INSUFFICIENT_EVIDENCE / null`, no partial counts |
-| Split/bonus/rights event or unproven negative completeness | `INSUFFICIENT_EVIDENCE / null`; no silent adjustment |
-| Evidence/revision first known after cutoff | `INSUFFICIENT_EVIDENCE / null` for this replay |
-| Float, NaN, Infinity, negative/zero close, duplicate JSON key, unknown enum/field | invalid admission; no report |
-| Same evidence supplied in shuffled set order | identical canonical input and report bytes |
-| Later correction or code/policy change | new identities; old report remains immutable |
+| Split/bonus/rights event or unproven negative completeness | `INSUFFICIENT_EVIDENCE / null`; no adjustment |
+| Float, NaN, Infinity, duplicate JSON key, unknown field, or more than 51 rows | structural rejection; no report |
+| Shuffled external canonical array | structural rejection; no report |
+| Shuffled local builder collection | sort before serialization; one canonical output |
+| Later correction or code/policy change | new identities; old report stays immutable |
 
 ## Package and application boundary
 
 The future domain package may contain only immutable schema values, canonical
-validation/identity helpers, and a pure deterministic Market Regime reducer. It
-must have no provider client, HTTP/network port, credential reader, filesystem
-search, writable storage, clock, calendar library as authority, LLM call, CLI
-renderer, or source acquisition. The application layer may load an explicitly
-identified already-retained private bundle, verify it, call the pure reducer,
-and render the separate public `MarketRegimeReportV1`. Source adapters,
-acquisition, capture authorization, and runtime surfaces require separately
-approved work.
+validation/identity helpers, pure attempt/fact admission, and a pure deterministic
+Market Regime reducer. It has no provider client, HTTP/network port, credential
+reader, filesystem access, writable storage, clock, calendar authority, LLM
+call, CLI renderer, or source acquisition. The bounded application adapter may
+load explicitly identified retained bytes, verify and parse them, close all
+resources, call the domain, and render `MarketRegimeReportV1`. Acquisition,
+capture authorization, and runtime surfaces require separately approved work.
 
-`PublicCommandReportV1` remains untouched and frozen for its existing candle
-`download | coverage | query` contracts. Market Regime must not add a mode or
-fields to it. Any future CLI/API/MCP wrapper uses the same
-`nifty50-market-regime@v1` domain request/report and a separate renderer; no
-wrapper may recompute market facts or expose the private close inputs.
+`PublicCommandReportV1` remains untouched for candle `download | coverage |
+query`. Market Regime adds no mode or fields to it. Any future CLI/API/MCP
+wrapper uses the same domain request/report and a separate renderer; it cannot
+recompute facts or expose private close inputs.
 
 ## Versioning and implementation handoff
 
-Any change to endpoint distance or session selection, `CLOSE`, Decimal semantics,
-equality, comparability path, exact-50 denominator, threshold value or
-inclusivity, label/state/reason enum or precedence, schema field/nullability,
-canonicalization, identity coverage, public redaction, authority/cutoff rule,
-validation invariant, or bound is a breaking contract change and requires a new
-contract version. A source-policy or calculation/code revision also changes its
-bound identity even when the outer contract version remains compatible. New
-labels or a confidence score can never be slipped into V1.
+A change to endpoint distance, session selection, market/evidence boundary,
+`CLOSE`, decimal semantics, equality, comparability, denominator, threshold,
+enums/precedence, schemas/nullability, canonicalization, identity coverage,
+redaction, authority, invariant, or bound is breaking and requires a new
+contract version. A source-policy or code revision also changes its bound
+identity.
 
 ARK-166 authorizes documentation and executable documentation assertions only.
 It does not authorize a classifier, provider, source, acquisition, application,
 CLI, API, MCP server, retained-evidence classification, performance study, or
-runtime. The Sprint 4/5 evidence remains not ready: 31 sessions from 2026-07-01
+runtime. Sprint 4/5 evidence remains not ready: 31 sessions from 2026-07-01
 through 2026-08-12, a current list that cannot prove historical membership,
 1,550 insufficient stock/session pairs, raw prices, and unsupported adjusted
 price, corporate-action completeness, and historical symbol-change authority
-cannot yield an observed V1 label. Synthetic fixtures may later prove mechanics only; they cannot validate effectiveness or cure evidence blockers.
-
+cannot yield an observed V1 label. Synthetic fixtures may later prove mechanics
+only; they cannot validate effectiveness or cure evidence blockers.
 
 ## Source and authority policy retained from ARK-165
 
-No new market-data source is admitted. NSE Indices Limited is the authoritative
-Nifty 50 membership and reconstitution authority; NSE is the authoritative
-exchange authority for Capital Market sessions, closures, special sessions,
-timing changes, and corrections. The only price input is the existing private
-provider-independent `nse-session-ohlcv@v1` fact. Corporate-action comparability
-requires authoritative cutoff-safe positive status, negative completeness, and
-revision lineage; Upstox observations remain discovery evidence only. No index
-price series, India VIX, macro source, provider shortcut, or current
-constituents for a historical session is admitted.
-
-A future bounded file adapter must reject symlink and non-regular inputs, use
-no-follow reads, and publish with copy-on-write replacement. Those adapter rules
-do not grant the pure evaluator I/O.
+No new market-data source is admitted. NSE Indices Limited (`NSE_INDICES`) is
+the authoritative Nifty 50 membership/reconstitution authority. NSE Capital
+Market (`NSE_CM`) is authoritative for sessions, corrections, and corporate
+action/identity evidence. The only price fact is the existing private
+provider-independent `nse-session-ohlcv@v1` fact exposed by
+`ADMITTED_EQUITY_FACT_PIPELINE`. Upstox observations remain discovery evidence
+only. No index price series, India VIX, macro source, provider shortcut, or
+current constituents for a historical session is admitted.
