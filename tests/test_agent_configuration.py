@@ -203,3 +203,36 @@ def test_ark_95_publisher_lifecycle_authority_stays_narrow_and_review_isolation_
         )
         assert "does not prove effective isolation" in instructions
         assert "os-enforced read-only" in instructions
+
+
+def test_cross_provider_target_is_accepted_but_not_falsely_activated() -> None:
+    workflow = (ROOT / "docs" / "development-workflow.md").read_text()
+    decision = (
+        ROOT / "docs" / "notes" / "2026-08-13-cross-provider-model-routing-decision.md"
+    ).read_text()
+    config = read_toml(ROOT / ".codex" / "config.toml")
+
+    normalized_decision = " ".join(decision.split())
+    for required in (
+        "Claude Fable 5",
+        "Claude Opus 5",
+        "GPT-5.6 Sol",
+        "20% planning / 55% execution / 25% review",
+        "deterministic tools and hosted CI",
+        "activation pending provider qualification",
+        "Catalogue visibility is not proof of access",
+        "separately billed extra usage",
+        "three bounded qualification tasks",
+        "no task may require more than one material repair cycle",
+    ):
+        assert required in normalized_decision
+
+    assert "Roles are capability and authority contracts" in workflow
+    assert "accepted target" in workflow
+    assert "Do not change runtime role TOMLs" in workflow
+
+    agents = config["agents"]
+    assert isinstance(agents, dict)
+    assert agents["default_subagent_model"] == "gpt-5.6-terra"
+    assert read_toml(AGENTS / "terra-implementer.toml")["model"] == "gpt-5.6-terra"
+    assert read_toml(AGENTS / "high-risk-reviewer.toml")["model"] == "gpt-5.6-sol"

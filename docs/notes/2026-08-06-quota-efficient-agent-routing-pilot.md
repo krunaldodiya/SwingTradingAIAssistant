@@ -5,10 +5,14 @@ Status: **superseded by ARK-63 quality-first routing**
 ## Supersession
 
 This note preserves historical pilot evidence only; it does not select an
-active implementation writer. The authoritative current routing is Terra High
-as the sole implementation and repair writer. Luna is limited to explicitly
-delegated low-risk, read-only documentation or inventory support. See the
-[development workflow](../development-workflow.md) and the Sprint 1
+active or target implementation writer. The checked-in fallback remains Terra
+High as sole implementation/repair writer, Sol for architecture/high-risk
+review, and Luna for explicit low-risk read-only support. The owner has since
+accepted a cross-provider target—Fable/Opus planning and review with GPT-5.6 Sol
+execution—but it is not active until provider qualification. See the
+[development workflow](../development-workflow.md), the current
+[cross-provider decision](2026-08-13-cross-provider-model-routing-decision.md),
+and the Sprint 1
 [reconciliation note](2026-08-07-sprint1-workflow-reconciliation.md).
 
 ## Context
