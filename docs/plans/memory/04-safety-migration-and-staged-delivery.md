@@ -1,7 +1,9 @@
 # Safety, Migration, and Staged Delivery PRD
 
 Status: **future delivery authority; no implementation in this delivery**
-Applies to every contract and experiment in this suite. When another document
+Applies to every contract and experiment in this suite, including the closed
+Prime/Pi host-adapter work in
+[Document 06](06-harness-neutral-core-and-adapter-contract-prd.md). When another document
 conflicts with this one, this document's safety invariant wins.
 
 ## Purpose and decision
@@ -247,9 +249,12 @@ revalidation of the memory-tool baseline and uses strict failing-test-first TDD.
 14. **A separately promoted production candidate**, only after confirmation
     evidence and a dependency/migration/security decision.
 
-A PR may narrow a slice; it may not bundle later slices for convenience. Docs,
-contract, implementation, migration, release evidence, and rollback mechanics
-must stay reviewable. Reference code is never copy-pasted.
+A PR may narrow a slice; it may not bundle later slices for convenience. The
+adapter stages in Document 06 are additional future slices under this same owner
+promotion and checklist; they do not start automatically and cannot be bundled
+into the slices above. Docs, contract, implementation, migration, release
+evidence, and rollback mechanics must stay reviewable. Reference code is never
+copy-pasted.
 
 ## Slice acceptance checklist
 

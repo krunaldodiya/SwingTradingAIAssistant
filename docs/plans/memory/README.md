@@ -2,15 +2,19 @@
 
 Status: **future product/specification authority; implementation not started**
 Delivery type: documentation only
-Repository baseline: `f78df63029a19f4b91007323bd74c288b4eb6072`
+Repository baseline: `b5e03593310e96bc73ab4ef65c385dec08c75ebc`
 Audited persistent-memory baseline: `79d07ccc41d483076bd1ee9acc4b876dec6eae54`
 
 This suite records the accepted product direction and experiment gates for future
-versions of Prime Agent persistent memory. It does not implement, authorize, or
-schedule a memory-tool change. This delivery changes no memory source, schema,
-runtime dependency, database, service, migration bundle, benchmark result, or
-operating policy. Every implementation slice requires separate explicit
-promotion, strict TDD, review, and release evidence in the memory-tool repository.
+versions of the local persistent-memory product. The current v0.1 implementation
+is Prime Agent-coupled; the accepted future direction is a harness-neutral core
+with first-class Prime Agent and Pi coding agent adapters over the same stores and
+contracts. This does not claim universal zero-work compatibility. It does not
+implement, authorize, or schedule a memory-tool change. This delivery changes no
+memory source, schema, runtime dependency, database, service, migration bundle,
+benchmark result, or operating policy. Every implementation slice requires
+separate explicit promotion, strict TDD, review, and release evidence in the
+memory-tool repository.
 
 ## Suite map and authority
 
@@ -21,13 +25,16 @@ promotion, strict TDD, review, and release evidence in the memory-tool repositor
 | [03 — experiments](03-experiment-first-improvement-protocols.md) | FTS baseline and guarded semantic, bootstrap, graph, and consolidation experiments |
 | [04 — safety and delivery](04-safety-migration-and-staged-delivery.md) | Privacy, isolation, security, dependencies, migration, staged acceptance, rollback, and decision log |
 | [05 — reference lessons](05-reference-system-lessons.md) | System-specific findings, exact audited revisions, benchmark caveats, and ideas not to import |
+| [06 — harness-neutral core and adapters](06-harness-neutral-core-and-adapter-contract-prd.md) | Neutral core boundary, first-class Prime/Pi V1 adapters, shared-store continuity, conformance, compatibility, and rollback |
 
 Where the suite conflicts internally, the narrower contract owns its named
-subject; safety invariants in Document 04 always win. Where it conflicts with an
-implemented memory-tool contract, the implemented contract remains current
-runtime authority until a separately approved versioned change ships. Repository
-Markdown reviewed with code becomes authoritative only for the future product
-behavior it explicitly promotes.
+subject; safety invariants in Document 04 always win. Document 06 owns the closed
+host-adapter boundary and does not relax Document 03's rejection of an arbitrary
+plugin ecosystem or Document 04's local/no-network rules. Where this suite
+conflicts with an implemented memory-tool contract, the implemented contract
+remains current runtime authority until a separately approved versioned change
+ships. Repository Markdown reviewed with code becomes authoritative only for the
+future product behavior it explicitly promotes.
 
 ## Evidence hierarchy and audit seal
 
@@ -125,7 +132,9 @@ this delivery:
    allowlisting and explicit gaps/conflicts;
 4. read-only citation/source-pointer integrity and exact-duplicate audits;
 5. explicit timezone-aware UTC `since`/`before` filters and a dual-time
-   vocabulary separating learned/source time from optional event-valid time.
+   vocabulary separating learned/source time from optional event-valid time; and
+6. one neutral local core with closed, first-class Prime Agent and Pi Coding
+   Agent V1 adapters sharing the configured store and exact project identity.
 
 The following are experiment-first and may not enter production until their
 individual gates pass:
@@ -139,10 +148,13 @@ individual gates pass:
 ## Global non-goals
 
 This suite does not approve wholesale adoption of any reference runtime; hosted
-or remote memory; server/MCP/sync/multi-machine writing; broker, market, or
-trading integration; persona or mental-model generation; raw transcript
-wake-up; background reflection; autonomous truth promotion; fuzzy entity
-resolution; semantic deduplication; citation rewriting; or a runtime dependency.
+or remote memory; a public generic CLI, server, MCP, sync, or multi-machine
+writer; arbitrary/dynamic host plugins; broker, market, or trading integration;
+persona or mental-model generation; raw transcript wake-up; background
+reflection; autonomous truth promotion; fuzzy entity resolution; semantic
+deduplication; citation rewriting; or an unreviewed runtime dependency. The two
+closed adapters accepted in Document 06 are future specifications, not current
+Pi support or a general plugin exception.
 It does not modify the SwingTradingAIAssistant research pipeline, roadmap,
 market-regime contracts, sprints, or market logic.
 

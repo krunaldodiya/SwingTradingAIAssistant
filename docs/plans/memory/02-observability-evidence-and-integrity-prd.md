@@ -31,8 +31,10 @@ explicitly bounded detail list:
 
 ```text
 CaptureObservationV1 {
+  source_adapter_id: exact registered adapter or LEGACY_PRIME_SOURCE
+  capture_batch_identity: canonical batch SHA-256 or null for legacy capture
   source_file_identity: sanitized pointer or digest
-  entry_id: stable source entry ID
+  entry_id: adapter-qualified stable source entry ID
   content_hash: hash of stored transformed text
   eligible_original_character_count: nonnegative integer
   stored_character_count: nonnegative integer
@@ -43,6 +45,12 @@ CaptureObservationV1 {
   source_pointer: file/line/byte-offset/entry ID after admission
 }
 ```
+
+For host-adapter capture, the closed adapter ID, source/session namespace, and
+batch identity follow
+[Document 06](06-harness-neutral-core-and-adapter-contract-prd.md). They prevent Prime and
+Pi source IDs from colliding; they do not make adapter output trusted. Legacy
+Prime capture stays explicitly labeled until its parity migration is accepted.
 
 Allowed transformation values are `VISIBLE_PART_SELECTION`, `CONTROL_PART_DROP`,
 `WHITESPACE_NORMALIZATION`, `SECRET_REDACTION`, `USER_PATTERN_REDACTION`, and
