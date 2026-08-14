@@ -138,11 +138,23 @@ MarketRegimeSectorHandoffV1 {
 }
 ```
 
-The handoff rows are strictly ISIN-sorted and unique. Its endpoints and all
-Market Regime identities equal the observed report; its direction totals equal
-the report's `advances`, `declines`, and `unchanged`. Its identity is recomputed
-from every field except only `handoff_identity_sha256`. Sector Participation
-validates these equations but does not redo the upstream close comparisons.
+The handoff rows are the immutable, strictly ISIN-sorted, unique, exact-50
+projection of the `(isin, direction)` member decisions used by the same Market
+Regime reduction that emitted the observed report:
+
+```text
+handoff.members ==
+  sort_by_isin(project_isin_and_direction(same_input_market_regime_members))
+count(handoff.members) == count(unique(handoff.members[*].isin)) == 50
+```
+
+Every Market Regime identity and endpoint in the handoff equals the corresponding
+observed-report field, and its direction totals equal that report's `advances`,
+`declines`, and `unchanged`. Its identity is SHA-256 of the Plan 12 canonical
+JSON-plus-one-LF serialization of every field except only
+`handoff_identity_sha256`. The Market Regime producer copies its already-decided
+directions into this projection; neither Sector Participation nor the handoff
+projection reads closes or repeats a comparison.
 
 This immutable, in-process, owner-private value is not a public report, stored
 export, provider payload, request argument, CLI flag, API body, or MCP argument.
@@ -395,10 +407,10 @@ hide lower-precedence reasons. These mappings are exact:
 
 | Structurally valid candidate or attempt condition | Domain reason |
 |---|---|
-| expected attempt absent; null payload/`NOT_RETURNED`; taxonomy or manifest absent; 0 rows | `SECTOR_CLASSIFICATION_MISSING` |
-| 1..49 rows, missing requested ISIN, or incomplete manifest | `SECTOR_CLASSIFICATION_MISSING` |
-| 51 rows or any extra ISIN | `SECTOR_CLASSIFICATION_CORRUPT` |
-| duplicate ISIN; overlapping effective rows; two selected assignments; conflicting labels/releases | `SECTOR_CLASSIFICATION_AMBIGUOUS` |
+| expected attempt absent; null payload/`NOT_RETURNED`; taxonomy or manifest absent; 0 received assignment candidate rows | `SECTOR_CLASSIFICATION_MISSING` |
+| 1..49 received assignment candidate rows, assignment candidates omit a requested ISIN, or incomplete manifest | `SECTOR_CLASSIFICATION_MISSING` |
+| 51 received assignment candidate rows or any extra assignment candidate ISIN | `SECTOR_CLASSIFICATION_CORRUPT` |
+| duplicate assignment candidate ISIN; overlapping assignment candidate effective rows; two selected assignments; conflicting labels/releases | `SECTOR_CLASSIFICATION_AMBIGUOUS` |
 | invalid ISIN/date/label/effective interval; selector selects zero/multiple values; selected bytes disagree with candidate; `INVALID_SOURCE_ROW` | `SECTOR_CLASSIFICATION_CORRUPT` |
 | candidate or failure is after cutoff; any required clock is after cutoff | `SECTOR_CLASSIFICATION_LATE` |
 | authority/source/schema/release is not the sealed source-policy binding; `UNAUTHORIZED_AUTHORITY` | `SOURCE_NOT_AUTHORITATIVE` |
@@ -408,7 +420,7 @@ hide lower-precedence reasons. These mappings are exact:
 | selected assignment interval or taxonomy release misses `decision_session` | `SECTOR_EFFECTIVE_SCOPE_MISMATCH` |
 | lineage/manifest absent or incomplete; selected revision absent; checked-through differs from cutoff; gap, orphan, fork, cycle, conflicting current nodes, missing supersession, or post-cutoff node selected | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN` |
 | licence proof absent, digest-only, wrong source/release/scope/date, unresolved, or lacks retention or owner-private aggregate permission | `LICENCE_UNRESOLVED` |
-| receipt/attempt/bundle identity, handoff/report binding, selected object/revision projection, manifest selector, or sealed policy/build claim mismatches | `EVIDENCE_IDENTITY_MISMATCH` |
+| receipt/attempt identity, selected object/revision projection, manifest selector, sealed policy/build claim, or structurally valid `classification_attempt.requested_identity.member_isins` tuple does not exactly equal the strict ISIN-sorted ordered `handoff.members[*].isin` projection (including duplicate, permutation, or missing/excess substitution) | `EVIDENCE_IDENTITY_MISMATCH` |
 | all above pass but exact assignment-to-handoff join or global equations fail | `SECTOR_TOTALS_INCONSISTENT` |
 | owner proof is expired, replayed, wrong-owner, wrong-purpose, unauthenticated, anonymous, public, or does not match sealed privacy policy | `PRIVACY_POLICY_UNSATISFIED` |
 
@@ -558,7 +570,7 @@ sanitized immutable admission decision already captured before reducer entry.
 The reducer reads no current clock or credential and cannot accept a caller's
 boolean such as `authenticated = true`.
 
-Because `sector_total == 1` can disclose one member's direction, an observed
+Because `member_count == 1` can disclose one member's direction, an observed
 aggregate is deliverable only to this authenticated, nonanonymous owner-private
 boundary. Any proof failure suppresses the whole aggregate with
 `PRIVACY_POLICY_UNSATISFIED`. Selective row suppression is forbidden. Even valid
@@ -578,6 +590,7 @@ SectorParticipationEvidenceBundleV1 {
   source_policy_identity_sha256: Sha256
   validation_policy_identity_sha256: Sha256
   privacy_policy_identity_sha256: Sha256
+  licence_policy_identity_sha256: Sha256
   policy_identity_sha256: Sha256
   code_identity_sha256: Sha256
   input_identity_sha256: Sha256
@@ -678,13 +691,32 @@ ExpectedReviewedBuildV1 {
 }
 ```
 
-Every adjacent identity is recomputed from the exact named canonical manifest
-bytes. `ExpectedReviewedBuildV1` is sealed into the reviewed build, not supplied
-by a request or bundle. The source manifest selects one authority/source/schema
-and the release, object, revision, supersession, selector, and trusted-clock
-projections; it does not contain one caller-chosen release value. Coordinated
-replacement and rehashing of candidate bytes, bundle, manifests, and claimed
-digests cannot replace these sealed trust roots.
+The manifest identities are exact and have no composite or alternate
+projection:
+
+```text
+source_policy_identity_sha256 =
+  SHA256(source_policy_manifest_canonical_bytes)
+validation_policy_identity_sha256 =
+  SHA256(validation_policy_manifest_canonical_bytes)
+privacy_policy_identity_sha256 =
+  SHA256(privacy_policy_manifest_canonical_bytes)
+licence_policy_identity_sha256 =
+  SHA256(licence_policy_manifest_canonical_bytes)
+policy_identity_sha256 =
+  SHA256(semantic_policy_manifest_canonical_bytes)
+code_identity_sha256 =
+  SHA256(code_build_manifest_canonical_bytes)
+```
+
+Every manifest byte sequence is the exact canonical JSON-plus-one-LF encoding of
+its named closed schema. Every identity claim in the evidence bundle must equal
+the corresponding identity above. `ExpectedReviewedBuildV1` is sealed into the
+reviewed build, not supplied by a request or bundle. The source manifest selects
+one authority/source/schema and the release, object, revision, supersession,
+selector, and trusted-clock projections; it does not contain a caller-chosen
+release value. Coordinated replacement and rehashing of candidate bytes, bundle,
+manifests, and claimed digests cannot replace these sealed trust roots.
 
 The reducer accepts parsed immutable values and performs zero network, provider,
 filesystem, database, environment, wall-clock, credential, randomness, logging,
@@ -693,16 +725,17 @@ telemetry, subprocess, or storage-write I/O.
 ## Frozen aggregation and cross-fact equations
 
 For each of the 50 unique upstream handoff ISINs, join exactly one reconstructed
-assignment by exact ISIN. For each distinct exact sector label `s`, in canonical
+assignment by exact ISIN. For each distinct exact sector label `s`, in ascending
 UTF-8 byte order:
 
 ```text
 sector_advances[s] = count(sector == s and direction == ADVANCE)
 sector_declines[s] = count(sector == s and direction == DECLINE)
 sector_unchanged[s] = count(sector == s and direction == UNCHANGED)
-sector_total[s] = sector_advances[s] + sector_declines[s] + sector_unchanged[s]
+sector_member_count[s] =
+  sector_advances[s] + sector_declines[s] + sector_unchanged[s]
 
-sum(sector_total[s] for s in sectors) = 50
+sum(sector_member_count[s] for s in sectors) = 50
 sum(sector_advances[s] for s in sectors) = upstream.advances
 sum(sector_declines[s] for s in sectors) = upstream.declines
 sum(sector_unchanged[s] for s in sectors) = upstream.unchanged
@@ -710,9 +743,13 @@ upstream.advances + upstream.declines + upstream.unchanged = 50
 ```
 
 Each member contributes once to one direction and one sector. Every emitted
-`sector_total` is 1..50; each directional count is 0..50. There is no unknown
-bucket, partial denominator, percentage, weight, score, or residual. Any failed
-join/equation produces null sectors; no unaffected sector may leak.
+`member_count` is 1..50; each directional count is 0..50. There is no `OTHER`,
+unknown, inferred, or residual bucket; no partial denominator, percentage,
+weight, score, or repaired count. Any applicable domain defect anywhere in the
+upstream handoff, classification/proof chain, join, equations, or audience
+proof makes the whole report `INSUFFICIENT_EVIDENCE` with `sectors = null`; no
+unaffected row or denominator may leak. A structural defect instead produces no
+report, as defined above.
 
 The reducer validates these additional invariants:
 
@@ -721,8 +758,20 @@ request.decision_session == upstream.report.decision_session
 upstream observed report identities == handoff identities
 upstream observed endpoints == handoff endpoints
 handoff direction totals == upstream observed counts
-classification requested ISINs == handoff ISINs
-assignment ISINs == manifest ISINs == handoff ISINs
+
+count(unique(classification_attempt.requested_identity.member_isins)) == 50
+count(unique(reconstructed_facts.assignments[*].isin)) == 50
+count(unique(reconstructed_facts.coverage_manifest.entries[*].isin)) == 50
+count(unique(handoff.members[*].isin)) == 50
+classification_attempt.requested_identity.member_isins
+  == handoff.members[*].isin
+classification_attempt.requested_identity.member_isins
+  == sort_by_isin(classification_attempt.requested_identity.member_isins)
+set(classification_attempt.requested_identity.member_isins)
+  == set(reconstructed_facts.assignments[*].isin)
+  == set(reconstructed_facts.coverage_manifest.entries[*].isin)
+  == set(handoff.members[*].isin)
+
 all assignment and taxonomy effective intervals cover decision_session
 all source and proof clocks <= knowledge_cutoff
 lineage.checked_through == knowledge_cutoff
@@ -734,8 +783,8 @@ all receipt digests, selectors, objects, revisions, manifests, and policy identi
 
 ```text
 SectorCountV1 {
-  sector_label: SectorLabel
-  sector_total: Integer[1..50]
+  label: SectorLabel
+  member_count: Integer[1..50]
   advances: Integer[0..50]
   declines: Integer[0..50]
   unchanged: Integer[0..50]
@@ -750,6 +799,7 @@ SectorParticipationReportV1 {
   source_policy_identity_sha256: Sha256
   validation_policy_identity_sha256: Sha256
   privacy_policy_identity_sha256: Sha256
+  licence_policy_identity_sha256: Sha256
   policy_identity_sha256: Sha256
   code_identity_sha256: Sha256
   decision_session: LocalDate
@@ -765,13 +815,30 @@ SectorParticipationReportV1 {
 }
 ```
 
-An observed report requires the observed upstream branch, all endpoints
-non-null, 1..50 sector rows, every equation satisfied, and no reasons. An
-insufficient report has `sectors = null` and at least one reason. For upstream
-`ABSENT`, the Market Regime report identity and all three nullable endpoints are
-null. For upstream `INSUFFICIENT_EVIDENCE`, its report identity is non-null and
-its exact endpoint stage is copied. Classification defects can never advance an
-endpoint. The report identity hashes every field except only itself.
+`CanonicalSectorParticipationReportIdentityProjectionV1(report)` contains every
+closed `SectorParticipationReportV1` field, including
+`licence_policy_identity_sha256`, except only `report_identity_sha256`. The
+report identity is exactly:
+
+```text
+report.report_identity_sha256 =
+  SHA256(canonical_json_lf(
+    CanonicalSectorParticipationReportIdentityProjectionV1(report)
+  ))
+```
+
+`SectorCountV1` is the complete observed-row schema: its only fields are
+`label`, `member_count`, `advances`, `declines`, and `unchanged`.
+
+An observed report requires the observed upstream branch, a non-null Market
+Regime report identity and all three endpoints, 1..50 sector rows, every
+equation satisfied, and no reasons. An insufficient report always has
+`sectors = null` and at least one reason. For an observed upstream branch, the
+Market Regime report identity and all three copied endpoints remain non-null.
+For upstream `ABSENT`, the Market Regime report identity and all three nullable
+endpoints are null. For upstream `INSUFFICIENT_EVIDENCE`, its report identity is
+non-null and its exact endpoint stage is copied. Classification or downstream
+defects can never advance, clear, or otherwise repair an upstream endpoint.
 
 ## Closed reasons and precedence
 
@@ -802,10 +869,21 @@ SectorParticipationReasonV1 = Literal[
 Observed output has no reasons. Insufficient output chooses the earliest
 applicable reason as primary and lists each other applicable reason once in
 declaration order. Discovery, source-row, map, and fault-injection order cannot
-change it. `MEMBER_DIRECTION_HANDOFF_INVALID` applies only to a structurally
-valid observed envelope whose handoff violates exact row/order/count/cross-field
-semantics; forbidden/missing union fields remain structural no-report errors.
-Privacy is evaluated even when another domain defect applies.
+change it. `MEMBER_DIRECTION_HANDOFF_INVALID` applies only after the observed
+report and handoff bytes have passed their closed schemas, bounds, canonical
+serialization, recomputed digests, versions, and discriminators. It then covers
+duplicate or non-ISIN-sorted rows, a Market Regime identity or endpoint that
+does not equal the observed report, or direction totals that do not equal the
+observed report counts. Privacy is evaluated even when another domain defect
+applies.
+
+Wrong handoff row count, an out-of-enum direction, malformed or noncanonical
+report/handoff bytes, digest failure, and forbidden or missing union fields are
+structural no-report failures. `EVIDENCE_IDENTITY_MISMATCH` is reserved for the
+downstream candidate evidence, selector, manifest, sealed-policy/build identity,
+or structurally valid but non-exact classification requested-ISIN projection
+failures listed in the candidate-to-reason table; it does not subsume a
+structurally valid handoff semantic defect.
 
 ## Edge-case truth table
 
@@ -818,18 +896,22 @@ Privacy is evaluated even when another domain defect applies.
 | upstream insufficient with cutoff resolved | same reason; all three endpoints copied |
 | upstream unobserved envelope carries a handoff | structural rejection; no report |
 | observed envelope omits a handoff or has foreign/noncanonical report | structural rejection; no report |
-| expected classification attempt missing, 0 rows, 49 rows, or one missing ISIN | whole-report insufficiency; null sectors |
-| 51 rows, extra ISIN, malformed candidate field, or selector mismatch | whole-report insufficiency; null sectors |
-| duplicate ISIN, overlapping effective assignments, or conflicting labels | `SECTOR_CLASSIFICATION_AMBIGUOUS`; null sectors |
+| structurally valid requested-ISIN tuple is a permutation, contains a duplicate, or substitutes a missing/excess ISIN relative to the strict sorted handoff projection | `EVIDENCE_IDENTITY_MISMATCH`; null sectors |
+| expected classification attempt missing, payload has 0 or 49 received assignment candidate rows, or assignment candidates omit one exact handoff ISIN | whole-report insufficiency; null sectors; no partial denominator |
+| payload has 51 received assignment candidate rows, an extra assignment candidate ISIN, structurally valid but semantically invalid candidate text, or selector mismatch | whole-report insufficiency; null sectors; no `OTHER` or inferred repair |
+| duplicate assignment candidate ISIN, overlapping assignment candidate effective intervals, or conflicting assignment labels | `SECTOR_CLASSIFICATION_AMBIGUOUS`; null sectors |
 | wrong taxonomy tier or release path | `SECTOR_TIER_INVALID`; null sectors |
 | late publication/retrieval/retention or untrusted clock | exact clock/timeliness reason; null sectors |
 | unresolved retention/private-use licence | `LICENCE_UNRESOLVED`; null sectors |
 | lineage gap, fork, cycle, conflicting current revision, unchecked cutoff, or missing manifest entry | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN`; null sectors |
+| canonical, digest-valid, exact-50 observed handoff has duplicate/unsorted ISINs, report identity/endpoint mismatch, or direction-total mismatch | `MEMBER_DIRECTION_HANDOFF_INVALID`; null sectors |
+| exact assignment/handoff set join or any row/global equation fails | `SECTOR_TOTALS_INCONSISTENT`; null sectors |
+| owner-private audience proof fails | `PRIVACY_POLICY_UNSATISFIED`; null sectors; no selective disclosure |
 | schedule correction or corporate-action completeness changes upstream | downstream verifies new bound upstream report/handoff only; never recomputes the change |
 | one 50-member sector | one exact row reconciling to 50 |
 | fifty singleton sectors | 50 owner-private rows; never public |
 | one singleton plus one 49-member sector | two owner-private rows; never selectively suppress |
-| malformed JSON, duplicate JSON key, unknown field, >51 rows, or oversize bundle | structural rejection; no report |
+| malformed JSON, duplicate JSON key, unknown field, invalid enum, bundle/reducer identity mismatch, 49/51 handoff rows, >51 classification rows, or oversize bytes | structural rejection; no report |
 | unchanged sealed old input replay after any external post-cutoff change | byte-identical old report |
 | separately sealed input containing a post-cutoff revision | new input/report identities and its newly derived outcome; no cross-input byte-identity requirement |
 
@@ -846,10 +928,11 @@ canonical integers, exact tuple order, no duplicate keys, and no normalization
 after receipt. Verified semantic strings are NFC. `CandidateText` is the one
 intentional attempted-evidence exception: its exact Unicode scalar sequence is
 preserved and hashed without normalization so non-NFC or otherwise corrupt
-candidate claims can yield domain insufficiency. Candidate assignment order is retained and hashed
-so duplicates and noncanonical semantic order remain inspectable; verified
-assignments/handoff rows are strictly ISIN-sorted and report sectors are sorted
-by label UTF-8 bytes.
+candidate claims can yield domain insufficiency. Candidate assignment order is
+retained and hashed so duplicates and noncanonical semantic order remain
+inspectable; verified assignments and handoff rows are strictly ISIN-sorted.
+Report sector rows are strictly sorted by the raw UTF-8 bytes of their `label`;
+that order is serialization only and never rank.
 
 Replay of the unchanged, sealed old input never reads external state. Even if a
 source publishes a correction after the cutoff, the old canonical input and

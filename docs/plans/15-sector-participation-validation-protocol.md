@@ -92,10 +92,13 @@ CUTOFF_VERIFIED => value / value / value
 ```
 
 Every well-formed absent/insufficient branch yields
-`MARKET_REGIME_NOT_OBSERVED`. Foreign versions, identity mismatch, inconsistent
-observed counts, handoff/report endpoint mismatch, 49/51/duplicate/unsorted
-handoff rows, or direction-total mismatch cover structural versus
-`MEMBER_DIRECTION_HANDOFF_INVALID` exactly as Plan 14 declares. No test derives
+`MARKET_REGIME_NOT_OBSERVED`. Foreign versions, malformed or noncanonical
+report/handoff bytes, digest mismatch, inconsistent observed counts, an invalid
+direction enum, and 49/51 handoff rows are structural no-report cases. Only
+after both objects are canonical, digest-valid, version-correct, and the handoff
+has exactly 50 rows do duplicate/unsorted handoff ISINs, report
+identity/endpoint mismatch, or direction-total mismatch yield
+`MEMBER_DIRECTION_HANDOFF_INVALID`, exactly as Plan 14 declares. No test derives
 a direction from close values or replays Market Regime schedule/corporate-action
 logic.
 
@@ -113,6 +116,21 @@ receipt bytes -> receipt SHA-256 -> sealed source/schema/release binding
 -> object/revision/supersession identity -> containing fact identity
 -> bundle/input/report identity
 ```
+
+The oracle separately hashes the source, validation, privacy, licence, semantic,
+and code manifest bytes. It requires the bundle and report identity claims,
+including `licence_policy_identity_sha256` and the semantic manifest's
+`policy_identity_sha256`, to equal Plan 14's exact one-manifest projections.
+
+The requested-ISIN exact-order oracle starts from the strict ISIN-sorted
+`handoff.members[*].isin` tuple, then rebuilds canonical, digest-valid attempt
+and bundle bytes for each fixed-length-50 mutation: swap two positions
+(permutation), replace one position with another present ISIN (duplicate plus
+missing), and replace one position with a lexically valid nonmember ISIN
+(missing/excess substitution). The unmodified ordered tuple proceeds; every
+mutant remains structurally valid and yields `EVIDENCE_IDENTITY_MISMATCH` with
+null sectors at its existing precedence, never structural rejection or a
+classification ambiguity/corruption reason.
 
 Zero-match, multi-match, out-of-range, escaped, mutable, or cross-object
 selectors fail closed. Coordinated rehashing of object, candidate, attempt,
@@ -148,6 +166,9 @@ Enumerate all 1,326 nonnegative direction triples `(a, d, u)` satisfying `a + d
 + u = 50`. For each, exercise one 50-member sector, fifty singleton sectors,
 one singleton plus 49, 25/25 sectors, and a deterministic irregular partition.
 The independent oracle must match every row and global equation exactly.
+Each expected observed row has exactly `label`, `member_count`, `advances`,
+`declines`, and `unchanged`; the oracle admits no extra row field, alias, or
+derived percentage.
 
 For helper cohort sizes 0..8, enumerate all three-way directions and every
 restricted-growth sector partition. At production admission, exercise 0..49,
