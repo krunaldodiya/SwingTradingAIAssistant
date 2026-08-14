@@ -15,6 +15,7 @@ from .boundary import (
     canonical_json_lf,
     parse_canonical_json_lf,
     validate_canonical_decimal,
+    validate_isin,
     validate_local_date,
     validate_sha256,
     validate_utc_instant,
@@ -45,6 +46,101 @@ def _label(advances: int, declines: int) -> MarketRegimeLabelV1:
     if declines >= 30:
         return MarketRegimeLabelV1.BROAD_DECLINE
     return MarketRegimeLabelV1.MIXED_PARTICIPATION
+
+
+@dataclass(frozen=True, slots=True)
+class _MemberDirectionV1:
+    """One owner-private member decision projected from the observed pass."""
+
+    isin: str
+    direction: str
+
+    def __post_init__(self) -> None:
+        validate_isin(self.isin)
+        if self.direction not in {"ADVANCE", "DECLINE", "UNCHANGED"}:
+            raise ValueError("member direction must be closed")
+
+
+@dataclass(frozen=True, slots=True)
+class _MarketRegimeSectorHandoffV1:
+    """Canonical owner-private projection for downstream sector aggregation."""
+
+    contract_version: str
+    market_regime_contract_version: str
+    market_regime_report_identity_sha256: str
+    market_regime_input_identity_sha256: str
+    source_policy_identity_sha256: str
+    validation_policy_identity_sha256: str
+    policy_identity_sha256: str
+    code_identity_sha256: str
+    comparison_session: str
+    decision_session: str
+    decision_market_close: str
+    evidence_cutoff: str
+    members: tuple[_MemberDirectionV1, ...]
+    handoff_identity_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.contract_version != "nifty50-market-regime-sector-handoff@v1"
+            or self.market_regime_contract_version != "nifty50-market-regime@v1"
+        ):
+            raise ValueError("invalid market regime sector handoff constants")
+        for identity in (
+            self.market_regime_report_identity_sha256,
+            self.market_regime_input_identity_sha256,
+            self.source_policy_identity_sha256,
+            self.validation_policy_identity_sha256,
+            self.policy_identity_sha256,
+            self.code_identity_sha256,
+            self.handoff_identity_sha256,
+        ):
+            validate_sha256(identity)
+        validate_local_date(self.comparison_session)
+        validate_local_date(self.decision_session)
+        validate_utc_instant(self.decision_market_close)
+        validate_utc_instant(self.evidence_cutoff)
+        if self.decision_market_close >= self.evidence_cutoff:
+            raise ValueError("decision close must precede evidence cutoff")
+        if (
+            type(self.members) is not tuple
+            or len(self.members) != 50
+            or any(type(member) is not _MemberDirectionV1 for member in self.members)
+            or tuple(sorted(self.members, key=lambda member: member.isin))
+            != self.members
+            or len({member.isin for member in self.members}) != 50
+        ):
+            raise ValueError("handoff members must be exact-50 unique ISIN-sorted")
+        for member in self.members:
+            member.__post_init__()
+        expected_identity = hashlib.sha256(
+            canonical_json_lf(self._identity_projection())
+        ).hexdigest()
+        if self.handoff_identity_sha256 != expected_identity:
+            raise ValueError("handoff identity mismatch")
+
+    def _identity_projection(self) -> dict[str, object]:
+        return {
+            "code_identity_sha256": self.code_identity_sha256,
+            "comparison_session": self.comparison_session,
+            "contract_version": self.contract_version,
+            "decision_market_close": self.decision_market_close,
+            "decision_session": self.decision_session,
+            "evidence_cutoff": self.evidence_cutoff,
+            "market_regime_contract_version": self.market_regime_contract_version,
+            "market_regime_input_identity_sha256": (
+                self.market_regime_input_identity_sha256
+            ),
+            "market_regime_report_identity_sha256": (
+                self.market_regime_report_identity_sha256
+            ),
+            "members": self.members,
+            "policy_identity_sha256": self.policy_identity_sha256,
+            "source_policy_identity_sha256": self.source_policy_identity_sha256,
+            "validation_policy_identity_sha256": (
+                self.validation_policy_identity_sha256
+            ),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +277,7 @@ class MarketRegimeReportV1:
         unchanged: int,
     ) -> MarketRegimeReportV1:
         sessions = facts.schedule.sessions
+        regime_label = _label(advances, declines)
         values: dict[str, object] = {
             "contract_version": "nifty50-market-regime@v1",
             "calculation_version": "nifty50-market-regime-classifier@v1",
@@ -198,7 +295,7 @@ class MarketRegimeReportV1:
             "required_member_count": 50,
             "threshold_count": 30,
             "evidence_state": "OBSERVED",
-            "regime_label": _label(advances, declines),
+            "regime_label": regime_label,
             "advances": advances,
             "declines": declines,
             "unchanged": unchanged,
@@ -206,7 +303,31 @@ class MarketRegimeReportV1:
             "additional_reasons": (),
         }
         identity = hashlib.sha256(canonical_json_lf(values)).hexdigest()
-        return cls(**values, report_identity_sha256=identity)  # type: ignore[arg-type]
+        return cls(
+            contract_version="nifty50-market-regime@v1",
+            calculation_version="nifty50-market-regime-classifier@v1",
+            request_identity_sha256=facts.request.request_identity_sha256,
+            input_identity_sha256=facts.input_identity_sha256,
+            source_policy_identity_sha256=facts.source_policy_identity_sha256,
+            validation_policy_identity_sha256=(facts.validation_policy_identity_sha256),
+            policy_identity_sha256=facts.policy_identity_sha256,
+            code_identity_sha256=facts.code_identity_sha256,
+            decision_session=facts.request.decision_session,
+            comparison_session=sessions[0].session_date,
+            decision_market_close=sessions[20].close_at,
+            evidence_cutoff=sessions[21].open_at,
+            lookback_official_sessions=20,
+            required_member_count=50,
+            threshold_count=30,
+            evidence_state="OBSERVED",
+            regime_label=regime_label,
+            advances=advances,
+            declines=declines,
+            unchanged=unchanged,
+            primary_reason=None,
+            additional_reasons=(),
+            report_identity_sha256=identity,
+        )
 
     def canonical_json_bytes(self) -> bytes:
         raw = canonical_json_lf(self)
@@ -245,6 +366,62 @@ def reduce_observed_market_regime_v1(
     facts: object,
 ) -> MarketRegimeReportV1:
     """Reduce one complete verified fact graph with exact Decimal comparisons."""
+    report, _ = _reduce_observed_market_regime_pass_v1(
+        facts, collect_member_directions=False
+    )
+    return report
+
+
+def _reduce_observed_market_regime_with_sector_handoff_v1(  # type: ignore[reportUnusedFunction]
+    facts: object,
+) -> tuple[MarketRegimeReportV1, _MarketRegimeSectorHandoffV1]:
+    """Emit the public aggregate and its private member projection in one pass."""
+    report, members = _reduce_observed_market_regime_pass_v1(
+        facts, collect_member_directions=True
+    )
+    if members is None:
+        raise AssertionError("member direction collection is unavailable")
+    sorted_members = tuple(sorted(members, key=lambda member: member.isin))
+    values: dict[str, object] = {
+        "contract_version": "nifty50-market-regime-sector-handoff@v1",
+        "market_regime_contract_version": report.contract_version,
+        "market_regime_report_identity_sha256": report.report_identity_sha256,
+        "market_regime_input_identity_sha256": report.input_identity_sha256,
+        "source_policy_identity_sha256": report.source_policy_identity_sha256,
+        "validation_policy_identity_sha256": (report.validation_policy_identity_sha256),
+        "policy_identity_sha256": report.policy_identity_sha256,
+        "code_identity_sha256": report.code_identity_sha256,
+        "comparison_session": report.comparison_session,
+        "decision_session": report.decision_session,
+        "decision_market_close": report.decision_market_close,
+        "evidence_cutoff": report.evidence_cutoff,
+        "members": sorted_members,
+    }
+    identity = hashlib.sha256(canonical_json_lf(values)).hexdigest()
+    handoff = _MarketRegimeSectorHandoffV1(
+        contract_version="nifty50-market-regime-sector-handoff@v1",
+        market_regime_contract_version=report.contract_version,
+        market_regime_report_identity_sha256=report.report_identity_sha256,
+        market_regime_input_identity_sha256=report.input_identity_sha256,
+        source_policy_identity_sha256=report.source_policy_identity_sha256,
+        validation_policy_identity_sha256=(report.validation_policy_identity_sha256),
+        policy_identity_sha256=report.policy_identity_sha256,
+        code_identity_sha256=report.code_identity_sha256,
+        comparison_session=report.comparison_session,
+        decision_session=report.decision_session,
+        decision_market_close=report.decision_market_close,
+        evidence_cutoff=report.evidence_cutoff,
+        members=sorted_members,
+        handoff_identity_sha256=identity,
+    )
+    return report, handoff
+
+
+def _reduce_observed_market_regime_pass_v1(
+    facts: object,
+    *,
+    collect_member_directions: bool,
+) -> tuple[MarketRegimeReportV1, tuple[_MemberDirectionV1, ...] | None]:
     if not isinstance(facts, VerifiedMarketRegimeFactsV1):
         raise TypeError("observed reduction requires VerifiedMarketRegimeFactsV1")
     validate_verified_market_regime_facts_v1(facts)
@@ -278,6 +455,9 @@ def reduce_observed_market_regime_v1(
         raise ValueError("verified member equations are inconsistent")
 
     advances = declines = unchanged = 0
+    projected_members: list[_MemberDirectionV1] | None = (
+        [] if collect_member_directions else None
+    )
     for prior_close, current_close in zip(prior, current, strict=True):
         if (
             prior_close.session_date != sessions[0].session_date
@@ -289,10 +469,21 @@ def reduce_observed_market_regime_v1(
         prior_value = validate_canonical_decimal(prior_close.close)
         current_value = validate_canonical_decimal(current_close.close)
         if current_value > prior_value:
+            direction = "ADVANCE"
             advances += 1
         elif current_value < prior_value:
+            direction = "DECLINE"
             declines += 1
         else:
+            direction = "UNCHANGED"
             unchanged += 1
+        if projected_members is not None:
+            projected_members.append(
+                _MemberDirectionV1(isin=current_close.isin, direction=direction)
+            )
 
-    return MarketRegimeReportV1.observed(facts, advances, declines, unchanged)
+    report = MarketRegimeReportV1.observed(facts, advances, declines, unchanged)
+    return (
+        report,
+        tuple(projected_members) if projected_members is not None else None,
+    )

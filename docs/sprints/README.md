@@ -28,18 +28,35 @@ increment and future process decisions.
 
 - Sprint 4 — Five-session opportunity census — closed by [PR #91](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/91), merged as `82f62107eb78ef696121edf096de7801d370970d`; the sealed result was 1,550/1,550 insufficient evidence and made no predictive claim.
 - Sprint 5 — Prospective Evidence Readiness v1 — closed by [PR #92](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/92), merged as `21cd9f9acbb976e9f29298e0f45dbcdf83167897`; the provider-free prerequisite manifest fails closed with `DECLARATION_RECEIPT_MISSING` and zero attempts.
-- [Sprint 6 — Market Regime v1 specification](sprint-6.md) — closed by [PR #93](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/93), merged as `46daa690b75ae1bedbdbb76633b167bfac5a6a1d`; the classifier and observed regimes remain unimplemented/unclaimed.
-- [Sprint 8 — Sector Analysis: Sector Participation v1 specification](sprint-8.md) —
-  owner-approved on 2026-08-13 IST as the minimal V1 fact for locked Module 2;
-  ARK-175 through ARK-178 are Done and ARK-179 remains In Progress. Sealed
-  candidate `2d993210` passed the authoritative full gate before
-  `Sprint8FinalExactReview` returned **REQUEST_CHANGES**; repair `30750181`
-  changes only Plans 14 and 15 and has focused verification/antipattern
-  **PASS** plus quality **APPROVE**. The next commit is the complete publication
-  candidate; its SHA, full gate, and exact-SHA review will be recorded
-  externally in the PR body and Linear ARK-179 comment. After authorized merge,
-  a distinct closeout-metadata commit may record that predecessor's publication
-  evidence and final states without self-attesting its own SHA or checks. Both
-  phases, hosted checks, merge, and closure remain pending. No implementation,
-  source/provider/credential/data-root activity, observed result, ranking, or
-  effectiveness evidence is claimed.
+- [Sprint 6 — Market Regime v1 specification](sprint-6.md) — closed by [PR #93](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/93), merged as `46daa690b75ae1bedbdbb76633b167bfac5a6a1d`; Sprint 6 itself claimed no observed regime, and the later Sprint 8 slice reuses the now-implemented observed reducer.
+- [Sprint 8 — Sector Analysis: atomic Sector Participation v1 slice](sprint-8.md) —
+  In Progress for the corrected 2026-08-13 through 2026-08-19 window. Its
+  provider-free in-process reducer accepts trusted verified Market Regime facts
+  and a resolved snapshot, then derives and consumes the exact-50 private
+  handoff internally in the same call; callers have no handoff authority.
+  Aggregate snapshot construction now revalidates every constituent invariant
+  across all 50 exact members. Expected deep-consistency `TypeError` or
+  `ValueError` failures cross Sector Participation only as the stable bounded
+  `resolved universe snapshot is inconsistent` structural error.
+  A label containing a full constituent ISIN case-insensitively or matching a
+  constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token
+  returns whole-result `SECTOR_CLASSIFICATION_CORRUPT` with no sector rows.
+  Non-identity singleton groups remain allowed solely within the authenticated
+  nonanonymous owner-private boundary; no public delivery exists.
+  Exact SHA `25d889a` received **REQUEST_CHANGES** for the identity-label defect
+  and is superseded by its TDD repair. The second exact-SHA review returned
+  **REQUEST_CHANGES** for the deep constituent-revalidation defect in `d79eecc`;
+  that revision is also superseded and is not final-candidate evidence.
+  The focused defect reproduction was **2 failing**, the direct repaired
+  regression is **2 passed**, and the current combined universe/observed/sector
+  focused gate is **96 passed**, with Ruff **PASS** and Pyright **0 errors, 0
+  warnings**.
+  ARK-175 through ARK-178 remain Done historical specification work, ARK-179
+  remains the integrated In Progress goal, ARK-180 is Done with implementation
+  evidence, and ARK-181 is the sole active child, In Progress pending integrated
+  review. The final repaired repository gate is Ruff/format/Vulture **PASS**,
+  Pyright **0 errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage.
+  A sealed exact-revision review remains pending. PR #102
+  remains immutable planning evidence; no official taxonomy, provider,
+  delivery transport, recommendation, live result, effectiveness, approval,
+  merge, or publication claim is made.

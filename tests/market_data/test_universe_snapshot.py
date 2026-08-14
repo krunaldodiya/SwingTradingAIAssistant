@@ -157,6 +157,25 @@ def test_current_official_symbol_aliases_are_admitted_and_round_trip() -> None:
     assert {"M&M", "BAJAJ-AUTO"} <= {member.symbol for member in restored.constituents}
 
 
+def test_snapshot_revalidation_rejects_exact_member_with_forged_symbol_type() -> None:
+    class CaseMaskingStr(str):
+        def upper(self) -> str:
+            return "MASKED-FORGED-SYMBOL"
+
+    snapshot = _snapshot()
+    member = snapshot.constituents[0]
+    forged_symbol = CaseMaskingStr(member.symbol)
+    assert str(forged_symbol) == member.symbol
+    assert forged_symbol.upper() == "MASKED-FORGED-SYMBOL"
+    object.__setattr__(member, "symbol", forged_symbol)
+    assert type(member) is Nifty50ConstituentV1
+
+    with pytest.raises(ValueError) as raised:
+        snapshot.__post_init__()
+
+    assert str(raised.value) == "invalid Nifty 50 constituent"
+
+
 def test_snapshot_rejects_invalid_member_count_and_noncanonical_bytes() -> None:
     with pytest.raises(ValueError):
         _snapshot().__class__(

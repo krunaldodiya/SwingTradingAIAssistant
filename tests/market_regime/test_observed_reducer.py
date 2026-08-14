@@ -13,6 +13,7 @@ from functools import lru_cache
 import pytest
 from test_fact_graph import _event, _isin, _valid_graph
 
+import swing_trading_ai_assistant.market_regime.observed as observed_module
 from swing_trading_ai_assistant.market_regime import (
     FactGraphAdmissionError,
     MarketRegimeLabelV1,
@@ -619,3 +620,96 @@ def test_cutoff_clock_accepts_equality_and_rejects_plus_one_microsecond() -> Non
     late_values["current_closes"] = (late, *current[1:])
     with pytest.raises(FactGraphAdmissionError, match="after cutoff"):
         admit_verified_market_regime_facts_v1(**late_values)
+
+
+def test_same_pass_handoff_preserves_public_report_and_binds_member_directions() -> (
+    None
+):
+    directions = [
+        1 if index % 3 == 0 else -1 if index % 3 == 1 else 0 for index in range(50)
+    ]
+    facts = _with_directions(_admitted(), directions)
+    existing_report = reduce_observed_market_regime_v1(facts)
+
+    report, handoff = (
+        observed_module._reduce_observed_market_regime_with_sector_handoff_v1(facts)
+    )
+
+    assert report == existing_report
+    assert report.canonical_json_bytes() == existing_report.canonical_json_bytes()
+    assert isinstance(handoff, observed_module._MarketRegimeSectorHandoffV1)
+    assert handoff.contract_version == "nifty50-market-regime-sector-handoff@v1"
+    assert (
+        handoff.handoff_identity_sha256
+        == hashlib.sha256(canonical_json_lf(handoff._identity_projection())).hexdigest()
+    )
+    assert handoff.market_regime_contract_version == report.contract_version
+    assert handoff.market_regime_report_identity_sha256 == report.report_identity_sha256
+    assert handoff.market_regime_input_identity_sha256 == report.input_identity_sha256
+    for field in (
+        "source_policy_identity_sha256",
+        "validation_policy_identity_sha256",
+        "policy_identity_sha256",
+        "code_identity_sha256",
+        "comparison_session",
+        "decision_session",
+        "decision_market_close",
+        "evidence_cutoff",
+    ):
+        assert getattr(handoff, field) == getattr(report, field)
+
+    expected = tuple(
+        sorted(
+            (
+                (
+                    close.isin,
+                    {-1: "DECLINE", 0: "UNCHANGED", 1: "ADVANCE"}[direction],
+                )
+                for close, direction in zip(
+                    facts.current_closes, directions, strict=True
+                )
+            )
+        )
+    )
+    assert (
+        len(handoff.members) == len({member.isin for member in handoff.members}) == 50
+    )
+    assert tuple(member.isin for member in handoff.members) == tuple(
+        sorted(member.isin for member in handoff.members)
+    )
+    assert all(
+        isinstance(member, observed_module._MemberDirectionV1)
+        for member in handoff.members
+    )
+    assert (
+        tuple((member.isin, member.direction) for member in handoff.members) == expected
+    )
+    assert (
+        sum(member.direction == "ADVANCE" for member in handoff.members)
+        == report.advances
+    )
+    assert (
+        sum(member.direction == "DECLINE" for member in handoff.members)
+        == report.declines
+    )
+    assert (
+        sum(member.direction == "UNCHANGED" for member in handoff.members)
+        == report.unchanged
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        handoff.members[0].direction = "DECLINE"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        handoff.members = ()  # type: ignore[misc]
+
+    public_surface = report.canonical_json_bytes().decode("utf-8") + repr(report)
+    private_tokens = (
+        *(member.isin for member in facts.membership.members),
+        *(member.symbol for member in facts.membership.members),
+        "_MemberDirectionV1",
+        "_MarketRegimeSectorHandoffV1",
+        "direction=",
+        "RAW_CLOSE_NO_BREAK_PROVEN",
+        "nse-session-ohlcv@v1",
+    )
+    assert all(token not in public_surface for token in private_tokens)

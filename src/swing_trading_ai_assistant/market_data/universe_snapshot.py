@@ -130,7 +130,12 @@ class Nifty50UniverseSnapshotV1:
             and type(members) is tuple
             and len(members) == 50
             and all(type(member) is Nifty50ConstituentV1 for member in members)
-            and tuple(sorted(members, key=lambda member: member.isin)) == members
+        ):
+            raise ValueError("invalid Nifty 50 universe snapshot")
+        for member in members:
+            member.__post_init__()
+        if not (
+            tuple(sorted(members, key=lambda member: member.isin)) == members
             and len({member.isin for member in members}) == 50
             and len({member.symbol for member in members}) == 50
         ):
