@@ -54,8 +54,11 @@ joins all 50 decision-session ISINs to point-in-time official NSE Indices
 Sector-tier evidence, and permits owner-private per-sector counts only.
 [Plan 14](plans/14-sector-participation-contract.md) and
 [Plan 15](plans/15-sector-participation-validation-protocol.md) define the
-owner-approved specification and validation protocol; implementation and real
-evidence are future and unstarted.
+owner-approved specification and validation protocol. Their four component
+histories have independent agent-role approval, and ARK-179 is reconciling the
+pre-publication candidate. No final candidate commit, PR, hosted check,
+publication, merge, implementation, source/provider/credential/data-root
+activity, observed result, ranking, or effectiveness evidence exists.
 
 ## Later modules
 

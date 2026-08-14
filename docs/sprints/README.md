@@ -29,4 +29,10 @@ increment and future process decisions.
 - Sprint 4 — Five-session opportunity census — closed by [PR #91](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/91), merged as `82f62107eb78ef696121edf096de7801d370970d`; the sealed result was 1,550/1,550 insufficient evidence and made no predictive claim.
 - Sprint 5 — Prospective Evidence Readiness v1 — closed by [PR #92](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/92), merged as `21cd9f9acbb976e9f29298e0f45dbcdf83167897`; the provider-free prerequisite manifest fails closed with `DECLARATION_RECEIPT_MISSING` and zero attempts.
 - [Sprint 6 — Market Regime v1 specification](sprint-6.md) — closed by [PR #93](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/93), merged as `46daa690b75ae1bedbdbb76633b167bfac5a6a1d`; the classifier and observed regimes remain unimplemented/unclaimed.
-- [Sprint 8 — Sector Analysis: Sector Participation v1 specification](sprint-8.md) — owner-approved on 2026-08-13 IST as the minimal V1 fact for locked Module 2; ARK-175 through ARK-179 remain Todo/unstarted, and implementation, sources, and observed results remain unstarted.
+- [Sprint 8 — Sector Analysis: Sector Participation v1 specification](sprint-8.md) —
+  owner-approved on 2026-08-13 IST as the minimal V1 fact for locked Module 2;
+  ARK-175 through ARK-178 are Done and independently agent-reviewed, while
+  ARK-179 is the sole In Progress pre-publication reconciliation. No final
+  candidate commit, PR, hosted check, merge, implementation, source/provider/
+  credential/data-root activity, observed result, ranking, or effectiveness
+  evidence is claimed.
