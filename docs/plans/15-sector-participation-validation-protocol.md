@@ -1,6 +1,6 @@
 # Sector Participation v1 TDD and validation protocol
 
-Status: **GREEN IMPLEMENTED CORE — REVIEW AND PUBLICATION PENDING**
+Status: **GREEN — REVIEWED AND PUBLISHED**
 
 Contract under validation: `nifty50-sector-participation@v1`
 
@@ -64,14 +64,22 @@ exact constituent. The focused defect reproduction was **2 failing**. The
 repair deep-revalidates all exact-50 members at aggregate construction, and the
 direct repaired regression is **2 passed**.
 
-The current combined universe-snapshot, observed-reducer, and Sector
-Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
-errors, 0 warnings**. `d79eecc` is superseded; it is not approval, publication,
-or final-candidate evidence. The final repaired repository gate is
+The final combined universe-snapshot, observed-reducer, and Sector Participation
+focused gate is **96 passed**, with Ruff **PASS** and Pyright **0 errors, 0
+warnings**. `d79eecc` is superseded; it is not approval, publication, or
+final-candidate evidence. The final repaired repository gate is
 Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
-passed** at **92.96%** coverage. A sealed exact-revision review remains pending.
-None of the focused or repository results is hosted CI, publication,
-observed-market, or effectiveness evidence.
+passed** at **92.96%** coverage. Documentation evidence is **60 passed**.
+
+Final reviewed head `411b21d4874206563b64d03ce8024953430660d2`
+received independent exact-SHA quality **APPROVE** and security **PASS**.
+[PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
+merged to `main` at **2026-08-14T19:39:18Z** as
+`b6e34d3cdc598e1cd6dc50c50d517481d26e1391`. Hosted CI
+[run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021)
+and GitGuardian both passed. The local focused and repository gates are not
+themselves hosted, live-market, or effectiveness evidence; the separately
+identified hosted checks are publication evidence only.
 
 ## Current behavioral matrix
 
@@ -206,8 +214,8 @@ characters in the exercised cases.
 The reducer implementation contains no file, network, provider, resolver,
 storage, logging, or publication operation. Review must reject any future
 change that turns the pure in-memory reducer into an I/O boundary. The focused
-suite validates redacted surfaces; final review must also inspect the reducer
-for zero-I/O preservation.
+suite validates redacted surfaces; the completed exact-SHA reviews also
+inspected the reducer for zero-I/O preservation.
 
 ## Historical PR #102 boundary
 
@@ -222,18 +230,22 @@ issue in the provider-free in-process core. No nonce, cryptographic delivery
 protocol, readiness service, or private-delivery runtime is implemented or
 claimed here.
 
-## Remaining evidence and publication gates
+## Completed review and publication evidence
 
-The following remain pending for the integrated Sprint 8 increment:
+| Evidence | Final result |
+|---|---|
+| Final reviewed head | `411b21d4874206563b64d03ce8024953430660d2` |
+| Independent exact-SHA reviews | Quality **APPROVE**; security **PASS** |
+| Focused gate | **96 passed**; Ruff **PASS**; Pyright **0 errors, 0 warnings** |
+| Repository gate | Ruff/format/Vulture **PASS**; Pyright **0 errors, 0 warnings**; **2,445 passed** at **92.96%** coverage |
+| Documentation evidence | **60 passed** |
+| Hosted checks | CI [run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021) **PASS**; GitGuardian **PASS** |
+| Publication | [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103) merged at **2026-08-14T19:39:18Z** as `b6e34d3cdc598e1cd6dc50c50d517481d26e1391` |
 
-1. a committed publication candidate with externally recorded exact revision;
-2. a new exact-revision independent review of the repaired implementation and
-   reconciled documentation (`25d889a` and `d79eecc` were
-   **REQUEST_CHANGES** and are superseded);
-3. hosted checks and authorized merge/publication; and
-4. Linear/sprint closeout after that evidence exists.
-
-Failure of any pending review or gate blocks publication, but does not turn the
-removed Layer B design into an implemented-core defect. No real-data run or
-observed Sector Participation result is required or claimed for this synthetic,
-provider-free conformance slice.
+Repository implementation, review, and publication are complete. ARK-179 and
+ARK-181 remain In Progress pending Linear reconciliation rather than being
+represented here as Done; repository Sprint delivery is complete, and Linear
+closeout is next.
+The completed publication does not turn the removed Layer B design into an
+implemented-core defect and does not claim a real-data run, observed Sector
+Participation result, or effectiveness evidence.

@@ -1,6 +1,6 @@
 # Sector Participation v1 implementation contract
 
-Status: **IMPLEMENTED CORE — REVIEW AND PUBLICATION PENDING**
+Status: **IMPLEMENTED, REVIEWED, AND PUBLISHED**
 
 Contract: `nifty50-sector-participation@v1`
 
@@ -262,15 +262,27 @@ repair; it is not approval, publication, or final-candidate evidence. The
 focused defect reproduction was **2 failing** before the repair, and the direct
 repaired regression is **2 passed**.
 
-The current combined universe-snapshot, observed-reducer, and Sector
-Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
-errors, 0 warnings**. The final repaired repository gate is
-Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
-passed** at **92.96%** coverage. A sealed exact-revision review remains pending.
+The final combined universe-snapshot, observed-reducer, and Sector Participation
+focused gate is **96 passed**, with Ruff **PASS** and Pyright **0 errors, 0
+warnings**. The final repaired repository gate is Ruff/format/Vulture **PASS**,
+Pyright **0 errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage.
+Documentation evidence is **60 passed**.
 
-## Implemented acceptance
+Final reviewed head `411b21d4874206563b64d03ce8024953430660d2`
+received independent exact-SHA quality **APPROVE** and security **PASS**.
+[PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
+merged to `main` at **2026-08-14T19:39:18Z** as
+`b6e34d3cdc598e1cd6dc50c50d517481d26e1391`. Hosted CI
+[run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021)
+and GitGuardian both passed. This evidence completes repository review and
+publication; it is not a live-market or effectiveness result.
+ARK-179 and ARK-181 remain In Progress pending Linear reconciliation rather
+than being represented here as Done. Repository Sprint delivery is complete,
+and Linear closeout is next.
 
-The implemented core is accepted for review when all of these remain true:
+## Completed acceptance
+
+The delivered contract was accepted after all of these remained true:
 
 - exact verified Market Regime facts internally produce an unchanged public
   report plus one exact-50 immutable private handoff, and that pair is consumed
@@ -294,12 +306,11 @@ The implemented core is accepted for review when all of these remain true:
 
 ## Explicitly deferred
 
-The following are not part of the implemented core:
+The following are not part of the delivered slice:
 
 - proof or acquisition of an official historical NSE Sector taxonomy;
 - any provider, download, refresh, storage, or retained-evidence workflow;
 - Layer B acquisition/readiness and its private-delivery controls;
 - CLI, API, MCP, or another delivery transport;
 - a recommendation, ranking, live observed market result, backtest, or
-  effectiveness claim; and
-- publication or Sprint 8 closure evidence.
+  effectiveness claim.
