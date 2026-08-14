@@ -47,8 +47,8 @@ Implement and validate the module only after that specification is frozen.
 
 ## Phase 3: Second module — Sector Analysis
 
-Sprint 8 implements the first atomic vertical slice inside architecture-locked
-Module 2, Sector Analysis, during the corrected 2026-08-13 through 2026-08-19
+Sprint 8 delivered the first atomic vertical slice inside architecture-locked
+Module 2, Sector Analysis, in the corrected 2026-08-13 through 2026-08-19
 window. `nifty50-sector-participation@v1` accepts exact verified Market Regime
 facts and one already-resolved PIT Nifty 50 snapshot, then derives and consumes
 the report/private handoff internally in the same call. It emits deterministic
@@ -78,31 +78,35 @@ core is implemented in
 `src/swing_trading_ai_assistant/sector_analysis/participation.py`; focused
 coverage is in `tests/market_data/test_universe_snapshot.py`,
 `tests/market_regime/test_observed_reducer.py`, and
-`tests/sector_analysis/test_participation.py`. The prior complete two-file
-focused run was **49 passed**. After exact-SHA privacy review, the focused
-identity-regression run was **4 passed**; the subsequent complete two-file run
-was **53 passed**, with Ruff **PASS** and focused Pyright **0 errors, 0
-warnings**.
+`tests/sector_analysis/test_participation.py`. Historical focused evidence
+includes the prior **49 passed** two-file run, the **4 passed** identity
+regressions, and the subsequent **53 passed** two-file run.
 
-ARK-175 through ARK-178 remain Done as historical specification work. The
-corrected integrated goal ARK-179 remains In Progress; ARK-180 is Done with its
-implementation evidence recorded, and ARK-181 is the sole active child, In
-Progress pending integrated review. Exact SHA `25d889a` received
-**REQUEST_CHANGES** for the identity-bearing-label privacy defect and is
-superseded by its TDD repair.
+The final combined universe/observed/sector focused gate is **96 passed**, with
+Ruff **PASS** and Pyright **0 errors, 0 warnings**. The repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
+passed** at **92.96%** coverage; documentation evidence is **60 passed**.
+Final reviewed head `411b21d4874206563b64d03ce8024953430660d2`
+received independent exact-SHA quality **APPROVE** and security **PASS**.
+Hosted CI [run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021)
+and GitGuardian both passed.
 
-The second exact-SHA review found the deep constituent-revalidation defect in
-`d79eecc` and returned **REQUEST_CHANGES**. That revision is superseded by the
-repair; it is not approval, publication, or final-candidate evidence. The
-focused defect reproduction was **2 failing** and the direct repaired regression
-is **2 passed**. The current combined universe/observed/sector focused gate is
-**96 passed**, with Ruff **PASS** and Pyright **0 errors, 0 warnings**.
+[PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
+merged the slice to `main` at **2026-08-14T19:39:18Z** as
+`b6e34d3cdc598e1cd6dc50c50d517481d26e1391`; repository Sprint 8 delivery,
+review, and publication are complete. ARK-175 through ARK-178 remain Done as
+historical specification work, and ARK-180 remains Done with implementation
+evidence. ARK-179 and ARK-181 remain In Progress pending Linear reconciliation;
+Linear closeout is next and is not represented here as complete.
 
-The final repaired repository gate is Ruff/format/Vulture **PASS**, Pyright **0
-errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage. A sealed
-exact-revision review, publication, and closure remain pending.
+Exact SHA `25d889a` received **REQUEST_CHANGES** for the identity-bearing-label
+privacy defect. Exact SHA `d79eecc` received **REQUEST_CHANGES** for the deep
+constituent-revalidation defect. Both are superseded and are not approval or
+publication evidence. The focused defect reproduction was **2 failing**, and
+the direct repaired regression is **2 passed**.
 [PR #102](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/102)
-remains immutable planning evidence, not implementation evidence.
+remains immutable historical planning/specification evidence, not implementation
+or publication evidence.
 
 The opaque labels are not claimed as an official NSE Sector taxonomy. Official
 taxonomy work and Layer B are deferred. This slice adds no provider, acquisition

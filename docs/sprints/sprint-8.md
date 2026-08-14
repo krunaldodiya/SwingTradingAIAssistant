@@ -1,6 +1,6 @@
 # Sprint 8 — Sector Analysis: atomic Sector Participation v1 slice
 
-Status: **IN PROGRESS — IMPLEMENTED CORE; REVIEW AND PUBLICATION PENDING**
+Status: **REPOSITORY DELIVERY COMPLETE — LINEAR RECONCILIATION PENDING**
 
 Corrected window: **2026-08-13 through 2026-08-19**
 
@@ -34,7 +34,7 @@ taxonomy.
 
 ## Implemented increment
 
-The current worktree contains:
+The merged implementation contains:
 
 | Contract area | Implemented behavior | Source |
 |---|---|---|
@@ -60,7 +60,8 @@ No public delivery surface exists, and this in-process policy is not a public
 privacy guarantee.
 
 The exact implemented contract is [Plan 14](../plans/14-sector-participation-contract.md).
-The current TDD matrix and remaining gates are [Plan 15](../plans/15-sector-participation-validation-protocol.md).
+The completed TDD, review, and publication evidence is
+[Plan 15](../plans/15-sector-participation-validation-protocol.md).
 
 ## TDD and status evidence
 
@@ -99,12 +100,15 @@ deep-revalidation repair; it is not approval, publication, or final-candidate
 evidence. The focused defect reproduction was **2 failing** and the direct
 repaired regression is **2 passed**.
 
-The current combined universe-snapshot, observed-reducer, and Sector
-Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
-errors, 0 warnings**. The final repaired repository gate is
-Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
-passed** at **92.96%** coverage. None of this is hosted CI, publication, a
-live-data run, or an effectiveness result.
+The final combined universe-snapshot, observed-reducer, and Sector Participation
+focused gate is **96 passed**, with Ruff **PASS** and Pyright **0 errors, 0
+warnings**. The final repaired repository gate is Ruff/format/Vulture **PASS**,
+Pyright **0 errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage.
+Documentation evidence is **60 passed**. Final reviewed head
+`411b21d4874206563b64d03ce8024953430660d2` received independent exact-SHA
+quality **APPROVE** and security **PASS**. Hosted CI
+[run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021)
+and GitGuardian both passed.
 
 ## Linear reconciliation
 
@@ -116,18 +120,16 @@ The repository records the current Linear truth without mutating it:
 | ARK-176 | Historical taxonomy-policy documentation | Done |
 | ARK-177 | Historical fact-contract documentation | Done |
 | ARK-178 | Historical validation/readiness documentation | Done |
-| ARK-179 | Corrected integrated Sprint 8 implementation goal | In Progress |
+| ARK-179 | Corrected integrated Sprint 8 implementation goal | In Progress — pending reconciliation |
 | ARK-180 | Trusted-facts same-call handoff and happy path with implementation evidence | Done |
-| ARK-181 | Fail-closed behavior and synthetic conformance; integrated review pending | In Progress |
+| ARK-181 | Fail-closed behavior and synthetic conformance | In Progress — pending reconciliation |
 
 ARK-175 through ARK-178 remain immutable historical specification outcomes; they
 are not implementation evidence and are not reopened. ARK-180 is Done with its
-implementation evidence recorded. ARK-181 is the sole active child, In Progress:
-its implementation and tests exist; the current combined focused evidence is
-**96 passed**, with Ruff **PASS** and Pyright **0 errors, 0 warnings**. The
-final repaired repository gate is **2,445 passed** at **92.96%** coverage;
-independent exact-revision review remains pending.
-ARK-179 and Sprint 8 therefore remain In Progress through final closure.
+implementation evidence recorded. ARK-179 and ARK-181 remain In Progress pending
+Linear reconciliation rather than being falsely represented here as Done.
+Repository Sprint 8 delivery, review, and publication are complete; Linear
+closeout is next.
 
 ## Historical planning evidence
 
@@ -151,20 +153,21 @@ Opaque source labels are not represented as an official NSE Sector tier. Sprint
 - Layer B acquisition/readiness or private-delivery controls;
 - CLI, API, MCP, or another delivery transport;
 - a recommendation, ranking, live observed Sector Participation result,
-  backtest, or effectiveness evidence; or
-- publication, merge, or Sprint closure before external evidence exists.
+  backtest, or effectiveness evidence.
 
-## Remaining gate and publication evidence
+## Completed publication evidence and next reconciliation
 
-The integrated slice remains open pending:
+| Evidence | Final result |
+|---|---|
+| Final reviewed head | `411b21d4874206563b64d03ce8024953430660d2` |
+| Independent exact-SHA reviews | Quality **APPROVE**; security **PASS** |
+| Focused gate | **96 passed**; Ruff **PASS**; Pyright **0 errors, 0 warnings** |
+| Repository gate | Ruff/format/Vulture **PASS**; Pyright **0 errors, 0 warnings**; **2,445 passed** at **92.96%** coverage |
+| Documentation evidence | **60 passed** |
+| Hosted checks | CI [run 31832620021](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/31832620021) **PASS**; GitGuardian **PASS** |
+| Publication | [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103) merged to `main` at **2026-08-14T19:39:18Z** as `b6e34d3cdc598e1cd6dc50c50d517481d26e1391` |
 
-1. a committed candidate with externally recorded exact revision;
-2. a new exact-revision independent review of the repaired implementation and
-   these reconciled documents;
-3. hosted checks plus authorized publication/merge; and
-4. deliberate Linear reconciliation and Sprint 8 closeout after publication.
-
-There is no specification-only closeout or separate post-merge documentation
-phase. The implementation, review, and publication evidence close as one atomic
-Sprint 8 increment. Until the pending evidence exists, ARK-179 and Sprint 8
-remain In Progress and no observed result or effectiveness claim is made.
+The repository increment is closed. The next administrative action is Linear
+reconciliation for ARK-179 and ARK-181; this repository record does not claim
+that reconciliation has already occurred. The completed increment makes no
+observed-result or effectiveness claim.
