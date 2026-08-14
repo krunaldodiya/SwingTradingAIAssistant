@@ -36,9 +36,10 @@ approve any excluded work.
   candidate/attempt/admission trace, taxonomy evidence, facts, equations,
   reasons, privacy, identities, bounds, and implementation stop.
 - [Plan 15](../plans/15-sector-participation-validation-protocol.md)
-  preregisters structural/domain distinction, exact oracle, selectors,
-  adversaries, metamorphisms, upstream boundary, privacy, zero I/O, readiness,
-  and feasible future chronology.
+  preregisters the independent exhaustive per-sector and aggregate oracle,
+  boundary/revision/no-lookahead adversaries, permutation and renaming
+  metamorphisms, privacy canaries, identity sensitivity, byte-exact replay,
+  zero I/O, count-free readiness, and the feasible future chronology.
 - Per the owner clarification, this planning increment adds no documentation
   assertion and no test file. Existing focused checks remain repository-quality
   evidence only, not implementation, reducer, evidence-readiness,
@@ -103,11 +104,14 @@ caller-trusted facts, partial output, or implementation work.
 
 ### ARK-178 — validation and readiness
 
-Preregister structural/no-report versus domain insufficiency, exhaustive and
-property oracles, selector binding, revision forks/cycles/conflicts, schedule and
-corporate-action upstream adversaries, corrected post-cutoff metamorphisms,
-privacy/redaction, zero I/O, one-bundle readiness without count disclosure, and
-the feasible non-circular chronology.
+Plan 15 preregisters structural/no-report versus domain insufficiency,
+exhaustive per-sector direction triples and exact aggregate reconciliation,
+independent and property oracles, selector binding, effective/cutoff and
+revision boundaries, cross-authority no-lookahead, schedule and
+corporate-action upstream adversaries, permutation/renaming and post-cutoff
+metamorphisms, privacy canaries, identity sensitivity, byte-exact replay, zero
+I/O, one-bundle readiness without count disclosure, and the feasible
+non-circular chronology.
 
 Acceptance: every contract edge has a future zero-tolerance test and readiness
 cannot disclose an outcome. Stop if tests require real data/provider access,
@@ -141,14 +145,18 @@ Review must verify:
   defects as insufficiency while malformed bytes produce no report;
 - receipt/selector and sealed authority/source/schema/release/clock/revision/
   manifest/licence proof binding, reconstructed rather than caller-trusted;
-- exact equations, whole-report failure, reason precedence, privacy suppression,
-  canonical identities, and zero I/O;
-- byte-identical unchanged old replay versus new identities/outcome for a
-  separately sealed changed post-cutoff input;
-- explicit revision forks/cycles/conflicts, schedule corrections, and corporate-
-  action completeness adversaries without downstream recomputation; and
-- authorization → source/licence/acquisition/retention → strict-TDD Layer A and
-  review → sealing → count-free readiness → one ready-bundle reduction.
+- exhaustive per-sector size/direction triples, exact aggregate equations,
+  whole-report failure, reason precedence, permutation invariance, label
+  renaming, privacy suppression/canaries, identity sensitivity, and zero I/O;
+- byte-identical unchanged old replay across membership, classification,
+  assignment mapping, schedule, and corporate-action future revisions versus
+  new identities/outcomes for a separately sealed changed post-cutoff input;
+- explicit effective/cutoff edges, duplicate/extra rows, revision
+  forks/cycles/conflicts, schedule corrections, and corporate-action
+  completeness adversaries without downstream recomputation; and
+- strict conformance/readiness/result separation followed by authorization →
+  source/licence/acquisition/retention → strict-TDD Layer A and review → sealing
+  → count-free readiness → one ready-bundle reduction.
 
 ## Data and readiness truth
 

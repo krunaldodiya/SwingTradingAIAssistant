@@ -957,6 +957,12 @@ lineage nodes 0..64 candidates and 1..64 verified; sector rows 1..50; sector
 labels 1..128 UTF-8 bytes; nesting at most 16; additional reasons at most 15.
 Limit-plus-one is always tested.
 
+The future falsifiable mechanics and count-free readiness gate for this exact
+contract are preregistered in
+[Plan 15](15-sector-participation-validation-protocol.md). That protocol neither
+changes this contract nor supplies implementation, conformance, readiness, or
+observed-result evidence.
+
 This slice authorizes documentation edits and review only. Per the owner
 clarification, it adds no documentation assertion and no test file. The feasible
 future order is fixed and non-circular:
