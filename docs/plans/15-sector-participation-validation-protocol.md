@@ -82,7 +82,7 @@ The suite first freezes a two-column oracle:
 
 | Input class | Required behavior |
 |---|---|
-| malformed UTF-8/JSON, duplicate key, unknown/missing field, invalid union/nullability, noncanonical bytes, excessive nesting/bytes, >51 candidate rows | structural rejection; no report |
+| malformed UTF-8/JSON, duplicate key, unknown/missing field (including removed handoff `next_official_session`), invalid union/nullability, noncanonical bytes, excessive nesting/bytes, canonical request/upstream decision-session mismatch, 52 assignment candidates, or 52 coverage-manifest entries | structural rejection; no report |
 | well-formed upstream absent or insufficient envelope | report with `MARKET_REGIME_NOT_OBSERVED` and exact nullable endpoints |
 | well-formed missing/late/0/49/51/duplicate/ambiguous/corrupt/wrong-tier/clock/licence/revision candidate | insufficient report with null sectors and exact reasons |
 | fully verified observed branch and valid owner proof | observed owner-private report |
@@ -108,15 +108,31 @@ CUTOFF_VERIFIED => value / value / value
 ```
 
 Every well-formed absent/insufficient branch yields
-`MARKET_REGIME_NOT_OBSERVED`. Foreign versions, malformed or noncanonical
-report/handoff bytes, digest mismatch, inconsistent observed counts, an invalid
-direction enum, a duplicate handoff ISIN, an externally unsorted
-`handoff.members` tuple, and 49/51 handoff rows are structural no-report cases.
-The ordering fixture swaps two otherwise valid exact-50 handoff rows and
-recomputes the handoff digest; its digest-valid but noncanonical external order
-is still structurally rejected. The duplicate fixture replaces one row's ISIN
-with another present ISIN and recomputes the digest; its fixed 50-row shape does
-not prevent structural rejection.
+`MARKET_REGIME_NOT_OBSERVED`. For every branch with an upstream report, a
+canonical baseline binds the request and report `decision_session`. A fixture
+mutates only the request's semantic date, rebuilds the request identity, the
+audience proof's request binding and proof identity, and the canonical bundle
+identity, and leaves the canonical digest-valid upstream report unchanged. The
+well-formed date mismatch is structurally rejected before domain reduction and
+produces no report; `ABSENT` has no report-date comparison.
+
+`MarketRegimeSectorHandoffV1` has no `next_official_session`. Adding that removed
+name to otherwise canonical bytes and recomputing the handoff digest is an
+unknown-field structural rejection.
+
+The remaining Market Regime identities plus `decision_session`,
+`comparison_session`, `decision_market_close`, and `evidence_cutoff` must equal
+the observed report field-for-field. Sector Participation neither accepts nor
+derives a next-session value.
+
+Foreign versions, malformed or noncanonical report/handoff bytes, digest
+mismatch, inconsistent observed counts, an invalid direction enum, a duplicate
+handoff ISIN, an externally unsorted `handoff.members` tuple, and 49/51 handoff
+rows are structural no-report cases. The ordering fixture swaps two otherwise
+valid exact-50 handoff rows and recomputes the handoff digest; its digest-valid
+but noncanonical external order is still structurally rejected. The duplicate
+fixture replaces one row's ISIN with another present ISIN and recomputes the
+digest; its fixed 50-row shape does not prevent structural rejection.
 
 Only after both objects are canonically ordered, digest-valid, version-correct,
 and the handoff has exactly 50 strict-sorted unique rows do report
@@ -154,6 +170,46 @@ mutant remains structurally valid and yields `EVIDENCE_IDENTITY_MISMATCH` with
 null sectors at its existing precedence, never structural rejection or a
 classification ambiguity/corruption reason.
 
+Let `D` be the equal request/upstream decision session. Two independent
+canonical one-field date fixtures cover the downstream equations. The first
+changes only `classification_attempt.requested_identity.decision_session` to
+`D + 1 day`, then recomputes the attempt, bundle/input, and report identities.
+The second changes only the selected coverage-manifest decision-session value
+to `D + 1 day`, replays its selector, and recomputes every covering source-object,
+attempt, bundle/input, and report identity. Each remains structurally valid,
+yields exactly `[EVIDENCE_IDENTITY_MISMATCH]` at existing first precedence, has
+`sectors = null`, and exposes no partial count. The unchanged-date controls
+proceed; neither fixture mutates the request or upstream report.
+
+The coverage-manifest cardinality oracle starts from one canonical,
+trace-consistent, exact-50 ordered manifest and rebuilds all covering identities
+for each admitted mutation. For every `n` in 0..49, retain `n` requested entries;
+the exact reasons are `[SECTOR_CLASSIFICATION_MISSING]`. At 51, append one
+lexically valid nonmember entry; the exact reasons are
+`[SECTOR_CLASSIFICATION_CORRUPT]`. At 50, replace one requested entry with a
+duplicate of another and obtain the complete ordered tuple
+`[SECTOR_CLASSIFICATION_MISSING, SECTOR_CLASSIFICATION_AMBIGUOUS]`; instead
+replace it with one unique nonmember and obtain exactly
+`[EVIDENCE_IDENTITY_MISMATCH]`. Every admitted defect has null sectors, the
+tuple's first item is primary and any remainder is `additional_reasons`, and
+the recomputed source-object/attempt/bundle/input/report identities differ from
+the baseline. The unchanged exact-50 manifest proceeds. A 52-entry fixture is
+limit-plus-one structural rejection with no report or report identity.
+
+The required-member-count scalar oracle keeps the manifest at the valid exact-50
+entry shape, mutates only the selected scalar value, replays the selector, and
+recomputes every covering source-object, attempt, bundle/input, and output-report
+identity. Exact canonical `"50"` is the passing control. Exact canonical `"49"`
+and `"51"` each yield exactly `[SECTOR_CLASSIFICATION_CORRUPT]`, have
+`sectors = null`, and expose no partial count. Structurally valid count-format
+adversaries include empty text, `"5"`, `"050"`, `"+50"`, `"50.0"`, and
+padded text; all have the same corrupt outcome, with no parse, trim, or numeric
+coercion. `CandidateText` values at the 0-byte and 512-byte bounds are admitted
+and corrupt unless the value is exact `"50"`; a 513-byte value, malformed
+UTF-8/JSON, or noncanonical external bytes are structural rejection with no
+report or report identity. Every admitted corrupt fixture has recomputed
+identities distinct from the `"50"` control and null sectors.
+
 Zero-match, multi-match, out-of-range, escaped, mutable, or cross-object
 selectors fail closed. Coordinated rehashing of object, candidate, attempt,
 bundle, and caller-supplied manifests cannot replace the expected reviewed
@@ -165,9 +221,20 @@ manifest, licence, audience, or reviewed-build fact.
 The candidate-reason table in Plan 14 is parameterized row-for-row. It must prove
 these exact families:
 
-- null attempt/payload, zero and 49 rows, missing member, absent release/manifest;
-- 51 rows, extra member, corrupt text/date/label/interval, selector mismatch;
-- duplicate rows, overlapping intervals, conflicting labels/releases;
+- null attempt/payload, zero and 49 assignment rows, missing assignment member,
+  and absent taxonomy/coverage manifest;
+- 51 assignment rows, extra assignment member, corrupt
+  text/date/label/interval, and selector mismatch;
+- duplicate assignment rows, overlapping intervals, and conflicting
+  labels/releases;
+- coverage-manifest entries at every cardinality 0..52, with the exact
+  missing/corrupt/duplicate-plus-missing/nonmember-substitution outcomes above;
+- exact coverage-manifest `required_member_count_text` values `"49"`, `"50"`,
+  `"51"`, malformed count formats, and 0/512/513-byte boundaries with the exact
+  corrupt-versus-structural split above;
+- independent requested-identity and coverage-manifest decision-session
+  mismatches, plus every other identity mismatch and final join/equation
+  mismatch;
 - wrong authority, source, schema, release, tier, or effective scope;
 - each clock absent, one microsecond late, untrusted, rollback-conflicting, or
   forged from HTTP, filesystem, report, replay, or caller time;
@@ -175,8 +242,7 @@ these exact families:
 - absent selected revision, incomplete lineage, gap, orphan, missing edge,
   self-cycle, multi-node cycle, fork, conflicting current children, superseded
   selection, post-cutoff selection, checked-through before/after cutoff, and
-  manifest/lineage disagreement; and
-- every identity mismatch and final join/equation mismatch.
+  lineage disagreement.
 
 Effective-time and cutoff boundaries are partitioned, never described by an
 overlapping shorthand. Let `D` be `decision_session` and `K` be

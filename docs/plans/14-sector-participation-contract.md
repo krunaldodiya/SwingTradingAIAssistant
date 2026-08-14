@@ -130,7 +130,6 @@ MarketRegimeSectorHandoffV1 {
   code_identity_sha256: Sha256
   comparison_session: LocalDate
   decision_session: LocalDate
-  next_official_session: LocalDate
   decision_market_close: UtcInstant
   evidence_cutoff: UtcInstant
   members: tuple[MemberDirectionV1, 50]
@@ -148,13 +147,15 @@ handoff.members ==
 count(handoff.members) == count(unique(handoff.members[*].isin)) == 50
 ```
 
-Every Market Regime identity and endpoint in the handoff equals the corresponding
-observed-report field, and its direction totals equal that report's `advances`,
-`declines`, and `unchanged`. Its identity is SHA-256 of the Plan 12 canonical
-JSON-plus-one-LF serialization of every field except only
+Every Market Regime identity, `decision_session`, `comparison_session`,
+`decision_market_close`, and `evidence_cutoff` in the handoff equals the
+corresponding observed-report field, and its direction totals equal that
+report's `advances`, `declines`, and `unchanged`. Its identity is SHA-256 of the
+Plan 12 canonical JSON-plus-one-LF serialization of every field except only
 `handoff_identity_sha256`. The Market Regime producer copies its already-decided
 directions into this projection; neither Sector Participation nor the handoff
-projection reads closes or repeats a comparison.
+projection reads closes, repeats a comparison, derives a next session, or
+accepts a next-session field.
 
 This immutable, in-process, owner-private value is not a public report, stored
 export, provider payload, request argument, CLI flag, API body, or MCP argument.
@@ -246,14 +247,21 @@ own field. A malformed or noncanonical request is `REQUEST_INVALID` at
 application admission and produces no report; `REQUEST_INVALID` is not a domain
 reason.
 
+After the canonical request and any present canonical upstream report have
+passed their own identity checks, structural bundle admission requires
+`request.decision_session == upstream.report.decision_session`. This applies to
+both observed and upstream-insufficient reports. A well-formed, canonical,
+digest-valid mismatch is rejected before domain reduction and produces no
+`SectorParticipationReportV1`; `ABSENT` has no upstream report to compare.
+
 ## Evidence candidate, attempt, and immutable-byte trace
 
 Structural parsing is deliberately wider than verified facts. The following
 closed candidate layer preserves well-formed missing, late, zero-row, 49-row,
 51-row, duplicate, ambiguous, corrupt, wrong-tier, wrong-clock, licence, and
-revision defects as domain insufficiency. More than 51 assignment candidates,
-more than 64 lineage nodes, or malformed external bytes are structural failures
-and produce no report.
+revision defects as domain insufficiency. A 52-row assignment-candidate or
+coverage-manifest-entry collection, more than 64 lineage nodes, or malformed
+external bytes is structural failure and produces no report.
 
 ```text
 SectorEvidenceRequestIdentityV1 {
@@ -400,17 +408,34 @@ supersession edge, be acyclic, have no fork with two current children, and be
 checked through exactly the trusted knowledge cutoff. The licence proof must be
 content-derived from immutable bytes; a digest alone cannot prove permission.
 
+`CoverageManifestCandidateV1.entries` deliberately admits 0..51 rows. Its
+structurally valid cardinality/set defects use the exact shape-specific outcomes
+below; they are never normalized to 50, deduplicated, or repaired. A 52-entry
+manifest violates the closed bound and produces no report.
+
+`CoverageManifestCandidateV1.required_member_count_text` is separately exact:
+the only valid verified claim is the two-scalar canonical text `"50"`. Any other
+trace-consistent value within `CandidateText`'s 0..512-byte bound is
+`SECTOR_CLASSIFICATION_CORRUPT`; it is never parsed, coerced, padded, trimmed, or
+used to repair the entries. Malformed/noncanonical external bytes or a
+CandidateText bound violation remain structural no-report failures.
+
 ## Candidate-to-reason truth table
 
 The reducer evaluates every applicable row and proof so one failure does not
 hide lower-precedence reasons. These mappings are exact:
 
-| Structurally valid candidate or attempt condition | Domain reason |
+| Structurally valid candidate or attempt condition | Domain reason(s) |
 |---|---|
-| expected attempt absent; null payload/`NOT_RETURNED`; taxonomy or manifest absent; 0 received assignment candidate rows | `SECTOR_CLASSIFICATION_MISSING` |
-| 1..49 received assignment candidate rows, assignment candidates omit a requested ISIN, or incomplete manifest | `SECTOR_CLASSIFICATION_MISSING` |
+| expected attempt absent; null payload/`NOT_RETURNED`; taxonomy or coverage manifest absent; 0 received assignment candidate rows | `SECTOR_CLASSIFICATION_MISSING` |
+| 1..49 received assignment candidate rows or assignment candidates omit a requested ISIN | `SECTOR_CLASSIFICATION_MISSING` |
 | 51 received assignment candidate rows or any extra assignment candidate ISIN | `SECTOR_CLASSIFICATION_CORRUPT` |
 | duplicate assignment candidate ISIN; overlapping assignment candidate effective rows; two selected assignments; conflicting labels/releases | `SECTOR_CLASSIFICATION_AMBIGUOUS` |
+| coverage manifest has 0..49 entries, omits at least one requested entry in that sub-50 shape, or has a structurally valid incomplete completeness claim | `SECTOR_CLASSIFICATION_MISSING` |
+| coverage manifest has 51 entries or an extra entry in that 51-entry shape | `SECTOR_CLASSIFICATION_CORRUPT` |
+| coverage manifest has exactly 50 entries with a duplicate candidate ISIN and the corresponding requested ISIN missing | complete ordered reasons `[SECTOR_CLASSIFICATION_MISSING, SECTOR_CLASSIFICATION_AMBIGUOUS]` |
+| coverage manifest has exactly 50 unique entries but substitutes a lexically valid nonmember ISIN for a requested ISIN | `EVIDENCE_IDENTITY_MISMATCH` only |
+| trace-consistent coverage-manifest `required_member_count_text` is any structurally valid `CandidateText` value other than exact canonical `"50"` | `SECTOR_CLASSIFICATION_CORRUPT` |
 | invalid ISIN/date/label/effective interval; selector selects zero/multiple values; selected bytes disagree with candidate; `INVALID_SOURCE_ROW` | `SECTOR_CLASSIFICATION_CORRUPT` |
 | candidate or failure is after cutoff; any required clock is after cutoff | `SECTOR_CLASSIFICATION_LATE` |
 | authority/source/schema/release is not the sealed source-policy binding; `UNAUTHORIZED_AUTHORITY` | `SOURCE_NOT_AUTHORITATIVE` |
@@ -418,17 +443,18 @@ hide lower-precedence reasons. These mappings are exact:
 | response/retrieval/retention clock missing, untrusted, rollback-conflicting, or derived from HTTP/filesystem/report/replay time | `CLOCK_UNTRUSTED` |
 | exact tier is not official `Sector`, or release does not prove the four-tier path | `SECTOR_TIER_INVALID` |
 | selected assignment interval or taxonomy release misses `decision_session` | `SECTOR_EFFECTIVE_SCOPE_MISMATCH` |
-| lineage/manifest absent or incomplete; selected revision absent; checked-through differs from cutoff; gap, orphan, fork, cycle, conflicting current nodes, missing supersession, or post-cutoff node selected | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN` |
+| revision lineage absent or incomplete; selected revision absent; checked-through differs from cutoff; gap, orphan, fork, cycle, conflicting current nodes, missing supersession, or post-cutoff node selected | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN` |
 | licence proof absent, digest-only, wrong source/release/scope/date, unresolved, or lacks retention or owner-private aggregate permission | `LICENCE_UNRESOLVED` |
-| receipt/attempt identity, selected object/revision projection, manifest selector, sealed policy/build claim, or structurally valid `classification_attempt.requested_identity.member_isins` tuple does not exactly equal the strict ISIN-sorted ordered `handoff.members[*].isin` projection (including duplicate, permutation, or missing/excess substitution) | `EVIDENCE_IDENTITY_MISMATCH` |
+| receipt/attempt identity, selected object/revision projection, manifest selector, sealed policy/build claim, `classification_attempt.requested_identity.decision_session` or reconstructed coverage-manifest `decision_session` differs from the request/upstream decision session, or structurally valid `classification_attempt.requested_identity.member_isins` does not exactly equal the strict ISIN-sorted ordered `handoff.members[*].isin` projection (including duplicate, permutation, or missing/excess substitution) | `EVIDENCE_IDENTITY_MISMATCH` |
 | all above pass but exact assignment-to-handoff join or global equations fail | `SECTOR_TOTALS_INCONSISTENT` |
 | owner proof is expired, replayed, wrong-owner, wrong-purpose, unauthenticated, anonymous, public, or does not match sealed privacy policy | `PRIVACY_POLICY_UNSATISFIED` |
 
 Malformed UTF-8/JSON, duplicate object keys, unknown fields, noncanonical bytes,
-invalid union shape, more than 51 assignment rows, or a bound violation is
-structural admission failure: no report. By contrast, a structurally valid
-candidate's bad market/taxonomy value remains representable through bounded
-text and returns the table's insufficiency reason with null sectors.
+invalid union shape, 52 assignment rows, 52 coverage-manifest entries, or any
+other bound violation is structural admission failure: no report. By contrast,
+a structurally valid candidate's bad market/taxonomy/manifest value remains
+representable through bounded text and returns the table's insufficiency reason
+or complete ordered reason tuple with null sectors.
 
 ## Verified facts reconstructed by admission
 
@@ -754,9 +780,20 @@ report, as defined above.
 The reducer validates these additional invariants:
 
 ```text
-request.decision_session == upstream.report.decision_session
+request.decision_session ==
+  upstream.report.decision_session  # structural admission precondition
+classification_attempt.requested_identity.decision_session
+  == request.decision_session
+  == upstream.report.decision_session
+reconstructed_facts.coverage_manifest.decision_session
+  == request.decision_session
+  == upstream.report.decision_session
+
 upstream observed report identities == handoff identities
-upstream observed endpoints == handoff endpoints
+upstream.report.decision_session == handoff.decision_session
+upstream.report.comparison_session == handoff.comparison_session
+upstream.report.decision_market_close == handoff.decision_market_close
+upstream.report.evidence_cutoff == handoff.evidence_cutoff
 handoff direction totals == upstream observed counts
 
 count(unique(classification_attempt.requested_identity.member_isins)) == 50
@@ -881,9 +918,10 @@ externally unsorted `handoff.members` tuple, malformed or otherwise noncanonical
 report/handoff bytes, digest failure, and forbidden or missing union fields are
 structural no-report failures. `EVIDENCE_IDENTITY_MISMATCH` is reserved for the
 downstream candidate evidence, selector, manifest, sealed-policy/build identity,
-or structurally valid but non-exact classification requested-ISIN projection
-failures listed in the candidate-to-reason table; it does not subsume a
-structurally valid handoff semantic defect.
+structurally valid downstream decision-session mismatch, non-exact
+classification requested-ISIN projection, or exact-50 unique coverage-manifest
+nonmember substitution listed in the candidate-to-reason table; it does not
+subsume a structurally valid handoff semantic defect.
 
 ## Edge-case truth table
 
@@ -894,17 +932,26 @@ structurally valid handoff semantic defect.
 | upstream insufficient at schedule-unverified stage | same reason; all endpoints null |
 | upstream insufficient with endpoints but unresolved next open | same reason; comparison/close copied, cutoff null |
 | upstream insufficient with cutoff resolved | same reason; all three endpoints copied |
+| canonical, digest-valid request decision session differs from a present upstream report decision session | structural rejection before domain reduction; no report |
 | upstream unobserved envelope carries a handoff | structural rejection; no report |
 | observed envelope omits a handoff or has foreign/noncanonical report | structural rejection; no report |
+| handoff contains removed `next_official_session` field | unknown-field structural rejection; no report |
 | digest-valid external `handoff.members` tuple is not in canonical ISIN order | structural rejection; no report |
-| structurally valid requested-ISIN tuple is a permutation, contains a duplicate, or substitutes a missing/excess ISIN relative to the strict sorted handoff projection | `EVIDENCE_IDENTITY_MISMATCH`; null sectors |
+| structurally valid attempt requested decision session differs from the equal request/upstream session | `[EVIDENCE_IDENTITY_MISMATCH]`; null sectors; no partial output |
+| reconstructed coverage-manifest decision session differs from the equal request/upstream session | `[EVIDENCE_IDENTITY_MISMATCH]`; null sectors; no partial output |
+| structurally valid requested-ISIN tuple is a permutation, contains a duplicate, or substitutes a missing/excess ISIN relative to the strict sorted handoff projection | `[EVIDENCE_IDENTITY_MISMATCH]`; null sectors |
 | expected classification attempt missing, payload has 0 or 49 received assignment candidate rows, or assignment candidates omit one exact handoff ISIN | whole-report insufficiency; null sectors; no partial denominator |
 | payload has 51 received assignment candidate rows, an extra assignment candidate ISIN, structurally valid but semantically invalid candidate text, or selector mismatch | whole-report insufficiency; null sectors; no `OTHER` or inferred repair |
 | duplicate assignment candidate ISIN, overlapping assignment candidate effective intervals, or conflicting assignment labels | `SECTOR_CLASSIFICATION_AMBIGUOUS`; null sectors |
+| coverage manifest has 0..49 entries or an incomplete completeness claim | `[SECTOR_CLASSIFICATION_MISSING]`; null sectors |
+| coverage manifest has 51 entries with an extra entry | `[SECTOR_CLASSIFICATION_CORRUPT]`; null sectors |
+| coverage manifest has exactly 50 entries containing one duplicate and one corresponding missing requested ISIN | `[SECTOR_CLASSIFICATION_MISSING, SECTOR_CLASSIFICATION_AMBIGUOUS]`; null sectors |
+| coverage manifest has exactly 50 unique entries with a nonmember substitution | `[EVIDENCE_IDENTITY_MISMATCH]` only; null sectors |
+| trace-consistent coverage-manifest required-member-count text is not exact canonical `"50"` | `[SECTOR_CLASSIFICATION_CORRUPT]`; null sectors |
 | wrong taxonomy tier or release path | `SECTOR_TIER_INVALID`; null sectors |
 | late publication/retrieval/retention or untrusted clock | exact clock/timeliness reason; null sectors |
 | unresolved retention/private-use licence | `LICENCE_UNRESOLVED`; null sectors |
-| lineage gap, fork, cycle, conflicting current revision, unchecked cutoff, or missing manifest entry | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN`; null sectors |
+| revision-lineage gap, fork, cycle, conflicting current revision, unchecked cutoff, or missing revision node | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN`; null sectors |
 | canonical, digest-valid, exact-50 strict-sorted unique observed handoff has a report identity/endpoint mismatch or direction-total mismatch | `MEMBER_DIRECTION_HANDOFF_INVALID`; null sectors |
 | exact assignment/handoff set join or any row/global equation fails | `SECTOR_TOTALS_INCONSISTENT`; null sectors |
 | owner-private audience proof fails | `PRIVACY_POLICY_UNSATISFIED`; null sectors; no selective disclosure |
@@ -912,7 +959,7 @@ structurally valid handoff semantic defect.
 | one 50-member sector | one exact row reconciling to 50 |
 | fifty singleton sectors | 50 owner-private rows; never public |
 | one singleton plus one 49-member sector | two owner-private rows; never selectively suppress |
-| malformed JSON, duplicate JSON key, unknown field, invalid enum, duplicate handoff ISIN, unsorted external handoff ordering, bundle/reducer identity mismatch, 49/51 handoff rows, >51 classification rows, or oversize bytes | structural rejection; no report |
+| malformed JSON, duplicate JSON key, unknown field, invalid enum, duplicate handoff ISIN, unsorted external handoff ordering, bundle/reducer identity mismatch, 49/51 handoff rows, 52 assignment candidates, 52 coverage-manifest entries, or oversize bytes | structural rejection; no report |
 | unchanged sealed old input replay after any external post-cutoff change | byte-identical old report |
 | separately sealed input containing a post-cutoff revision | new input/report identities and its newly derived outcome; no cross-input byte-identity requirement |
 
