@@ -871,13 +871,13 @@ applicable reason as primary and lists each other applicable reason once in
 declaration order. Discovery, source-row, map, and fault-injection order cannot
 change it. `MEMBER_DIRECTION_HANDOFF_INVALID` applies only after the observed
 report and handoff bytes have passed their closed schemas, bounds, canonical
-serialization, recomputed digests, versions, and discriminators. It then covers
-duplicate or non-ISIN-sorted rows, a Market Regime identity or endpoint that
-does not equal the observed report, or direction totals that do not equal the
-observed report counts. Privacy is evaluated even when another domain defect
-applies.
+serialization, recomputed digests, versions, strict ISIN order, and uniqueness.
+It then covers a Market Regime identity or endpoint that does not equal the
+observed report, or direction totals that do not equal the observed report
+counts. Privacy is evaluated even when another domain defect applies.
 
-Wrong handoff row count, an out-of-enum direction, malformed or noncanonical
+Wrong handoff row count, a duplicate handoff ISIN, an out-of-enum direction, an
+externally unsorted `handoff.members` tuple, malformed or otherwise noncanonical
 report/handoff bytes, digest failure, and forbidden or missing union fields are
 structural no-report failures. `EVIDENCE_IDENTITY_MISMATCH` is reserved for the
 downstream candidate evidence, selector, manifest, sealed-policy/build identity,
@@ -896,6 +896,7 @@ structurally valid handoff semantic defect.
 | upstream insufficient with cutoff resolved | same reason; all three endpoints copied |
 | upstream unobserved envelope carries a handoff | structural rejection; no report |
 | observed envelope omits a handoff or has foreign/noncanonical report | structural rejection; no report |
+| digest-valid external `handoff.members` tuple is not in canonical ISIN order | structural rejection; no report |
 | structurally valid requested-ISIN tuple is a permutation, contains a duplicate, or substitutes a missing/excess ISIN relative to the strict sorted handoff projection | `EVIDENCE_IDENTITY_MISMATCH`; null sectors |
 | expected classification attempt missing, payload has 0 or 49 received assignment candidate rows, or assignment candidates omit one exact handoff ISIN | whole-report insufficiency; null sectors; no partial denominator |
 | payload has 51 received assignment candidate rows, an extra assignment candidate ISIN, structurally valid but semantically invalid candidate text, or selector mismatch | whole-report insufficiency; null sectors; no `OTHER` or inferred repair |
@@ -904,14 +905,14 @@ structurally valid handoff semantic defect.
 | late publication/retrieval/retention or untrusted clock | exact clock/timeliness reason; null sectors |
 | unresolved retention/private-use licence | `LICENCE_UNRESOLVED`; null sectors |
 | lineage gap, fork, cycle, conflicting current revision, unchecked cutoff, or missing manifest entry | `SECTOR_CLASSIFICATION_REVISION_UNPROVEN`; null sectors |
-| canonical, digest-valid, exact-50 observed handoff has duplicate/unsorted ISINs, report identity/endpoint mismatch, or direction-total mismatch | `MEMBER_DIRECTION_HANDOFF_INVALID`; null sectors |
+| canonical, digest-valid, exact-50 strict-sorted unique observed handoff has a report identity/endpoint mismatch or direction-total mismatch | `MEMBER_DIRECTION_HANDOFF_INVALID`; null sectors |
 | exact assignment/handoff set join or any row/global equation fails | `SECTOR_TOTALS_INCONSISTENT`; null sectors |
 | owner-private audience proof fails | `PRIVACY_POLICY_UNSATISFIED`; null sectors; no selective disclosure |
 | schedule correction or corporate-action completeness changes upstream | downstream verifies new bound upstream report/handoff only; never recomputes the change |
 | one 50-member sector | one exact row reconciling to 50 |
 | fifty singleton sectors | 50 owner-private rows; never public |
 | one singleton plus one 49-member sector | two owner-private rows; never selectively suppress |
-| malformed JSON, duplicate JSON key, unknown field, invalid enum, bundle/reducer identity mismatch, 49/51 handoff rows, >51 classification rows, or oversize bytes | structural rejection; no report |
+| malformed JSON, duplicate JSON key, unknown field, invalid enum, duplicate handoff ISIN, unsorted external handoff ordering, bundle/reducer identity mismatch, 49/51 handoff rows, >51 classification rows, or oversize bytes | structural rejection; no report |
 | unchanged sealed old input replay after any external post-cutoff change | byte-identical old report |
 | separately sealed input containing a post-cutoff revision | new input/report identities and its newly derived outcome; no cross-input byte-identity requirement |
 

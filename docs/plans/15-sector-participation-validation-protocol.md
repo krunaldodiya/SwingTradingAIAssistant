@@ -94,13 +94,19 @@ CUTOFF_VERIFIED => value / value / value
 Every well-formed absent/insufficient branch yields
 `MARKET_REGIME_NOT_OBSERVED`. Foreign versions, malformed or noncanonical
 report/handoff bytes, digest mismatch, inconsistent observed counts, an invalid
-direction enum, and 49/51 handoff rows are structural no-report cases. Only
-after both objects are canonical, digest-valid, version-correct, and the handoff
-has exactly 50 rows do duplicate/unsorted handoff ISINs, report
-identity/endpoint mismatch, or direction-total mismatch yield
-`MEMBER_DIRECTION_HANDOFF_INVALID`, exactly as Plan 14 declares. No test derives
-a direction from close values or replays Market Regime schedule/corporate-action
-logic.
+direction enum, a duplicate handoff ISIN, an externally unsorted
+`handoff.members` tuple, and 49/51 handoff rows are structural no-report cases.
+The ordering fixture swaps two otherwise valid exact-50 handoff rows and
+recomputes the handoff digest; its digest-valid but noncanonical external order
+is still structurally rejected. The duplicate fixture replaces one row's ISIN
+with another present ISIN and recomputes the digest; its fixed 50-row shape does
+not prevent structural rejection.
+
+Only after both objects are canonically ordered, digest-valid, version-correct,
+and the handoff has exactly 50 strict-sorted unique rows do report
+identity/endpoint mismatch or direction-total mismatch yield
+`MEMBER_DIRECTION_HANDOFF_INVALID`. No test derives a direction from close
+values or replays Market Regime schedule/corporate-action logic.
 
 ### Candidate-to-verified selector oracle
 
