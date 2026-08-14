@@ -15,6 +15,38 @@ and tests but must be independently verifiable. Split only unrelated concerns or
 and verified coherently. Tracking tools aid prioritization; labels, estimates, predicates, budgets, and status
 transitions do not gate implementation.
 
+## Local-first specification and just-in-time tracking
+
+For a bounded, single-writer slice, draft the short specification in a clean worktree before implementation.
+Keep it in repository Markdown, commit it locally as the immutable specification baseline, and record its exact
+SHA. Do not leave an approved specification only in an untracked file. When the slice changes a contract,
+schema, scoring or market-logic rule, obtain the required read-only exact-SHA review before the first RED test.
+A remote feature-branch backup without a PR is optional when it does not trigger hosted CI.
+
+Do not open a separate specification PR by default. After the local specification is reviewed, implement the
+smallest coherent first slice with strict TDD and publish one PR containing the specification commit followed by
+separate RED, implementation, and repair commits. The PR body names the specification-baseline SHA so reviewers
+can compare the implementation with the rule set that preceded it. Do not combine an entire sprint merely to
+avoid CI; later coherent slices retain their own PRs.
+
+Repository Markdown owns behavioral detail. Linear tracks execution and must not duplicate the specification.
+When implementation is authorized, create at most the milestone or parent plus the current WIP-one task. That
+task contains only the outcome, concise acceptance and stop boundaries, a link to the relevant Markdown
+section or specification SHA, and later the PR/evidence. Preserve the prospective task order in the sprint
+Markdown; create the next Linear task only when the current task closes or a continuity-critical next placeholder
+is justified. Tracker completeness is not a reason to invent premature tasks.
+
+Once implementation begins, never amend the reviewed specification-baseline commit. A semantic correction is a
+separate `spec-change` commit and must be reviewed before implementation continues; changed product direction
+returns to the owner. At PR review, verify both the implementation against the baseline and every later
+specification change explicitly. This prevents implementation behavior from silently becoming the specification.
+
+Use a separate specification PR before implementation only when the specification itself is the authorized
+final deliverable, or when coordination or risk requires authority on `main`: multiple writers or dependent
+modules, a shared/public contract or migration, unresolved architecture, source/licence/privacy/credential
+authority, or expensive or irreversible work. If the owner authorizes planning or specification only, stop at
+that boundary; the combined path never implies implementation permission.
+
 ## Ownership, concurrency, and recovery
 
 One writer owns a file path at a time. Separate worktrees may write concurrently to disjoint paths. Serialize
@@ -27,9 +59,9 @@ the new owner. This prevents both concurrent path ownership and permanent read-o
 
 ## Default path and risk-based review
 
-The default path has one actor: **implement → full gate → commit/PR → done**. The implementer owns the slice,
-tests, evidence, and repair. Multiple files, adapters, provenance fields, or market-data plumbing alone do not
-require a second actor.
+The default path has one actor: **short local specification → reviewed baseline when required → implement →
+full gate → commit/PR → done**. The implementer owns the slice, tests, evidence, and repair. Multiple files,
+adapters, provenance fields, or market-data plumbing alone do not require a second actor.
 
 Require independent high-effort review only for a published contract or schema change; a scoring, signal, or
 market-logic rule change; credentials or their security boundary; or a second failed verification of the same
