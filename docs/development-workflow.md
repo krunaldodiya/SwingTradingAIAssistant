@@ -6,14 +6,60 @@ correctness. Product boundaries are in `../AGENTS.md`; safeguards are in `engine
 ## Direction, specification, and unit of work
 
 The owner approves direction at the epic or equivalent product boundary. Below it, the implementer writes a
-short specification—purpose, inputs, outputs, deterministic rules, edge cases, validation, and acceptance
-criteria—and proceeds without human approval. Ask only for changed direction/scope, credentials or live-
-provider authority, or destructive/irreversible action.
+complete, implementation-ready specification—purpose, inputs, outputs, deterministic rules, edge cases,
+validation, and acceptance criteria—and proceeds without human approval. Ask only for changed direction/scope,
+credentials or live-provider authority, or destructive/irreversible action.
 
 The delivery unit is one coherent PR-sized slice with one primary reason to change. It may span several files
 and tests but must be independently verifiable. Split only unrelated concerns or work that cannot be reviewed
 and verified coherently. Tracking tools aid prioritization; labels, estimates, predicates, budgets, and status
 transitions do not gate implementation.
+
+## Local-first specification and just-in-time tracking
+
+For a bounded, single-writer slice, draft the complete, detailed specification in a clean worktree before
+implementation. Completeness is not traded for workflow speed: include every purpose, scope and non-claim,
+input/output, rule, contract or schema, point-in-time/provenance/identity requirement, edge and failure case,
+validation rule, acceptance criterion, and stop boundary needed to implement without invention. Use multiple
+Markdown files when that is the clearest representation; no arbitrary size limit replaces semantic completeness.
+Commit the specification locally as the immutable baseline and record its exact SHA. Do not leave an approved
+specification only in an untracked file. Before implementation, push the baseline to a remote feature branch as
+a recovery checkpoint without opening a PR; under the current CI triggers this backup does not run hosted CI.
+If a remote checkpoint is unavailable or prohibited, create an approved durable Git backup before proceeding.
+When risk-based review is required below, obtain read-only review of the specification baseline's exact SHA
+before the first RED test.
+
+Keep the specification phase bounded operationally without reducing content: give the reviewer the complete
+contract/risk checklist before drafting, run only proportional deterministic documentation checks, and use one
+bounded review plus remediation loop by default. A second material block triggers scope/risk reassessment or an
+owner decision when direction changed, rather than unbounded prose expansion. The authoritative full gate runs
+later on the combined implementation PR.
+
+Do not open a separate specification PR by default. After any required local specification review, implement the
+smallest coherent first slice with strict TDD and publish one PR containing the specification commit followed by
+separate RED, implementation, and repair commits. The PR body names the specification-baseline SHA so reviewers
+can compare the implementation with the rule set that preceded it. Do not combine an entire sprint merely to
+avoid CI; later coherent slices retain their own PRs.
+
+Repository Markdown owns behavioral detail. Linear tracks execution and must not duplicate the specification.
+When implementation is authorized, create at most the milestone or parent plus the current WIP-one task. That
+task contains only the outcome, concise acceptance and stop boundaries, a link to the relevant Markdown
+section or specification SHA, and later the PR/evidence. Preserve the prospective task order in the sprint
+Markdown; create the next Linear task only when the current task closes or a continuity-critical next placeholder
+is justified. Tracker completeness is not a reason to invent premature tasks.
+
+Never amend or replace a reviewed specification-baseline commit. Any semantic change after review is a separate
+`spec-change` commit, reviewed at its exact SHA before the first RED test or before implementation resumes.
+Once implementation begins, preserve even an unreviewed baseline and make later semantic changes in separate
+commits; apply the risk-based review triggers below. Changed product direction returns to the owner. At PR review,
+verify both the implementation against the baseline and every later specification change explicitly. This
+prevents implementation behavior from silently becoming the specification.
+
+Use a separate specification PR before implementation only when the specification itself is the authorized
+final deliverable, or when coordination or risk requires authority on `main`: multiple writers or dependent
+modules, a shared/public contract or migration, unresolved architecture, source/licence/privacy/credential
+authority, or expensive or irreversible work. If the owner authorizes planning or specification only, stop at
+that boundary; the combined path never implies implementation permission.
 
 ## Ownership, concurrency, and recovery
 
@@ -27,9 +73,9 @@ the new owner. This prevents both concurrent path ownership and permanent read-o
 
 ## Default path and risk-based review
 
-The default path has one actor: **implement → full gate → commit/PR → done**. The implementer owns the slice,
-tests, evidence, and repair. Multiple files, adapters, provenance fields, or market-data plumbing alone do not
-require a second actor.
+The default path has one actor: **complete local specification → reviewed baseline when required → implement →
+full gate → commit/PR → done**. The implementer owns the slice, tests, evidence, and repair. Multiple files,
+adapters, provenance fields, or market-data plumbing alone do not require a second actor.
 
 Require independent high-effort review only for a published contract or schema change; a scoring, signal, or
 market-logic rule change; credentials or their security boundary; or a second failed verification of the same
@@ -72,15 +118,24 @@ runs are local feedback only, never merge evidence. Do not set PYTEST_ADDOPTS to
 During work, pair the relevant pytest profile with Ruff format/lint on changed files. Reproduce failures at the
 smallest case. Vulture runs only in the full gate, never inside the green step.
 
-Before merge, the same actor runs the existing full gate once on the sealed revision. The authoritative full
-profile remains branch-aware through the default pytest configuration. Nothing merges unless all five tools
-pass:
+Do not open a PR merely to obtain early hosted feedback. Feature-branch recovery pushes remain CI-free; open the
+PR only when the coherent slice is sealed for review. The hosted workflow classifies the complete PR diff. When
+every changed path is Markdown, it runs only the lightweight required documentation gate. If any changed path is
+not Markdown—including source, tests, configuration, locks, workflows, generated contracts, or data—the same
+actor runs the existing full gate once on that sealed revision. A later non-Markdown change invalidates the prior
+result and reruns the gate; file size or a one-line executable change is never a reason to skip it. Superseded
+PR runs remain cancelled automatically. Main-branch defense runs use unique groups and are never cancelled by a
+later push, so a Markdown-only push cannot erase a preceding executable-change gate.
+
+The authoritative full profile remains branch-aware through the default pytest configuration. Nothing with a
+non-Markdown change merges unless all five tools pass:
 
 ```sh
 uv run --extra dev ruff format --check . && uv run --extra dev ruff check . && uv run --extra dev pyright && uv run --extra dev vulture src --min-confidence 80 && uv run --extra dev pytest
 ```
 
-Retain strict Pyright on production source, Vulture at 80%, and pytest branch coverage. Require at least 95%
+A post-merge `main` run is defense in depth and does not block starting the next independently safe slice after
+the reviewed PR gate passed. Retain strict Pyright on production source, Vulture at 80%, and pytest branch coverage. Require at least 95%
 branch coverage on changed executable lines. Project-wide branch coverage may not fall below the base
 revision's measured value or configured floor, whichever is higher (currently 87.80%). Never exclude
 production code or add superficial tests to meet coverage.

@@ -30,8 +30,9 @@ _CI_BLOCKS = {
     "permissions:": ("permissions:", "  contents: read"),
     "concurrency:": (
         "concurrency:",
-        "  group: ci-${{ github.workflow }}-${{ github.ref }}",
-        "  cancel-in-progress: true",
+        "  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || "
+        "github.run_id }}",
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
     ),
     "jobs:": (
         "jobs:",
@@ -44,15 +45,54 @@ _CI_BLOCKS = {
         "        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
         "        with:",
         "          persist-credentials: false",
+        "          fetch-depth: 0",
+        "      - name: Classify the sealed change",
+        "        id: changes",
+        "        shell: bash",
+        "        env:",
+        "          EVENT_NAME: ${{ github.event_name }}",
+        "          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "          PUSH_BEFORE_SHA: ${{ github.event.before }}",
+        "        run: |",
+        "          set -euo pipefail",
+        '          if [[ "$EVENT_NAME" == "pull_request" ]]; then',
+        '            base="$PR_BASE_SHA"',
+        "          else",
+        '            base="$PUSH_BEFORE_SHA"',
+        "          fi",
+        '          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e '
+        '"${base}^{commit}"; then',
+        '            echo "Comparison base is unavailable; failing closed to the full gate."',
+        '            echo "full_gate=true" >> "$GITHUB_OUTPUT"',
+        "          else",
+        '            non_markdown="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA" | '
+        "grep -Ev '\\.md$' || true)\"",
+        '            if [[ -n "$non_markdown" ]]; then',
+        '              echo "full_gate=true" >> "$GITHUB_OUTPUT"',
+        "              printf 'Full gate required for:\\n%s\\n' \"$non_markdown\"",
+        "            else",
+        '              echo "full_gate=false" >> "$GITHUB_OUTPUT"',
+        '              echo "Markdown-only change: using the lightweight required gate."',
+        "            fi",
+        '            echo "base=$base" >> "$GITHUB_OUTPUT"',
+        "          fi",
+        "      - name: Run lightweight Markdown gate",
+        "        if: steps.changes.outputs.full_gate != 'true'",
+        "        env:",
+        "          BASE_SHA: ${{ steps.changes.outputs.base }}",
+        '        run: git diff --check "$BASE_SHA" "$GITHUB_SHA"',
         "      - name: Set up uv and Python",
+        "        if: steps.changes.outputs.full_gate == 'true'",
         "        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
         "        with:",
         '          version: "0.9.24"',
         '          python-version: "3.11"',
         '          checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"',
         "      - name: Install locked development dependencies",
+        "        if: steps.changes.outputs.full_gate == 'true'",
         "        run: uv sync --extra dev --frozen",
         "      - name: Run authoritative quality gate",
+        "        if: steps.changes.outputs.full_gate == 'true'",
         "        run: >-",
         "          uv run --no-sync --extra dev ruff format --check . &&",
         "          uv run --no-sync --extra dev ruff check . &&",
@@ -60,6 +100,7 @@ _CI_BLOCKS = {
         "          uv run --no-sync --extra dev vulture src --min-confidence 80 &&",
         "          uv run --no-sync --extra dev pytest",
         "      - name: Build distribution",
+        "        if: steps.changes.outputs.full_gate == 'true'",
         "        run: uv build --no-build-isolation --python .venv/bin/python",
     ),
 }
@@ -151,6 +192,19 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
     )
     for fixture in fixtures:
         _assert_rejected(validate_ci_workflow, fixture)
+
+
+def test_ci_classifier_fails_closed_for_non_markdown_to_markdown_rename() -> None:
+    workflow = CI_PATH.read_text()
+    assert 'git diff --no-renames --name-only "$base" "$GITHUB_SHA"' in workflow
+
+    changed_paths_without_rename_collapsing = ("module.md", "module.py")
+    non_markdown = tuple(
+        path
+        for path in changed_paths_without_rename_collapsing
+        if not path.endswith(".md")
+    )
+    assert non_markdown == ("module.py",)
 
 
 def test_frozen_dev_dependency_closure_contains_the_nonisolated_build_backend() -> None:
@@ -253,8 +307,12 @@ def test_workflow_has_fast_iteration_and_one_unwaivable_full_gate() -> None:
         "uv run --extra dev pytest <test-paths> --no-cov -q",
         "focused and affected runs are local feedback only, never merge evidence",
         "vulture runs only in the full gate",
-        "before merge",
-        "nothing merges unless all five tools pass",
+        "do not open a pr merely to obtain early hosted feedback",
+        "nothing with a non-markdown change merges unless all five tools pass",
+        "feature-branch recovery pushes remain ci-free",
+        "complete, detailed specification",
+        "do not open a separate specification pr by default",
+        "create at most the milestone or parent plus the current wip-one task",
         "at least 95% branch coverage on changed executable lines",
         "project-wide branch coverage may not fall below the base revision",
         "may never waive a gate",

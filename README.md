@@ -300,8 +300,8 @@ generated datasets, and private market data must never be committed.
 - [Roadmap](docs/roadmap.md): phased product direction.
 - [Data foundation and Upstox ingestion plan](docs/plans/01-data-foundation-and-upstox-ingestion.md):
   downloader milestones and acceptance gates.
-- [Development workflow](docs/development-workflow.md): Agile, TDD, review, and
-  publication controls.
+- [Development workflow](docs/development-workflow.md): complete local-first specifications, just-in-time
+  Linear tracking, TDD, risk-based review, path-aware CI, and publication controls.
 - [Engineering standards](docs/engineering-standards.md): correctness,
   performance, security, and testing rules.
 - [Sprint records](docs/sprints/README.md): committed work and retrospectives.
