@@ -121,21 +121,31 @@ recompute upstream facts, tune outcomes, or imply implementation proof.
 
 ### ARK-179 — publish and review
 
-Seal the exact cumulative specification candidate in a durable commit; run the
-workflow-required authoritative full gate on that sealed revision; obtain an
-independent exact-SHA review and resolve every finding in separate preserved
-repair commits; push and open the publication PR; require successful hosted CI
-and GitGuardian evidence; merge only with authorization; and reconcile final
-Linear and sprint state without starting implementation.
+ARK-179 has a non-circular two-phase publication boundary:
 
-Acceptance: sealed candidate and any repair SHAs plus exact cumulative diff;
-passing authoritative full-gate evidence; independent approval of the final
-exact SHA; push/PR URL and exact head; successful hosted CI and GitGuardian
-results for that head; authorized merge and resulting `main` SHA; ARK-179
-**Done** and Sprint 8 closure reconciled in Linear and repository Markdown; and
-explicit residual authorization/readiness blockers. Any failed or missing gate,
-review, hosted check, authorization, merge, or reconciliation blocks final
-publication. Stop before implementation, source/runtime/provider/credential/
+1. **Publication candidate.** The next commit seals the complete publication
+   candidate. Its exact SHA, authoritative full-gate result, and independent
+   exact-SHA review are post-commit external evidence recorded in the PR body
+   and a Linear ARK-179 comment; the candidate document neither contains nor
+   claims those facts about itself. Resolve any finding in a separate preserved
+   repair commit, repeat the gate/review on the resulting exact candidate, then
+   require successful hosted CI and GitGuardian evidence and merge only with
+   authorization.
+2. **Closeout metadata after merge.** A distinct reconciliation commit may
+   record the predecessor publication-candidate SHA, PR and hosted-check
+   evidence, GitGuardian result, merge SHA, and final Linear/sprint states. It is
+   metadata about the predecessor publication, not a new self-attesting
+   publication candidate. Its own SHA, gate, review, and delivery evidence
+   remain external and are not required inside its content.
+
+Acceptance: externally evidenced sealed publication candidate and any repairs;
+passing authoritative full gate; independent approval of the final exact SHA;
+PR URL/exact head and Linear ARK-179 evidence comment; successful hosted CI and
+GitGuardian for that head; authorized merge and resulting `main` SHA; then
+closeout-metadata reconciliation of the predecessor publication evidence,
+ARK-179 **Done**, and Sprint 8 closure. Any failed or missing gate, review,
+hosted check, authorization, merge, external evidence, or reconciliation blocks
+closure. Stop before implementation, source/runtime/provider/credential/
 data-root access, readiness, or observed-result activity.
 
 ## Reviewed component and repair history
@@ -153,15 +163,51 @@ reviews; they were not hosted CI, an external human review, or publication.
 | ARK-177 | Initial `260457a4d05573f122d76badf7205d080035c85e` preserved after **REQUEST_CHANGES**; separate repair `dde53e82a47e9adde5c6b6a9137e2cacf66ea6f0` | `ContractExactShaReview`: repair candidate **APPROVE** | Plans 14 and 15 |
 | ARK-178 | Initial `f3dd0bfa6c342b0e9fdfa4e0cc9e74e76b764da0`; separate repairs `3064a4919a6721e8df772ecba123b125904e0d9a`, `c456ea92b1fac75ebf5a045f32933e16ca73add6`, and final `4f7582caff607b3a7046bdbd0f8a87c6977be0c7`, all preserved | Earlier exact-review findings were repaired separately; `ValidationExactShaReview`: final repair candidate **APPROVE** | Plans 14 and 15 plus Sprint 8; final repair changes Plan 15 only |
 
-The reviewed component range has exact main parent
+The pre-publication component range has exact main parent
 `aa68b0029eab22323700e8837238e28f41e1d694` and tip
-`4f7582caff607b3a7046bdbd0f8a87c6977be0c7`.
-Its cumulative name-status audit contains only three modified Markdown paths:
-Plans 14 and 15 and this Sprint 8 record; the audited stat is 894 insertions and
-139 deletions. ARK-179 pre-publication reconciliation expands the candidate
-path set only with `docs/sprints/README.md` and `docs/roadmap.md`, while updating
-this already-in-scope record. No source, test, configuration, workflow, lock,
-provider, credential, data, or generated path is in scope.
+`4f7582caff607b3a7046bdbd0f8a87c6977be0c7`. Its cumulative audit contains
+only three modified Markdown paths—Plans 14 and 15 and this Sprint 8 record—with
+894 insertions and 139 deletions.
+
+## ARK-179 candidate, gate, review, and repair actuals
+
+The first sealed ARK-179 candidate is
+`2d9932102412b3854c5157dc095d2d9d2c96b11e`, whose exact parent is
+`4f7582caff607b3a7046bdbd0f8a87c6977be0c7` and whose main parent is
+`aa68b0029eab22323700e8837238e28f41e1d694`. Against that main parent, the
+candidate contains exactly five modified Markdown paths: Plans 14 and 15,
+`docs/roadmap.md`, `docs/sprints/README.md`, and this Sprint 8 record. The
+cumulative stat is 997 insertions and 169 deletions.
+
+The authoritative full gate passed on exact candidate `2d993210`: Ruff format
+check, Ruff check, Pyright, Vulture, and pytest all passed; pytest reported
+2,415 passed and 93.07% whole-package coverage. The run emitted one
+multiprocessing deprecation warning. `Sprint8FinalExactReview`, an independent
+reviewer, acknowledged that gate and the clean tracked/index state, then issued
+**REQUEST_CHANGES** on the exact candidate with five findings:
+
+1. replace stale drafting-step actuals with the sealed candidate/full-gate
+   truth;
+2. remove `MarketRegimeSectorHandoffV1.next_official_session` or bind it without
+   downstream schedule recomputation;
+3. specify the exact outcome for a canonical request/upstream-report
+   `decision_session` mismatch;
+4. bind classification-attempt requested-identity and coverage-manifest
+   decision sessions to the study/upstream session with exact mismatch outcomes;
+5. specify exact outcomes for coverage-manifest 51/extra and duplicate/missing
+   admitted shapes.
+
+The separate repair commit
+`30750181afc3ab3747d50f56cb87a2c06eef2b7c`, with exact parent
+`2d9932102412b3854c5157dc095d2d9d2c96b11e`, changes only Plans 14 and 15.
+`ContractVerification` reported **PASS**, `ContractAntipattern` reported
+**PASS**, and `ContractQuality` reported **APPROVE** for the focused repair.
+The repair addresses the four contract findings and also closes the
+`required_member_count_text` mapping discovered during focused repair. At exact
+repair commit `30750181`, the cumulative main-parent audit remains the same five
+Markdown paths and recomputes to 1,129 insertions and 188 deletions. This
+focused evidence is not the still-pending authoritative full gate or final
+exact-SHA review for the complete evidence-record candidate.
 
 ## Specification acceptance checklist
 
@@ -209,27 +255,27 @@ measurement, or effectiveness evidence.
 
 ## Pre-publication actuals, pending facts, and stop
 
-### Current pre-publication writer stop — this uncommitted drafting step only
+Actuals are limited to owner approval; the four preserved specification-
+component histories and independent agent-role reviews; sealed candidate
+`2d993210`; its authoritative full-gate result; the independent exact-SHA
+**REQUEST_CHANGES** verdict; repair `30750181`; its focused verification,
+antipattern, and quality approvals; current Linear reconciliation; and the
+Markdown-only diff audits above. None proves a parser, evidence selector,
+handoff, reducer, private audience, readiness gate, market fact, publication,
+or merge.
 
-This temporary stop governs only the present pre-publication reconciliation. It
-does not narrow the final ARK-179 publisher obligations and acceptance above.
+Until publication phase 1 occurs, these facts remain pending:
 
-Actuals at this candidate point are limited to owner approval, the four
-preserved specification-component histories and independent agent-role reviews
-above, current Linear state reconciliation, and a Markdown-only diff audit. No
-ARK-179 validation or commit has been performed. Earlier focused no-coverage,
-Ruff, Markdown, and diff checks are component review evidence only; they do not
-prove a parser, evidence selector, handoff, reducer, private audience, readiness
-gate, market fact, publication, or merge.
-
-The following are pending facts because the prohibited actions that could
-produce them have not occurred; they are not claimed evidence:
-
-- final ARK-179 candidate commit SHA and sealed cumulative diff;
+- next complete publication-candidate commit and its exact SHA;
+- authoritative full-gate result and independent final exact-SHA review for
+  that committed candidate;
+- external recording of those facts in the PR body and Linear ARK-179 comment;
 - push or remote feature-branch recovery checkpoint;
-- PR number/URL and hosted documentation-gate result;
+- PR number/URL, exact head, and hosted documentation-gate result;
 - hosted CI, GitGuardian, or other hosted security-check result;
 - merge authorization, merge event, and resulting `main` SHA;
+- post-merge closeout-metadata reconciliation of the predecessor candidate,
+  checks, merge, and Linear states, with its own delivery evidence external; and
 - final publication evidence, ARK-179 **Done**, and Sprint 8 closure.
 
 Residual authorization/readiness blockers are unchanged: implementation
@@ -241,9 +287,9 @@ authorized retained data root; reviewed Sector Participation implementation and
 owner-private runtime; sealed build/policy/code/audience proofs; and one
 count-free readiness admission. None is satisfied by specification review.
 
-Do not validate, commit, push, open a PR, contact a provider, use credentials or
-data, download anything, mutate a data root or storage, expose a public surface,
-write Linear, run readiness, or merge in this step. ARK-179 remains the sole
-**In Progress** issue and Sprint 8 remains open before publication and
-implementation. The later feasible chronology remains the one frozen in Plan
-15.
+ARK-179 remains the sole **In Progress** issue and Sprint 8 remains open before
+publication and implementation. These documentation actuals authorize no
+implementation, source/provider/credential/data-root activity, download,
+runtime or public surface, readiness run, observed result, ranking, or
+effectiveness claim. The later feasible chronology remains the one frozen in
+Plan 15.

@@ -54,11 +54,17 @@ joins all 50 decision-session ISINs to point-in-time official NSE Indices
 Sector-tier evidence, and permits owner-private per-sector counts only.
 [Plan 14](plans/14-sector-participation-contract.md) and
 [Plan 15](plans/15-sector-participation-validation-protocol.md) define the
-owner-approved specification and validation protocol. Their four component
-histories have independent agent-role approval, and ARK-179 is reconciling the
-pre-publication candidate. No final candidate commit, PR, hosted check,
-publication, merge, implementation, source/provider/credential/data-root
-activity, observed result, ranking, or effectiveness evidence exists.
+owner-approved specification and validation protocol. ARK-175 through ARK-178
+are Done and ARK-179 remains In Progress. Sealed candidate `2d993210` passed the
+authoritative full gate, then independent exact-SHA review requested changes;
+focused verification/antipattern/quality review approved Plans 14/15 repair
+`30750181`. The next commit is the complete publication candidate; its SHA,
+full gate, and exact-SHA review remain external PR/Linear evidence. After an
+authorized merge, a distinct closeout-metadata commit may record that
+predecessor publication and final states without self-attesting its own SHA or
+checks. Both phases, hosted checks, merge, and closure remain pending. No
+implementation, source/provider/credential/data-root activity, observed result,
+ranking, or effectiveness evidence exists.
 
 ## Later modules
 

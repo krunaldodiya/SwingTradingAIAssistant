@@ -31,8 +31,15 @@ increment and future process decisions.
 - [Sprint 6 — Market Regime v1 specification](sprint-6.md) — closed by [PR #93](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/93), merged as `46daa690b75ae1bedbdbb76633b167bfac5a6a1d`; the classifier and observed regimes remain unimplemented/unclaimed.
 - [Sprint 8 — Sector Analysis: Sector Participation v1 specification](sprint-8.md) —
   owner-approved on 2026-08-13 IST as the minimal V1 fact for locked Module 2;
-  ARK-175 through ARK-178 are Done and independently agent-reviewed, while
-  ARK-179 is the sole In Progress pre-publication reconciliation. No final
-  candidate commit, PR, hosted check, merge, implementation, source/provider/
-  credential/data-root activity, observed result, ranking, or effectiveness
-  evidence is claimed.
+  ARK-175 through ARK-178 are Done and ARK-179 remains In Progress. Sealed
+  candidate `2d993210` passed the authoritative full gate before
+  `Sprint8FinalExactReview` returned **REQUEST_CHANGES**; repair `30750181`
+  changes only Plans 14 and 15 and has focused verification/antipattern
+  **PASS** plus quality **APPROVE**. The next commit is the complete publication
+  candidate; its SHA, full gate, and exact-SHA review will be recorded
+  externally in the PR body and Linear ARK-179 comment. After authorized merge,
+  a distinct closeout-metadata commit may record that predecessor's publication
+  evidence and final states without self-attesting its own SHA or checks. Both
+  phases, hosted checks, merge, and closure remain pending. No implementation,
+  source/provider/credential/data-root activity, observed result, ranking, or
+  effectiveness evidence is claimed.
