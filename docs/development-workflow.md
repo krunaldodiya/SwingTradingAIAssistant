@@ -19,11 +19,11 @@ transitions do not gate implementation.
 
 For a bounded, single-writer slice, draft the short specification in a clean worktree before implementation.
 Keep it in repository Markdown, commit it locally as the immutable specification baseline, and record its exact
-SHA. Do not leave an approved specification only in an untracked file. When the slice changes a contract,
-schema, scoring or market-logic rule, obtain the required read-only exact-SHA review before the first RED test.
-A remote feature-branch backup without a PR is optional when it does not trigger hosted CI.
+SHA. Do not leave an approved specification only in an untracked file. When risk-based review is required
+below, obtain read-only review of the specification baseline's exact SHA before the first RED test. A remote
+feature-branch backup without a PR is optional when it does not trigger hosted CI.
 
-Do not open a separate specification PR by default. After the local specification is reviewed, implement the
+Do not open a separate specification PR by default. After any required local specification review, implement the
 smallest coherent first slice with strict TDD and publish one PR containing the specification commit followed by
 separate RED, implementation, and repair commits. The PR body names the specification-baseline SHA so reviewers
 can compare the implementation with the rule set that preceded it. Do not combine an entire sprint merely to
@@ -36,10 +36,12 @@ section or specification SHA, and later the PR/evidence. Preserve the prospectiv
 Markdown; create the next Linear task only when the current task closes or a continuity-critical next placeholder
 is justified. Tracker completeness is not a reason to invent premature tasks.
 
-Once implementation begins, never amend the reviewed specification-baseline commit. A semantic correction is a
-separate `spec-change` commit and must be reviewed before implementation continues; changed product direction
-returns to the owner. At PR review, verify both the implementation against the baseline and every later
-specification change explicitly. This prevents implementation behavior from silently becoming the specification.
+Never amend or replace a reviewed specification-baseline commit. Any semantic change after review is a separate
+`spec-change` commit, reviewed at its exact SHA before the first RED test or before implementation resumes.
+Once implementation begins, preserve even an unreviewed baseline and make later semantic changes in separate
+commits; apply the risk-based review triggers below. Changed product direction returns to the owner. At PR review,
+verify both the implementation against the baseline and every later specification change explicitly. This
+prevents implementation behavior from silently becoming the specification.
 
 Use a separate specification PR before implementation only when the specification itself is the authorized
 final deliverable, or when coordination or risk requires authority on `main`: multiple writers or dependent
