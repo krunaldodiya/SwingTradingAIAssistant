@@ -48,7 +48,7 @@ _RECEIPTS: list[VerifiedProvenanceReceiptV1] = []
 
 
 def _isin(number: int) -> str:
-    prefix = f"IN{number:09d}"
+    prefix = f"INE{number:08d}"
     expanded = "".join(
         str(ord(char) - 55) if char.isalpha() else char for char in prefix
     )

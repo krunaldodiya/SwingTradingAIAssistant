@@ -47,24 +47,35 @@ Implement and validate the module only after that specification is frozen.
 
 ## Phase 3: Second module — Sector Analysis
 
-Freeze `nifty50-sector-participation@v1` as the minimal V1 fact contract inside
-architecture-locked Module 2, Sector Analysis. It is not an added or renamed
-eleventh module. It reuses the exact private Market Regime member directions,
-joins all 50 decision-session ISINs to point-in-time official NSE Indices
-Sector-tier evidence, and permits owner-private per-sector counts only.
-[Plan 14](plans/14-sector-participation-contract.md) and
-[Plan 15](plans/15-sector-participation-validation-protocol.md) define the
-owner-approved specification and validation protocol. ARK-175 through ARK-178
-are Done and ARK-179 remains In Progress. Sealed candidate `2d993210` passed the
-authoritative full gate, then independent exact-SHA review requested changes;
-focused verification/antipattern/quality review approved Plans 14/15 repair
-`30750181`. The next commit is the complete publication candidate; its SHA,
-full gate, and exact-SHA review remain external PR/Linear evidence. After an
-authorized merge, a distinct closeout-metadata commit may record that
-predecessor publication and final states without self-attesting its own SHA or
-checks. Both phases, hosted checks, merge, and closure remain pending. No
-implementation, source/provider/credential/data-root activity, observed result,
-ranking, or effectiveness evidence exists.
+Sprint 8 implements the first atomic vertical slice inside architecture-locked
+Module 2, Sector Analysis, during the corrected 2026-08-13 through 2026-08-19
+window. `nifty50-sector-participation@v1` accepts exact verified Market Regime
+facts and one already-resolved PIT Nifty 50 snapshot, then derives and consumes
+the report/private handoff internally in the same call. It emits deterministic
+participation counts by opaque source label or one whole-result insufficiency;
+callers have no report or handoff authority.
+
+[Plan 14](plans/14-sector-participation-contract.md) records the implemented
+contract, and [Plan 15](plans/15-sector-participation-validation-protocol.md)
+records the focused TDD and validation evidence. The provider-free in-process
+core is implemented in `src/swing_trading_ai_assistant/market_regime/observed.py`
+and `src/swing_trading_ai_assistant/sector_analysis/participation.py`; focused
+coverage is in `tests/market_regime/test_observed_reducer.py` and
+`tests/sector_analysis/test_participation.py`. The recorded focused run is
+**49 passed**.
+
+ARK-175 through ARK-178 remain Done as historical specification work. The
+corrected integrated goal ARK-179 remains In Progress; ARK-180 is Done with its
+implementation evidence recorded, and ARK-181 is the sole active child, In
+Progress pending integrated review. ARK-181 implementation and tests exist and
+the focused checks pass, while independent review, the final gate, publication,
+and closure remain pending. [PR #102](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/102)
+remains immutable planning evidence, not implementation evidence.
+
+The opaque labels are not claimed as an official NSE Sector taxonomy. Official
+taxonomy work and Layer B are deferred. This slice adds no provider, acquisition
+or retained-data workflow, delivery transport, recommendation, live observed
+result, ranking, or effectiveness claim.
 
 ## Later modules
 
