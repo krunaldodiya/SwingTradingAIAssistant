@@ -23,9 +23,17 @@ input/output, rule, contract or schema, point-in-time/provenance/identity requir
 validation rule, acceptance criterion, and stop boundary needed to implement without invention. Use multiple
 Markdown files when that is the clearest representation; no arbitrary size limit replaces semantic completeness.
 Commit the specification locally as the immutable baseline and record its exact SHA. Do not leave an approved
-specification only in an untracked file. When risk-based review is required below, obtain read-only review of the
-specification baseline's exact SHA before the first RED test. A remote
-feature-branch backup without a PR is optional when it does not trigger hosted CI.
+specification only in an untracked file. Before implementation, push the baseline to a remote feature branch as
+a recovery checkpoint without opening a PR; under the current CI triggers this backup does not run hosted CI.
+If a remote checkpoint is unavailable or prohibited, create an approved durable Git backup before proceeding.
+When risk-based review is required below, obtain read-only review of the specification baseline's exact SHA
+before the first RED test.
+
+Keep the specification phase bounded operationally without reducing content: give the reviewer the complete
+contract/risk checklist before drafting, run only proportional deterministic documentation checks, and use one
+bounded review plus remediation loop by default. A second material block triggers scope/risk reassessment or an
+owner decision when direction changed, rather than unbounded prose expansion. The authoritative full gate runs
+later on the combined implementation PR.
 
 Do not open a separate specification PR by default. After any required local specification review, implement the
 smallest coherent first slice with strict TDD and publish one PR containing the specification commit followed by
@@ -110,15 +118,23 @@ runs are local feedback only, never merge evidence. Do not set PYTEST_ADDOPTS to
 During work, pair the relevant pytest profile with Ruff format/lint on changed files. Reproduce failures at the
 smallest case. Vulture runs only in the full gate, never inside the green step.
 
-Before merge, the same actor runs the existing full gate once on the sealed revision. The authoritative full
-profile remains branch-aware through the default pytest configuration. Nothing merges unless all five tools
-pass:
+Do not open a PR merely to obtain early hosted feedback. Feature-branch recovery pushes remain CI-free; open the
+PR only when the coherent slice is sealed for review. The hosted workflow classifies the complete PR diff. When
+every changed path is Markdown, it runs only the lightweight required documentation gate. If any changed path is
+not Markdown—including source, tests, configuration, locks, workflows, generated contracts, or data—the same
+actor runs the existing full gate once on that sealed revision. A later non-Markdown change invalidates the prior
+result and reruns the gate; file size or a one-line executable change is never a reason to skip it. Superseded
+runs remain cancelled automatically.
+
+The authoritative full profile remains branch-aware through the default pytest configuration. Nothing with a
+non-Markdown change merges unless all five tools pass:
 
 ```sh
 uv run --extra dev ruff format --check . && uv run --extra dev ruff check . && uv run --extra dev pyright && uv run --extra dev vulture src --min-confidence 80 && uv run --extra dev pytest
 ```
 
-Retain strict Pyright on production source, Vulture at 80%, and pytest branch coverage. Require at least 95%
+A post-merge `main` run is defense in depth and does not block starting the next independently safe slice after
+the reviewed PR gate passed. Retain strict Pyright on production source, Vulture at 80%, and pytest branch coverage. Require at least 95%
 branch coverage on changed executable lines. Project-wide branch coverage may not fall below the base
 revision's measured value or configured floor, whichever is higher (currently 87.80%). Never exclude
 production code or add superficial tests to meet coverage.
