@@ -380,11 +380,19 @@ byte-identical:
    handoff endpoints/identities, sector bundle/input, and report identities.
    The fully rebound input emits `OBSERVED`, null reasons, the same count rows,
    new copied endpoints, and new lineage/upstream/handoff/bundle/report
-   identities. A paired mismatch fixture instead rehashes only the changed
-   handoff endpoint while retaining the old observed report; it emits
-   `INSUFFICIENT_EVIDENCE`,
-   `sectors = null`, primary `MEMBER_DIRECTION_HANDOFF_INVALID`, and no
-   additional reason.
+   identities. A paired mismatch fixture retains the old observed Market Regime
+   report bytes, identity, fields, and totals, but changes the handoff endpoint
+   and then transitively rebuilds the handoff digest; observed-envelope handoff
+   bytes/identity claim; complete evidence-bundle canonical bytes and
+   `input_identity_sha256`; reducer `evidence_bundle_identity_sha256`;
+   reconstructed classification facts' `input_identity_sha256` when present;
+   and the eventual insufficient report identity. The old classification
+   candidate/attempt content remains byte-identical; only its containing
+   evidence-bundle identity and reconstructed-facts input binding change. All
+   bytes, schemas, and claimed digests are therefore canonical and aligned
+   before the retained report/handoff endpoint mismatch is evaluated. It emits
+   `INSUFFICIENT_EVIDENCE`, `sectors = null`,
+   primary `MEMBER_DIRECTION_HANDOFF_INVALID`, and no additional reason.
 5. **Corporate-action completeness correction at the upstream boundary.**
    Timestamp a separately sealed upstream status/negative-completeness/lineage/
    identity-continuity correction at `K`, change `I[16]` from `ADVANCE` to
@@ -392,10 +400,19 @@ byte-identical:
    Market Regime totals and report, handoff member/totals, and all downstream
    identities. The fully rebound input
    emits `OBSERVED`, null reasons, `ALPHA = (25, 16, 8, 1)`, and unchanged
-   `BETA`. A paired fixture rehashes only the changed handoff member/direction
-   while retaining the old report totals; it emits `INSUFFICIENT_EVIDENCE`,
-   `sectors = null`, primary `MEMBER_DIRECTION_HANDOFF_INVALID`, and no
-   additional reason.
+   `BETA`. A paired mismatch fixture retains the old observed report bytes,
+   identity, fields, and totals, changes only the canonical handoff member
+   direction for `I[16]`, and transitively rebuilds the handoff digest;
+   observed-envelope handoff bytes/identity claim; evidence-bundle canonical
+   bytes and `input_identity_sha256`; reducer
+   `evidence_bundle_identity_sha256`; reconstructed classification facts'
+   `input_identity_sha256` when present; and the eventual insufficient report
+   identity. The old classification candidate/attempt content remains
+   byte-identical; only its containing evidence-bundle identity and
+   reconstructed-facts input binding change. With every
+   containing claim canonical and rehashed, only the retained old report totals
+   semantically disagree. It emits `INSUFFICIENT_EVIDENCE`, `sectors = null`,
+   primary `MEMBER_DIRECTION_HANDOFF_INVALID`, and no additional reason.
 
 Schedule and corporate-action raw evidence is never a Sector Participation
 input. Those paired cases prove that downstream either accepts a completely
@@ -483,9 +500,10 @@ sentinels. Required calls are exactly zero.
 
 Layer B is not a second conformance suite and Layer A success is not a readiness
 predicate by itself. The two layers have disjoint result schemas, fixtures, and
-measurements. No Layer A synthetic sector label or count may enter a readiness
-fixture, and no `READY`/`BLOCKED` value may be interpreted as a sector label,
-usefulness score, prediction, or performance result.
+measurements. Layer B privately verifies the sealed prerequisite bundle
+described below; it never accepts a Layer A pass/fail value or synthetic report
+as readiness evidence. No `READY`/`BLOCKED` value may be interpreted as a
+sector label, usefulness score, prediction, or performance result.
 
 Layer B starts blocked. It may run only after the separate authorization and
 implementation/review steps in the chronology below. Its closed types are:
@@ -532,6 +550,38 @@ SectorParticipationReadinessV1 {
   readiness_identity_sha256: Sha256
 }
 ```
+
+### Exact private readiness-verifier boundary
+
+The gate's sole study payload is the canonical byte sequence of exactly one
+closed `SectorParticipationEvidenceBundleV1` already defined by Plan 14. It
+recomputes `CanonicalSectorParticipationBundleIdentityProjectionV1`, verifies
+the bundle's own `input_identity_sha256`, and admits no caller readiness
+attestation or matching-looking preverified facts. The reviewed gate separately
+closes over the identity-bound implementation authorization,
+source/private-delivery authorization, and `ExpectedReviewedBuildV1` needed for
+`R01`; caller booleans cannot replace them.
+
+Inside that private boundary, the deterministic gate parses and validates the
+complete sealed bundle under the same closed schemas and selector/receipt
+bindings. For `R02` and `R03` it parses the observed Market Regime report and
+handoff, validates all 50 strict-sorted unique handoff ISINs and their exact
+direction enums, recomputes the report/handoff identities and binding, and
+checks direction totals without deriving any direction. For `R04` through
+`R10` and `R12` it replays source-object selectors, reconstructs the taxonomy
+release, all assignment ISIN/label memberships, clocks, lineage, manifest, and
+licence/audience proofs, and verifies that the assignments and manifest cover
+exactly the same 50 handoff ISINs. It may inspect those private prerequisite
+values only to evaluate the twelve frozen predicates; it performs no
+sector-label grouping, sector aggregation, prediction, or report reduction.
+
+All parsed handoff ISINs/directions, assignment ISINs/labels, source values, and
+intermediate totals are invocation-local and are neither returned nor retained.
+The only output is one canonical `SectorParticipationReadinessV1`: opaque
+identity pair, `READY`/`BLOCKED`, ordered covered requirement IDs, ordered
+closed blocker reasons, and readiness identity. Forbidden values must not reach
+readiness bytes, logs, errors, exceptions, telemetry, retained snapshots, or a
+result preview; failures are expressed only by the closed blocker reasons.
 
 `ReadinessRequirementV1` is closed to exactly the twelve IDs above; declaration
 order is its only canonical order. `ReadinessBlockerReasonV1` is a separate
@@ -600,9 +650,10 @@ failures or studies.
 
 ### Layer B identity sensitivity and count-free redaction
 
-Layer B uses only readiness prerequisites and `SectorParticipationReadinessV1`
-inputs/outputs; it imports no Layer A report fixture, sector label, count, member
-direction, or member identity. Identity sensitivity is restricted to fields
+Layer B's private verifier input is the sealed evidence bundle, so it necessarily
+contains exact handoff ISINs/directions and assignment ISINs/labels. Those
+values are internal prerequisites, never readiness output fields or a Layer A
+conformance attestation. Identity sensitivity is restricted to fields
 actually covered by the closed readiness projection:
 `study_identity_sha256`, `evidence_bundle_identity_sha256`, `readiness_state`,
 ordered `covered_requirement_ids`, and ordered `blocker_reasons`. There is no
@@ -624,14 +675,34 @@ other projected V1 field.
   comparison.
 
 The excluded `readiness_identity_sha256` self-field and coordinated sealed-root
-rehash receive the same mismatch/rejection checks as Layer A. Layer B redaction
-uses schema-valid opaque digest and `UtcInstant` canaries only in readiness
-prerequisite artifacts. It scans readiness canonical bytes, returned objects,
-string/debug representations, equality diffs, exceptions, logs, telemetry, and
-snapshots for any sector label, count, member direction/identity, raw source
-value, credential, secret, or free-form diagnostic. A harness-only deliberate
-readiness leak is the positive control; changing that out-of-boundary sentinel
-must not change the canonical readiness bytes or `READY`/`BLOCKED` outcome.
+rehash receive the same mismatch/rejection checks as Layer A. The redaction
+allowlist has exactly one private value: when non-null, the recomputed
+`expected_bundle_identity` may appear only as the value of both required
+`study_identity_sha256` and `evidence_bundle_identity_sha256` fields, and
+therefore in those two covered positions of
+`CanonicalSectorParticipationReadinessIdentityProjectionV1`. It may not appear
+in any other readiness field or output surface. When the identity pair is null,
+there is no allowed occurrence.
+
+Canaries use distinct markers per independent private channel or a
+distinguishable multi-field pattern; they are not required to be globally
+unique. An equality-bound group intentionally repeats one marker everywhere the
+contract requires equality, including an ISIN across handoff/requested cohort/
+assignment/manifest locations, a selector-selected source value across its
+candidate and verified label/claim, and any other identity-bound repetition.
+
+The scanner tracks each complete equality group and requires zero occurrences
+outside that group's allowed private input locations, except for the sole
+bundle-identity output allowlist above. It applies the same rule to policy/
+receipt/source/object/revision/proof digests, handoff direction patterns,
+selectors, selected values, and trusted clocks, and rejects sector counts,
+credentials, secrets, or free-form diagnostics in readiness canonical bytes,
+returned objects, result previews, string/debug representations, equality
+diffs, errors/exceptions, logs, telemetry, and retained snapshots. Positive
+controls either leak a non-allowlisted group marker or place the otherwise
+allowed bundle identity in a forbidden field or surface. Changing a
+harness-only control must not change canonical readiness bytes or the
+`READY`/`BLOCKED` outcome.
 
 ## One feasible future chronology and sealing
 

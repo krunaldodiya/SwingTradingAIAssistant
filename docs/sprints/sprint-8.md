@@ -1,6 +1,6 @@
 # Sprint 8 — Sector Analysis: Sector Participation v1 specification
 
-Status: **PLANNED — OWNER APPROVED; ALL ISSUES TODO/UNSTARTED**
+Status: **IN PROGRESS — OWNER APPROVED; ARK-178 ACTIVE WIP**
 Owner decision: **approved on 2026-08-13 IST**
 Planning base: `418445cd0e68af4a2e1b5b2a22a8d920398c6849`
 Planned window: unassigned
@@ -48,18 +48,19 @@ approve any excluded work.
 
 ## Exact Linear issue order, scope, and state
 
-The repository mirrors the exact operational order and scope below. Every issue
-is currently **Todo / unstarted**. This planning commit does not transition an
-issue, create an issue, or write to Linear. Future delivery is strictly
-sequential WIP-one in this exact order:
+The repository mirrors the current Linear order and state at this repair point:
+ARK-175, ARK-176, and ARK-177 are **Done**; ARK-178 is the sole **In Progress**
+issue; and ARK-179 remains **Todo**. This repository repair does not transition
+an issue or write to Linear. Delivery remains sequential WIP-one in this exact
+order:
 
 | Order | Issue | Exact scope | Current state |
 |---:|---|---|---|
-| 1 | ARK-175 | boundary and non-claims | Todo / unstarted |
-| 2 | ARK-176 | taxonomy policy | Todo / unstarted |
-| 3 | ARK-177 | fact contract | Todo / unstarted |
-| 4 | ARK-178 | validation and readiness | Todo / unstarted |
-| 5 | ARK-179 | publish and review | Todo / unstarted |
+| 1 | ARK-175 | boundary and non-claims | Done |
+| 2 | ARK-176 | taxonomy policy | Done |
+| 3 | ARK-177 | fact contract | Done |
+| 4 | ARK-178 | validation and readiness | In Progress |
+| 5 | ARK-179 | publish and review | Todo |
 
 No later issue starts before the preceding issue's acceptance and review stop
 boundary. There is no implementation/source/runtime/data/provider/credential or
@@ -135,7 +136,7 @@ Review must verify:
 
 - minimal V1 fact contract inside locked Module 2 Sector Analysis, never an
   eleventh module;
-- exact owner approval date, issue order/scope, and Todo/unstarted truth;
+- exact owner approval date, issue order/scope, current states, and WIP-one truth;
 - closed `SectorParticipationRequestV1` and
   `OwnerPrivateAudienceProofV1` schemas;
 - discriminated observed/unobserved upstream envelope, handoff only when
@@ -177,8 +178,8 @@ planning repair show documentation consistency only. They do not prove a
 request parser, evidence selector, handoff, reducer, private audience, readiness
 gate, or market fact exists.
 
-This repository-only repair stops after one local documentation commit. Do not
+This repository-only specification repair makes no Linear transition. Do not
 push, open a PR, contact a provider, use credentials/data, mutate storage, or
-write Linear. Future Sprint 8 delivery starts at Todo ARK-175 only when
-separately authorized, proceeds sequentially through ARK-179, and stops before
-implementation. The later feasible chronology remains the one frozen in Plan 15.
+write Linear. ARK-178 remains the sole In Progress issue and ARK-179 remains
+Todo; Sprint 8 still stops before implementation. The later feasible chronology
+remains the one frozen in Plan 15.
