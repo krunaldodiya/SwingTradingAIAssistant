@@ -43,7 +43,7 @@ jobs:
             echo "Comparison base is unavailable; failing closed to the full gate."
             echo "full_gate=true" >> "$GITHUB_OUTPUT"
           else
-            non_markdown="$(git diff --name-only "$base" "$GITHUB_SHA" | grep -Ev '\.md$' || true)"
+            non_markdown="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA" | grep -Ev '\.md$' || true)"
             if [[ -n "$non_markdown" ]]; then
               echo "full_gate=true" >> "$GITHUB_OUTPUT"
               printf 'Full gate required for:\n%s\n' "$non_markdown"

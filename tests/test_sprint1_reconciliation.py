@@ -65,8 +65,8 @@ _CI_BLOCKS = {
         '            echo "Comparison base is unavailable; failing closed to the full gate."',
         '            echo "full_gate=true" >> "$GITHUB_OUTPUT"',
         "          else",
-        '            non_markdown="$(git diff --name-only "$base" "$GITHUB_SHA" | grep -Ev '
-        "'\\.md$' || true)\"",
+        '            non_markdown="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA" | '
+        "grep -Ev '\\.md$' || true)\"",
         '            if [[ -n "$non_markdown" ]]; then',
         '              echo "full_gate=true" >> "$GITHUB_OUTPUT"',
         "              printf 'Full gate required for:\\n%s\\n' \"$non_markdown\"",
@@ -192,6 +192,19 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
     )
     for fixture in fixtures:
         _assert_rejected(validate_ci_workflow, fixture)
+
+
+def test_ci_classifier_fails_closed_for_non_markdown_to_markdown_rename() -> None:
+    workflow = CI_PATH.read_text()
+    assert 'git diff --no-renames --name-only "$base" "$GITHUB_SHA"' in workflow
+
+    changed_paths_without_rename_collapsing = ("module.md", "module.py")
+    non_markdown = tuple(
+        path
+        for path in changed_paths_without_rename_collapsing
+        if not path.endswith(".md")
+    )
+    assert non_markdown == ("module.py",)
 
 
 def test_frozen_dev_dependency_closure_contains_the_nonisolated_build_backend() -> None:
