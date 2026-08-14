@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   quality:
@@ -40,17 +40,19 @@ jobs:
             base="$PUSH_BEFORE_SHA"
           fi
           if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}"; then
-            base="$(git rev-parse "${GITHUB_SHA}^")"
-          fi
-          non_markdown="$(git diff --name-only "$base" "$GITHUB_SHA" | grep -Ev '\.md$' || true)"
-          if [[ -n "$non_markdown" ]]; then
+            echo "Comparison base is unavailable; failing closed to the full gate."
             echo "full_gate=true" >> "$GITHUB_OUTPUT"
-            printf 'Full gate required for:\n%s\n' "$non_markdown"
           else
-            echo "full_gate=false" >> "$GITHUB_OUTPUT"
-            echo "Markdown-only change: using the lightweight required gate."
+            non_markdown="$(git diff --name-only "$base" "$GITHUB_SHA" | grep -Ev '\.md$' || true)"
+            if [[ -n "$non_markdown" ]]; then
+              echo "full_gate=true" >> "$GITHUB_OUTPUT"
+              printf 'Full gate required for:\n%s\n' "$non_markdown"
+            else
+              echo "full_gate=false" >> "$GITHUB_OUTPUT"
+              echo "Markdown-only change: using the lightweight required gate."
+            fi
+            echo "base=$base" >> "$GITHUB_OUTPUT"
           fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Run lightweight Markdown gate
         if: steps.changes.outputs.full_gate != 'true'

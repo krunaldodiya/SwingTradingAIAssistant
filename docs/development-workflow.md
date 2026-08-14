@@ -124,7 +124,8 @@ every changed path is Markdown, it runs only the lightweight required documentat
 not Markdown—including source, tests, configuration, locks, workflows, generated contracts, or data—the same
 actor runs the existing full gate once on that sealed revision. A later non-Markdown change invalidates the prior
 result and reruns the gate; file size or a one-line executable change is never a reason to skip it. Superseded
-runs remain cancelled automatically.
+PR runs remain cancelled automatically. Main-branch defense runs use unique groups and are never cancelled by a
+later push, so a Markdown-only push cannot erase a preceding executable-change gate.
 
 The authoritative full profile remains branch-aware through the default pytest configuration. Nothing with a
 non-Markdown change merges unless all five tools pass:
