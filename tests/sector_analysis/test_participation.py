@@ -327,6 +327,102 @@ def _assert_whole_insufficiency(
     )
 
 
+def _assert_identity_bearing_label_fails_closed(
+    result: object,
+    raw: tuple[tuple[str, str, str], ...],
+    malicious_label: str,
+) -> None:
+    _assert_whole_insufficiency(result, ("SECTOR_CLASSIFICATION_CORRUPT",))
+    serialized = canonical_json_lf(result).decode("utf-8")
+    assert json.loads(serialized) == {
+        "additional_reasons": [],
+        "evidence_state": "INSUFFICIENT_EVIDENCE",
+        "primary_reason": "SECTOR_CLASSIFICATION_CORRUPT",
+        "sectors": None,
+    }
+
+    private_identifiers = (
+        malicious_label,
+        *(isin for isin, _symbol, _label in raw),
+        *(symbol for _isin, symbol, _label in raw),
+    )
+    direction_surfaces = (
+        "advances",
+        "declines",
+        "unchanged",
+        "member_count",
+        "direction=",
+        "_memberdirectionv1",
+    )
+    for surface in (serialized.casefold(), repr(result).casefold()):
+        assert all(
+            identifier.casefold() not in surface for identifier in private_identifiers
+        )
+        assert all(token not in surface for token in direction_surfaces)
+
+
+@pytest.mark.parametrize(
+    "label_template",
+    ("{identity}", "Opaque ({identity}) Bucket"),
+    ids=("exact", "wrapped"),
+)
+def test_identity_bearing_sector_label_with_member_isin_fails_closed(
+    label_template: str,
+    verified_market_regime_facts_v1: VerifiedMarketRegimeFactsV1,
+) -> None:
+    raw = _raw_constituents(verified_market_regime_facts_v1)
+    malicious_label = label_template.format(identity=raw[0][0].lower())
+    injected = ((raw[0][0], raw[0][1], malicious_label), *raw[1:])
+
+    result = participation.reduce_sector_participation_v1(
+        verified_market_regime_facts_v1, _resolved_snapshot(injected)
+    )
+
+    _assert_identity_bearing_label_fails_closed(result, injected, malicious_label)
+
+
+def test_identity_bearing_sector_label_with_member_symbol_token_fails_closed(
+    verified_market_regime_facts_v1: VerifiedMarketRegimeFactsV1,
+) -> None:
+    raw = _raw_constituents(verified_market_regime_facts_v1)
+    malicious_label = f"Opaque ({raw[0][1].lower()}) Bucket"
+    injected = ((raw[0][0], raw[0][1], malicious_label), *raw[1:])
+
+    result = participation.reduce_sector_participation_v1(
+        verified_market_regime_facts_v1, _resolved_snapshot(injected)
+    )
+
+    _assert_identity_bearing_label_fails_closed(result, injected, malicious_label)
+
+
+def test_opaque_singleton_sector_without_member_identity_remains_observed(
+    verified_market_regime_facts_v1: VerifiedMarketRegimeFactsV1,
+) -> None:
+    raw = _raw_constituents(verified_market_regime_facts_v1)
+    singleton_label = "Opaque Solo Bucket"
+    assert all(
+        isin.casefold() not in singleton_label.casefold()
+        and symbol.casefold() not in singleton_label.casefold()
+        for isin, symbol, _label in raw
+    )
+    singleton = ((raw[0][0], raw[0][1], singleton_label), *raw[1:])
+
+    result = participation.reduce_sector_participation_v1(
+        verified_market_regime_facts_v1, _resolved_snapshot(singleton)
+    )
+
+    assert isinstance(result, participation.SectorParticipationReportV1)
+    assert tuple(
+        (row.label, row.member_count, row.advances, row.declines, row.unchanged)
+        for row in result.sectors
+    ) == (
+        ("Opaque Alpha", 15, 15, 0, 0),
+        ("Opaque Mu", 25, 25, 0, 0),
+        ("Opaque Solo Bucket", 1, 1, 0, 0),
+        ("Opaque Zeta", 9, 9, 0, 0),
+    )
+
+
 def test_sector_reason_taxonomy_is_exact_closed_and_declaration_ordered() -> None:
 
     assert tuple(

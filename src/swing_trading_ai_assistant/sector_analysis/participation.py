@@ -359,6 +359,24 @@ def _admit_resolved_snapshot_participation_input(
     return metadata, snapshot
 
 
+def _snapshot_has_identity_bearing_sector_label(
+    snapshot: Nifty50UniverseSnapshotV1,
+) -> bool:
+    constituent_isins = tuple(
+        constituent.isin.upper() for constituent in snapshot.constituents
+    )
+    constituent_symbols = frozenset(
+        constituent.symbol.upper() for constituent in snapshot.constituents
+    )
+    for constituent in snapshot.constituents:
+        label = constituent.sector.upper()
+        if any(isin in label for isin in constituent_isins):
+            return True
+        if not constituent_symbols.isdisjoint(re.findall(r"[A-Z0-9.&_-]+", label)):
+            return True
+    return False
+
+
 def _sector_participation_reasons(
     report: MarketRegimeReportV1 | None,
     handoff: _MarketRegimeSectorHandoffV1 | None,
@@ -372,6 +390,9 @@ def _sector_participation_reasons(
     snapshot_reason = _snapshot_outcome_reason(resolved_snapshot)
     if snapshot_reason is not None:
         reasons.append(snapshot_reason)
+
+    if snapshot is not None and _snapshot_has_identity_bearing_sector_label(snapshot):
+        reasons.append(SectorParticipationReasonV1.SECTOR_CLASSIFICATION_CORRUPT)
 
     if report is not None and snapshot is not None:
         decision_date = date.fromisoformat(report.decision_session)

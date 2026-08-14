@@ -41,6 +41,7 @@ The current worktree contains:
 | Trusted same-call orchestration | Exact `VerifiedMarketRegimeFactsV1` causes one private Market Regime reduction pass to return the unchanged public report plus an immutable exact-50, unique, ISIN-sorted private direction handoff, which Sector Participation consumes internally in the same public call | `src/swing_trading_ai_assistant/market_regime/observed.py`; `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Opaque-label aggregate | Exact ISIN join to one already-resolved PIT snapshot; deterministic label-sorted advance/decline/unchanged counts; totals reconcile to 50 and to Market Regime | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Fail-closed result | Unavailable Market Regime evidence or missing, stale, ambiguous, corrupt, effective/cutoff-mismatched, or cohort-mismatched snapshot evidence returns one redacted insufficiency with `sectors = None` | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
+| Identity-label admission | Any label containing a full constituent ISIN case-insensitively or matching a constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token returns whole-result `SECTOR_CLASSIFICATION_CORRUPT` with `sectors = None` | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Security and structural boundary | The public reducer has exactly two inputs and rejects legacy three-argument forged-handoff submission; wrong types, inconsistent resolved structure, or an inconsistent internally produced report/handoff pair stop with sanitized boundary errors rather than a misleading insufficiency | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Public package surface | Exports the aggregate/report/insufficiency/eight-reason types and two-input reducer; it gives callers no report or handoff authority | `src/swing_trading_ai_assistant/sector_analysis/__init__.py` |
 
@@ -50,6 +51,12 @@ outcome. The report and private handoff are derived and consumed internally in
 the same call. Observed output contains aggregate opaque labels, counts, session
 metadata, versions, and deterministic identities; it excludes ISINs, symbols,
 member directions, raw closes, and private upstream details.
+
+Non-identity singleton groups remain admitted solely within the authenticated
+nonanonymous owner-private boundary required by the approved historical
+specification. Identity-bearing labels are rejected regardless of group size.
+No public delivery surface exists, and this in-process policy is not a public
+privacy guarantee.
 
 The exact implemented contract is [Plan 14](../plans/14-sector-participation-contract.md).
 The current TDD matrix and remaining gates are [Plan 15](../plans/15-sector-participation-validation-protocol.md).
@@ -61,21 +68,30 @@ Focused test paths are:
 - `tests/market_regime/test_observed_reducer.py`
 - `tests/sector_analysis/test_participation.py`
 
-RED tests first established the missing same-pass private handoff, trusted-facts
-public boundary, aggregate/fail-closed behavior, and rejection of caller handoff
-authority. The smallest production changes then made the focused run GREEN.
-Current focused evidence is Ruff **PASS**, focused Pyright **0 errors, 0
-warnings**, and **49 tests passed** across the two focused test files.
+The original RED tests first established the missing same-pass private handoff,
+trusted-facts public boundary, aggregate/fail-closed behavior, and rejection of
+caller handoff authority. The smallest production changes made the prior
+complete two-file focused run GREEN at **49 passed**, with Ruff **PASS** and
+focused Pyright **0 errors, 0 warnings**.
 
-That evidence covers same-pass report preservation, exact-50 internal handoff
-binding, opaque-label equations, canonical permutation behavior, the closed
-eight-reason set, whole-result failures, three-reason global precedence,
-structural/domain separation, redaction canaries, and a security regression:
-swapping equal-total directions across sector labels and recomputing the private
-handoff hash still cannot enter the exact two-input public API; the legacy
-three-argument call raises `TypeError`. It is not a project-wide gate, hosted
-CI, publication, live-data run, or effectiveness result. This documentation
-edit does not rerun validation.
+Exact-SHA review of `25d889a` then found that a syntactically safe label could
+still carry a constituent identity and returned **REQUEST_CHANGES**. The
+identity-label repair was developed with focused RED cases and now rejects full
+ISIN substrings and complete constituent-symbol tokens case-insensitively. The
+observed focused identity-regression run is **4 passed**, covering exact and
+wrapped ISINs, a wrapped complete symbol token, and the admitted non-identity
+singleton boundary. `25d889a` is superseded; it is not approval evidence.
+
+Those four cases were added after the prior 49-test complete run. The subsequent
+complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
+**0 errors, 0 warnings**. This evidence also covers same-pass report
+preservation, exact-50 handoff binding, opaque-label equations, canonical
+permutation behavior, the closed eight-reason set, whole-result failures,
+global reason precedence, structural/domain separation, redaction canaries,
+and rejection of a caller-supplied forged handoff. The subsequent repaired
+repository gate is Ruff/format/Vulture **PASS**, Pyright **0 errors, 0
+warnings**, and **2,443 passed** at **92.97%** coverage. None of this is hosted
+CI, publication, a live-data run, or an effectiveness result.
 
 ## Linear reconciliation
 
@@ -94,9 +110,10 @@ The repository records the current Linear truth without mutating it:
 ARK-175 through ARK-178 remain immutable historical specification outcomes; they
 are not implementation evidence and are not reopened. ARK-180 is Done with its
 implementation evidence recorded. ARK-181 is the sole active child, In Progress:
-its implementation and tests exist and focused checks pass, while independent
-integrated review, the final gate, and publication remain pending. ARK-179 and
-Sprint 8 therefore remain In Progress through final closure.
+its implementation and tests exist; focused evidence is **53 passed**, and the
+repaired repository gate is **2,443 passed** at **92.97%** coverage.
+Independent exact-revision review and publication remain pending.
+ARK-179 and Sprint 8 therefore remain In Progress through final closure.
 
 ## Historical planning evidence
 
@@ -127,11 +144,11 @@ Opaque source labels are not represented as an official NSE Sector tier. Sprint
 
 The integrated slice remains open pending:
 
-1. independent review of the implementation and these reconciled documents;
-2. the authoritative project gate on the final candidate;
-3. a committed candidate and externally recorded exact revision;
-4. hosted checks plus authorized publication/merge; and
-5. deliberate Linear reconciliation and Sprint 8 closeout after publication.
+1. a committed candidate with externally recorded exact revision;
+2. a new exact-revision independent review of the repaired implementation and
+   these reconciled documents;
+3. hosted checks plus authorized publication/merge; and
+4. deliberate Linear reconciliation and Sprint 8 closeout after publication.
 
 There is no specification-only closeout or separate post-merge documentation
 phase. The implementation, review, and publication evidence close as one atomic

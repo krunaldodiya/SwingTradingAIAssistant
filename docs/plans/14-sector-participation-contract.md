@@ -35,6 +35,12 @@ The aggregate remains owner-private because its upstream handoff contains exact
 member identities and directions. Only the aggregate report or one redacted
 whole-result insufficiency may leave the reducer boundary.
 
+Non-identity singleton groups remain admissible solely inside the
+already-authenticated, nonanonymous owner-private boundary required by the
+approved historical specification. A singleton label is not permission to
+carry an identity: the identity-bearing-label rule below still applies. No
+public delivery surface exists, so this is not a public privacy guarantee.
+
 ## Existing inputs
 
 The public reducer is deliberately small:
@@ -101,11 +107,19 @@ Admission requires all of the following:
 3. metadata fields bind exactly to the snapshot fields;
 4. the report decision session lies inside the snapshot effective interval;
 5. membership and sector publication/retrieval timestamps are not after the
-   report evidence cutoff; and
-6. the snapshot and handoff contain the same exact set of 50 ISINs.
+   report evidence cutoff;
+6. the snapshot and handoff contain the same exact set of 50 ISINs; and
+7. no sector label contains a full constituent ISIN case-insensitively or
+   matches a constituent symbol case-insensitively as a complete
+   `[A-Z0-9.&_-]` token.
 
 The join key is exact ISIN. There is no symbol join, aliasing, label inference,
 or partial join.
+
+Identity-bearing labels are corrupt classification evidence, not another
+grouping. Admission rejects the whole result even when the identity belongs to
+the same row or is wrapped in otherwise safe label text. Non-identity singleton
+groups remain allowed only under the owner-private boundary above.
 
 ## Deterministic output and equations
 
@@ -128,9 +142,9 @@ sum_s U_s = market_report.unchanged
 
 `SectorCountV1` contains `label`, `member_count`, `advances`, `declines`, and
 `unchanged`. Rows are unique and sorted ascending by the exact label string.
-Every label has length 1 through 64 and matches the implemented safe-label
-alphabet; every count is an integer within 0 through 50, and `member_count` is
-within 1 through 50.
+Every label has length 1 through 64, matches the implemented safe-label
+alphabet, and passes identity-bearing-label admission; every count is an integer
+within 0 through 50, and `member_count` is within 1 through 50.
 
 An observed `SectorParticipationReportV1` contains:
 
@@ -175,6 +189,11 @@ The closed global order is:
 No invalid case emits a partial sector row, upstream reason, member identifier,
 direction, source exception detail, or observed-result implication.
 
+In particular, any label bearing a constituent identity returns a whole-result
+insufficiency with `primary_reason = "SECTOR_CLASSIFICATION_CORRUPT"` (subject
+to the closed global precedence above), `sectors = None`, and no partial or
+identity-bearing row.
+
 ## Structural boundary versus domain failure
 
 These outcomes are intentionally distinct:
@@ -182,7 +201,7 @@ These outcomes are intentionally distinct:
 | Class | Examples | Result |
 |---|---|---|
 | Structural misuse | wrong top-level type; malformed typed object; inconsistent resolved metadata/snapshot structure or digest; inconsistent internally produced report/handoff pair | sanitized `TypeError` or `ValueError`; no domain report |
-| Domain insufficiency | unavailable Market Regime; missing/stale/ambiguous/corrupt snapshot outcome; effective/cutoff mismatch; exact-50 ISIN-set mismatch | one redacted whole-result insufficiency |
+| Domain insufficiency | unavailable Market Regime; missing/stale/ambiguous/corrupt snapshot outcome; identity-bearing label; effective/cutoff mismatch; exact-50 ISIN-set mismatch | one redacted whole-result insufficiency |
 | Accepted observation | exact verified facts, reduced internally to a paired same-pass report and private handoff, plus one valid resolved snapshot | one canonical aggregate-only observed report |
 
 Structural exceptions contain stable boundary text rather than the rejected
@@ -201,6 +220,23 @@ metadata, versions, and digests, but not ISINs, symbols, per-member directions,
 raw closes, upstream fact objects, or private handoff objects. Insufficiency
 exposes only its state and closed reasons.
 
+## Exact-SHA privacy finding and TDD repair
+
+Exact-SHA review of `25d889a` found that syntactically safe labels could still
+carry a constituent ISIN or symbol and therefore returned **REQUEST_CHANGES**.
+That revision is superseded by the TDD repair implementing the admission rule
+above; it is not approval or publication evidence.
+
+The observed identity-regression run is **4 passed**: exact and wrapped
+case-insensitive ISIN cases, a case-insensitive complete symbol-token case, and
+the permitted non-identity singleton boundary. The prior complete two-file
+focused run was **49 passed** before these four cases were added. The subsequent
+complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
+**0 errors, 0 warnings**. The repaired repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,443
+passed** at **92.97%** coverage. A sealed exact-revision review and publication
+remain pending.
+
 ## Implemented acceptance
 
 The implemented core is accepted for review when all of these remain true:
@@ -215,7 +251,11 @@ The implemented core is accepted for review when all of these remain true:
 - every admitted domain defect fails closed with `sectors = None`;
 - malformed structure raises a sanitized boundary error rather than becoming a
   misleading insufficiency;
-- no member-level value appears in report, insufficiency, or error surfaces; and
+- no member-level value appears in report, insufficiency, or error surfaces;
+- identity-bearing labels fail as whole-result
+  `SECTOR_CLASSIFICATION_CORRUPT`, while non-identity singleton groups are
+  admitted only inside the authenticated nonanonymous owner-private boundary;
+  and
 - the reducer adds no I/O or external integration.
 
 ## Explicitly deferred

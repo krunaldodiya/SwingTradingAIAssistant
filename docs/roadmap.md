@@ -55,21 +55,36 @@ the report/private handoff internally in the same call. It emits deterministic
 participation counts by opaque source label or one whole-result insufficiency;
 callers have no report or handoff authority.
 
+Label admission rejects any full constituent ISIN case-insensitively and any
+constituent symbol matched case-insensitively as a complete
+`[A-Z0-9.&_-]` token. Either defect returns whole-result
+`SECTOR_CLASSIFICATION_CORRUPT` with no sector rows. A non-identity singleton
+group remains allowed solely inside the authenticated nonanonymous owner-private
+boundary required by the approved historical specification; no public delivery
+surface exists.
+
 [Plan 14](plans/14-sector-participation-contract.md) records the implemented
 contract, and [Plan 15](plans/15-sector-participation-validation-protocol.md)
 records the focused TDD and validation evidence. The provider-free in-process
 core is implemented in `src/swing_trading_ai_assistant/market_regime/observed.py`
 and `src/swing_trading_ai_assistant/sector_analysis/participation.py`; focused
 coverage is in `tests/market_regime/test_observed_reducer.py` and
-`tests/sector_analysis/test_participation.py`. The recorded focused run is
-**49 passed**.
+`tests/sector_analysis/test_participation.py`. The prior complete two-file
+focused run was **49 passed**. After exact-SHA privacy review, the focused
+identity-regression run was **4 passed**; the subsequent complete two-file run
+is **53 passed**, with Ruff **PASS** and focused Pyright **0 errors, 0
+warnings**.
 
 ARK-175 through ARK-178 remain Done as historical specification work. The
 corrected integrated goal ARK-179 remains In Progress; ARK-180 is Done with its
 implementation evidence recorded, and ARK-181 is the sole active child, In
-Progress pending integrated review. ARK-181 implementation and tests exist and
-the focused checks pass, while independent review, the final gate, publication,
-and closure remain pending. [PR #102](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/102)
+Progress pending integrated review. Exact SHA `25d889a` received
+**REQUEST_CHANGES** for the identity-bearing-label privacy defect and is
+superseded by the TDD repair; it is not approval or publication evidence. The
+repaired repository gate is Ruff/format/Vulture **PASS**, Pyright **0 errors, 0
+warnings**, and **2,443 passed** at **92.97%** coverage. A sealed exact-revision
+review, publication, and closure remain pending.
+[PR #102](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/102)
 remains immutable planning evidence, not implementation evidence.
 
 The opaque labels are not claimed as an official NSE Sector taxonomy. Official

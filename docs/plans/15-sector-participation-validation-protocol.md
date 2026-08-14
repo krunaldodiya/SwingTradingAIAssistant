@@ -35,21 +35,30 @@ investment effectiveness.
 
 ## RED to GREEN evidence
 
-The integrated implementation followed the requested TDD order:
+The integrated implementation followed the requested TDD order. The original
+RED tests named the missing same-pass private handoff, trusted-facts public
+boundary, and Sector Participation happy-path/fail-closed contracts. They
+failed before the producer, reducer, types, exports, reason mappings, and
+security boundary existed. The smallest production changes made the prior
+complete two-file focused run GREEN at **49 passed**, with Ruff **PASS** and
+focused Pyright **0 errors, 0 warnings**.
 
-- **RED:** focused tests first named the missing same-pass private handoff,
-  trusted-facts public boundary, and Sector Participation
-  happy-path/fail-closed contracts. They failed before the new producer,
-  reducer, types, exports, reason mappings, and security boundary existed.
-- **GREEN:** the smallest production changes added the same-pass private
-  projection and the pure two-input aggregate reducer. Current focused evidence
-  is Ruff **PASS**, focused Pyright **0 errors, 0 warnings**, and **49 tests
-  passed** across the two test files above.
+Exact-SHA review of `25d889a` then found a privacy defect: a syntactically safe
+label could still carry a constituent identity. Review returned
+**REQUEST_CHANGES**. Identity-focused RED cases drove the repair that rejects
+any label containing a full constituent ISIN case-insensitively or matching a
+constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token. The
+observed focused identity-regression run is **4 passed**, covering exact and
+wrapped ISINs, a complete symbol token, and the allowed non-identity singleton
+boundary.
 
-Those focused results are behavioral and static evidence, not an authoritative
-project-wide gate, hosted CI result, publication record, observed market result,
-or effectiveness evidence. This documentation reconciliation does not rerun
-validation.
+The four new cases were added after the prior 49-test complete run. The
+subsequent complete two-file run is **53 passed**, with Ruff **PASS** and
+focused Pyright **0 errors, 0 warnings**. `25d889a` is superseded, not approved.
+These focused results are not hosted CI, publication, observed-market, or
+effectiveness evidence. The subsequent repaired repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,443
+passed** at **92.97%** coverage.
 
 ## Current behavioral matrix
 
@@ -62,6 +71,9 @@ validation.
 | Market Regime absent or insufficient | `MARKET_REGIME_UNAVAILABLE`; upstream reason suppressed | Both branches asserted |
 | Snapshot absent or not found | `SECTOR_CLASSIFICATION_MISSING` | Both branches asserted |
 | Snapshot stale, ambiguous, or corrupt | Matching closed classification reason | All three branches asserted |
+| Any label contains a full constituent ISIN case-insensitively, including inside otherwise safe text | Whole-result `SECTOR_CLASSIFICATION_CORRUPT` with `sectors = None`; no identity-bearing row | Exact and wrapped lowercase-ISIN regressions passed in the observed 4-test identity run |
+| Any label matches a constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token | Whole-result `SECTOR_CLASSIFICATION_CORRUPT` with `sectors = None`; no identity-bearing row | Lowercase wrapped-symbol regression passed in the observed 4-test identity run |
+| Singleton group with a non-identity opaque label | Observed aggregate remains allowed solely within the authenticated nonanonymous owner-private boundary | Singleton boundary regression passed in the observed 4-test identity run; no public delivery exists |
 | Decision session outside snapshot interval | `SECTOR_EFFECTIVE_SCOPE_MISMATCH` and no rows | Asserted |
 | Any membership/sector publication or retrieval timestamp after cutoff | `EVIDENCE_CUTOFF_MISMATCH` and no rows | All four clocks asserted at cutoff + 1 microsecond |
 | Snapshot substitutes one ISIN while retaining cardinality 50 | `MEMBER_IDENTITY_MISMATCH` and no joined rows | Asserted with identifier redaction |
@@ -108,8 +120,11 @@ The implemented boundaries are:
   report evidence cutoff;
 - the internally joined handoff and snapshot ISIN sets must be identical and
   exact-50;
-- one label has 1 through 64 safe characters and one row has 1 through 50
-  members;
+- each label must contain no full constituent ISIN case-insensitively and no
+  constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token;
+- one non-identity label has 1 through 64 safe characters and one row may have 1
+  through 50 members only inside the authenticated nonanonymous owner-private
+  boundary;
 - sector counts and global totals must reconcile exactly;
 - observed reports have no reasons; insufficiencies have no sector rows; and
 - canonical report serialization is capped at 64 KiB.
@@ -120,6 +135,13 @@ inconsistent resolved object, or an inconsistent pair from the private producer
 is a sanitized programming-boundary exception. A typed missing, stale,
 ambiguous, corrupt, cross-effective, late, or cohort-invalid outcome is a
 redacted domain insufficiency.
+
+An identity-bearing label is usable structure with corrupt domain evidence. It
+therefore produces one whole-result `SECTOR_CLASSIFICATION_CORRUPT`
+insufficiency with `sectors = None`, rather than a structural exception or a
+partially redacted aggregate. Non-identity singleton groups remain allowed only
+inside the approved owner-private boundary; no public delivery surface is
+implemented or validated.
 
 ## Metamorphisms
 
@@ -150,8 +172,10 @@ vector.
 For the observed path, canaries include all 50 ISINs and symbols plus private
 class names, member-direction syntax, raw-close provenance, and upstream source
 identifiers. They must be absent from the public Market Regime report and from
-the Sector Participation report serialization and representation. A caller has
-no public parameter through which to submit the private handoff.
+the Sector Participation report serialization and representation. Admission
+also prevents an opaque aggregate label from carrying a full constituent ISIN
+or complete constituent-symbol token. A caller has no public parameter through
+which to submit the private handoff.
 
 For insufficiency and structural-error paths, upstream reason detail, snapshot
 exception detail, substituted identifiers, and malformed private values must be
@@ -181,11 +205,12 @@ claimed here.
 
 The following remain pending for the integrated Sprint 8 increment:
 
-1. independent review of the final implementation and reconciled documentation;
-2. the authoritative project gate on the final candidate;
-3. a committed publication candidate with externally recorded exact revision;
-4. hosted checks and authorized merge/publication; and
-5. Linear/sprint closeout after that evidence exists.
+1. a committed publication candidate with externally recorded exact revision;
+2. a new exact-revision independent review of the repaired implementation and
+   reconciled documentation (`25d889a` was **REQUEST_CHANGES** and is
+   superseded);
+3. hosted checks and authorized merge/publication; and
+4. Linear/sprint closeout after that evidence exists.
 
 Failure of any pending review or gate blocks publication, but does not turn the
 removed Layer B design into an implemented-core defect. No real-data run or

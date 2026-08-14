@@ -33,14 +33,23 @@ increment and future process decisions.
   In Progress for the corrected 2026-08-13 through 2026-08-19 window. Its
   provider-free in-process reducer accepts trusted verified Market Regime facts
   and a resolved snapshot, then derives and consumes the exact-50 private
-  handoff internally in the same call; callers have no handoff authority. It
-  returns deterministic opaque-source-label counts or a whole-result
-  insufficiency, and the recorded focused run is **49 passed**. ARK-175 through
-  ARK-178 remain Done historical specification work, ARK-179 remains the
-  integrated In Progress goal, ARK-180 is Done with implementation evidence,
-  and ARK-181 is the sole active child, In Progress pending integrated review.
-  Its implementation and tests exist and focused checks pass, while independent
-  review, the final gate, publication, and closure remain pending. PR #102
-  remains immutable planning evidence; no official taxonomy, provider,
-  delivery transport, recommendation, live result, or effectiveness claim is
-  made.
+  handoff internally in the same call; callers have no handoff authority. A
+  label containing a full constituent ISIN case-insensitively or matching a
+  constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token now
+  returns whole-result `SECTOR_CLASSIFICATION_CORRUPT` with no sector rows.
+  Non-identity singleton groups remain allowed solely within the authenticated
+  nonanonymous owner-private boundary; no public delivery exists. Exact SHA
+  `25d889a` received **REQUEST_CHANGES** for the identity-label defect and is
+  superseded by its TDD repair. The prior complete two-file focused run was
+  **49 passed**; the identity-regression run was **4 passed**, and the subsequent
+  complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
+  **0 errors, 0 warnings**.
+  ARK-175 through ARK-178 remain Done historical specification work, ARK-179
+  remains the integrated In Progress goal, ARK-180 is Done with implementation
+  evidence, and ARK-181 is the sole active child, In Progress pending integrated
+  review. The repaired repository gate is Ruff/format/Vulture **PASS**, Pyright
+  **0 errors, 0 warnings**, and **2,443 passed** at **92.97%** coverage. A sealed
+  exact-revision review, publication, and closure remain pending. PR #102
+  remains immutable planning evidence; no official
+  taxonomy, provider, delivery transport, recommendation, live result,
+  effectiveness, approval, merge, or publication claim is made.
