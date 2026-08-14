@@ -551,37 +551,297 @@ SectorParticipationReadinessV1 {
 }
 ```
 
-### Exact private readiness-verifier boundary
+### Deployment-root attestation, verified context, and raw candidates
 
-The gate's sole study payload is the canonical byte sequence of exactly one
-closed `SectorParticipationEvidenceBundleV1` already defined by Plan 14. It
-recomputes `CanonicalSectorParticipationBundleIdentityProjectionV1`, verifies
-the bundle's own `input_identity_sha256`, and admits no caller readiness
-attestation or matching-looking preverified facts. The reviewed gate separately
-closes over the identity-bound implementation authorization,
-source/private-delivery authorization, and `ExpectedReviewedBuildV1` needed for
-`R01`; caller booleans cannot replace them.
+The production composition is two-stage and has no self-pinning cycle:
 
-Inside that private boundary, the deterministic gate parses and validates the
-complete sealed bundle under the same closed schemas and selector/receipt
-bindings. For `R02` and `R03` it parses the observed Market Regime report and
-handoff, validates all 50 strict-sorted unique handoff ISINs and their exact
-direction enums, recomputes the report/handoff identities and binding, and
-checks direction totals without deriving any direction. For `R04` through
-`R10` and `R12` it replays source-object selectors, reconstructs the taxonomy
-release, all assignment ISIN/label memberships, clocks, lineage, manifest, and
-licence/audience proofs, and verifies that the assignments and manifest cover
-exactly the same 50 handoff ISINs. It may inspect those private prerequisite
-values only to evaluate the twelve frozen predicates; it performs no
-sector-label grouping, sector aggregation, prediction, or report reduction.
+```text
+outer_candidate = parse_canonical_outer_candidate(candidate_input)
+bundle_self_identity = recompute_untrusted_bundle_self_identity(outer_candidate)
+provisional_context = verify_deployment_attestation(
+  deployment_attestation_bytes,
+  embedded_deployment_root,
+)
+T = verify_candidate_clock(outer_candidate, provisional_context)
+verified_internal_context = finalize_context(provisional_context, T)
+result = evaluate_readiness(outer_candidate, verified_internal_context)
+```
 
-All parsed handoff ISINs/directions, assignment ISINs/labels, source values, and
-intermediate totals are invocation-local and are neither returned nor retained.
-The only output is one canonical `SectorParticipationReadinessV1`: opaque
-identity pair, `READY`/`BLOCKED`, ordered covered requirement IDs, ordered
-closed blocker reasons, and readiness identity. Forbidden values must not reach
-readiness bytes, logs, errors, exceptions, telemetry, retained snapshots, or a
-result preview; failures are expressed only by the closed blocker reasons.
+Only `candidate_input` crosses the request API. Deployment tooling supplies the
+attestation through an internal immutable channel; neither it nor the root key
+is a request field. The evaluator runs only after internal attestation
+verification has produced `verified_internal_context`.
+
+```text
+ReadinessSignatureProfileV1 =
+  Literal["ED25519_RFC8032_STRICT_CANONICAL_JSON_LF_V1"]
+
+ReadinessSignedRecordKindV1 = Literal[
+  "READINESS_DEPLOYMENT_ATTESTATION",
+  "IMPLEMENTATION_AUTHORIZATION",
+  "SOURCE_LICENCE_RETENTION_OWNER_PRIVATE_DELIVERY_AUTHORIZATION",
+  "TRUSTED_EVALUATION_INSTANT",
+  "OWNER_PRIVATE_NONCE_ADMISSION_DECISION",
+]
+
+ReadinessVerificationKeyV1 {
+  record_kind: ReadinessSignedRecordKindV1
+  signature_profile: ReadinessSignatureProfileV1
+  public_key_bytes_hex: HexBytes[32..32]
+  key_identity_sha256: Sha256
+}
+
+SectorParticipationReadinessDeploymentRootV1 {
+  record_kind: Literal["READINESS_DEPLOYMENT_ATTESTATION"]
+  signature_profile: ReadinessSignatureProfileV1
+  public_key_bytes_hex: HexBytes[32..32]
+  key_identity_sha256: Sha256
+}
+
+ImplementationAuthorizationPayloadV1 {
+  record_kind: Literal["IMPLEMENTATION_AUTHORIZATION"]
+  authorization_scope:
+    Literal["NIFTY50_SECTOR_PARTICIPATION_V1_IMPLEMENTATION"]
+  decision: Literal["AUTHORIZED", "REJECTED"]
+  issued_at: UtcInstant
+  expires_at: UtcInstant
+  code_identity_sha256: Sha256
+  validation_policy_identity_sha256: Sha256
+  payload_content_identity_sha256: Sha256
+}
+
+SourcePrivateDeliveryAuthorizationPayloadV1 {
+  record_kind:
+    Literal["SOURCE_LICENCE_RETENTION_OWNER_PRIVATE_DELIVERY_AUTHORIZATION"]
+  authorization_scope:
+    Literal["NIFTY50_SECTOR_PARTICIPATION_V1_SOURCE_LICENCE_RETENTION_OWNER_PRIVATE_DELIVERY"]
+  decision: Literal["AUTHORIZED", "REJECTED"]
+  issued_at: UtcInstant
+  expires_at: UtcInstant
+  source_policy_identity_sha256: Sha256
+  licence_policy_identity_sha256: Sha256
+  privacy_policy_identity_sha256: Sha256
+  payload_content_identity_sha256: Sha256
+}
+
+TrustedEvaluationInstantPayloadV1 {
+  record_kind: Literal["TRUSTED_EVALUATION_INSTANT"]
+  evaluated_at: UtcInstant
+  payload_content_identity_sha256: Sha256
+}
+
+OwnerPrivateNonceAdmissionPayloadV1 {
+  record_kind: Literal["OWNER_PRIVATE_NONCE_ADMISSION_DECISION"]
+  decision: Literal["FRESH_ACCEPTED", "REUSED_REJECTED"]
+  nonce_identity_sha256: Sha256
+  audience_proof_identity_sha256: Sha256
+  request_identity_sha256: Sha256
+  evidence_bundle_identity_sha256: Sha256
+  evaluated_at: UtcInstant
+  payload_content_identity_sha256: Sha256
+}
+
+ReadinessSignedRecordV1 {
+  record_kind: ReadinessSignedRecordKindV1
+  signature_profile: ReadinessSignatureProfileV1
+  signer_key_identity_sha256: Sha256
+  payload_canonical_bytes_hex: HexBytes[1..65536]
+  payload_content_identity_sha256: Sha256
+  signature_bytes_hex: HexBytes[64..64]
+  signed_record_identity_sha256: Sha256
+}
+
+SectorParticipationReadinessTrustContextV1 {
+  expected_reviewed_build: ExpectedReviewedBuildV1
+  signature_profile: ReadinessSignatureProfileV1
+  implementation_authorization_key: ReadinessVerificationKeyV1
+  source_private_delivery_authorization_key: ReadinessVerificationKeyV1
+  evaluation_clock_key: ReadinessVerificationKeyV1
+  nonce_admission_key: ReadinessVerificationKeyV1
+  trust_context_identity_sha256: Sha256
+}
+
+ReadinessDeploymentAttestationPayloadV1 {
+  record_kind: Literal["READINESS_DEPLOYMENT_ATTESTATION"]
+  deployment_scope:
+    Literal["NIFTY50_SECTOR_PARTICIPATION_V1_READINESS_GATE"]
+  decision: Literal["APPROVED", "REVOKED"]
+  issued_at: UtcInstant
+  expires_at: UtcInstant
+  expected_reviewed_build: ExpectedReviewedBuildV1
+  signature_profile: ReadinessSignatureProfileV1
+  implementation_authorization_key: ReadinessVerificationKeyV1
+  source_private_delivery_authorization_key: ReadinessVerificationKeyV1
+  evaluation_clock_key: ReadinessVerificationKeyV1
+  nonce_admission_key: ReadinessVerificationKeyV1
+  trust_context_identity_sha256: Sha256
+  payload_content_identity_sha256: Sha256
+}
+
+SectorParticipationReadinessDeploymentAttestationV1 {
+  record_kind: Literal["READINESS_DEPLOYMENT_ATTESTATION"]
+  signature_profile: ReadinessSignatureProfileV1
+  signer_key_identity_sha256: Sha256
+  payload_canonical_bytes_hex: HexBytes[1..262144]
+  payload_content_identity_sha256: Sha256
+  signature_bytes_hex: HexBytes[64..64]
+  attestation_identity_sha256: Sha256
+}
+
+SectorParticipationReadinessCandidateInputV1 {
+  evidence_bundle_candidate_bytes_hex: HexBytes[0..2097152] | null
+  evidence_bundle_identity_claim_text: CandidateText | null
+  implementation_authorization_record_bytes_hex: HexBytes[0..65536] | null
+  source_private_delivery_authorization_record_bytes_hex:
+    HexBytes[0..65536] | null
+  evaluation_clock_record_bytes_hex: HexBytes[0..65536] | null
+  nonce_admission_record_bytes_hex: HexBytes[0..65536] | null
+  candidate_input_identity_sha256: Sha256
+}
+```
+
+Every schema above is closed. Key, typed-payload, signed-record, trust-context,
+deployment-payload, deployment-attestation, and candidate-input identities are
+SHA-256 of their canonical projection excluding only their own identity field;
+all projections use canonical JSON plus one LF. The trust-context projection is
+exactly the final `ExpectedReviewedBuildV1`, frozen profile, and four typed
+verification keys. The deployment payload carries those same values plus their
+recomputed trust-context identity, scope, decision, and validity interval.
+
+One fixed `SectorParticipationReadinessDeploymentRootV1` public key and profile
+is generated independently before the reviewed build, embedded in the gate, and
+covered by the resulting code identity. Its bytes contain no build, context, or
+attestation digest and are independent of the final build identity. Only after
+the build is sealed and reviewed does the authorized release signer use the
+corresponding external private key to sign a deployment payload binding that
+final build and context. The gate embeds no final-build-dependent hash that is
+needed to compute that same build.
+
+The gate verifies the deployment attestation under only the embedded root,
+requires exact root signer-key identity/profile/kind, authenticates the typed
+payload, recomputes every build/key/context identity, requires `APPROVED` and the
+exact readiness-gate scope, and reconstructs a provisional immutable context
+only from the authenticated payload. After that context authenticates candidate
+clock instant `T`, finalization additionally requires
+`issued_at <= T < expires_at`. The attestation and context are internal
+deployment artifacts, never caller replacements.
+
+`ED25519_RFC8032_STRICT_CANONICAL_JSON_LF_V1` signs the exact full canonical
+typed payload bytes, including their recomputed content-identity field. Strict
+verification interprets a signature as canonical 32-byte compressed Edwards
+point `R` followed by little-endian scalar `S`; requires `S < L`; requires both
+the 32-byte public key encoding and `R` to decode to valid curve points and
+re-encode byte-identically; rejects noncanonical encodings, the identity,
+small-order or torsion public keys or `R`, malformed lengths, and any failed
+RFC 8032 equation `[S]B = R + [SHA-512(R || A || M) mod L]A`. No permissive
+ZIP-215-style or scalar-reduction acceptance is allowed.
+
+An independently authored crypto oracle shares no production verification
+helper. Golden fixtures cover valid signatures plus message, kind, profile,
+public-key, signature, `R`, and `S` bit flips; wrong key/message; `S + L`
+malleability; noncanonical point/scalar encodings; identity, small-order, and
+torsion points; malformed lengths; and failed equations. Fixture private keys
+are never runtime or source-controlled. Isolated test setup generates any
+needed deterministic ephemeral private keys from harness material held outside
+source, then retains only public vectors, canonical messages, and signatures.
+
+A missing, malformed, expired, future-issued, revoked, wrong-scope,
+wrong-profile, wrong-root-key, bad-signature, bad-build-binding, or
+context-projection-mismatched deployment attestation cannot construct a context.
+The pure internal entrypoint nevertheless first parses the outer candidate and
+independently canonicalizes/recomputes the bundle's Plan 14 self-identity without
+using any readiness predicate or trust-context value. If bundle bytes and claim
+are canonical and self-consistent, the trust-failure result is `BLOCKED` with
+both identity fields equal that recomputed bundle identity, every requirement
+uncovered, and the complete fourteen-reason blocker tuple in declaration order.
+If the bundle is absent, malformed, noncanonical, or self-identity/claim
+mismatched, the same full-blocker result has a null identity pair. Either shape
+necessarily includes `REVIEWED_IMPLEMENTATION_BUILD_MISSING` and
+`SEALED_STUDY_IDENTITIES_INCOMPLETE`. A malformed outer candidate still produces
+no readiness object. Caller material never becomes alternate context.
+
+The candidate input is a closed envelope of untrusted bounded raw bytes. Its own
+unknown/missing field, wrong outer type, duplicate key, noncanonical outer
+serialization, bad outer identity, or bound violation is structural rejection
+and produces no readiness object. By contrast, each null, empty, malformed,
+noncanonical, wrong-type, bad-self-hash, bad-signature, wrong-key, wrong-profile,
+or wrong-kind inner candidate is an admitted failed prerequisite and produces
+the mapped readiness blockers. No inner candidate failure becomes outer
+structural rejection.
+
+Bundle admission first parses the raw bundle candidate and recomputes Plan 14's
+one bundle projection. Null, malformed, noncanonical, or identity-mismatched
+bundle bytes produce the reachable null study/evidence-bundle identity pair,
+leave `R11` uncovered, and add `SEALED_STUDY_IDENTITIES_INCOMPLETE`, plus every
+other mapped blocker whose prerequisite cannot be established. A valid bundle
+requires its recomputed identity to equal both its own `input_identity_sha256`
+and the parsed candidate claim. Only then may that identity occupy the two
+allowlisted readiness fields.
+
+The evaluation instant exists only if the raw evaluation record parses as
+`ReadinessSignedRecordV1`, verifies under the pinned clock key/profile, and its
+canonical payload parses as `TrustedEvaluationInstantPayloadV1` with matching
+kind/content identities. Call that authenticated instant `T`. A missing or
+invalid clock record leaves every time-dependent predicate unproven, including
+both authorization predicates and `R12`, and emits all applicable existing
+blockers. No caller field, ambient clock, replay time, or filesystem/network
+timestamp substitutes for `T`.
+
+The implementation authorization passes exactly when its raw signed record and
+typed payload authenticate under the pinned implementation key/profile, its
+decision is `AUTHORIZED`, `issued_at <= T < expires_at`, and its code and
+validation-policy identities equal the sealed reviewed build. Any failure adds
+`IMPLEMENTATION_AUTHORIZATION_MISSING`. The source authorization passes exactly
+when it authenticates under the pinned source key/profile, has decision
+`AUTHORIZED`, satisfies the same time window, and its source/licence/privacy
+policy identities equal the sealed build and valid bundle. Any failure adds
+`SOURCE_PRIVATE_DELIVERY_AUTHORIZATION_MISSING`. A missing or invalid sealed-
+build/bundle binding adds `REVIEWED_IMPLEMENTATION_BUILD_MISSING`. `R01` is
+covered only when all three predicates pass; blockers occur once in frozen
+order.
+
+For `R12`, the gate validates the parsed bundle's complete
+`OwnerPrivateAudienceProofV1` at authenticated `T`. The raw nonce record must
+authenticate under the pinned nonce key/profile and parse as the closed nonce
+payload; `decision` must be `FRESH_ACCEPTED`; its `evaluated_at` must equal `T`;
+and nonce, audience-proof, request, and bundle identities must equal the exact
+parsed proof/input values. Any failure, including a valid signed
+`REUSED_REJECTED`, leaves `R12` uncovered and adds only
+`OWNER_PRIVATE_AUDIENCE_PROOF_INVALID` for that requirement. Fresh acceptance
+is the authenticated immutable result of one prior admission; a later reuse is
+a separately signed candidate. The evaluator accepts no caller boolean and
+performs no nonce-store lookup.
+
+Layer B candidate fixtures independently cover each raw inner value as null,
+empty, malformed UTF-8/JSON, noncanonical, bad self-hash, bad signature, wrong
+pinned key, wrong profile, and wrong record/payload kind. Authorization fixtures
+cover issue/expiry at `T - 1 microsecond`, `T`, and `T + 1 microsecond`,
+`REJECTED`, wrong policy/build binding, and all multi-fault blocker
+combinations. Clock fixtures cover missing/bad authentication. Nonce fixtures
+cover every proof/request/bundle/evaluation binding, `FRESH_ACCEPTED`, signed
+`REUSED_REJECTED`, and bad authentication. Deployment fixtures cross every
+root-key/profile/kind/scope/decision/window/build/key/context-projection defect
+with (a) canonical self-consistent bundle bytes/claim, (b) absent or malformed/
+noncanonical/self-mismatched bundle, and (c) malformed outer candidate. They
+assert respectively the recomputed identity pair, null pair, or no readiness
+object, plus all strict Ed25519 adversaries and coordinated forged attestation/
+payload/signature/candidate/bundle self-hashes.
+
+With admitted prerequisites, the evaluator privately validates all 50 exact
+handoff ISIN/direction rows and reconstructs assignments, selectors, clocks,
+lineage, manifest, licence, and audience proofs. It performs no sector grouping,
+aggregation, prediction, or report reduction. Candidate-derived private values
+are invocation-local and never returned or retained. The only output is one
+canonical `SectorParticipationReadinessV1`.
+
+The attestation verifier, context finalizer, and evaluator are pure over the
+explicit deployment-attestation bytes, fixed embedded root, and candidate
+bytes. After internal verification the evaluator receives only
+`(candidate_input, verified_internal_context)`. The entire chain makes zero
+network, filesystem, database, environment, wall-clock, randomness, credential,
+logging, telemetry, subprocess, storage, or nonce-store calls and maps the same
+authenticated-attestation/canonical-candidate pair to one byte-identical
+count-free readiness outcome.
 
 `ReadinessRequirementV1` is closed to exactly the twelve IDs above; declaration
 order is its only canonical order. `ReadinessBlockerReasonV1` is a separate
@@ -639,93 +899,89 @@ expected_readiness_identity =
 result.readiness_identity_sha256 == expected_readiness_identity
 ```
 
-The gate recomputes that equality before recording or returning the result. It
-contains no sector label, count, member direction, member identity, Market
-Regime count, or preview. `READY` means only all prerequisites can be
-mechanically admitted; it does not assert a result is useful, surprising,
-tradable, or already reduced. Any missing item is `BLOCKED`; no synthetic
-substitute, current-map repair, partial denominator, inferred lineage, or count
-inspection is allowed. Original and revised candidates remain separate immutable
-failures or studies.
-
 ### Layer B identity sensitivity and count-free redaction
 
-Layer B's private verifier input is the sealed evidence bundle, so it necessarily
-contains exact handoff ISINs/directions and assignment ISINs/labels. Those
-values are internal prerequisites, never readiness output fields or a Layer A
-conformance attestation. Identity sensitivity is restricted to fields
-actually covered by the closed readiness projection:
-`study_identity_sha256`, `evidence_bundle_identity_sha256`, `readiness_state`,
-ordered `covered_requirement_ids`, and ordered `blocker_reasons`. There is no
-other projected V1 field.
+Layer B keeps candidate, deployment, and trust identities separate. Only
+`SectorParticipationReadinessCandidateInputV1` is fuzzed through the request
+API. Deployment-attestation fixtures exercise the fixed-root signature and
+post-build binding; trust-context fixtures exercise reconstruction and key/
+projection integrity internally. Neither artifact can become alternate caller
+trust.
 
-- A schema-valid, invariant-preserving mutation of an independently mutable
-  projected field changes canonical readiness bytes and
-  `readiness_identity_sha256`.
-- An input-driven coupled mutation rebuilds the complete legal projected group,
-  especially `readiness_state`/coverage/blockers and the paired study/evidence-
-  bundle identities; any changed projected field changes readiness bytes and
-  identity.
-- An admitted prerequisite or authorization-proof mutation that leaves all five
-  projected fields identical must produce byte-identical readiness output and
-  the identical readiness identity; its admission and own proof identity are
-  tested separately.
-- A foreign singleton state, requirement, or blocker literal, invalid tuple
-  order, duplicate, or illegal nullability shape rejects before identity
-  comparison.
+Readiness identity sensitivity remains restricted to fields actually covered by
+the closed output projection: `study_identity_sha256`,
+`evidence_bundle_identity_sha256`, `readiness_state`, ordered
+`covered_requirement_ids`, and ordered `blocker_reasons`. A legal changed
+projected field changes canonical readiness bytes and identity. An input-driven
+coupled mutation rebuilds the complete legal state/coverage/blocker and paired-
+identity group. An authenticated candidate-record mutation that leaves all five
+projected fields identical must produce byte-identical readiness output and
+identity; its candidate, payload, signature, and admission identities are tested
+separately. Foreign output literals/order/nullability reject before identity
+comparison. The excluded readiness self-identity and coordinated sealed-root
+rehash retain their mismatch/rejection checks.
 
-The excluded `readiness_identity_sha256` self-field and coordinated sealed-root
-rehash receive the same mismatch/rejection checks as Layer A. The redaction
-allowlist has exactly one private value: when non-null, the recomputed
-`expected_bundle_identity` may appear only as the value of both required
-`study_identity_sha256` and `evidence_bundle_identity_sha256` fields, and
-therefore in those two covered positions of
-`CanonicalSectorParticipationReadinessIdentityProjectionV1`. It may not appear
-in any other readiness field or output surface. When the identity pair is null,
-there is no allowed occurrence.
+On readiness output surfaces, the redaction allowlist has exactly one private
+value: any non-null canonical self-consistent bundle identity—including the
+trust-blocked shape above—may appear only as both required study/evidence-bundle
+identity fields and those two output-projection positions. Its equality-bound
+occurrences inside private candidate records are allowed input locations, not
+output exceptions. It may appear in no other readiness field or surface; a null
+pair permits no output occurrence.
 
-Canaries use distinct markers per independent private channel or a
-distinguishable multi-field pattern; they are not required to be globally
-unique. An equality-bound group intentionally repeats one marker everywhere the
-contract requires equality, including an ISIN across handoff/requested cohort/
-assignment/manifest locations, a selector-selected source value across its
-candidate and verified label/claim, and any other identity-bound repetition.
+Canaries use distinct markers per independent channel or distinguishable multi-
+field patterns and intentionally repeat a marker across contract-required
+equality groups. Groups cover bundle identity; handoff/request/assignment/
+manifest ISINs; selector/source/candidate/verified values; signed payload/
+content/envelope/attestation identities; deployment root and signer key;
+authorization kinds, policies, windows, signer-key identities and signatures;
+authenticated clock instants; nonce/proof/request/bundle/evaluation bindings;
+context verification keys and projection; and all other identity-bound
+repetitions.
 
-The scanner tracks each complete equality group and requires zero occurrences
-outside that group's allowed private input locations, except for the sole
-bundle-identity output allowlist above. It applies the same rule to policy/
-receipt/source/object/revision/proof digests, handoff direction patterns,
-selectors, selected values, and trusted clocks, and rejects sector counts,
-credentials, secrets, or free-form diagnostics in readiness canonical bytes,
-returned objects, result previews, string/debug representations, equality
-diffs, errors/exceptions, logs, telemetry, and retained snapshots. Positive
-controls either leak a non-allowlisted group marker or place the otherwise
-allowed bundle identity in a forbidden field or surface. Changing a
-harness-only control must not change canonical readiness bytes or the
-`READY`/`BLOCKED` outcome.
+The scanner requires zero group occurrences outside allowed private candidate,
+internal deployment-attestation, or trust-context locations and the sole
+bundle-identity output allowlist. It also rejects sector counts, credentials,
+secrets, and free-form diagnostics in readiness bytes, returned objects,
+previews, string/debug representations, equality diffs, errors/exceptions,
+logs, telemetry, or retained snapshots. Positive controls leak a
+non-allowlisted candidate/deployment/context marker or put the allowed bundle
+identity in a forbidden field/surface. Changing a harness-only control must not
+change readiness bytes or `READY`/`BLOCKED`.
 
 ## One feasible future chronology and sealing
 
 The chronology is strict and deliberately avoids the prior circular plan:
 
-1. **Separate authorization.** Obtain explicit owner authorization for the
-   implementation slice and separate authority for source/private-delivery work.
+1. **Initial work authorization only.** Obtain owner authorization to perform
+   implementation work and separate authority to investigate source/licence/
+   acquisition/retention/private-delivery work. These step-1 decisions are not
+   `R01` records and cannot claim or bind identities that do not yet exist.
 2. **Source, licence, acquisition, retention.** Approve the source binding,
    licence and retained-use scope, bounded acquisition manifest, capture
    authority, credentials if unavoidable, budget, and storage; then retain raw
    candidate bytes and trusted receipts without computing sector counts.
-3. **Strict TDD Layer A implementation/review.** First implement/review the
-   prerequisite Market Regime observed-only handoff; then write failing Layer A
-   tests and implement the pure Sector Participation schemas, admission,
-   identities, privacy suppression, and reducer. No same-input handoff is
-   claimed before this step.
-4. **Seal code, evidence, and policies.** After independent review, seal the
-   reviewed build and the exact source, validation, semantic, privacy, licence,
+3. **Strict TDD Layer A implementation/review.** Implement/review the prerequisite
+   observed-only handoff, then the pure schemas, admission, identities, privacy,
+   and reducer under Layer A. No same-input handoff is claimed before this step.
+4. **Seal final build, evidence, and policies.** Complete independent review and
+   seal final code/build plus source, validation, semantic, privacy, licence,
    selector, audience, evidence, manifest, request/date/cohort, and cutoff bytes.
-5. **Readiness without count disclosure.** Run Layer B only over those sealed
-   identities. It emits `READY` or `BLOCKED`, never sector counts/directions.
-6. **Reduce one ready bundle.** If and only if readiness is `READY`, reduce that
-   exact one bundle once and deliver only through the owner-private boundary.
+5. **Issue post-build trust and final R01 evidence.** The external authorized
+   release signer signs the deployment attestation binding the final reviewed
+   build and four verification keys. Only now issue the two final signed
+   identity-bound R01 authorization records with validity windows covering the
+   intended readiness evaluation.
+6. **Authenticate evaluation and nonce admission.** At readiness time, issue the
+   signed evaluation-clock record, perform the one-time owner-private nonce
+   admission, and issue its signed fresh/reused decision bound to the exact
+   proof, request, bundle, and authenticated instant.
+7. **Construct and run count-free readiness.** Construct the raw candidate input;
+   internally verify the deployment attestation into a context; then evaluate
+   exactly `(candidate_input, verified_internal_context)`. Emit only `READY` or
+   `BLOCKED` readiness fields, never sector labels/counts/directions.
+8. **Reduce one ready bundle.** If and only if readiness is `READY`, reduce that
+   exact bundle once and deliver only through the owner-private boundary.
 
 Failure at any step stops. No later external revision rewrites an older study;
 it requires a separately sealed input and identity. There is no same-input
