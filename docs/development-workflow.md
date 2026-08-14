@@ -6,9 +6,9 @@ correctness. Product boundaries are in `../AGENTS.md`; safeguards are in `engine
 ## Direction, specification, and unit of work
 
 The owner approves direction at the epic or equivalent product boundary. Below it, the implementer writes a
-short specification—purpose, inputs, outputs, deterministic rules, edge cases, validation, and acceptance
-criteria—and proceeds without human approval. Ask only for changed direction/scope, credentials or live-
-provider authority, or destructive/irreversible action.
+complete, implementation-ready specification—purpose, inputs, outputs, deterministic rules, edge cases,
+validation, and acceptance criteria—and proceeds without human approval. Ask only for changed direction/scope,
+credentials or live-provider authority, or destructive/irreversible action.
 
 The delivery unit is one coherent PR-sized slice with one primary reason to change. It may span several files
 and tests but must be independently verifiable. Split only unrelated concerns or work that cannot be reviewed
@@ -17,10 +17,14 @@ transitions do not gate implementation.
 
 ## Local-first specification and just-in-time tracking
 
-For a bounded, single-writer slice, draft the short specification in a clean worktree before implementation.
-Keep it in repository Markdown, commit it locally as the immutable specification baseline, and record its exact
-SHA. Do not leave an approved specification only in an untracked file. When risk-based review is required
-below, obtain read-only review of the specification baseline's exact SHA before the first RED test. A remote
+For a bounded, single-writer slice, draft the complete, detailed specification in a clean worktree before
+implementation. Completeness is not traded for workflow speed: include every purpose, scope and non-claim,
+input/output, rule, contract or schema, point-in-time/provenance/identity requirement, edge and failure case,
+validation rule, acceptance criterion, and stop boundary needed to implement without invention. Use multiple
+Markdown files when that is the clearest representation; no arbitrary size limit replaces semantic completeness.
+Commit the specification locally as the immutable baseline and record its exact SHA. Do not leave an approved
+specification only in an untracked file. When risk-based review is required below, obtain read-only review of the
+specification baseline's exact SHA before the first RED test. A remote
 feature-branch backup without a PR is optional when it does not trigger hosted CI.
 
 Do not open a separate specification PR by default. After any required local specification review, implement the
@@ -61,7 +65,7 @@ the new owner. This prevents both concurrent path ownership and permanent read-o
 
 ## Default path and risk-based review
 
-The default path has one actor: **short local specification → reviewed baseline when required → implement →
+The default path has one actor: **complete local specification → reviewed baseline when required → implement →
 full gate → commit/PR → done**. The implementer owns the slice, tests, evidence, and repair. Multiple files,
 adapters, provenance fields, or market-data plumbing alone do not require a second actor.
 
