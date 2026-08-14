@@ -16,7 +16,19 @@ Implementation:
 - **Scope fit:** locked Module 2 / Nifty 50.
 - **Risk:** an opaque label is not an official taxonomy, and the private handoff could leak member-level evidence.
 - **Smallest alternative:** a provider-free in-process aggregate with a fail-closed result.
-- **Decision:** accept the implemented core; defer official taxonomy and Layer B.
+- **Decision:** accepted for Sprint 8 by the owner-created corrected integrated
+  outcome in [ARK-179](https://linear.app/arktechnology1987/issue/ARK-179/ship-provider-free-owner-private-sector-participation-v1-end-to-end);
+  defer official taxonomy and Layer B.
+
+## Direction authority and historical boundary
+
+ARK-179 was created by the product owner and records both the corrected
+provider-free integrated outcome and its accepted module evaluation. It is the
+current Sprint 8 implementation authority under the repository's epic-direction
+rule. ARK-175 through ARK-178 and PR #102 remain immutable historical
+specification evidence; this implementation does not rewrite them or claim that
+their official-taxonomy design was delivered. Official taxonomy acquisition,
+proof, and readiness remain deferred.
 
 ## Purpose and non-claims
 
