@@ -575,6 +575,52 @@ def test_public_reducer_sanitizes_inconsistent_same_pass_producer_tuple(
     assert private_value not in str(raised.value)
 
 
+def test_public_reducer_sanitizes_forged_member_normalization_failure(
+    verified_market_regime_facts_v1: VerifiedMarketRegimeFactsV1,
+) -> None:
+    sensitive_normalization_detail = "SENSITIVE-FORGED-NORMALIZATION-DETAIL"
+
+    class CaseMaskingStr(str):
+        def upper(self) -> str:
+            return sensitive_normalization_detail
+
+    raw = _raw_constituents(verified_market_regime_facts_v1)
+    identity = raw[0][1]
+    identity_bearing_label = f"Opaque ({identity.lower()}) Bucket"
+    injected = ((raw[0][0], identity, identity_bearing_label), *raw[1:])
+    resolved = _resolved_snapshot(injected)
+    member = next(
+        member for member in resolved.snapshot.constituents if member.symbol == identity
+    )
+    forged_symbol = CaseMaskingStr(member.symbol)
+    assert str(forged_symbol) == identity
+    assert forged_symbol.upper() == sensitive_normalization_detail
+    object.__setattr__(member, "symbol", forged_symbol)
+    payload = resolved.snapshot.canonical_json_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    rehashed_metadata = replace(
+        resolved.metadata,
+        snapshot_sha256=digest,
+        byte_count=len(payload),
+        relative_object_path=f"universe_snapshots/sha256={digest}/snapshot.json",
+    )
+    forged_resolved = ResolvedNifty50UniverseSnapshotV1(
+        metadata=rehashed_metadata,
+        snapshot=resolved.snapshot,
+    )
+
+    with pytest.raises(ValueError) as raised:
+        participation.reduce_sector_participation_v1(
+            verified_market_regime_facts_v1, forged_resolved
+        )
+
+    message = str(raised.value)
+    assert message == "resolved universe snapshot is inconsistent"
+    assert identity not in message
+    assert identity_bearing_label not in message
+    assert sensitive_normalization_detail not in message
+
+
 def test_private_handoff_constructor_rejects_rehashed_forty_nine_members(
     verified_market_regime_facts_v1: VerifiedMarketRegimeFactsV1,
 ) -> None:

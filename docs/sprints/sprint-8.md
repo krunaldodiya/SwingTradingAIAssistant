@@ -42,6 +42,7 @@ The current worktree contains:
 | Opaque-label aggregate | Exact ISIN join to one already-resolved PIT snapshot; deterministic label-sorted advance/decline/unchanged counts; totals reconcile to 50 and to Market Regime | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Fail-closed result | Unavailable Market Regime evidence or missing, stale, ambiguous, corrupt, effective/cutoff-mismatched, or cohort-mismatched snapshot evidence returns one redacted insufficiency with `sectors = None` | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Identity-label admission | Any label containing a full constituent ISIN case-insensitively or matching a constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token returns whole-result `SECTOR_CLASSIFICATION_CORRUPT` with `sectors = None` | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
+| Deep snapshot admission | Aggregate construction re-runs every constituent invariant across all 50 exact members; Sector Participation translates only expected deep-consistency `TypeError` or `ValueError` failures to bounded `ValueError("resolved universe snapshot is inconsistent")` | `src/swing_trading_ai_assistant/market_data/universe_snapshot.py`; `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Security and structural boundary | The public reducer has exactly two inputs and rejects legacy three-argument forged-handoff submission; wrong types, inconsistent resolved structure, or an inconsistent internally produced report/handoff pair stop with sanitized boundary errors rather than a misleading insufficiency | `src/swing_trading_ai_assistant/sector_analysis/participation.py` |
 | Public package surface | Exports the aggregate/report/insufficiency/eight-reason types and two-input reducer; it gives callers no report or handoff authority | `src/swing_trading_ai_assistant/sector_analysis/__init__.py` |
 
@@ -65,6 +66,7 @@ The current TDD matrix and remaining gates are [Plan 15](../plans/15-sector-part
 
 Focused test paths are:
 
+- `tests/market_data/test_universe_snapshot.py`
 - `tests/market_regime/test_observed_reducer.py`
 - `tests/sector_analysis/test_participation.py`
 
@@ -83,15 +85,26 @@ wrapped ISINs, a wrapped complete symbol token, and the admitted non-identity
 singleton boundary. `25d889a` is superseded; it is not approval evidence.
 
 Those four cases were added after the prior 49-test complete run. The subsequent
-complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
-**0 errors, 0 warnings**. This evidence also covers same-pass report
-preservation, exact-50 handoff binding, opaque-label equations, canonical
-permutation behavior, the closed eight-reason set, whole-result failures,
-global reason precedence, structural/domain separation, redaction canaries,
-and rejection of a caller-supplied forged handoff. The subsequent repaired
-repository gate is Ruff/format/Vulture **PASS**, Pyright **0 errors, 0
-warnings**, and **2,443 passed** at **92.97%** coverage. None of this is hosted
-CI, publication, a live-data run, or an effectiveness result.
+complete two-file run was **53 passed**, with Ruff **PASS** and focused Pyright
+**0 errors, 0 warnings**. That evidence covers same-pass report preservation,
+exact-50 handoff binding, opaque-label equations, canonical permutation
+behavior, the closed eight-reason set, whole-result failures, global reason
+precedence, structural/domain separation, redaction canaries, and rejection of
+a caller-supplied forged handoff.
+
+A second exact-SHA review found that aggregate snapshot construction did not
+re-run every invariant of every exact constituent and returned
+**REQUEST_CHANGES** for `d79eecc`. That revision is superseded by the
+deep-revalidation repair; it is not approval, publication, or final-candidate
+evidence. The focused defect reproduction was **2 failing** and the direct
+repaired regression is **2 passed**.
+
+The current combined universe-snapshot, observed-reducer, and Sector
+Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
+errors, 0 warnings**. The final repaired repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
+passed** at **92.96%** coverage. None of this is hosted CI, publication, a
+live-data run, or an effectiveness result.
 
 ## Linear reconciliation
 
@@ -110,9 +123,10 @@ The repository records the current Linear truth without mutating it:
 ARK-175 through ARK-178 remain immutable historical specification outcomes; they
 are not implementation evidence and are not reopened. ARK-180 is Done with its
 implementation evidence recorded. ARK-181 is the sole active child, In Progress:
-its implementation and tests exist; focused evidence is **53 passed**, and the
-repaired repository gate is **2,443 passed** at **92.97%** coverage.
-Independent exact-revision review and publication remain pending.
+its implementation and tests exist; the current combined focused evidence is
+**96 passed**, with Ruff **PASS** and Pyright **0 errors, 0 warnings**. The
+final repaired repository gate is **2,445 passed** at **92.96%** coverage;
+independent exact-revision review remains pending.
 ARK-179 and Sprint 8 therefore remain In Progress through final closure.
 
 ## Historical planning evidence

@@ -347,8 +347,11 @@ def _admit_resolved_snapshot_participation_input(
             or type(snapshot) is not Nifty50UniverseSnapshotV1
         ):
             raise ValueError("resolved universe snapshot is inconsistent")
-        metadata.__post_init__()
-        snapshot.__post_init__()
+        try:
+            metadata.__post_init__()
+            snapshot.__post_init__()
+        except (TypeError, ValueError):
+            raise ValueError("resolved universe snapshot is inconsistent") from None
         snapshot_bytes = snapshot.canonical_json_bytes()
         if (
             metadata.snapshot_sha256 != hashlib.sha256(snapshot_bytes).hexdigest()

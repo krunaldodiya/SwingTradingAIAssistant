@@ -103,13 +103,15 @@ does not resolve, refresh, download, reinterpret, or assign those labels.
 Admission requires all of the following:
 
 1. metadata and snapshot are the exact existing types;
-2. metadata byte count and SHA-256 match the snapshot's canonical bytes;
-3. metadata fields bind exactly to the snapshot fields;
-4. the report decision session lies inside the snapshot effective interval;
-5. membership and sector publication/retrieval timestamps are not after the
+2. snapshot construction revalidates every one of the exact 50 constituents
+   against all constituent invariants;
+3. metadata byte count and SHA-256 match the snapshot's canonical bytes;
+4. metadata fields bind exactly to the snapshot fields;
+5. the report decision session lies inside the snapshot effective interval;
+6. membership and sector publication/retrieval timestamps are not after the
    report evidence cutoff;
-6. the snapshot and handoff contain the same exact set of 50 ISINs; and
-7. no sector label contains a full constituent ISIN case-insensitively or
+7. the snapshot and handoff contain the same exact set of 50 ISINs; and
+8. no sector label contains a full constituent ISIN case-insensitively or
    matches a constituent symbol case-insensitively as a complete
    `[A-Z0-9.&_-]` token.
 
@@ -200,13 +202,20 @@ These outcomes are intentionally distinct:
 
 | Class | Examples | Result |
 |---|---|---|
-| Structural misuse | wrong top-level type; malformed typed object; inconsistent resolved metadata/snapshot structure or digest; inconsistent internally produced report/handoff pair | sanitized `TypeError` or `ValueError`; no domain report |
+| Structural misuse | wrong top-level type; malformed typed object; a constituent that fails deep revalidation; inconsistent resolved metadata/snapshot structure or digest; inconsistent internally produced report/handoff pair | sanitized `TypeError` or `ValueError`; no domain report |
 | Domain insufficiency | unavailable Market Regime; missing/stale/ambiguous/corrupt snapshot outcome; identity-bearing label; effective/cutoff mismatch; exact-50 ISIN-set mismatch | one redacted whole-result insufficiency |
 | Accepted observation | exact verified facts, reduced internally to a paired same-pass report and private handoff, plus one valid resolved snapshot | one canonical aggregate-only observed report |
 
 Structural exceptions contain stable boundary text rather than the rejected
 private value. Domain insufficiency deliberately collapses upstream detail into
 the closed Sector Participation reason set.
+
+Aggregate snapshot construction must re-run every constituent invariant rather
+than trust an exact typed member merely because it was admitted earlier. At the
+Sector Participation boundary, only the expected `TypeError` and `ValueError`
+from this resolved-snapshot consistency check are translated to the stable,
+bounded `ValueError("resolved universe snapshot is inconsistent")`; unexpected
+exceptions are not swallowed or exposed as domain evidence.
 
 ## Purity, privacy, and redaction
 
@@ -220,22 +229,32 @@ metadata, versions, and digests, but not ISINs, symbols, per-member directions,
 raw closes, upstream fact objects, or private handoff objects. Insufficiency
 exposes only its state and closed reasons.
 
-## Exact-SHA privacy finding and TDD repair
+## Exact-SHA findings and TDD repairs
 
 Exact-SHA review of `25d889a` found that syntactically safe labels could still
 carry a constituent ISIN or symbol and therefore returned **REQUEST_CHANGES**.
-That revision is superseded by the TDD repair implementing the admission rule
-above; it is not approval or publication evidence.
+That revision is superseded by the TDD identity-label repair implementing the
+admission rule above; it is not approval or publication evidence.
 
 The observed identity-regression run is **4 passed**: exact and wrapped
 case-insensitive ISIN cases, a case-insensitive complete symbol-token case, and
 the permitted non-identity singleton boundary. The prior complete two-file
 focused run was **49 passed** before these four cases were added. The subsequent
-complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
-**0 errors, 0 warnings**. The repaired repository gate is
-Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,443
-passed** at **92.97%** coverage. A sealed exact-revision review and publication
-remain pending.
+complete two-file run was **53 passed**, with Ruff **PASS** and focused Pyright
+**0 errors, 0 warnings**.
+
+A second exact-SHA review of `d79eecc` found that aggregate snapshot
+construction did not re-run the invariants of every exact constituent. That
+revision received **REQUEST_CHANGES** and is superseded by the deep-revalidation
+repair; it is not approval, publication, or final-candidate evidence. The
+focused defect reproduction was **2 failing** before the repair, and the direct
+repaired regression is **2 passed**.
+
+The current combined universe-snapshot, observed-reducer, and Sector
+Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
+errors, 0 warnings**. The final repaired repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
+passed** at **92.96%** coverage. A sealed exact-revision review remains pending.
 
 ## Implemented acceptance
 
@@ -246,6 +265,9 @@ The implemented core is accepted for review when all of these remain true:
   in the same public reducer call;
 - no caller can submit a report or handoff through the public API;
 - one already-resolved PIT snapshot maps the same 50 ISINs exactly once;
+- aggregate snapshot construction revalidates all 50 exact constituents, and
+  expected resolved-snapshot consistency failures cross Sector Participation
+  only as the stable bounded structural error;
 - output rows are deterministic opaque-label counts satisfying every equation;
 - input permutations preserve canonical output;
 - every admitted domain defect fails closed with `sectors = None`;

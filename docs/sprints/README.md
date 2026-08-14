@@ -33,23 +33,30 @@ increment and future process decisions.
   In Progress for the corrected 2026-08-13 through 2026-08-19 window. Its
   provider-free in-process reducer accepts trusted verified Market Regime facts
   and a resolved snapshot, then derives and consumes the exact-50 private
-  handoff internally in the same call; callers have no handoff authority. A
-  label containing a full constituent ISIN case-insensitively or matching a
-  constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token now
+  handoff internally in the same call; callers have no handoff authority.
+  Aggregate snapshot construction now revalidates every constituent invariant
+  across all 50 exact members. Expected deep-consistency `TypeError` or
+  `ValueError` failures cross Sector Participation only as the stable bounded
+  `resolved universe snapshot is inconsistent` structural error.
+  A label containing a full constituent ISIN case-insensitively or matching a
+  constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token
   returns whole-result `SECTOR_CLASSIFICATION_CORRUPT` with no sector rows.
   Non-identity singleton groups remain allowed solely within the authenticated
-  nonanonymous owner-private boundary; no public delivery exists. Exact SHA
-  `25d889a` received **REQUEST_CHANGES** for the identity-label defect and is
-  superseded by its TDD repair. The prior complete two-file focused run was
-  **49 passed**; the identity-regression run was **4 passed**, and the subsequent
-  complete two-file run is **53 passed**, with Ruff **PASS** and focused Pyright
-  **0 errors, 0 warnings**.
+  nonanonymous owner-private boundary; no public delivery exists.
+  Exact SHA `25d889a` received **REQUEST_CHANGES** for the identity-label defect
+  and is superseded by its TDD repair. The second exact-SHA review returned
+  **REQUEST_CHANGES** for the deep constituent-revalidation defect in `d79eecc`;
+  that revision is also superseded and is not final-candidate evidence.
+  The focused defect reproduction was **2 failing**, the direct repaired
+  regression is **2 passed**, and the current combined universe/observed/sector
+  focused gate is **96 passed**, with Ruff **PASS** and Pyright **0 errors, 0
+  warnings**.
   ARK-175 through ARK-178 remain Done historical specification work, ARK-179
   remains the integrated In Progress goal, ARK-180 is Done with implementation
   evidence, and ARK-181 is the sole active child, In Progress pending integrated
-  review. The repaired repository gate is Ruff/format/Vulture **PASS**, Pyright
-  **0 errors, 0 warnings**, and **2,443 passed** at **92.97%** coverage. A sealed
-  exact-revision review, publication, and closure remain pending. PR #102
-  remains immutable planning evidence; no official
-  taxonomy, provider, delivery transport, recommendation, live result,
-  effectiveness, approval, merge, or publication claim is made.
+  review. The final repaired repository gate is Ruff/format/Vulture **PASS**,
+  Pyright **0 errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage.
+  A sealed exact-revision review remains pending. PR #102
+  remains immutable planning evidence; no official taxonomy, provider,
+  delivery transport, recommendation, live result, effectiveness, approval,
+  merge, or publication claim is made.

@@ -1,6 +1,6 @@
 # Sector Participation v1 TDD and validation protocol
 
-Status: **GREEN IMPLEMENTED CORE — REVIEW, GATE, AND PUBLICATION PENDING**
+Status: **GREEN IMPLEMENTED CORE — REVIEW AND PUBLICATION PENDING**
 
 Contract under validation: `nifty50-sector-participation@v1`
 
@@ -8,11 +8,13 @@ Normative implementation contract: [Plan 14](14-sector-participation-contract.md
 
 Focused tests:
 
+- `tests/market_data/test_universe_snapshot.py`
 - `tests/market_regime/test_observed_reducer.py`
 - `tests/sector_analysis/test_participation.py`
 
 Implementation under test:
 
+- `src/swing_trading_ai_assistant/market_data/universe_snapshot.py`
 - `src/swing_trading_ai_assistant/market_regime/observed.py`
 - `src/swing_trading_ai_assistant/sector_analysis/participation.py`
 
@@ -52,13 +54,24 @@ observed focused identity-regression run is **4 passed**, covering exact and
 wrapped ISINs, a complete symbol token, and the allowed non-identity singleton
 boundary.
 
-The four new cases were added after the prior 49-test complete run. The
-subsequent complete two-file run is **53 passed**, with Ruff **PASS** and
+The four identity cases were added after the prior 49-test complete run. The
+subsequent complete two-file run was **53 passed**, with Ruff **PASS** and
 focused Pyright **0 errors, 0 warnings**. `25d889a` is superseded, not approved.
-These focused results are not hosted CI, publication, observed-market, or
-effectiveness evidence. The subsequent repaired repository gate is
-Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,443
-passed** at **92.97%** coverage.
+
+A second exact-SHA review of `d79eecc` returned **REQUEST_CHANGES** after finding
+that aggregate snapshot construction did not re-run every invariant of every
+exact constituent. The focused defect reproduction was **2 failing**. The
+repair deep-revalidates all exact-50 members at aggregate construction, and the
+direct repaired regression is **2 passed**.
+
+The current combined universe-snapshot, observed-reducer, and Sector
+Participation focused gate is **96 passed**, with Ruff **PASS** and Pyright **0
+errors, 0 warnings**. `d79eecc` is superseded; it is not approval, publication,
+or final-candidate evidence. The final repaired repository gate is
+Ruff/format/Vulture **PASS**, Pyright **0 errors, 0 warnings**, and **2,445
+passed** at **92.96%** coverage. A sealed exact-revision review remains pending.
+None of the focused or repository results is hosted CI, publication,
+observed-market, or effectiveness evidence.
 
 ## Current behavioral matrix
 
@@ -68,6 +81,8 @@ passed** at **92.97%** coverage.
 | Same Market Regime facts through existing public reducer versus private same-pass producer | Public Market Regime report and canonical bytes remain identical | Regression assertion in Market Regime focused test |
 | Internally produced exact-50 handoff | 50 unique ISIN-sorted immutable `_MemberDirectionV1` rows; direction totals equal public totals | Shape, sorting, immutability, identity binding, and total reconciliation asserted |
 | Snapshot constituent permutation | Equal report and byte-identical canonical output | Permutation metamorphism asserted |
+| Exact aggregate snapshot construction | Re-runs every constituent invariant across all 50 exact members before accepting the aggregate | Focused defect reproduction was 2 failing; direct repaired regression is 2 passed |
+| Deep snapshot inconsistency reaches Sector Participation | Only expected `TypeError` or `ValueError` is translated to bounded `ValueError("resolved universe snapshot is inconsistent")`; no private value or domain report escapes | Direct repaired regression asserts the sanitized structural boundary |
 | Market Regime absent or insufficient | `MARKET_REGIME_UNAVAILABLE`; upstream reason suppressed | Both branches asserted |
 | Snapshot absent or not found | `SECTOR_CLASSIFICATION_MISSING` | Both branches asserted |
 | Snapshot stale, ambiguous, or corrupt | Matching closed classification reason | All three branches asserted |
@@ -120,6 +135,8 @@ The implemented boundaries are:
   report evidence cutoff;
 - the internally joined handoff and snapshot ISIN sets must be identical and
   exact-50;
+- aggregate snapshot construction must re-run every invariant for each of its
+  exact 50 constituents before the snapshot can be accepted;
 - each label must contain no full constituent ISIN case-insensitively and no
   constituent symbol case-insensitively as a complete `[A-Z0-9.&_-]` token;
 - one non-identity label has 1 through 64 safe characters and one row may have 1
@@ -130,11 +147,15 @@ The implemented boundaries are:
 - canonical report serialization is capped at 64 KiB.
 
 Boundary validation distinguishes malformed structure from usable structure
-with insufficient domain evidence. A wrong public-input type, an internally
-inconsistent resolved object, or an inconsistent pair from the private producer
-is a sanitized programming-boundary exception. A typed missing, stale,
-ambiguous, corrupt, cross-effective, late, or cohort-invalid outcome is a
-redacted domain insufficiency.
+with insufficient domain evidence. A wrong public-input type, a constituent
+that fails deep aggregate revalidation, an internally inconsistent resolved
+object, or an inconsistent pair from the private producer is a sanitized
+programming-boundary exception. Sector Participation translates only expected
+`TypeError` and `ValueError` from resolved-snapshot consistency validation to
+the bounded `ValueError("resolved universe snapshot is inconsistent")`; it does
+not swallow unexpected exceptions. A typed missing, stale, ambiguous, corrupt,
+cross-effective, late, or cohort-invalid outcome is a redacted domain
+insufficiency.
 
 An identity-bearing label is usable structure with corrupt domain evidence. It
 therefore produces one whole-result `SECTOR_CLASSIFICATION_CORRUPT`
@@ -207,8 +228,8 @@ The following remain pending for the integrated Sprint 8 increment:
 
 1. a committed publication candidate with externally recorded exact revision;
 2. a new exact-revision independent review of the repaired implementation and
-   reconciled documentation (`25d889a` was **REQUEST_CHANGES** and is
-   superseded);
+   reconciled documentation (`25d889a` and `d79eecc` were
+   **REQUEST_CHANGES** and are superseded);
 3. hosted checks and authorized merge/publication; and
 4. Linear/sprint closeout after that evidence exists.
 

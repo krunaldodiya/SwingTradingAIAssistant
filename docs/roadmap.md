@@ -63,16 +63,25 @@ group remains allowed solely inside the authenticated nonanonymous owner-private
 boundary required by the approved historical specification; no public delivery
 surface exists.
 
+Aggregate snapshot construction now revalidates every invariant of all 50 exact
+constituents. At the Sector Participation boundary, expected deep-consistency
+`TypeError` or `ValueError` failures are translated to the stable bounded
+`resolved universe snapshot is inconsistent` structural error; unexpected
+exceptions are not swallowed.
+
 [Plan 14](plans/14-sector-participation-contract.md) records the implemented
 contract, and [Plan 15](plans/15-sector-participation-validation-protocol.md)
 records the focused TDD and validation evidence. The provider-free in-process
-core is implemented in `src/swing_trading_ai_assistant/market_regime/observed.py`
-and `src/swing_trading_ai_assistant/sector_analysis/participation.py`; focused
-coverage is in `tests/market_regime/test_observed_reducer.py` and
+core is implemented in
+`src/swing_trading_ai_assistant/market_data/universe_snapshot.py`,
+`src/swing_trading_ai_assistant/market_regime/observed.py`, and
+`src/swing_trading_ai_assistant/sector_analysis/participation.py`; focused
+coverage is in `tests/market_data/test_universe_snapshot.py`,
+`tests/market_regime/test_observed_reducer.py`, and
 `tests/sector_analysis/test_participation.py`. The prior complete two-file
 focused run was **49 passed**. After exact-SHA privacy review, the focused
 identity-regression run was **4 passed**; the subsequent complete two-file run
-is **53 passed**, with Ruff **PASS** and focused Pyright **0 errors, 0
+was **53 passed**, with Ruff **PASS** and focused Pyright **0 errors, 0
 warnings**.
 
 ARK-175 through ARK-178 remain Done as historical specification work. The
@@ -80,10 +89,18 @@ corrected integrated goal ARK-179 remains In Progress; ARK-180 is Done with its
 implementation evidence recorded, and ARK-181 is the sole active child, In
 Progress pending integrated review. Exact SHA `25d889a` received
 **REQUEST_CHANGES** for the identity-bearing-label privacy defect and is
-superseded by the TDD repair; it is not approval or publication evidence. The
-repaired repository gate is Ruff/format/Vulture **PASS**, Pyright **0 errors, 0
-warnings**, and **2,443 passed** at **92.97%** coverage. A sealed exact-revision
-review, publication, and closure remain pending.
+superseded by its TDD repair.
+
+The second exact-SHA review found the deep constituent-revalidation defect in
+`d79eecc` and returned **REQUEST_CHANGES**. That revision is superseded by the
+repair; it is not approval, publication, or final-candidate evidence. The
+focused defect reproduction was **2 failing** and the direct repaired regression
+is **2 passed**. The current combined universe/observed/sector focused gate is
+**96 passed**, with Ruff **PASS** and Pyright **0 errors, 0 warnings**.
+
+The final repaired repository gate is Ruff/format/Vulture **PASS**, Pyright **0
+errors, 0 warnings**, and **2,445 passed** at **92.96%** coverage. A sealed
+exact-revision review, publication, and closure remain pending.
 [PR #102](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/102)
 remains immutable planning evidence, not implementation evidence.
 
