@@ -30,10 +30,11 @@ and `UNCHANGED` member directions fall in each exact point-in-time official
 Sector label?_ It is an end-of-day descriptive composition fact. It does not
 reclassify Market Regime and is not a broad Sector Analysis platform.
 
-V1 computes no return, percentage, rank, score, strength, leader, laggard,
-rotation, performance, effectiveness, usefulness, signal, forecast,
-recommendation, trade permission, confidence, trend, relative strength, or AI
-narrative. It adds no price, index candle, weight, volume, indicator, benchmark,
+V1 explicitly rejects claims of returns, ranks, scores, leadership, rotation,
+relative strength, signals, recommendations, usefulness, and profitability. It
+also computes no percentage, strength, leader, laggard, performance,
+effectiveness, forecast, trade permission, confidence, trend, or AI narrative.
+It adds no price, index candle, weight, volume, indicator, benchmark,
 threshold search, or second data family. Canonical row order is serialization,
 not rank. `NO_TRADE` remains owned by later decision logic.
 
