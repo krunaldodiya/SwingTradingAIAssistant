@@ -161,6 +161,17 @@ Industry, Macro Economic Sector, provider categories, symbols, company names,
 row positions, aliases, and local rollups are not substitutes. ISIN is the only
 join key.
 
+The public current Nifty 50 constituent CSV's source `Industry` field and any
+current page `Industry` or sector presentation are opaque labels only. Neither
+proves the official Sector tier, a classification-release identity, an
+effective interval, or the assignment applicable to `decision_session`; HTTP
+`Last-Modified` and filesystem time are transport/local metadata, not
+publication or knowledge-time evidence. Membership and classification have
+separate roles: the exact upstream ISIN cohort fixes the 50 members, while the
+official classification release assigns those same ISINs to Sector labels.
+Sector-index names or sector-index constituent lists prove neither Nifty 50
+membership nor a Sector assignment.
+
 A selected assignment is eligible only when immutable candidate bytes prove all
 of the following:
 
@@ -179,10 +190,13 @@ of the following:
    aggregate use for the selected source/release at the decision session.
 
 A current download cannot establish historical effective time, publication, or
-revision truth. No current-map backfill, inferred label, nearest-date fill,
-latest-wins rule, cross-release union, symbol join, provider fallback, or
-post-cutoff repair is admitted. Original and revised bytes remain separately
-immutable.
+revision truth. No current-map backfill, alias inference, inferred label,
+inferred sector-index membership, nearest-date fill, latest-wins rule,
+cross-release union, symbol join, provider fallback, or post-cutoff repair is
+admitted. Original and revised bytes remain separately immutable. Without an
+explicit applicable supersession proven by the complete lineage, conflicting
+assignments or releases are ambiguous and fail the whole report closed;
+publication or retrieval order never resolves the conflict.
 
 ## Lexical types and structural request
 

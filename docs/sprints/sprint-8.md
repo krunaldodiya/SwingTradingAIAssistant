@@ -77,10 +77,14 @@ module, endpoint, cohort, purpose, or need for source contact.
 
 ### ARK-176 — taxonomy policy
 
-Freeze NSE Indices authority, exact Sector tier, ISIN join, effective and
-knowledge time, immutable selector/source/schema/release binding, trusted clocks,
-revision lineage/manifest completeness, licence/private-use proof, and rejection
-of current-map backfill or taxonomy substitution.
+Freeze NSE Indices authority and classification by exact ISIN to the same
+decision-session 50-member cohort; exact official Sector tier, release, and
+effective interval; knowledge cutoff and trusted publication,
+response-completion, retrieval, and immutable-retention clocks;
+immutable selector/source/schema binding; revision, supersession, manifest,
+licence/private-use, and conflict rules. Current CSV `Industry` or sector labels
+remain opaque rather than official Sector-tier proof; reject current-map
+backfill, alias inference, and inferred sector-index membership.
 
 Acceptance: one exact policy maps every valid/invalid candidate without source
 selection or acquisition. Stop on ambiguous authority/tier/licence, inferred
