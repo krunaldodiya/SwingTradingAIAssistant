@@ -1,6 +1,6 @@
 # Sprint 9 — Market Regime Layer B acquisition decision
 
-Status: **BLOCKED — CORRECTIVE PUBLICATION PENDING; TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`**
+Status: **TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`**
 Historical planning and original implementation parent: `b8359f5cffded6122511c3ee8ebe290893007672`
 Corrective change-series base: `c74ee4788aa6d03864eb8c21f111afe7025ad9cc`
 
@@ -110,7 +110,7 @@ keeping malformed or unauthenticated authority distinct.
 | 2 | Implement pure reducer and offline decision CLI | Initial `None` seal fails closed; stdin cannot supply authority; `16 KiB + 1` is rejected before allocation/parse amplification | **COMPLETE** |
 | 3 | Write RED probe tests and implement fixed worker/supervisor | Exact receipt rows, media normalization, byte bounds, no redirect/retry/write, outer watchdog, and local slow-stream termination are green; no live-probe CLI exists | **COMPLETE** |
 | 4 | Verify deterministic candidate build, then perform one supervised probe invocation | Retained owner authority/run evidence and one sanitized receipt/projection; no retry or raw-byte retention | **STOPPED — invocation consumed; receipt retained, projection absent** |
-| 5 | Review the seal disposition; reduce and publish the actual decision | Seal the truthful complete or incomplete manifest; never invent missing evidence | **CORRECTIVE CANDIDATE SEALED — `BLOCKED / CAPABILITY_EVIDENCE_MISSING`; review/publication pending** |
+| 5 | Review the seal disposition; reduce and publish the actual decision | Seal the truthful complete or incomplete manifest; never invent missing evidence | **CORRECTED SEAL — `BLOCKED / CAPABILITY_EVIDENCE_MISSING`** |
 
 A phase boundary is not sprint completion. Missing evidence is never filled by
 inference. The current incomplete sealed manifest produces its first honest
@@ -169,7 +169,7 @@ provider-independent capability projection was retained or reconstructed.
 
 No admissible capability projection, source/PIT evidence bundle, terms/use
 approval, operational-scope approval, owner full-acquisition authorization, or
-trusted authorization-validation receipt was supplied. The corrective candidate
+trusted authorization-validation receipt was supplied. The corrected build
 therefore seals each of those later fields as null. Its source-controlled
 `prerequisites_assessed_at` is `2026-08-15T16:03:40.000000Z`; this records the
 assessment of those absences and grants no authority.
@@ -181,16 +181,16 @@ and finite sealing projections:
 |---|---|
 | Plan 12 exact bytes / market-regime contract | `b5b54bed2d4224fb496755c8e9d6a190d6cbb7fc8bd13a53feded72450af12af` |
 | Plan 13 exact bytes / Layer B protocol | `e8e2c712e4fba5cfe24fd51c6d9985df23e2e714c12e01c7f9f9d30ab670e19d` |
-| Final corrected Plan 16 exact bytes / acquisition scope | `61dacb24fb65e58870bbb830c6f6d03af938a657ccfcbb32185ccbe8cda7492a` |
-| Manifest scope projection | `64a51b6f318a25db698051c9a462eac1e8970c81cfc7d05b3240cbe6f9877b6a` |
-| Final sealed manifest | `53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c` |
-| Canonical terminal report | `140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5` |
+| Final corrected Plan 16 exact bytes / acquisition scope | `71f54a9f89b8b77cfe5800312461dd1c3dbd189df5ff7fee2a760229b27da835` |
+| Manifest scope projection | `07f235b246e88d30404ddf1574e13907f436c937144e40abf4766c4463cb759e` |
+| Final sealed manifest | `53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f` |
+| Canonical terminal report | `dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408` |
 
 The offline reducer now returns canonical `BLOCKED` with primary blocker
 `CAPABILITY_EVIDENCE_MISSING`, sealed manifest identity
-`53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c`,
+`53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f`,
 and null authenticated capability, validation-receipt, and assessment-time
-outputs. This is the truthful corrective candidate outcome. It grants no
+outputs. This is the truthful corrected outcome. It grants no
 acquisition or execution authority.
 
 The following publication evidence is historical and applies to the original
@@ -209,7 +209,7 @@ implementation candidate, not to this corrective seal:
 
 Those gates establish historical delivery of the implementation and its former
 missing-seal result. They do not verify, review, commit, or publish this
-corrective candidate, turn the historical probe receipt into admissible
+correction, turn the historical probe receipt into admissible
 capability evidence, or supply any missing prerequisite.
 
 ## Lifecycle and later handoff
@@ -238,8 +238,8 @@ operational truth without rewriting Sprint 8 history.
 
 PR #107 remains immutable historical implementation publication evidence. It
 merged at `2026-08-15T15:40:16Z` as
-`c74ee4788aa6d03864eb8c21f111afe7025ad9cc`; it did not contain this corrective
-incomplete manifest or the corrected repository closeout.
+`c74ee4788aa6d03864eb8c21f111afe7025ad9cc`; it did not contain the corrective
+incomplete manifest.
 
 Linear reconciliation also remains historical:
 
@@ -250,10 +250,10 @@ Linear reconciliation also remains historical:
 | ARK-185 | Implementation story | **Done**; PR #107 attached; one completion comment |
 
 Those Done states record the published implementation; they do not establish
-authority or publication of this correction. The correction is committed in the
-candidate under review. Its exact revision, reviews, hosted checks, merge, and
-publication remain external lifecycle evidence; repository closeout remains
-blocked pending publication. The current candidate truth is
+authority or publication of this correction. Commit identity, exact-revision
+reviews, hosted checks, merge, and publication for the correction are external
+lifecycle evidence; this source snapshot asserts no current lifecycle state for
+them. The sealed result is
 `BLOCKED / CAPABILITY_EVIDENCE_MISSING` with a valid incomplete seal. No
 admissible capability projection, source/PIT evidence bundle, terms/use approval,
 operational-scope approval, owner full-acquisition authorization, or trusted
@@ -279,13 +279,11 @@ of the terminal decision.
 
 ## Sprint completion gate and residual risk
 
-Sprint 9 repository closeout is **BLOCKED PENDING CORRECTIVE PUBLICATION**. The
-implementation, consumed-probe disposition, historical PR #107 publication, and
-historical Linear ARK-183/184/185 Done states remain recorded, but they do not
-cover this corrected seal. The correction is committed in the candidate under
-review; its exact revision, reviews, hosted checks, merge, and publication
-remain external lifecycle evidence required before repository completion can be
-claimed.
+The implementation, consumed-probe disposition, historical PR #107 publication,
+and historical Linear ARK-183/184/185 Done states remain recorded, but they do
+not cover this corrected seal. Commit identity, exact-revision reviews, hosted
+checks, merge, and publication for the correction are external lifecycle
+evidence; this source snapshot asserts no current lifecycle state for them.
 
 The truthful terminal result is `BLOCKED / CAPABILITY_EVIDENCE_MISSING` with a
 content-addressed incomplete manifest. There is no admissible capability

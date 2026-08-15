@@ -34,18 +34,18 @@ OPERATIONAL_IDENTITY = "5" * 64
 AUTHORITY_IDENTITY = "6" * 64
 AUTHORIZATION_RECORD_IDENTITY = "7" * 64
 ACTUAL_INCOMPLETE_MANIFEST_IDENTITY = (
-    "53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c"
+    "53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f"
 )
 ACTUAL_INCOMPLETE_REPORT = (
     b'{"assessed_at":null,"authenticated_capability_evidence_identity_sha256":null,'
     b'"authorization_validation_receipt_identity_sha256":null,'
     b'"contract_version":"market-regime-layer-b-acquisition-decision@v1",'
     b'"decision_state":"BLOCKED","primary_blocker":"CAPABILITY_EVIDENCE_MISSING",'
-    b'"report_identity_sha256":"140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5",'
-    b'"sealed_manifest_identity_sha256":"53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c"}\n'
+    b'"report_identity_sha256":"dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408",'
+    b'"sealed_manifest_identity_sha256":"53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f"}\n'
 )
 ACTUAL_INCOMPLETE_REPORT_IDENTITY = (
-    "140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5"
+    "dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408"
 )
 GOLDEN_REPORTS: dict[str, tuple[bytes, str]] = {
     "SEALED_MANIFEST_MISSING": (

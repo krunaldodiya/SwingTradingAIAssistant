@@ -54,15 +54,14 @@ increment and future process decisions.
   evidence. Official taxonomy, Layer B, provider/public transport, live results,
   recommendation, ranking, and effectiveness remain deferred or unclaimed.
 - [Sprint 9 — Market Regime Layer B acquisition decision](sprint-9.md) —
-  repository closeout is **BLOCKED PENDING CORRECTIVE PUBLICATION**, with
-  truthful terminal decision `BLOCKED / CAPABILITY_EVIDENCE_MISSING`.
-  The corrective candidate seals canonical incomplete manifest identity
-  `53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c`
+  terminal decision `BLOCKED / CAPABILITY_EVIDENCE_MISSING`.
+  The corrected build seals canonical incomplete manifest identity
+  `53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f`
   from scope projection identity
-  `64a51b6f318a25db698051c9a462eac1e8970c81cfc7d05b3240cbe6f9877b6a`
+  `07f235b246e88d30404ddf1574e13907f436c937144e40abf4766c4463cb759e`
   and source-controlled prerequisite assessment
   `2026-08-15T16:03:40.000000Z`. Its canonical report identity is
-  `140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5`.
+  `dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
   The capability group and all later evidence, approval, authorization, and
   validation-receipt identities are null; the assessment instant grants no
   authority.
@@ -72,13 +71,13 @@ increment and future process decisions.
   `c74ee4788aa6d03864eb8c21f111afe7025ad9cc`, but did not contain this
   correction. Linear ARK-183, ARK-184, and ARK-185 remain historically
   **Done** with PR #107 attached; those tracker states do not publish or
-  authorize the corrective candidate.
+  authorize the correction.
   The consumed probe's historical receipt remains inadmissible as capability
   evidence because its old worker could attempt another resolved address; no
   provider-independent projection was retained or reconstructed, and no rerun
-  occurred. The correction is committed in the candidate under review. Its exact
-  revision, reviews, hosted checks, merge, and publication remain external
-  lifecycle evidence. It grants no acquisition, readiness, admission, label, or
-  later execution authority.
+  occurred. Commit identity, exact-revision reviews, hosted checks, merge, and
+  publication for the correction are external lifecycle evidence; this index
+  asserts no current lifecycle state for them. The correction grants no
+  acquisition, readiness, admission, label, or later execution authority.
   Sprint 10 and the separate GitHub workflow migration plan remain deferred
   until tomorrow, **2026-08-16**; neither starts in this correction.

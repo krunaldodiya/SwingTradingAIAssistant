@@ -1,14 +1,15 @@
 # Market Regime Layer B acquisition decision v1
 
-Status: **IMPLEMENTED — TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`; CORRECTIVE PUBLICATION PENDING**
+Status: **IMPLEMENTED — TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`**
 Contract version: `market-regime-layer-b-acquisition-decision@v1`
 Extends: frozen Plans 12 and 13; neither plan is amended or reinterpreted
 
 Linear tracking: `ARK-183`, `ARK-184`, and `ARK-185` remain historically
 **Done** for the implementation published through PR #107. That publication did
-not include this corrective incomplete-seal change. The correction is committed
-in the candidate under review; its exact revision, reviews, hosted checks, merge,
-and publication remain external lifecycle evidence.
+not include this corrective incomplete-seal change. Commit identity,
+exact-revision reviews, hosted checks, merge, and publication are external
+lifecycle evidence; this self-addressed document asserts no current lifecycle
+state for the correction.
 
 Sprint 9 is one learning-and-decision slice: implement the boundary test-first,
 execute the one owner-authorized candidate-artifact probe under supervision,
@@ -39,14 +40,14 @@ occurred.
 
 No admissible capability evidence, source/PIT evidence bundle, terms/use
 approval, operational-scope approval, full-acquisition authorization, or trusted
-validation receipt exists. The corrective candidate truthfully seals those
+validation receipt exists. The corrected build truthfully seals those
 absences in one canonical incomplete manifest. Its required
 `prerequisites_assessed_at` is a source-controlled sealing instant and grants no
 authority. The pure decision therefore returns canonical `BLOCKED` with first
 blocker `CAPABILITY_EVIDENCE_MISSING`, the sealed manifest identity present, and
 all authenticated capability, receipt, and assessment-time outputs null. The
-exact manifest and report identities are recorded with the corrective candidate
-evidence outside this self-addressed acquisition-scope document. No missing
+exact manifest and report identities are recorded with the correction evidence
+outside this self-addressed acquisition-scope document. No missing
 identity is inferred or reconstructed.
 
 ## Question, non-claims, and frozen upstream meaning
@@ -371,7 +372,7 @@ reconstructs both manifest projection identities and all inline bindings, and
 verifies that the derived final manifest identity equals the companion literal
 `SEALED_ACQUISITION_MANIFEST_IDENTITY_SHA256`.
 
-The corrective candidate replaces the historical `None` pin with an incomplete
+The corrected build replaces the historical `None` pin with an incomplete
 canonical seal. The three capability fields and every later evidence, approval,
 authorization, and validation-receipt identity are null; only the required
 prerequisite assessment instant records when those absences were assessed. The
@@ -647,7 +648,7 @@ completion.
 | Plans 12/13 and Market Regime semantics | Frozen and unchanged |
 | Candidate probe bytes | Transient; never persisted or admitted |
 | Provider transport metadata | Retained only in the `market_data` probe receipt |
-| Evidence/authorization authority | One canonical incomplete build-sealed manifest in the corrective candidate; review/publication pending |
+| Evidence/authorization authority | One canonical incomplete build-sealed manifest; lifecycle evidence is external to this self-addressed document |
 | Legal, terms, cost, credentials, storage, retention | All approval identities remain null; the first missing capability group blocks |
 | Data migration or production source replacement | None |
 | Labels, outcomes, strategy, recommendations | Forbidden and untouched |
@@ -675,17 +676,16 @@ of evidence as absence of a seal. Because the capability group is wholly null,
 the recorded result is `BLOCKED / CAPABILITY_EVIDENCE_MISSING`, with a sealed
 manifest identity and no authenticated capability, receipt, time, acquisition,
 readiness, admission, label, or later-execution authority. The exact document,
-manifest, and report identities are recorded in the build pin and Sprint 9
-candidate evidence, not embedded here where the Plan 16 byte identity would
-become self-referential.
+manifest and report identities are recorded in the build pin and Sprint 9
+evidence, not embedded here where the Plan 16 byte identity would become
+self-referential.
 
-Sprint 9 repository closeout remains **CORRECTIVE PUBLICATION PENDING**. PR #107
-is immutable historical implementation publication evidence, and Linear
-ARK-183/184/185 remain historically Done. The correction is committed in the
-candidate under review; its exact revision, reviews, hosted checks, merge, and
-publication remain external lifecycle evidence. No approval is inferred from
-the successful HTTP envelope, implementation, sealing instant, or this
-specification.
+PR #107 is immutable historical implementation publication evidence, and Linear
+ARK-183/184/185 remain historically Done. Commit identity, exact-revision
+reviews, hosted checks, merge, and publication for the correction are external
+lifecycle evidence; this self-addressed document asserts no current lifecycle
+state. No approval is inferred from the successful HTTP envelope,
+implementation, sealing instant, or this specification.
 
 Residual risk remains that exactly-once depends on human/release supervision and
 retained evidence rather than technical replay prevention; the candidate prefix
