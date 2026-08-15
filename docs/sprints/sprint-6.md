@@ -152,8 +152,7 @@ mutable or free-form public diagnostics, and unsupported performance claims.
 
 ## Planning approval gate — satisfied
 
-The owner approved the five product decisions in Prime session
-`019fec82-f298-7015-840f-541ab4c9a33f` before ARK-165 started. This approval
+The owner approved the five product decisions before ARK-165 started. This approval
 covered the specification increment only and did not authorize classifier
 implementation, new sources, evidence acquisition, portfolios, or orders.
 
