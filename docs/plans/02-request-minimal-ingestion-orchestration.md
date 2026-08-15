@@ -18,9 +18,8 @@ publication, and DuckDB lifecycle evidence. The contract must ensure that:
 - every provider attempt is bounded, traceable, and sanitized; and
 - only canonical one-minute acquisition can reach the provider.
 
-This specification does not change the architecture freeze or trading logic.
-It makes ARK-36 implementation-ready by replacing one cross-cutting task with
-ordered atomic children.
+This specification does not change the architecture freeze or trading logic. It
+defines nine ordered ingestion capabilities within the frozen boundary.
 
 ## Non-goals
 
@@ -707,13 +706,11 @@ Tests use injected fakes and temporary local storage. They must prove:
 - stable sanitization under hostile external values; and
 - memory, file, task, queue, and request cardinalities remain bounded.
 
-## ARK-36 decomposition
+## Ingestion capability decomposition
 
-ARK-36 is a tracking parent, not one implementation unit. Nine ordered
-children are the smallest honest decomposition: lease differs from filesystem
-mutation, header transport differs from retry behavior, schedule retention
-differs from validation, and each remaining child has one observable behavior
-and one reason to change.
+Nine ordered capabilities separate lease ownership from filesystem mutation,
+header transport from retry behavior, and schedule retention from validation.
+Each capability has one bounded domain outcome.
 
 ### Child A: acquire one protected storage-root lease
 
@@ -858,9 +855,8 @@ duplicate child implementation.
 
 ## Contract-compatibility matrix
 
-The exact candidate is compared with this deterministic matrix. Every row
-records the governing location, candidate location, compatible/incompatible
-result, and any required correction; an incompatible row blocks acceptance.
+Compatibility requires every row below to hold. An incompatible implementation
+lies outside this contract.
 
 | Required check | Exact compatibility proof |
 | --- | --- |
@@ -872,23 +868,17 @@ result, and any required correction; an incompatible row blocks acceptance.
 | Provenance retention | Schedule bytes, digest serialization/version, policy binding, immutable lookup, and recovery behavior are exact and bounded. |
 | Bounded resource and wait | Request, response, plan, file, connection, retry, limiter, and all wait cardinalities are bounded; every over-bound wait fails before waiting. |
 | Crash/concurrency ownership | Lease acquisition precedes mutable observation; only lease ownership permits stale interruption, cleanup, quarantine, recovery, or retention mutation. |
-| Callable dependency proof | Every required read, write, or query occurs only after its dependency is available and maps to an existing callable contract, or is isolated as an approved atomic child; prose does not assume an unstated API. |
-| Atomic children | Each child has one observable behavior, one reason to change, a one-sentence Done condition, and explicit dependencies/order with no stale count or label. |
+| Callable dependency proof | Every required read, write, or query occurs only after its dependency is available and maps to an existing callable contract; prose does not assume an unstated API. |
 
-## Acceptance criteria and completion
+## Contract acceptance conditions
 
-ARK-49 is complete when:
+The contract is satisfied when:
 
-- the contract-compatibility matrix is complete with no unresolved incompatible
-  row;
-- the specification is linked from ARK-36;
-- ARK-36 is converted to a tracking parent with nine ordered executable tasks;
+- the compatibility matrix has no unresolved incompatible row;
 - every failure and edge above has a deterministic typed result;
-- zero-request paths prove token, limiter, and HTTP inactivity;
-- no path can promote unsupported coverage or quality evidence to `VERIFIED`;
-  and
-- repository and Linear sources of truth agree.
+- zero-request paths prove token, limiter, and HTTP inactivity; and
+- no path can promote unsupported coverage or quality evidence to `VERIFIED`.
 
 A focused cancellation recheck approved the corrected specification. This
-record authorizes no implementation; separate accepted implementation work is
-required.
+contract does not authorize provider access or implementation; those remain
+separately authorized.
