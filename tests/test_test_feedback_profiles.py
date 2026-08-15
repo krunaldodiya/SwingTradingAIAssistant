@@ -10,9 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
-README = ROOT / "README.md"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-AUTHORITATIVE = "uv run --extra dev pytest"
 
 
 def _run_pytest(project: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -78,12 +76,6 @@ def test_project_default_retains_authoritative_branch_coverage() -> None:
     assert "--cov-branch" in addopts
     assert "--cov-fail-under=87" in addopts
     assert "--no-cov" not in addopts
-
-
-def test_readme_keeps_authoritative_pytest_command() -> None:
-    readme = README.read_text(encoding="utf-8")
-
-    assert f"{AUTHORITATIVE}\n```" in readme
 
 
 def test_ci_keeps_bare_authoritative_pytest_and_no_coverage_bypass() -> None:

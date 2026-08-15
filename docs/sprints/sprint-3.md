@@ -120,9 +120,9 @@ current-month, local-view, and release-readiness items into Slices 8–13 below.
   regimes, recommendations, F&O, crypto, account linking, and execution are out
   of scope.
 
-Write the sprint record once at close with the seven-slice result, gate/smoke
-evidence, held boundaries, and any incomplete work. Do not create per-issue
-sprint records or unchanged-state reports.
+The closeout uses one sprint record containing the seven-slice result,
+gate/smoke evidence, held boundaries, and incomplete work. It does not create
+per-issue sprint records or unchanged-state reports.
 
 ## Closeout record
 
@@ -148,9 +148,7 @@ zero provider attempts. Public JSON contains no storage path or credential.
 The source distribution and wheel build successfully. The wheel installs into
 a fresh temporary virtual environment, reports package version `0.1.0`, and
 exposes `download`, `coverage`, `query`, and `probe-upstox`. The final local
-suite contains **1,349 tests** and reaches **91.27% branch coverage**; Ruff
-format and lint, strict Pyright on production source, Vulture at 80%, the full
-pytest gate, and hosted CI are required on the accepted closeout revision.
+suite contained **1,349 tests** and reached **91.27% branch coverage**.
 
 The seven-slice closeout shipped a controlled single-symbol preview, not
 live-release or multi-symbol readiness. The package has no embedded exchange-

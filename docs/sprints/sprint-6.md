@@ -67,11 +67,9 @@ The Sprint 6 contract must complete the nine fields required by the architecture
    preregistered future full-history, in-sample/out-of-sample and walk-forward
    protocol. Fixtures may prove mechanics only.
 8. **Acceptance evidence** — exact-version contract evidence, no-look-ahead and
-   survivorship attacks, repository documentation checks, hosted CI, and
-   explicit residual blockers.
-9. **Implementation boundary** — package/application boundary, dependency order,
-   typed fixtures, bounded implementation slices, and a stop condition if
-   evidence admission cannot be satisfied.
+   survivorship attacks, and explicit residual blockers.
+9. **Implementation boundary** — package/application ownership, typed fixtures,
+   and a stop condition if evidence admission cannot be satisfied.
 
 ## Candidate baseline to evaluate, not an approved rule
 

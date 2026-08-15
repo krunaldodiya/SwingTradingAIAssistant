@@ -93,11 +93,10 @@ the measured RELIANCE vertical-slice baseline rather than guessed in advance.
 
 ## Historical next step
 
-Status: **completed and superseded by the current Linear execution order**
+Status: **completed**
 
 The credential-safe RELIANCE capability probe was the next step at the time of
-this note. It is complete; current work must be selected from Linear and the
-active sprint rather than this historical section.
+this note. It is complete, and this section records historical work only.
 
 ## Milestone 0 implementation record
 

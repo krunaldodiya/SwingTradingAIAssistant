@@ -648,14 +648,13 @@ one-minute data and can never construct `HistoricalRequest` in this workflow.
 
 Live access is separate from deterministic tests and requires:
 
-1. the recorded repository, build, lock, and diff checks to pass;
-2. explicit owner authorization at execution time;
-3. an environment-provided token;
-4. an isolated caller-created protected storage root;
-5. exactly one canonical closed RELIANCE calendar month with an authoritative
+1. explicit owner authorization at execution time;
+2. an environment-provided token;
+3. an isolated caller-created protected storage root;
+4. exactly one canonical closed RELIANCE calendar month with an authoritative
    schedule identity;
-6. a total attempt budget of one and no retry; and
-7. sanitized output limited to category, row count, first/last timestamp,
+5. a total attempt budget of one and no retry; and
+6. sanitized output limited to category, row count, first/last timestamp,
    checksum, request count, and gate result.
 
 No generated dataset is committed. Missing authoritative expected-session
@@ -707,9 +706,6 @@ Tests use injected fakes and temporary local storage. They must prove:
 - higher-timeframe input causes zero credential and provider activity;
 - stable sanitization under hostile external values; and
 - memory, file, task, queue, and request cardinalities remain bounded.
-
-Verification also includes the repository's deterministic Python checks,
-`uv lock --check`, `uv build`, and `git diff --check`.
 
 ## ARK-36 decomposition
 

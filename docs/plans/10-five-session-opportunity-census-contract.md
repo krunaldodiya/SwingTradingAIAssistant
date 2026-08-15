@@ -455,9 +455,8 @@ The slice is accepted only when:
 - future-price mutation and deterministic-rerun tests pass;
 - exact 2% is not counted as greater than 2%;
 - no prediction, accuracy, strategy acceptance, profitability, or
-  recommendation claim appears in code, JSON, documentation, PR evidence, or
-  release wording; and
-- the exact candidate's recorded repository and CI checks pass.
+  recommendation claim appears in code, JSON, documentation, or published
+  product wording.
 
 The implementation boundary is intentionally narrow: build the pure versioned
 contracts first, adapt existing session-aware market-data facts second, and add

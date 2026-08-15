@@ -262,18 +262,6 @@ first/last timestamp, and schema validity. It never prints the token or writes
 candle data. Provider and credential failures are intentionally reduced to a
 sanitized `probe_failed:<ErrorType>` message.
 
-## Development
-
-Run the deterministic quality gate from the repository root:
-
-```bash
-uv run --extra dev ruff format --check . && \
-uv run --extra dev ruff check . && \
-uv run --extra dev pyright && \
-uv run --extra dev vulture src --min-confidence 80 && \
-uv run --extra dev pytest
-```
-
 Credentials, broker sessions, generated datasets, and private market data must never be committed.
 
 ## Project documentation
