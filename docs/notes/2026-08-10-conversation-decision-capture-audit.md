@@ -15,11 +15,11 @@ transcript.
 
 | Durable topic | Status | Authoritative or primary record |
 | --- | --- | --- |
-| Owner supplies vision and feedback; agents translate it into bounded evidence-led delivery | accepted | [`AGENTS.md`](../../AGENTS.md) owner/delivery boundary and [`development-workflow.md`](../development-workflow.md) |
-| General conversation is answered directly; delivery workflow starts only after explicit durable promotion | accepted | `AGENTS.md` and `development-workflow.md` conversation/delivery routing |
+| Owner supplies vision and feedback; agents translate it into bounded evidence-led delivery | accepted | [`AGENTS.md`](../../AGENTS.md) owner/delivery boundary |
+| General conversation is answered directly; delivery workflow starts only after explicit durable promotion | accepted | [Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md) conversation/delivery boundary |
 | One top-level Goal task per Sprint/cohesive outcome; subagents/worktrees serve atomic delegated work | accepted | [Subagents and top-level Codex threads](2026-08-09-subagents-and-top-level-codex-threads.md) |
-| Smoke-first validation before an expensive full suite, benchmark, or backtest | accepted | `AGENTS.md`, `development-workflow.md`, and the [Sprint 2 closeout](../sprints/sprint-2-closeout.md) retrospective |
-| Prospective ranges, raw lifecycle timestamps, gate duration, repair rounds, and honest `UNSET` evidence | accepted | `development-workflow.md`, [Sprint 2 record](../sprints/sprint-2.md), and its time-accountability ledger |
+| Smoke-first validation before an expensive full suite, benchmark, or backtest | accepted | [Sprint 2 closeout](../sprints/sprint-2-closeout.md) retrospective |
+| Prospective ranges, raw lifecycle timestamps, gate duration, repair rounds, and honest `UNSET` evidence | accepted | [Sprint 2 record](../sprints/sprint-2.md) and its time-accountability ledger |
 | Upstox market-data use is separate from per-account portfolio access and any future execution connector | proposed/open architecture hypothesis | [Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md) |
 | Code-smell/refactoring tools and the Rust reference repository affect workflow only, not product logic | accepted assessment; experiments deferred | [Code-smell and refactoring workflow assessment](2026-08-09-code-smell-and-refactoring-workflow-assessment.md) |
 | Nifty 100 expansion and precious-metals hedging are hypotheses, not current scope | open/deferred | [Nifty 100 universe expansion](2026-08-09-nifty-100-universe-expansion-hypothesis.md) and [precious-metals hedge](2026-08-09-precious-metals-equity-hedge-hypothesis.md) |
@@ -30,9 +30,8 @@ transcript.
 The owner accepted value-aware holding and reprioritization: a difficult,
 low-value or low-frequency issue may be paused when no valuable current task
 depends on it and a materially higher-value independent Ready task exists. The
-authoritative conditions, safety exceptions, checkpoint evidence, and resume
-rule are now in `AGENTS.md` and `development-workflow.md`; the rationale also
-extends [Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md).
+conditions, safety exceptions, checkpoint evidence, and resume rule remain
+recorded in [Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md).
 
 The owner also asked for usable increments before the whole project is finished.
 The workflow now separates one-week Sprint cadence from a target of one coherent

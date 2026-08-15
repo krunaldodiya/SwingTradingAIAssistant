@@ -12,7 +12,7 @@ downloader before persistent Parquet/DuckDB ingestion begins.
 
 ## Scope worked so far
 
-- Repository architecture, roadmap, engineering standards, and atomic TDD flow.
+- Repository architecture, product roadmap, and initial market-data foundation.
 - Linear project, technical milestones, backlog, and issue hierarchy.
 - Generalized market-data contracts and non-persistent capability probe.
 - Upstox NSE master-instrument catalog parsing and caller-selected symbol

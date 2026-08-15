@@ -9,9 +9,8 @@ active or target implementation writer. The checked-in fallback remains Terra
 High as sole implementation/repair writer, Sol for architecture/high-risk
 review, and Luna for explicit low-risk read-only support. The owner has since
 accepted a cross-provider target—Fable/Opus planning and review with GPT-5.6 Sol
-execution—but it is not active until provider qualification. See the
-[development workflow](../development-workflow.md), the current
-[cross-provider decision](2026-08-13-cross-provider-model-routing-decision.md),
+execution—but it is not active until provider qualification. See the current
+[cross-provider decision](2026-08-13-cross-provider-model-routing-decision.md)
 and the Sprint 1
 [reconciliation note](2026-08-07-sprint1-workflow-reconciliation.md).
 
@@ -72,9 +71,9 @@ the historical evaluation plan; it does not select current routing.
 Sprint 1 closed at 21/21 executable items. Reliable token or cache telemetry
 was unavailable, so the project does not claim a measured token saving from the
 Luna implementation pilot. ARK-63 replaced the pilot with the quality-first
-Terra/Sol routing recorded in the authoritative development workflow. No open
-scorecard or future-tense Sprint 1 close action from this historical note can
-reopen the sprint or select an implementation model.
+Terra/Sol routing recorded in the checked-in `.codex/agents/` role
+configuration. No open scorecard or future-tense Sprint 1 close action from
+this historical note can reopen the sprint or select an implementation model.
 
 ## Accepted correction: ARK-48 routing and scorecard
 

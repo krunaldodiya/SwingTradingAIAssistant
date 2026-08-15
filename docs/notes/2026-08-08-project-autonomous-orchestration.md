@@ -100,9 +100,9 @@ This accepted note supersedes the root-as-mutating-coordinator assumptions in
 [the 2026-08-07 graph engineering assessment](2026-08-07-graph-engineering-workflow-assessment.md)
 and the proposed workflow-only pilot in [the 2026-08-08 spec-driven development
 assessment](2026-08-08-spec-driven-development-workflow-assessment.md). The
-authoritative implementation is [the development workflow](../development-workflow.md),
-the role configuration under `.codex/agents/`, and the handoff template; this
-note does not change the market-data architecture or product roadmap.
+surviving executable evidence is the role configuration under
+`.codex/agents/`; this note does not change the market-data architecture or
+product roadmap.
 
 ## Autonomous-delivery boundary
 

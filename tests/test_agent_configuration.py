@@ -132,21 +132,22 @@ def test_ark_48_handoffs_are_traceable_and_read_only_reviews_are_enforced() -> N
     assert "otherwise route" not in high_risk_reviewer
 
 
-def test_workflow_routes_reasoning_effort_by_task_risk() -> None:
-    workflow = " ".join(
-        (ROOT / "docs" / "development-workflow.md").read_text().lower().split()
+def test_lead_architect_enforces_single_writer_and_risk_based_routing() -> None:
+    lead_architect = read_toml(AGENTS / "lead-architect.toml")
+    assert "risk-based routing" in str(lead_architect["description"]).lower()
+
+    instructions = " ".join(
+        str(lead_architect["developer_instructions"]).lower().split()
     )
     for required in (
-        "high reasoning effort for market-logic implementation",
-        "architecture",
-        "unresolved-failure debugging",
-        "every review",
-        "medium for mechanical edits",
-        "test scaffolding",
-        "straightforward adapters",
+        "terra high as the sole repository writer",
+        "luna may be selected only for explicit low-risk, repeatable, read-only",
+        "dynamic session concurrency does not permit a second repository writer",
+        "architecture conflicts",
+        "security-sensitive changes",
+        "failed quality gates",
     ):
-        assert required in workflow
-    assert "default worker | terra, high" not in workflow
+        assert required in instructions
 
 
 def test_ark_95_delivery_publisher_is_the_only_external_mutation_actor() -> None:
@@ -160,22 +161,6 @@ def test_ark_95_delivery_publisher_is_the_only_external_mutation_actor() -> None
 
     instructions = " ".join(str(publisher["developer_instructions"]).lower().split())
     assert all(requirement in instructions for requirement in PUBLISHER_REQUIREMENTS)
-
-
-def test_workflow_has_one_actor_by_default_and_risk_based_review() -> None:
-    workflow = " ".join(
-        (ROOT / "docs" / "development-workflow.md").read_text().lower().split()
-    )
-    for required in (
-        "the default path has one actor",
-        "implement → full gate → commit/pr → done",
-        "published contract or schema change",
-        "scoring, signal, or market-logic rule change",
-        "credentials or their security boundary",
-        "second failed verification",
-    ):
-        assert required in workflow
-    assert "normal task receives one terra high verification" not in workflow
 
 
 def test_ark_95_publisher_lifecycle_authority_stays_narrow_and_review_isolation_is_external() -> (
@@ -206,7 +191,6 @@ def test_ark_95_publisher_lifecycle_authority_stays_narrow_and_review_isolation_
 
 
 def test_cross_provider_target_is_accepted_but_not_falsely_activated() -> None:
-    workflow = (ROOT / "docs" / "development-workflow.md").read_text()
     decision = (
         ROOT / "docs" / "notes" / "2026-08-13-cross-provider-model-routing-decision.md"
     ).read_text()
@@ -226,10 +210,6 @@ def test_cross_provider_target_is_accepted_but_not_falsely_activated() -> None:
         "no task may require more than one material repair cycle",
     ):
         assert required in normalized_decision
-
-    assert "Roles are capability and authority contracts" in workflow
-    assert "accepted target" in workflow
-    assert "Do not change runtime role TOMLs" in workflow
 
     agents = config["agents"]
     assert isinstance(agents, dict)

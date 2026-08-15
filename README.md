@@ -274,24 +274,7 @@ uv run --extra dev vulture src --min-confidence 80 && \
 uv run --extra dev pytest
 ```
 
-Use the native pytest feedback profiles during strict TDD:
-
-```bash
-# Focused red/green (replace the placeholder with one pytest node ID)
-uv run --extra dev pytest <test-node> --no-cov -q -x
-
-# Affected tests (replace the placeholder with relevant test paths)
-uv run --extra dev pytest <test-paths> --no-cov -q
-
-# Authoritative full profile with configured branch coverage
-uv run --extra dev pytest
-```
-
-The focused and affected profiles are local feedback only and never merge
-evidence. Do not set `PYTEST_ADDOPTS` to disable coverage. The full five-tool
-gate above and hosted CI remain mandatory; independent review remains
-risk-triggered by the development workflow. Credentials, broker sessions,
-generated datasets, and private market data must never be committed.
+Credentials, broker sessions, generated datasets, and private market data must never be committed.
 
 ## Project documentation
 
@@ -300,10 +283,6 @@ generated datasets, and private market data must never be committed.
 - [Roadmap](docs/roadmap.md): phased product direction.
 - [Data foundation and Upstox ingestion plan](docs/plans/01-data-foundation-and-upstox-ingestion.md):
   downloader milestones and acceptance gates.
-- [Development workflow](docs/development-workflow.md): complete local-first specifications, just-in-time
-  Linear tracking, TDD, risk-based review, path-aware CI, and publication controls.
-- [Engineering standards](docs/engineering-standards.md): correctness,
-  performance, security, and testing rules.
 - [Sprint records](docs/sprints/README.md): committed work and retrospectives.
 - [Project notes](docs/notes/README.md): curated decisions, hypotheses, and
   external-reference assessments.

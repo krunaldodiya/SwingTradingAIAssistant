@@ -127,8 +127,8 @@ is running.
 
 ## Sources and qualification boundary
 
-- Repository `docs/development-workflow.md` and `.codex/agents/` own active
-  mechanics.
+- Checked-in `.codex/config.toml` and the role files under `.codex/agents/` own
+  active routing mechanics.
 - The installed Prime Agent 0.7.2 provider guide lists Claude Pro/Max and Kimi
   provider paths, but also warns that Anthropic third-party harness use may draw
   separately billed extra usage. This must be rechecked against current vendor

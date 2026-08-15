@@ -35,8 +35,7 @@ truth or weakening the frozen market-data architecture.
 
 The project already implements the high-value SDD core:
 
-- durable governing principles in `AGENTS.md`, the architecture freeze, and
-  engineering standards;
+- durable governing principles in `AGENTS.md` and the architecture freeze;
 - separate intent/specification, technical plan, atomic tasks, implementation,
   verification, and publication phases;
 - acceptance criteria, typed failures, dependency order, security boundaries,
@@ -88,10 +87,6 @@ spec-drift findings, repeated gates on unchanged revisions, context-restart
 time, and issue-to-merge elapsed time over two or three atomic tasks.  Retain a
 practice only if it reduces rework or owner waiting without weakening the
 existing gates.
-
-This note does not change the authoritative workflow.  Any accepted standing
-authorization or traceability rule must be added to
-`docs/development-workflow.md` in a separate atomic documentation change.
 
 ## References
 

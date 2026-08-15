@@ -6,8 +6,8 @@ Status: accepted clarification; no policy change
 ## Context
 
 This note distinguishes an internal subagent from a user-owned top-level Codex
-task or thread. It clarifies the operating model already accepted in the
-development workflow; it does not change runtime behavior, tooling,
+task or thread. It clarifies the historical operating model recorded by the
+accepted orchestration notes; it does not change runtime behavior, tooling,
 configuration, architecture, Sprint scope, or publication authority. Current
 Sprint 2 work remains in its existing top-level Goal thread.
 
@@ -81,7 +81,8 @@ Resume restores a saved session for conversation continuity; fork creates a
 separate interactive-session branch; archive changes saved-session lifecycle.
 None of those actions creates a worktree, preserves a clean tree, resolves a
 conflict, publishes a candidate, or completes an issue. Exact Git evidence and
-the accepted workflow remain authoritative at every transition.
+the checked-in `.codex` configuration remain the surviving operational
+evidence at every transition.
 
 This clarification preserves the single writer and active mutator limits,
 strict TDD, deterministic gate, independent review, exact-SHA publication
@@ -90,7 +91,6 @@ configuration change and does not move or extend Sprint 2.
 
 ## References
 
-- [Development workflow](../development-workflow.md), read 2026-08-09.
 - [Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md), read 2026-08-09.
 - [Quota-efficient agent-routing pilot (historical)](2026-08-06-quota-efficient-agent-routing-pilot.md), read 2026-08-09.
 - Local read-only capability evidence: `codex --version`, `codex --help`, and
