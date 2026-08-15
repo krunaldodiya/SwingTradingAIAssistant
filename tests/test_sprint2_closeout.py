@@ -84,7 +84,6 @@ def test_closeout_retrospective_uses_smoke_first_and_one_redesign_item() -> None
     assert "smoke-first" in document
     assert "ARK-111" in document
     assert "one cohesive redesign" in document
-    assert "no issue-per-finding fragmentation" in document
 
 
 def test_closeout_contains_no_sensitive_evidence_patterns() -> None:

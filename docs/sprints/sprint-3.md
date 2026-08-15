@@ -14,11 +14,10 @@ extension completes the final multi-symbol release boundary while preserving
 the deterministic tool/AI split. It adds no signal, score, advice,
 portfolio/account connection, autonomous decision, or broker execution.
 
-## Delivery plan
+## Delivered slices
 
-The sprint executes as seven coherent PR-sized slices. The earlier issue graph
-remains historical tracking detail and does not force per-issue handoffs,
-approvals, gates, or commits.
+The sprint delivered seven coherent slices. The earlier issue graph remains
+historical tracking detail.
 
 | Slice | Coherent outcome | Dependencies |
 | --- | --- | --- |
@@ -30,17 +29,10 @@ approvals, gates, or commits.
 | 6. Daily query | Session-aware daily derivation contract/service and `1d` CLI adapter, with zero provider calls | 5 |
 | 7. Usability proof | Clean install, disposable-root end-to-end workflow, docs, and sprint-close evidence | 6 |
 
-The current contract is
-[Plan 04](../plans/04-public-preview-contract.md). Each implementation slice
-gets a short implementer-owned spec in its tests and public contract, follows
-red-green-refactor, runs the fast changed-file gate during work, and runs the
-unchanged five-tool full gate once before merge. Published contract/schema,
-market-logic, credential-boundary, or twice-failed slices receive one
-independent high-effort review; ordinary plumbing does not.
-
-One writer owns a file path. Disjoint paths may proceed concurrently in
-separate worktrees; shared contracts, schemas, migrations, and configuration
-remain serialized.
+The source contract was
+[Plan 04](../plans/04-public-preview-contract.md). Each slice retained
+executable contract evidence, and the final publication evidence below records
+the exact repository checks, review results, and merged revision.
 
 ## User-visible workflow
 
@@ -75,17 +67,11 @@ July 2026 is an example closed month, not authority to make a live request.
 The daily path is local derivation from verified canonical one-minute data; it
 never calls a provider.
 
-## Evidence ladder
+## Verification evidence
 
-Use the cheapest proof that exposes the next risk, in this order:
-
-1. focused offline tests for the changed contract, pure rule, failure, and
-   boundary;
-2. affected integration tests for catalog, storage, provider adapter, or CLI;
-3. one disposable-root end-to-end smoke using deterministic inputs;
-4. the full repository gate before merge; and
-5. one authenticated provider smoke only when credentials are supplied and
-   live-provider authority is explicit for that bounded attempt.
+The completed Sprint 3 evidence combined focused offline cases, affected
+integration cases, one disposable-root end-to-end smoke, recorded repository
+and hosted checks, and one owner-authorized provider smoke.
 
 Mocks never substitute for the final authenticated provider smoke, because the
 earlier Upstox probe showed that transport defaults can fail despite passing
@@ -112,8 +98,8 @@ Sprint 3 is complete only when all of the following are demonstrated:
 - credentials remain environment-only and no token, session, private market
   data, or generated dataset enters source control, logs, fixtures, or error
   text;
-- focused tests, disposable-root smoke, the full gate, hosted CI, installation,
-  and documentation pass on the accepted revisions; and
+- recorded offline, disposable-root, repository, hosted, installation, and
+  documentation evidence passes; and
 - missing, stale, corrupt, insufficient, `NO_TRADE`, cancellation, and partial
   outcomes remain visible and typed rather than becoming success.
 
@@ -192,14 +178,12 @@ The extension proceeds as seven coherent, independently verifiable slices:
 | 10a. Current-month continuity | Persist and query the current month through the latest completed minute; append only the advancing same-day suffix | ARK-145 | 8–10 |
 | 11. Bounded multi-instrument workflows | Download, resume, inspect coverage, and query one or many admitted instruments under shared bounded resources | ARK-141, ARK-12 | 9–10a |
 | 12. Local views and adjustment boundary | Derive approved higher intraday views from verified `1m` data and represent corporate-action/raw-adjusted provenance without rewriting raw bars | ARK-142, ARK-143 | 10–11 |
-| 13. Downloader-v1 release proof | Prove clean install, Python/CLI parity, compatibility, bounded performance, documentation, full gate, and release readiness | ARK-144, ARK-13 | 9–12 |
+| 13. Downloader-v1 release proof | Prove clean install, Python/CLI parity, compatibility, bounded performance, documentation, repository checks, and release readiness | ARK-144, ARK-13 | 9–12 |
 
 The dependency chain is deliberate: research-module implementation remains
-blocked until Slice 13 closes. Work may proceed concurrently only where file
-ownership and dependencies are disjoint; contracts, schemas, migrations, and
-configuration stay serialized. An unavailable credential or authoritative
+blocked until Slice 13 closes. An unavailable credential or authoritative
 external source may block only its bounded live proof, not unrelated offline
-implementation.
+product evidence.
 
 Optional post-v1 work is kept out of this completion chain in the
 [data downloader future TODO](../plans/data-downloader-v1-future-todo.md).
@@ -224,10 +208,10 @@ adjusted-unsupported provenance boundary is recorded in
 
 ## Downloader-v1 acceptance crosswalk
 
-This table crosswalks every Plan 01 acceptance-gate row. `PASS` means the
-functional requirement has exact local or retained operational evidence; it
-does not waive the separate publication gates below. The final reviewed source
-tree contained 1,973 passing tests at 93.22% project branch coverage.
+This table crosswalks every Plan 01 acceptance row. `PASS` means the
+functional requirement has exact local or retained operational evidence. The
+final reviewed source tree contained 1,973 passing tests at 93.22% project
+branch coverage; publication evidence is recorded below.
 
 | ID | Plan 01 requirement | Result | Exact evidence |
 | --- | --- | --- | --- |
@@ -245,7 +229,7 @@ tree contained 1,973 passing tests at 93.22% project branch coverage.
 | `A12` | Independently testable provider, storage, validation, and orchestration components | PASS | Typed ports and focused suites isolate Upstox adapters, schedule/instrument/universe/action evidence, Parquet/catalog storage, validation, single-symbol services, and bounded orchestration. |
 | `A13` | No trading, indicator, backtest, or AI-agent feature in the data phase | PASS | The shipped package surface is market-data download, coverage, query, and diagnostic capability only; research logic, advice, portfolio access, and broker execution remain absent and out of scope. |
 
-## Publication gates
+## Publication evidence
 
 Functional acceptance and every publication proof completed on the exact
 publication chain. PR #82 merged reviewed candidate
@@ -255,7 +239,7 @@ publication chain. PR #82 merged reviewed candidate
 | Publication proof | State | Required terminal evidence |
 | --- | --- | --- |
 | Independent exact-candidate review of ARK-141, ARK-142, and ARK-143 | PASS | Three fresh read-only reviews approved exact candidate `57ffe8e` / tree `62ce6bc9`; focused reviewer suites passed 175, 178, and 317 tests. |
-| Fresh five-tool full gate on the ARK-144 release-proof tree | PASS | Ruff format and lint, strict Pyright, Vulture at 80%, and all 1,973 pytest cases passed at 93.22% coverage; one expected Python 3.13 fork deprecation warning remained non-failing. |
+| Fresh five-tool repository checks on the ARK-144 release-proof tree | PASS | Ruff format and lint, strict Pyright, Vulture at 80%, and all 1,973 pytest cases passed at 93.22% coverage; one expected Python 3.13 fork deprecation warning remained non-failing. |
 | Clean wheel installation and CLI/Python import smoke | PASS | Python 3.11 build, fresh wheel installation, package import, and CLI help passed; wheel SHA-256 `a31524d17f71c28da42f3d014c8016efc8baacbbca00876fc663fa899348a670`. |
 | Hosted pull-request CI on the exact candidate | PASS | GitHub Actions `Quality and build` run `31578188264` and GitGuardian succeeded on exact head `57ffe8e`. |
 | Final merge revision and Linear/sprint synchronization | PASS | PR #82 merged as `23b07d0`; ARK-141–144, ARK-12, ARK-60, ARK-61, and ARK-13 were read back as Done. |

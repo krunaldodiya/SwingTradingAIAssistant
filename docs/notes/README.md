@@ -38,22 +38,12 @@ update those documents as well as the note.
 
 ## Notes index
 
-- [2026-08-13 — Cross-provider model routing decision](2026-08-13-cross-provider-model-routing-decision.md)
-
 - [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
-- [2026-08-10 — Conversation decision capture audit](2026-08-10-conversation-decision-capture-audit.md)
 - [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
-- [2026-08-09 — Code-smell and refactoring workflow assessment](2026-08-09-code-smell-and-refactoring-workflow-assessment.md)
 - [2026-08-04 — Data foundation and agent-tool boundary](2026-08-04-data-foundation-and-agent-tool-boundary.md)
-- [2026-08-06 — Quota-efficient agent-routing pilot](2026-08-06-quota-efficient-agent-routing-pilot.md)
 - [2026-08-07 — Indicator minimization](2026-08-07-indicator-minimization.md)
-- [2026-08-07 — Graph engineering workflow assessment](2026-08-07-graph-engineering-workflow-assessment.md)
 - [2026-08-07 — Research vision, validation, and instrument extensibility](2026-08-07-research-vision-validation-and-instrument-extensibility.md)
-- [2026-08-07 — Sprint 1 workflow reconciliation](2026-08-07-sprint1-workflow-reconciliation.md)
-- [2026-08-08 — Spec-driven development workflow assessment](2026-08-08-spec-driven-development-workflow-assessment.md)
-- [2026-08-08 — Project autonomous orchestration](2026-08-08-project-autonomous-orchestration.md)
 - [2026-08-08 — psutil benchmark sampler assessment](2026-08-08-psutil-benchmark-sampler-assessment.md)
 - [2026-08-08 — Swing-trading return and loss-exit risk decision](2026-08-08-swing-trading-return-and-loss-exit-risk-decision.md)
 - [2026-08-09 — Nifty 100 universe-expansion hypothesis](2026-08-09-nifty-100-universe-expansion-hypothesis.md)
 - [2026-08-09 — Precious-metals equity-hedge hypothesis](2026-08-09-precious-metals-equity-hedge-hypothesis.md)
-- [2026-08-09 — Subagents and top-level Codex threads](2026-08-09-subagents-and-top-level-codex-threads.md)

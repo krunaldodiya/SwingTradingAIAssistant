@@ -107,9 +107,9 @@ tested `NO_TRADE` cases were truly scarcity-caused.
 
 Failure to meet any gate preserves the Nifty 50 baseline. Meeting them would
 still require a separate owner product/architecture decision, point-in-time data
-and licensing approval, risk specification, atomic work, deterministic tests,
-and review before implementation. This note makes no guarantee of improvement
-and does not change the current Sprint 2 exclusions.
+and licensing approval, a risk specification, and an approved validated product
+contract before implementation. This note makes no guarantee of improvement and
+does not change the current Sprint 2 exclusions.
 
 ## References
 

@@ -54,8 +54,8 @@ being presented as universal research concepts.
 Supporting another instrument is a future architecture extension, not an
 existing capability. It requires a separately approved scope decision,
 instrument-specific data and risk contracts, point-in-time validation, and
-atomic implementation work. Do not build speculative adapters or abstractions
-for futures, options, forex, crypto, or other instruments in v1.
+separately authorized implementation. Do not build speculative adapters or
+abstractions for futures, options, forex, crypto, or other instruments in v1.
 
 ## External consumer: AI agent harness
 
@@ -189,9 +189,9 @@ Liquidity / SMC owns only:
 - order blocks; and
 - fair-value gaps.
 
-## Development contract
+## Module contract boundary
 
-Develop one module at a time. Before implementation, each module must define:
+Before a module enters product scope, its approved contract must define:
 
 1. purpose;
 2. business requirements;
@@ -201,7 +201,7 @@ Develop one module at a time. Before implementation, each module must define:
 6. edge cases;
 7. validation approach;
 8. acceptance criteria; and
-9. implementation handoff.
+9. implementation boundary.
 
 A module advances only after its requirements and validation are complete.
 

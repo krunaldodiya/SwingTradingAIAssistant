@@ -80,7 +80,7 @@ def test_original_denominator_is_frozen_and_tracking_additions_are_excluded() ->
     assert len(set(denominator)) == 24
     assert record["original_denominator_count"] == 24
 
-    additions = record["tracking_governance_additions"]
+    additions = record["tracking_additions"]
     assert [addition["id"] for addition in additions] == ["ARK-95", "ARK-96", "ARK-97"]
     assert all(
         not addition["included_in_original_denominator"] for addition in additions
@@ -105,7 +105,7 @@ def test_record_preserves_provenance_and_captured_incomplete_snapshot() -> None:
         "completed_at",
         "included_in_original_denominator",
     }
-    for addition in record["tracking_governance_additions"]:
+    for addition in record["tracking_additions"]:
         assert required_added_fields <= set(addition)
 
     snapshot = record["cutoff_snapshot"]
@@ -146,7 +146,7 @@ def test_record_preserves_provenance_and_captured_incomplete_snapshot() -> None:
     }
 
 
-def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
+def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_acceptance_state() -> None:
     record = _record()
 
     rules = record["completion_classification_rules"]
@@ -192,16 +192,13 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_all_gates() -> None:
     assert record["post_cutoff_interpretation"] == (
         "continuing committed work is carryover/schedule overrun; only newly added work is expansion"
     )
-    no_waiver = record["deadline_never_waives"]
-    assert no_waiver["scope"] == "deadline expiry only"
-    assert set(no_waiver["requirements"]) >= {
-        "specification",
-        "strict red-green-refactor TDD",
-        "deterministic quality gates",
-        "independent review",
+    preserved = record["cutoff_preserves_acceptance_contract"]
+    assert preserved["scope"] == "deadline expiry only"
+    assert set(preserved["requirements"]) >= {
+        "documented behavior and evidence",
         "hosted CI/security",
         "exact-SHA merge/publication",
-        "ordering/WIP",
+        "dependency ordering",
         "ARK-69 owner live authority",
         "Sprint Done/closure",
     }
@@ -229,5 +226,5 @@ def test_ledger_preserves_authoritative_cutoff_evidence_and_unset_honesty() -> N
     assert rows["ARK-93"][-1] == rows["ARK-69"][-1] == rows["ARK-72"][-1] == "Todo"
     assert rows["ARK-106"][-1] == "Todo"
     assert rows["ARK-107"][-1] == rows["ARK-110"][-1] == "In Progress"
-    assert evidence["workflow_breakdown"]["active_gate_seconds"] == "UNSET"
-    assert evidence["workflow_breakdown"]["owner_or_external_wait_seconds"] == "UNSET"
+    assert evidence["timing_breakdown"]["verification_seconds"] == "UNSET"
+    assert evidence["timing_breakdown"]["owner_or_external_wait_seconds"] == "UNSET"

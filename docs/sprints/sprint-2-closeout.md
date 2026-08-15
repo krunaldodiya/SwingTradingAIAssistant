@@ -54,7 +54,7 @@ Milestone 2 and any later threshold, live-provider, scaling, or release claim.
 The last exceptional persistence candidate was
 `44f589444a5e7cfd883a210c19308b7a19720aae`. Its attached deterministic gate
 passed Ruff, Pyright, Vulture, and **1,131 passed in 351.88s** with **88.26%**
-coverage. Native Sol review session
+coverage. Independent review session
 `019fe9da-4654-7290-9b69-fd2614c7a774` nevertheless rejected it because
 non-success record matrices, protocol-invalid pairing, obfuscated SQL
 sanitization, and work-root substitution defenses remained incomplete.
@@ -64,10 +64,9 @@ The one-shot benchmark collection remains unused: no benchmark artifact,
 provider call, credential action, PR, or merge came from the rejected
 candidate.
 
-ARK-111 is the one cohesive redesign of that persistence boundary. It is
-planning/specification work outside this Sprint 2 denominator. Later work must
-approve the smaller contract before implementation, preserve smoke-first
-hostile checks, and keep no issue-per-finding fragmentation.
+ARK-111 is the one cohesive redesign of that persistence boundary. It requires
+owner approval of the smaller contract before implementation and preserves the
+smoke-first hostile checks.
 
 ## Delivered increment
 
@@ -88,9 +87,9 @@ provider integration.
 ### What worked
 
 - Atomic deterministic cases found boundary defects without provider use.
-- Isolated worktrees, exact revisions, independent review, and hosted checks
-  protected user-owned work and prevented a green test suite from being
-  mistaken for complete acceptance.
+- Exact revisions, recorded verification, and hosted checks protected user-owned
+  work and prevented a green test suite from being mistaken for complete
+  acceptance.
 - Typed failures, immutable files, schedule provenance, and zero-request paths
   now have strong reusable evidence.
 
@@ -98,26 +97,24 @@ provider integration.
 
 - ARK-92 combined measurement collection, durable serialization, sanitization,
   hostile filesystem publication, and one-shot operational evidence into one
-  acceptance surface. The review surface was too large.
-- Repeated full six-minute gates occurred before the hostile persistence matrix
-  was fully closed, producing avoidable elapsed time and rework.
+  acceptance surface. The verification surface was too large.
+- Repeated six-minute repository checks occurred before the hostile persistence
+  matrix was fully closed, producing avoidable elapsed time and rework.
 - The raw five-sample report was initially kept only in memory, so ARK-93 did
   not receive an immutable accepted input.
 
-### Corrective actions
+### Recorded follow-up
 
-- Apply the merged smoke-first ladder: static and adversarial unit checks,
-  affected suite, then one full gate on a sealed candidate.
-- Use ARK-111 to freeze one smaller persistence specification before any code or
-  collection. Keep one cohesive redesign and no issue-per-finding fragmentation.
-- Pre-register the eventual one-shot command and durable artifact boundary
-  before executing any expensive collection.
-- Ground Sprint 3 capacity in the 21/24 delivery result and the three explicit
-  carryover tasks rather than the earlier throughput rate.
+- ARK-111 would freeze one smaller persistence specification before any code or
+  collection.
+- The eventual one-shot command and durable artifact boundary would be
+  preregistered before expensive collection.
+- Sprint 3 capacity would be grounded in the 21/24 delivery result and the three
+  explicit carryover tasks rather than the earlier throughput rate.
 
-## Next planning gate
+## Recorded next planning condition
 
-ARK-106 may prepare Sprint 3 only after this closeout is reviewed, merged, and
-ARK-72 is Done. Sprint 3 planning must decide where ARK-111, ARK-92, ARK-93,
-and ARK-69 fit against capacity. It must not treat Milestone 2 as accepted or
-start ARK-12 scaling merely because the Sprint 2 timebox is closed.
+The recorded condition required this closeout to be published and ARK-72 to be
+Done before ARK-106 prepared Sprint 3. Planning retained ARK-111, ARK-92, ARK-93,
+and ARK-69 against capacity and did not treat Milestone 2 as accepted or start
+ARK-12 scaling merely because the Sprint 2 timebox was closed.

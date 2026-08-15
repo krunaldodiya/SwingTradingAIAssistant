@@ -11,7 +11,7 @@
       "Live GitHub REST/GraphQL pull-request, Quality and build CI, and exact merge evidence captured 2026-08-09 after 2026-08-09T16:30:00Z",
       "Linear ARK-110 owner reroute comment fb747f77-f96a-4c02-bee9-e823a9c7bb56"
     ],
-    "limits": "This is a cutoff-state snapshot, not Sprint closure. Exact state is reconstructed only from stateHistory at or before the cutoff; current capture is recorded separately. Unsupported workflow durations, retries, labor, and PR mappings remain UNSET."
+    "limits": "This is a cutoff-state snapshot, not Sprint closure. Exact state is reconstructed only from stateHistory at or before the cutoff; current capture is recorded separately. Unsupported execution durations, retries, labor, and PR mappings remain UNSET."
   },
   "cutoff": {
     "local": "2026-08-09T22:00:00+05:30",
@@ -46,12 +46,12 @@
       "created_to_merged_seconds": {"value": null, "status": "UNSET", "rule": "merged_at - created_at only when both are authoritative"},
       "pull_request_to_ci_seconds": {"value": null, "status": "UNSET", "rule": "required_ci_terminal_at - pull_request_created_at only when both are authoritative"}
     },
-    "workflow_breakdown": {
-      "active_gate_seconds": {"value": null, "status": "UNSET"},
+    "timing_breakdown": {
+      "verification_seconds": {"value": null, "status": "UNSET"},
       "owner_or_external_wait_seconds": {"value": null, "status": "UNSET"},
       "retry_count": {"value": null, "status": "UNSET"},
       "repair_round_count": {"value": null, "status": "UNSET"},
-      "repeated_gate_count": {"value": null, "status": "UNSET"}
+      "repeated_check_count": {"value": null, "status": "UNSET"}
     },
     "linear_points": {
       "value": null,
@@ -80,7 +80,7 @@
     ],
     "linear_row_columns": ["id", "created_at", "first_in_progress_at", "terminal_done_at", "state_at_cutoff"],
     "ark_92_state_history_note": "The temporary Done interval 2026-08-09T13:11:04.345Z..2026-08-09T13:50:51.563Z ended before cutoff. It is not terminal completion evidence; the cutoff state is In Progress and circuit-frozen per Linear comment fb747f77-f96a-4c02-bee9-e823a9c7bb56.",
-    "added_work_at_cutoff": {"done_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason_by_id": {"ARK-95": "accepted workflow-orchestration remediation", "ARK-96": "hosted merge-evidence reconciliation", "ARK-97": "tracking-only cutoff accountability", "ARK-98": "owner-requested research-note documentation", "ARK-99": "owner-requested research-note clarification", "ARK-100": "knowledge-capture workflow clarification", "ARK-101": "owner-requested research-note documentation", "ARK-102": "owner-requested research-note documentation", "ARK-103": "delivery-thread-boundary clarification", "ARK-104": "workflow assessment documentation", "ARK-105": "open connector-separation hypothesis documentation", "ARK-106": "future Sprint planning", "ARK-107": "owner and delivery responsibility charter", "ARK-108": "ARK-92 corrective evidence work", "ARK-109": "ARK-92 corrective evidence work", "ARK-110": "Sprint 2 time-accountability correction"}, "rule": "All are outside the frozen 24 denominator; none is counted as baseline completion."},
+    "added_work_at_cutoff": {"done_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason_by_id": {"ARK-95": "publication-control remediation", "ARK-96": "hosted merge-evidence reconciliation", "ARK-97": "tracking-only cutoff accountability", "ARK-98": "owner-requested research-note documentation", "ARK-99": "owner-requested research-note clarification", "ARK-100": "retained-decision clarification", "ARK-101": "owner-requested research-note documentation", "ARK-102": "owner-requested research-note documentation", "ARK-103": "task-boundary clarification", "ARK-104": "maintainability-tool assessment documentation", "ARK-105": "open connector-separation hypothesis documentation", "ARK-106": "future Sprint planning", "ARK-107": "owner and delivery responsibility documentation", "ARK-108": "ARK-92 corrective evidence work", "ARK-109": "ARK-92 corrective evidence work", "ARK-110": "Sprint 2 time-accountability correction"}, "rule": "All are outside the frozen 24 denominator; none is counted as baseline completion."},
     "hosted_rows": [
       ["ARK-74", 31, "2026-08-08T03:59:45Z", "2026-08-08T04:00:49Z", "2026-08-08T04:01:01Z", "c48b4fffc149b7b0fa29f94bb92de5ddd26a372d"], ["ARK-82", 32, "2026-08-08T04:15:51Z", "2026-08-08T04:17:01Z", "2026-08-08T04:17:20Z", "e7fd9e35360fa25ab1074455efe47714bba62152"], ["ARK-70", 33, "2026-08-08T04:28:18Z", "2026-08-08T04:29:29Z", "2026-08-08T04:29:37Z", "8e68e61efebb6edf22777b71aabda15db02fdd24"], ["ARK-85", 34, "2026-08-08T04:49:01Z", "2026-08-08T04:50:16Z", "2026-08-08T04:50:26Z", "a4a9e152ccf1569fff68ff8f1906609fe7f06885"],
       ["ARK-84", 45, "2026-08-08T10:59:00Z", "2026-08-08T11:00:31Z", "2026-08-08T11:00:49Z", "5bb41ab5b6cc493a195c4672533e8c166b2cda72"], ["ARK-91", 46, "2026-08-08T11:24:20Z", "2026-08-08T11:26:29Z", "2026-08-08T11:26:52Z", "be6242d89c1f5d4fbc8a699dd3e49e5b12dd2b07"], ["ARK-79", 47, "2026-08-08T11:43:35Z", "2026-08-08T11:45:38Z", "2026-08-08T11:45:56Z", "b0301dc27034db4b75c22a0d1f6d1d65d4a9760e"], ["ARK-81", 48, "2026-08-08T12:09:06Z", "2026-08-08T12:10:51Z", "2026-08-08T12:11:15Z", "3ef7103fde69d3f1b436ec90e79ad6e0d00c5440"],
@@ -93,7 +93,7 @@
     "hosted_source": "GitHub exact PR createdAt, successful Quality and build check completedAt, and mergedAt/merge commit. No PR mapping is inferred from local commits.",
     "unmapped_hosted_rows": ["ARK-75", "ARK-76", "ARK-77", "ARK-78", "ARK-80", "ARK-90", "ARK-73", "ARK-93", "ARK-69", "ARK-72", "ARK-95", "ARK-96", "ARK-97", "ARK-106", "ARK-107", "ARK-108", "ARK-109", "ARK-110"],
     "derived_elapsed_seconds": {"linear_started_to_terminal_done": {"ARK-74": 2516, "ARK-75": 867, "ARK-76": 1644, "ARK-77": 819, "ARK-78": 924, "ARK-79": 1138, "ARK-80": 1792, "ARK-81": 1494, "ARK-82": 933, "ARK-83": 2529, "ARK-84": 790, "ARK-85": 1088, "ARK-86": 7024, "ARK-87": 3285, "ARK-88": 2380, "ARK-89": 3119, "ARK-90": 2424, "ARK-91": 1523, "ARK-70": 691, "ARK-73": 1080, "ARK-95": 7344, "ARK-96": 716, "ARK-97": 1939, "ARK-98": 912, "ARK-99": 1195, "ARK-100": 767, "ARK-101": 2241, "ARK-102": 1251, "ARK-103": 1338, "ARK-104": 1780, "ARK-105": 1489, "ARK-108": 5670, "ARK-109": 2123}, "hosted_pr_to_quality_and_build": {"ARK-74": 64, "ARK-82": 70, "ARK-70": 71, "ARK-85": 75, "ARK-84": 91, "ARK-91": 129, "ARK-79": 123, "ARK-81": 105, "ARK-83": 129, "ARK-98": 122, "ARK-86": 136, "ARK-87": 141, "ARK-99": 121, "ARK-100": 149, "ARK-101": 148, "ARK-102": 150, "ARK-103": 145, "ARK-88": 148, "ARK-104": 131, "ARK-105": 143, "ARK-89": 158, "ARK-92": 306}, "rule": "Only exact named timestamps are subtracted. These are elapsed spans, never labor or active-gate duration; every unsupported per-row derived field is UNSET."},
-    "workflow_breakdown": {"active_gate_seconds": "UNSET", "owner_or_external_wait_seconds": "UNSET", "retry_count": "UNSET", "repair_round_count": "UNSET", "repeated_gate_count": "UNSET", "note": "The cutoff comment evidences ARK-92's circuit-frozen blocker and ARK-110's mandatory cutoff wait, but not a safely separable numerical duration or a universal repair/gate count."},
+    "timing_breakdown": {"verification_seconds": "UNSET", "owner_or_external_wait_seconds": "UNSET", "retry_count": "UNSET", "repair_round_count": "UNSET", "repeated_check_count": "UNSET", "note": "The cutoff comment evidences ARK-92's circuit-frozen blocker and ARK-110's mandatory cutoff wait, but not a safely separable numerical duration or a universal repair/check count."},
     "schedule_and_carryover": {"Sprint_2_closure": "UNSET", "final_schedule_variance": "UNSET", "carryover_at_cutoff": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"], "reason": "The cutoff is not Sprint closure and the historical timebox ends 2026-08-14; no closure projection is permitted."}
   },
   "issues": [
@@ -136,14 +136,14 @@
     {"id": "ARK-107", "cohort": "addition", "included_in_original_denominator": false},
     {"id": "ARK-108", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T17:20:51+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 3baf4fdae3a05dc2e92fe695cfed2aa45e4cde1d; hosted lifecycle evidence remains UNSET"}},
     {"id": "ARK-109", "cohort": "addition", "included_in_original_denominator": false, "repository_observation": {"value": "2026-08-09T18:21:27+05:30", "status": "OBSERVED", "source": "origin/main ancestor candidate commit 100f4955d957a217837eaf7b4503cb69de09564b; hosted lifecycle evidence remains UNSET"}},
-    {"id": "ARK-110", "cohort": "addition", "included_in_original_denominator": false, "prospective_override": {"expected_wall_clock_minutes": {"minimum": 45, "maximum": 120, "status": "RECORDED_BEFORE_LIFECYCLE"}, "recorded_at": "2026-08-09T18:45:53+05:30", "assumptions": ["approved bounded documentation-only scope", "no external publication or Linear mutation", "local deterministic quality gate is available", "no reviewer-directed repair"], "rule": "This is a prospective wall-clock range, not labor hours."}}
+    {"id": "ARK-110", "cohort": "addition", "included_in_original_denominator": false, "prospective_override": {"expected_wall_clock_minutes": {"minimum": 45, "maximum": 120, "status": "RECORDED_BEFORE_LIFECYCLE"}, "recorded_at": "2026-08-09T18:45:53+05:30", "assumptions": ["approved bounded documentation-only scope", "no external publication or Linear mutation", "recorded checks were available", "no repair was assumed"], "rule": "This is a prospective wall-clock range, not labor hours."}}
   ],
   "post_cutoff_update_procedure": [
     "Preserve this cutoff snapshot and its source revision; later captures must retain their own capture time rather than overwrite cutoff state.",
     "Use Linear stateHistory, not updatedAt, to determine a state at the cutoff; reopened work is unfinished unless a Done interval remains terminal at the cutoff.",
     "Use hosted PR createdAt, required CI terminal timestamps, and exact-SHA mergedAt only where the issue-to-PR association is explicit; do not infer a mapping from a local commit.",
     "Calculate a derived elapsed value only when both named raw operands are authoritative and sufficiently precise; otherwise retain UNSET and identify the missing operand.",
-    "Record active gate, owner/external wait, retry, repair-round, and repeated-gate values in their dedicated fields without converting Linear points to labor hours.",
+    "Record verification, owner/external wait, retry, repair-round, and repeated-check values in their dedicated fields without converting Linear points to labor hours.",
     "Do not turn a cutoff snapshot, added work, or a deadline into Sprint closure, completed work, or a waived acceptance requirement."
   ]
 }

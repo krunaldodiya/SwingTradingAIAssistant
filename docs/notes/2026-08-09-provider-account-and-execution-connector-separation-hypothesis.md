@@ -149,8 +149,8 @@ alternative rather than presumed worth accepting.
 
 This hypothesis remains **open** until all applicable gates are met:
 
-1. The owner approves a bounded product problem and a separate, atomic Linear
-   item; it is not added to the current sprint by implication.
+1. The owner approves a bounded product problem as a separate change; it is not
+   added to the current sprint by implication.
 2. A specification defines purpose, inputs, output schema, deterministic rules,
    edge cases, acceptance criteria, `NO_DATA`/staleness semantics, and the
    equity-only universe filter.  It must separately specify a manual-import
@@ -161,14 +161,14 @@ This hypothesis remains **open** until all applicable gates are met:
 4. Security, privacy, licensing, regulatory, and threat-model review approves
    consent, data minimization, secret handling, audit retention, household/user
    separation, incident response, and no-redistribution constraints.
-5. Deterministic fixtures and red-green-refactor tests prove tenant isolation,
-   provenance, point-in-time behavior, reconciliation, failure handling, and
-   no cross-account leakage.  Any live probe requires separate owner approval,
-   uses no retained secrets or private payloads, and is not part of this note.
+5. Deterministic fixtures and focused tests prove tenant isolation, provenance,
+   point-in-time behavior, reconciliation, failure handling, and no
+   cross-account leakage. Any live probe requires separate owner approval, uses
+   no retained secrets or private payloads, and is not part of this note.
 6. An execution connector, if ever considered, has its own owner-approved
-   architecture decision, risk/compliance review, specification, atomic work,
-   and gates after the read-only path is proven.  It cannot be inferred from a
-   read-only connector.
+   architecture decision, risk/compliance review, specification, and evidence
+   after the read-only path is proven. It cannot be inferred from a read-only
+   connector.
 
 ## Consequences / next steps
 

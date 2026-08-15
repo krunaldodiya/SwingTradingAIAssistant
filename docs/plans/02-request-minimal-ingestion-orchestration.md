@@ -648,7 +648,7 @@ one-minute data and can never construct `HistoricalRequest` in this workflow.
 
 Live access is separate from deterministic tests and requires:
 
-1. the full repository gate, build, lock, and diff checks to pass;
+1. the recorded repository, build, lock, and diff checks to pass;
 2. explicit owner authorization at execution time;
 3. an environment-provided token;
 4. an isolated caller-created protected storage root;
@@ -708,14 +708,12 @@ Tests use injected fakes and temporary local storage. They must prove:
 - stable sanitization under hostile external values; and
 - memory, file, task, queue, and request cardinalities remain bounded.
 
-Run the deterministic Python quality gate plus `uv lock --check`, `uv build`,
-and `git diff --check`. Each implementation child requires one combined Sol
-High independent review because it touches storage, provenance, provider retry,
-credentials, or cross-module orchestration. Do not add a duplicate Terra review.
+Verification also includes the repository's deterministic Python checks,
+`uv lock --check`, `uv build`, and `git diff --check`.
 
-## ARK-36 atomic decomposition
+## ARK-36 decomposition
 
-ARK-36 is a tracking parent, not one red-green-refactor task. Nine ordered
+ARK-36 is a tracking parent, not one implementation unit. Nine ordered
 children are the smallest honest decomposition: lease differs from filesystem
 mutation, header transport differs from retry behavior, schedule retention
 differs from validation, and each remaining child has one observable behavior
@@ -858,19 +856,15 @@ requests only independently required full months.
 
 Dependencies are `A -> B`, `A -> D`, `D -> E`, `C -> F`,
 `A + B + D + E -> G`, `E + F -> H`, and `A + B + C + D + E + F + G + H -> I
--> ARK-37`. The implementation order is `A, B, C, D, E, F, G, H, I` under the
-one-item WIP limit. Independent children never execute in parallel. ARK-37
-remains end-to-end crash and zero-request idempotency proof and does not
+-> ARK-37`. The required dependency order is `A, B, C, D, E, F, G, H, I`.
+ARK-37 remains end-to-end crash and zero-request idempotency proof and does not
 duplicate child implementation.
 
-## Coordinator contract-compatibility matrix
+## Contract-compatibility matrix
 
-Before the one formal Sol High review of this high-risk, broad specification,
-the coordinator completes and records this deterministic matrix against the
-exact candidate commit. It is a coordinator-owned document/code comparison,
-not another reviewer, subagent, model pass, or acceptance-gate waiver. Every
-row records the governing location, candidate location, compatible/incompatible
-result, and any required repair; an incompatible row blocks formal review.
+The exact candidate is compared with this deterministic matrix. Every row
+records the governing location, candidate location, compatible/incompatible
+result, and any required correction; an incompatible row blocks acceptance.
 
 | Required check | Exact compatibility proof |
 | --- | --- |
@@ -889,10 +883,8 @@ result, and any required repair; an incompatible row blocks formal review.
 
 ARK-49 is complete when:
 
-- one independent Sol High review approves this complete contract and
-  decomposition;
-- the coordinator contract-compatibility matrix is complete with no unresolved
-  incompatible row before that review begins;
+- the contract-compatibility matrix is complete with no unresolved incompatible
+  row;
 - the specification is linked from ARK-36;
 - ARK-36 is converted to a tracking parent with nine ordered executable tasks;
 - every failure and edge above has a deterministic typed result;
@@ -901,10 +893,6 @@ ARK-49 is complete when:
   and
 - repository and Linear sources of truth agree.
 
-The original specification review-repair budget is exhausted. The authorized
-last focused cancellation-only OS-read-only Sol High recheck approved the
-corrected candidate. No further automatic repair round is authorized by this
-plan. Each child uses strict red-green-refactor TDD, unchanged deterministic
-gates, the approved single-writer routing, and the required independent
-high-risk review. No child implementation begins until this specification is
-accepted and its Linear issue is Ready.
+A focused cancellation recheck approved the corrected specification. This
+record authorizes no implementation; separate accepted implementation work is
+required.

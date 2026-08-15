@@ -215,8 +215,8 @@ out-of-band developer convenience and is not read by production code.
 The first urllib request returned HTTP 403 even though the same token, URL, and
 headers succeeded through another HTTP client. A controlled live comparison
 isolated the difference to Python urllib's default user agent. ARK-30 added a
-stable application user agent at the shared transport boundary under TDD; the
-subsequent production probe returned HTTP 200 with a valid schema.
+stable application user agent at the shared transport boundary; the subsequent
+production probe returned HTTP 200 with a valid schema.
 
 Official references:
 

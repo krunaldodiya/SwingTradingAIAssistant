@@ -12,9 +12,8 @@ with first-class Prime Agent and Pi coding agent adapters over the same stores a
 contracts. This does not claim universal zero-work compatibility. It does not
 implement, authorize, or schedule a memory-tool change. This delivery changes no
 memory source, schema, runtime dependency, database, service, migration bundle,
-benchmark result, or operating policy. Every implementation slice requires
-separate explicit promotion, strict TDD, review, and release evidence in the
-memory-tool repository.
+benchmark result, or operating policy. Any implementation must be separately
+authorized in the memory-tool repository; this suite grants none.
 
 ## Suite map and authority
 

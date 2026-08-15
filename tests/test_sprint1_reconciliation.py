@@ -222,34 +222,3 @@ def test_project_docs_have_no_slack_update_requirement() -> None:
     )
 
     assert "slack" not in documentation
-
-
-def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> None:
-    sprint_index = (ROOT / "docs" / "sprints" / "README.md").read_text().lower()
-    sprint_two = " ".join(
-        (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower().split()
-    )
-    note_index = (ROOT / "docs" / "notes" / "README.md").read_text().lower()
-    note = (
-        (ROOT / "docs" / "notes" / "2026-08-08-project-autonomous-orchestration.md")
-        .read_text()
-        .lower()
-    )
-
-    assert "formal commitment pending ark-67" not in sprint_index
-    assert (
-        "status: **closeout candidate; 21/24 after ark-72 publication, with milestone 2 blocked**"
-        in sprint_two
-    )
-    assert "delivery publisher" in sprint_two
-    assert "2026-08-08 — project autonomous orchestration" in note_index
-    for required in (
-        "status: accepted",
-        "value",
-        "alternatives",
-        "cost",
-        "failure and revocation",
-        "supersessions",
-        "not autonomous trading",
-    ):
-        assert required in note

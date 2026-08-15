@@ -9,9 +9,8 @@ composition; it does not weaken or reinterpret the rules below.
 
 Depends on [Plan 01](01-data-foundation-and-upstox-ingestion.md) and
 [Plan 02](02-request-minimal-ingestion-orchestration.md). The rejected ARK-112
-candidate is superseded by this contract; it preserves the Sprint 3 product
-scope while replacing its microtask handoffs with coherent implementation
-slices.
+candidate is superseded by this contract, which preserves the Sprint 3 product
+scope in one coherent product contract.
 
 ## Purpose, value, and boundary
 
@@ -614,7 +613,7 @@ populated v1 upgrade are transactional; a DDL, ledger, validation, or injected
 fault rolls back, and reopening must expose the exact prior v1 signature and all
 prior domain rows.
 
-## Preparation handoff and provenance
+## Preparation boundary and provenance
 
 The preparation slice owns four typed ports: a provenance-complete NSE schedule
 source; one bounded no-credential BOD snapshot source; immutable snapshot
@@ -669,11 +668,9 @@ dataset enters source control, fixtures, logs, reports, or error text.
 
 ## Implementation and acceptance
 
-One writer per file path applies; disjoint implementation work may proceed in
-separate worktrees. Shared contracts, schema, migration, and configuration are
-serialized. Implement behavior with red-green-refactor and keep the existing
-coordinator, immutable Parquet, metadata-only DuckDB, manifest, schedule, retry,
-cancellation, and bounded-resource rules unchanged.
+Implementation must preserve the existing coordinator, immutable Parquet,
+metadata-only DuckDB, manifest, schedule, retry, cancellation, and
+bounded-resource rules.
 
 Acceptance requires executable tests proving admission before side effects,
 exact serializer allowlists/order/ceiling, exhaustive enum conversion including

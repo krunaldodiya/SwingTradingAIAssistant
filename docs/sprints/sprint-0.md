@@ -59,14 +59,13 @@ atomic tasks.
 The initial work exposed two architectural misunderstandings early: credentials
 must be portable `.env` configuration, and instruments must always resolve from
 provider master data. Capturing these corrections before storage work avoided
-platform coupling and symbol-specific design. Future sprint planning must verify
-both assumptions explicitly in Definition of Ready.
+platform coupling and symbol-specific design. Those assumptions were carried
+into later product contracts.
 
 The live probe exposed a provider-compatibility detail that deterministic mocks
 could not reveal: Upstox rejected Python urllib's default user agent with HTTP
 403 while accepting the identical authenticated request with a stable
-application user agent. ARK-30 captured the defect, a failing regression was
-written first, and the fix was applied centrally without changing response
-budgets or redirect credential handling. The incident reinforces that each
-provider adapter needs both deterministic contract tests and a minimal live
-capability gate before persistent ingestion work begins.
+application user agent. ARK-30 captured the defect, and the fix was applied
+centrally without changing response budgets or redirect credential handling.
+The incident showed that each provider adapter needs deterministic contract
+tests and a minimal live capability gate before persistent ingestion begins.
