@@ -45,46 +45,61 @@ Write and approve the Market Regime specification before coding it:
 
 Implement and validate the module only after that specification is frozen.
 
-Sprint 9 is an **IMPLEMENTED / VERIFIED release candidate with terminal decision
-`BLOCKED`; publication is pending**. It is one test-first learning/decision
+Sprint 9 records terminal decision
+`BLOCKED / CAPABILITY_EVIDENCE_MISSING`. It is one test-first learning/decision
 slice for the point-in-time evidence required by Market Regime Layer B.
 [Plan 16](plans/16-market-regime-layer-b-acquisition-decision.md)
 extends frozen [Plan 12](plans/12-market-regime-contract.md) and
 [Plan 13](plans/13-market-regime-validation-protocol.md) without changing their
 facts, labels, cutoffs, reasons, or validation sequence.
 
-Linear records parent Task `ARK-183` as **In Progress**. Its child contract Story
-`ARK-184` is **In Progress** and blocks its child implementation Story `ARK-185`,
-which is **Todo**.
+Plan 16 replaces caller-authored gate/authorization payloads with one canonical
+evidence/authorization manifest sealed in the build. The capability state,
+identity, and assessment time are one atomic optional group. The corrected build
+seals all three null because no admissible capability
+evidence exists; all later evidence, approval, authorization, and
+validation-receipt identities are also null. Its required source-controlled
+prerequisite assessment instant records when those absences were assessed and
+grants no authority.
 
-Plan 16 specifies replacing caller-authored gate/authorization payloads with one reviewed
-canonical evidence/authorization manifest sealed in the candidate build. The
-initial absent seal fails closed; future approval is impossible without a
-reviewed build change. The pure decision is provider-independent and receives
-only a manifest-authenticated capability identity/state. It reports the first
-missing group among candidate capability, source/PIT evidence, terms/use,
-operational scope, and owner authorization.
+The incomplete manifest is content-addressed by scope projection identity
+`07f235b246e88d30404ddf1574e13907f436c937144e40abf4766c4463cb759e`
+and final identity
+`53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f`.
+The canonical blocked report identity is
+`dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`;
+it exposes the sealed manifest identity and null authenticated capability,
+receipt, and assessment-time outputs. A literal `None` remains a distinct
+fail-closed `SEALED_MANIFEST_MISSING` path. Neither input nor the sealing instant
+can supply authority.
 
 The owner authorized one supervised release invocation containing one
-credential-free `GET` of the fixed candidate PDF at
-`https://www.niftyindices.com/Press_Release/ind_prs21022025.pdf`, bounded to one
-attempt, concurrency `1`, 1,048,576 body bytes, an outer monotonic 30-second
-watchdog with child-process termination, zero retries or followed redirects, no
-parsing or persistence, and one sanitized `market_data` receipt. The adapter is
-not authorization and claims no replay prevention; there is no installable
-live-probe CLI, and another invocation requires new owner authority. HTTP success,
-media type, `%PDF-`, or a digest proves no publisher authority, content, history,
-licence, or permitted use.
+credential-free `GET` of the fixed candidate PDF. The consumed invocation
+emitted a sanitized historical receipt, but its old worker could attempt another
+resolved address. Its one-call/one-attempt counters are unverified; the receipt
+is inadmissible as capability evidence and no provider-independent projection
+was retained or reconstructed. It was not rerun. HTTP success, media type,
+`%PDF-`, or a digest proves no publisher authority, content, history, licence,
+or permitted use.
 
-The single authorized probe emitted a sanitized historical receipt, but its old
-worker could attempt another resolved address. Its one-call/one-attempt counters
-are unverified; the receipt is inadmissible as capability evidence and no
-provider-independent projection was retained. The invocation is consumed and
-must not be repeated without new authority. With no reviewed manifest seal or
-prerequisite approvals, the pure decision returned
-`BLOCKED` with first blocker `SEALED_MANIFEST_MISSING`. This complete research
-outcome stops before acquisition, readiness/admission, Market Regime labels,
-counts, outcomes, or recommendations.
+[PR #107](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/107)
+merged the historical implementation to `main` at **2026-08-15T15:40:16Z** as
+`c74ee4788aa6d03864eb8c21f111afe7025ad9cc`. Its exact-revision reviews, checks,
+and builds remain historical implementation publication evidence; PR #107 did
+not contain this corrective seal or closeout. Linear ARK-183, ARK-184, and
+ARK-185 remain historically **Done** with PR #107 attached. Those tracker states
+grant no technical or decision authority and do not publish the correction.
+
+Commit identity, exact-revision reviews, hosted checks, merge, and publication
+for the correction are external lifecycle evidence; this roadmap asserts no
+current lifecycle state for them. No source/PIT evidence bundle, terms/use
+approval, operational-scope approval, owner full-acquisition authorization, or
+trusted authorization-validation receipt exists. Work stops before acquisition,
+readiness/admission, Market Regime labels, counts, outcomes, recommendations, or
+later execution authority.
+
+Sprint 10 and the separate GitHub workflow migration plan remain deferred until
+tomorrow, **2026-08-16**; neither starts in this correction.
 
 ## Phase 3: Second module — Sector Analysis
 

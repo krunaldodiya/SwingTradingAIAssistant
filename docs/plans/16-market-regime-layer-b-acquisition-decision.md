@@ -1,12 +1,15 @@
 # Market Regime Layer B acquisition decision v1
 
-Status: **IMPLEMENTED / VERIFIED — TERMINAL DECISION `BLOCKED`; PUBLICATION PENDING**  
-Contract version: `market-regime-layer-b-acquisition-decision@v1`  
+Status: **IMPLEMENTED — TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`**
+Contract version: `market-regime-layer-b-acquisition-decision@v1`
 Extends: frozen Plans 12 and 13; neither plan is amended or reinterpreted
 
-Linear tracking: `ARK-183` is the parent Task (**In Progress**); its child
-contract Story `ARK-184` is **In Progress** and blocks its child implementation
-Story `ARK-185`, which is **Todo**.
+Linear tracking: `ARK-183`, `ARK-184`, and `ARK-185` remain historically
+**Done** for the implementation published through PR #107. That publication did
+not include this corrective incomplete-seal change. Commit identity,
+exact-revision reviews, hosted checks, merge, and publication are external
+lifecycle evidence; this self-addressed document asserts no current lifecycle
+state for the correction.
 
 Sprint 9 is one learning-and-decision slice: implement the boundary test-first,
 execute the one owner-authorized candidate-artifact probe under supervision,
@@ -35,13 +38,17 @@ as capability evidence. The current fixed worker was not used for the consumed
 invocation; no rerun, provider-independent projection, or reconstruction
 occurred.
 
-No source/PIT evidence bundle, terms/use approval, operational-scope approval,
-full-acquisition authorization, or trusted validation receipt exists. The
-reviewed build seal remains `None`.
-The pure decision therefore returned canonical `BLOCKED` with first blocker
-`SEALED_MANIFEST_MISSING` and report identity
-`456d3e08b337220cf20fbd8be3f50ee7d764b80a88a7c0182b5a4ec6afcfc4ff`.
-No missing identity is inferred or reconstructed.
+No admissible capability evidence, source/PIT evidence bundle, terms/use
+approval, operational-scope approval, full-acquisition authorization, or trusted
+validation receipt exists. The corrected build truthfully seals those
+absences in one canonical incomplete manifest. Its required
+`prerequisites_assessed_at` is a source-controlled sealing instant and grants no
+authority. The pure decision therefore returns canonical `BLOCKED` with first
+blocker `CAPABILITY_EVIDENCE_MISSING`, the sealed manifest identity present, and
+all authenticated capability, receipt, and assessment-time outputs null. The
+exact manifest and report identities are recorded with the correction evidence
+outside this self-addressed acquisition-scope document. No missing
+identity is inferred or reconstructed.
 
 ## Question, non-claims, and frozen upstream meaning
 
@@ -271,9 +278,9 @@ AcquisitionAuthorizationManifestV1 {
   market_regime_contract_identity_sha256: Sha256
   layer_b_protocol_identity_sha256: Sha256
   acquisition_scope_identity_sha256: Sha256
-  capability_evidence_state: Literal["OBSERVED", "NOT_OBSERVED"]
-  capability_evidence_identity_sha256: Sha256
-  capability_assessed_at: UtcInstant
+  capability_evidence_state: Literal["OBSERVED", "NOT_OBSERVED"] | null
+  capability_evidence_identity_sha256: Sha256 | null
+  capability_assessed_at: UtcInstant | null
   source_and_pit_evidence_bundle_identity_sha256: Sha256 | null
   terms_and_use_approval_identity_sha256: Sha256 | null
   operational_scope_approval_identity_sha256: Sha256 | null
@@ -293,6 +300,14 @@ AcquisitionAuthorizationBindingV1 {
   expires_at: UtcInstant
 }
 ```
+`capability_evidence_state`, `capability_evidence_identity_sha256`, and
+`capability_assessed_at` are one atomic optional group. All three null means no
+capability evidence exists. All three non-null retains the authenticated
+capability behavior below. Any partial-null group is an invalid sealed manifest.
+`prerequisites_assessed_at` remains a required UTC instant even in an incomplete
+manifest; it records when the seal's prerequisite absences were assessed and
+grants no evidence or authority.
+
 
 The three prerequisite identities are content addresses of independently
 retained reviewed records:
@@ -307,8 +322,9 @@ retained reviewed records:
   pre-roll, source identities, credentials, cost ceiling, storage,
   retention/deletion, concurrency, byte/time bounds, and stop/rollback plan.
 
-A null identity means that prerequisite is not approved. No individual gate
-objects or caller-selected evidence identities enter the reducer.
+A null prerequisite identity means that prerequisite is not approved. A wholly
+null capability group means capability evidence does not exist. No individual
+gate objects or caller-selected evidence identities enter the reducer.
 
 Every retained-record `*_identity_sha256` above is lowercase SHA-256 of the
 named record's exact canonical JSON-LF bytes excluding that record's identity
@@ -321,9 +337,12 @@ from the reviewed seal and retained records, not from possession of a digest.
 For one manifest, sealing is ordered and finite:
 
 1. Fix the scope fields from `manifest_version` through
-   `acquisition_authorization`. The manifest scope projection is the canonical
-   JSON-LF object containing exactly those twelve fields under their original
-   names. It excludes `manifest_scope_identity_sha256`,
+   `acquisition_authorization`. Set the capability group wholly null when no
+   capability evidence exists, or wholly non-null when admissible capability
+   evidence exists; never seal a partial group. `prerequisites_assessed_at`
+   remains required. The manifest scope projection is the canonical JSON-LF
+   object containing exactly those twelve fields under their original names. It
+   excludes `manifest_scope_identity_sha256`,
    `authorization_validation_receipt_identity_sha256`, and
    `manifest_identity_sha256`.
 2. Set `manifest_scope_identity_sha256` to SHA-256 of those exact projection
@@ -346,21 +365,23 @@ For one manifest, sealing is ordered and finite:
 
 The sole runtime source is a literal immutable
 `SEALED_ACQUISITION_MANIFEST_CANONICAL_JSON_LF` in
-`historical_evaluation/acquisition_manifest.py`. In the initial implementation it
-is `None`. The module admits no environment, file, network, standard-input,
-plugin, or configuration replacement. When non-null, the application parses the
-literal bytes canonically, reconstructs both manifest projection identities and
-all inline bindings, and verifies that the derived final manifest identity
-equals the companion literal
+`historical_evaluation/acquisition_manifest.py`. The module admits no
+environment, file, network, standard-input, plugin, or configuration replacement.
+When non-null, the application parses the literal bytes canonically,
+reconstructs both manifest projection identities and all inline bindings, and
+verifies that the derived final manifest identity equals the companion literal
 `SEALED_ACQUISITION_MANIFEST_IDENTITY_SHA256`.
 
-Therefore the current unsealed build deterministically returns `BLOCKED` with
-`SEALED_MANIFEST_MISSING`. A future `APPROVED_TO_ACQUIRE` is impossible unless a
-reviewed build change replaces `None` with the exact canonical manifest bytes
-and matching identity, and the candidate build passes exact-revision review.
-Changing only input bytes cannot create approval. The sealed manifest may record
-missing prerequisites and still produce an honest blocked decision; sealing is
-not itself approval.
+The corrected build replaces the historical `None` pin with an incomplete
+canonical seal. The three capability fields and every later evidence, approval,
+authorization, and validation-receipt identity are null; only the required
+prerequisite assessment instant records when those absences were assessed. The
+valid seal therefore deterministically returns `BLOCKED /
+CAPABILITY_EVIDENCE_MISSING` with its manifest identity present. A monkeypatched
+or future literal `None` still returns `BLOCKED / SEALED_MANIFEST_MISSING`.
+Changing only input bytes cannot create approval. A future
+`APPROVED_TO_ACQUIRE` remains impossible unless a reviewed build change seals
+all required evidence and authority. Sealing is not itself approval.
 
 The same module pins
 `TRUSTED_AUTHORIZATION_CLOCK_SOURCE_IDENTITY_SHA256`. It is a content address of
@@ -465,19 +486,21 @@ an acquisition prerequisite.
 
 After structural admission of the decision input, the table below exhausts every
 report-producing outcome. `M` means the strictly authenticated final sealed
-manifest. `C` exists only when the non-null input capability state and identity
-exactly equal `M`'s values and that common state is `OBSERVED`; when it exists,
-its identity source is `M.capability_evidence_identity_sha256`. `R` exists only
-when a structurally admitted non-null input receipt passes all four authentication
-checks above; receipt authentication does not include the authorization temporal
-equations. Its two report sources are `R.receipt_identity_sha256` and
+manifest, including enforcement that its capability group is either wholly null
+or wholly non-null. `C` exists only when that group is wholly non-null, the
+non-null input capability state and identity exactly equal `M`'s values, and that
+common state is `OBSERVED`; when it exists, its identity source is
+`M.capability_evidence_identity_sha256`. `R` exists only when a structurally
+admitted non-null input receipt passes all four authentication checks above;
+receipt authentication does not include the authorization temporal equations.
+Its two report sources are `R.receipt_identity_sha256` and
 `R.validation_completed_at`.
 
 | First applicable condition | `decision_state` | `primary_blocker` | `sealed_manifest_identity_sha256` | `authenticated_capability_evidence_identity_sha256` | `authorization_validation_receipt_identity_sha256` | `assessed_at` |
 |---|---|---|---|---|---|---|
 | Manifest literal is `None` | `BLOCKED` | `SEALED_MANIFEST_MISSING` | null | null | null | null |
-| Manifest literal is non-null but strict canonical parsing, either manifest projection identity, an inline binding, or the companion final-identity pin fails | `BLOCKED` | `SEALED_MANIFEST_INVALID` | null | null | null | null |
-| `M` exists but `C` does not | `BLOCKED` | `CAPABILITY_EVIDENCE_MISSING` | `M.manifest_identity_sha256` | null | null | null |
+| Manifest literal is non-null but strict canonical parsing, either manifest projection identity, an inline binding, atomic capability-group nullability, or the companion final-identity pin fails | `BLOCKED` | `SEALED_MANIFEST_INVALID` | null | null | null | null |
+| `M` exists but its capability group is wholly null or `C` otherwise does not exist | `BLOCKED` | `CAPABILITY_EVIDENCE_MISSING` | `M.manifest_identity_sha256` | null | null | null |
 | `C` exists and `M.source_and_pit_evidence_bundle_identity_sha256` is null | `BLOCKED` | `SOURCE_AND_PIT_EVIDENCE_UNPROVEN` | `M.manifest_identity_sha256` | `M.capability_evidence_identity_sha256` | null | null |
 | Earlier conditions are false and `M.terms_and_use_approval_identity_sha256` is null | `BLOCKED` | `TERMS_AND_USE_UNAPPROVED` | `M.manifest_identity_sha256` | `M.capability_evidence_identity_sha256` | null | null |
 | Earlier conditions are false and `M.operational_scope_approval_identity_sha256` is null | `BLOCKED` | `OPERATIONAL_SCOPE_UNAPPROVED` | `M.manifest_identity_sha256` | `M.capability_evidence_identity_sha256` | null | null |
@@ -578,12 +601,16 @@ completion.
 
 ### Discriminatory acceptance evidence
 
-- Initial `None` manifest pin yields byte-stable `BLOCKED /
+- A `None` manifest pin yields byte-stable `BLOCKED /
   SEALED_MANIFEST_MISSING`; standard input cannot replace it.
+- A canonical incomplete manifest with all three capability fields null seals
+  successfully and yields `BLOCKED / CAPABILITY_EVIDENCE_MISSING` with its
+  manifest identity present and authenticated capability/receipt/time outputs
+  null.
+- Any partial-null capability group, manifest mutation, pin mismatch, or
+  malformed sealed bytes yields `SEALED_MANIFEST_INVALID`.
 - Changing input capability state/identity or receipt bytes cannot produce
   approval unless they match identities already sealed into the reviewed build.
-- Manifest mutation, pin mismatch, or malformed sealed bytes yields
-  `SEALED_MANIFEST_INVALID`.
 - Golden canonical reports cover `APPROVED_TO_ACQUIRE` and all seven blockers
   with exactly the identity/time sources and nulls in the decision-output table,
   including authenticated-but-out-of-force versus unauthenticated receipts.
@@ -621,16 +648,18 @@ completion.
 | Plans 12/13 and Market Regime semantics | Frozen and unchanged |
 | Candidate probe bytes | Transient; never persisted or admitted |
 | Provider transport metadata | Retained only in the `market_data` probe receipt |
-| Evidence/authorization authority | One reviewed canonical build-sealed manifest |
-| Legal, terms, cost, credentials, storage, retention | Approval identities must be sealed or the first missing group blocks |
+| Evidence/authorization authority | One canonical incomplete build-sealed manifest; lifecycle evidence is external to this self-addressed document |
+| Legal, terms, cost, credentials, storage, retention | All approval identities remain null; the first missing capability group blocks |
 | Data migration or production source replacement | None |
 | Labels, outcomes, strategy, recommendations | Forbidden and untouched |
 | Later acquisition | Separate implementation and fresh execution-start authority required |
 
-A blocked handoff contains the immutable report, authenticated identities that
-exist, the first missing prerequisite group, and the retained review/run evidence.
-Later work must create new evidence and a new reviewed manifest/build; it must not
-overwrite history or rerun the Sprint 9 probe without new owner authority.
+The current blocked handoff contains the immutable report, the valid sealed
+manifest identity, the first missing prerequisite group, and the retained
+review/run evidence. Its prerequisite assessment instant records sealing
+provenance only. Later work must create new evidence and a new reviewed
+manifest/build; it must not overwrite history or rerun the Sprint 9 probe without
+new owner authority.
 
 An approved handoff contains the immutable report and the exact sealed manifest.
 It still performs no acquisition. A later executor must independently revalidate
@@ -641,13 +670,22 @@ considered.
 ## Completion and residual risk
 
 The Sprint 9 implementation, deterministic acceptance coverage, one supervised
-probe disposition, and real offline decision are present. No manifest was sealed
-because the capability projection and required prerequisite approvals are
-absent; the literal `None` is the authenticated fail-closed source of the
-recorded `BLOCKED / SEALED_MANIFEST_MISSING` result. Sprint 9 remains
-**PUBLICATION PENDING** until exact-revision review, hosted checks, merge, and
-sprint/tracker reconciliation are recorded. No approval is inferred from the
-successful HTTP envelope, implementation, or this specification.
+probe disposition, and real offline decision are present. The corrective
+candidate now seals a truthful incomplete manifest rather than treating absence
+of evidence as absence of a seal. Because the capability group is wholly null,
+the recorded result is `BLOCKED / CAPABILITY_EVIDENCE_MISSING`, with a sealed
+manifest identity and no authenticated capability, receipt, time, acquisition,
+readiness, admission, label, or later-execution authority. The exact document,
+manifest and report identities are recorded in the build pin and Sprint 9
+evidence, not embedded here where the Plan 16 byte identity would become
+self-referential.
+
+PR #107 is immutable historical implementation publication evidence, and Linear
+ARK-183/184/185 remain historically Done. Commit identity, exact-revision
+reviews, hosted checks, merge, and publication for the correction are external
+lifecycle evidence; this self-addressed document asserts no current lifecycle
+state. No approval is inferred from the successful HTTP envelope,
+implementation, sealing instant, or this specification.
 
 Residual risk remains that exactly-once depends on human/release supervision and
 retained evidence rather than technical replay prevention; the candidate prefix

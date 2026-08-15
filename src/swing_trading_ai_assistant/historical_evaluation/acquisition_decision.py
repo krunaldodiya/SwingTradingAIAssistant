@@ -199,9 +199,9 @@ class AcquisitionAuthorizationManifestV1:
     market_regime_contract_identity_sha256: str
     layer_b_protocol_identity_sha256: str
     acquisition_scope_identity_sha256: str
-    capability_evidence_state: CapabilityEvidenceStateV1
-    capability_evidence_identity_sha256: str
-    capability_assessed_at: datetime
+    capability_evidence_state: CapabilityEvidenceStateV1 | None
+    capability_evidence_identity_sha256: str | None
+    capability_assessed_at: datetime | None
     source_and_pit_evidence_bundle_identity_sha256: str | None
     terms_and_use_approval_identity_sha256: str | None
     operational_scope_approval_identity_sha256: str | None
@@ -221,13 +221,19 @@ class AcquisitionAuthorizationManifestV1:
             "market_regime_contract_identity_sha256",
             "layer_b_protocol_identity_sha256",
             "acquisition_scope_identity_sha256",
-            "capability_evidence_identity_sha256",
             "manifest_scope_identity_sha256",
             "manifest_identity_sha256",
         ):
             _require_sha256(getattr(self, name))
-        if type(self.capability_evidence_state) is not CapabilityEvidenceStateV1:
-            raise ValueError("invalid sealed capability evidence state")
+        object.__setattr__(
+            self,
+            "capability_assessed_at",
+            _validate_capability_group(
+                self.capability_evidence_state,
+                self.capability_evidence_identity_sha256,
+                self.capability_assessed_at,
+            ),
+        )
         for name in (
             "source_and_pit_evidence_bundle_identity_sha256",
             "terms_and_use_approval_identity_sha256",
@@ -235,11 +241,6 @@ class AcquisitionAuthorizationManifestV1:
             "authorization_validation_receipt_identity_sha256",
         ):
             _require_optional_sha256(getattr(self, name))
-        object.__setattr__(
-            self,
-            "capability_assessed_at",
-            _require_utc_datetime(self.capability_assessed_at),
-        )
         object.__setattr__(
             self,
             "prerequisites_assessed_at",
@@ -436,6 +437,20 @@ def _parse_sealed_manifest(
         if authorization_value is None
         else _parse_authorization(authorization_value)
     )
+    capability_state_value = value["capability_evidence_state"]
+    capability_identity_value = value["capability_evidence_identity_sha256"]
+    capability_assessed_at_value = value["capability_assessed_at"]
+    capability_state = (
+        None
+        if capability_state_value is None
+        else _enum(CapabilityEvidenceStateV1, capability_state_value)
+    )
+    capability_identity = _optional_sha256(capability_identity_value)
+    capability_assessed_at = (
+        None
+        if capability_assessed_at_value is None
+        else _parse_utc_instant(capability_assessed_at_value)
+    )
     manifest = AcquisitionAuthorizationManifestV1(
         manifest_version=_require_literal(value["manifest_version"], _MANIFEST_VERSION),
         market_regime_contract_identity_sha256=_require_sha256(
@@ -447,13 +462,9 @@ def _parse_sealed_manifest(
         acquisition_scope_identity_sha256=_require_sha256(
             value["acquisition_scope_identity_sha256"]
         ),
-        capability_evidence_state=_enum(
-            CapabilityEvidenceStateV1, value["capability_evidence_state"]
-        ),
-        capability_evidence_identity_sha256=_require_sha256(
-            value["capability_evidence_identity_sha256"]
-        ),
-        capability_assessed_at=_parse_utc_instant(value["capability_assessed_at"]),
+        capability_evidence_state=capability_state,
+        capability_evidence_identity_sha256=capability_identity,
+        capability_assessed_at=capability_assessed_at,
         source_and_pit_evidence_bundle_identity_sha256=_optional_sha256(
             value["source_and_pit_evidence_bundle_identity_sha256"]
         ),
@@ -561,10 +572,13 @@ def _authorization_in_force(
     authorization: AcquisitionAuthorizationBindingV1,
     receipt: AuthorizationValidationReceiptV1,
 ) -> bool:
+    capability_assessed_at = manifest.capability_assessed_at
+    if capability_assessed_at is None:
+        return False
     return (
         authorization.issued_at <= authorization.not_before
         and authorization.not_before
-        <= manifest.capability_assessed_at
+        <= capability_assessed_at
         <= receipt.authorization_validated_at
         and authorization.not_before
         <= manifest.prerequisites_assessed_at
@@ -692,9 +706,17 @@ def _manifest_value(value: AcquisitionAuthorizationManifestV1) -> dict[str, obje
         "market_regime_contract_identity_sha256": value.market_regime_contract_identity_sha256,
         "layer_b_protocol_identity_sha256": value.layer_b_protocol_identity_sha256,
         "acquisition_scope_identity_sha256": value.acquisition_scope_identity_sha256,
-        "capability_evidence_state": value.capability_evidence_state.value,
+        "capability_evidence_state": (
+            None
+            if value.capability_evidence_state is None
+            else value.capability_evidence_state.value
+        ),
         "capability_evidence_identity_sha256": value.capability_evidence_identity_sha256,
-        "capability_assessed_at": _format_utc_instant(value.capability_assessed_at),
+        "capability_assessed_at": (
+            None
+            if value.capability_assessed_at is None
+            else _format_utc_instant(value.capability_assessed_at)
+        ),
         "source_and_pit_evidence_bundle_identity_sha256": value.source_and_pit_evidence_bundle_identity_sha256,
         "terms_and_use_approval_identity_sha256": value.terms_and_use_approval_identity_sha256,
         "operational_scope_approval_identity_sha256": value.operational_scope_approval_identity_sha256,
@@ -925,6 +947,20 @@ def _require_sha256(value: object) -> str:
 def _require_optional_sha256(value: object) -> None:
     if value is not None:
         _require_sha256(value)
+
+
+def _validate_capability_group(
+    state: object, identity: object, assessed_at: object
+) -> datetime | None:
+    group = (state, identity, assessed_at)
+    if any(item is None for item in group):
+        if not all(item is None for item in group):
+            raise ValueError("partial sealed capability evidence group")
+        return None
+    if type(state) is not CapabilityEvidenceStateV1:
+        raise ValueError("invalid sealed capability evidence state")
+    _require_sha256(identity)
+    return _require_utc_datetime(assessed_at)
 
 
 def _optional_sha256(value: object) -> str | None:
