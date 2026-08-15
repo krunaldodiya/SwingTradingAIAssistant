@@ -45,6 +45,47 @@ Write and approve the Market Regime specification before coding it:
 
 Implement and validate the module only after that specification is frozen.
 
+Sprint 9 is an **IMPLEMENTED / VERIFIED release candidate with terminal decision
+`BLOCKED`; publication is pending**. It is one test-first learning/decision
+slice for the point-in-time evidence required by Market Regime Layer B.
+[Plan 16](plans/16-market-regime-layer-b-acquisition-decision.md)
+extends frozen [Plan 12](plans/12-market-regime-contract.md) and
+[Plan 13](plans/13-market-regime-validation-protocol.md) without changing their
+facts, labels, cutoffs, reasons, or validation sequence.
+
+Linear records parent Task `ARK-183` as **In Progress**. Its child contract Story
+`ARK-184` is **In Progress** and blocks its child implementation Story `ARK-185`,
+which is **Todo**.
+
+Plan 16 specifies replacing caller-authored gate/authorization payloads with one reviewed
+canonical evidence/authorization manifest sealed in the candidate build. The
+initial absent seal fails closed; future approval is impossible without a
+reviewed build change. The pure decision is provider-independent and receives
+only a manifest-authenticated capability identity/state. It reports the first
+missing group among candidate capability, source/PIT evidence, terms/use,
+operational scope, and owner authorization.
+
+The owner authorized one supervised release invocation containing one
+credential-free `GET` of the fixed candidate PDF at
+`https://www.niftyindices.com/Press_Release/ind_prs21022025.pdf`, bounded to one
+attempt, concurrency `1`, 1,048,576 body bytes, an outer monotonic 30-second
+watchdog with child-process termination, zero retries or followed redirects, no
+parsing or persistence, and one sanitized `market_data` receipt. The adapter is
+not authorization and claims no replay prevention; there is no installable
+live-probe CLI, and another invocation requires new owner authority. HTTP success,
+media type, `%PDF-`, or a digest proves no publisher authority, content, history,
+licence, or permitted use.
+
+The single authorized probe emitted a sanitized historical receipt, but its old
+worker could attempt another resolved address. Its one-call/one-attempt counters
+are unverified; the receipt is inadmissible as capability evidence and no
+provider-independent projection was retained. The invocation is consumed and
+must not be repeated without new authority. With no reviewed manifest seal or
+prerequisite approvals, the pure decision returned
+`BLOCKED` with first blocker `SEALED_MANIFEST_MISSING`. This complete research
+outcome stops before acquisition, readiness/admission, Market Regime labels,
+counts, outcomes, or recommendations.
+
 ## Phase 3: Second module — Sector Analysis
 
 Sprint 8 delivered the first atomic vertical slice inside architecture-locked
@@ -94,10 +135,10 @@ and GitGuardian both passed.
 [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
 merged the slice to `main` at **2026-08-14T19:39:18Z** as
 `b6e34d3cdc598e1cd6dc50c50d517481d26e1391`; repository Sprint 8 delivery,
-review, and publication are complete. ARK-175 through ARK-178 remain Done as
-historical specification work, and ARK-180 remains Done with implementation
-evidence. ARK-179 and ARK-181 remain In Progress pending Linear reconciliation;
-Linear closeout is next and is not represented here as complete.
+review, and publication are complete. Linear now records ARK-175 through ARK-181
+as Done. The Sprint 8 file preserves the historical pending-reconciliation
+snapshot, while the sprint index and Sprint 9 record state the current
+operational truth.
 
 Exact SHA `25d889a` received **REQUEST_CHANGES** for the identity-bearing-label
 privacy defect. Exact SHA `d79eecc` received **REQUEST_CHANGES** for the deep

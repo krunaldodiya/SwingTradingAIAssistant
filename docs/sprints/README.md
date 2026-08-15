@@ -45,11 +45,32 @@ increment and future process decisions.
   [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
   merged to `main` at **2026-08-14T19:39:18Z** as
   `b6e34d3cdc598e1cd6dc50c50d517481d26e1391`.
-  ARK-175 through ARK-178 remain Done historical specification work and ARK-180
-  remains Done with implementation evidence. ARK-179 and ARK-181 remain In
-  Progress pending Linear reconciliation; repository Sprint delivery is
-  complete, and Linear closeout is next.
+  ARK-175 through ARK-181 now remain Done in Linear. The
+  [Sprint 8 record](sprint-8.md) preserves its historical pending-reconciliation
+  snapshot; this index records the current operational truth without rewriting
+  the delivered evidence.
   Exact SHAs `25d889a` and `d79eecc` remain superseded rejected revisions, not
   final evidence. PR #102 remains immutable historical planning/specification
   evidence. Official taxonomy, Layer B, provider/public transport, live results,
   recommendation, ranking, and effectiveness remain deferred or unclaimed.
+- [Sprint 9 — Market Regime Layer B acquisition decision](sprint-9.md) —
+  **IMPLEMENTED / VERIFIED** with terminal decision `BLOCKED`; publication is pending.
+  Linear records parent Task `ARK-183` as **In Progress**; its child contract
+  Story `ARK-184` is **In Progress** and blocks its child implementation Story
+  `ARK-185`, which is **Todo**.
+  Plan 16 specifies a provider-independent pure reducer whose only authority is one
+  reviewed canonical manifest sealed in the candidate build; the initial absent
+  seal fails closed and stdin cannot supply authorization. One owner-supervised
+  release invocation may issue one credential-free GET of the fixed candidate
+  PDF within a 1,048,576-byte cap and an outer monotonic 30-second watchdog.
+  Exactly-once is supervision plus retained run evidence, not adapter replay
+  prevention; no live-probe CLI exists. Provider HTTP metadata remains in
+  `market_data`, while the decision sees only a manifest-authenticated capability
+  identity/state.
+  The one authorized invocation emitted a sanitized historical receipt whose old
+  worker could attempt another resolved address. Its one-call/one-attempt
+  counters are unverified, so the receipt is inadmissible as capability evidence;
+  no provider-independent projection was retained. The invocation is consumed.
+  With the build seal still `None`, the terminal result is `BLOCKED`
+  with first blocker `SEALED_MANIFEST_MISSING`; it grants no acquisition,
+  readiness, admission, Market Regime label, or later execution authority.
