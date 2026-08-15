@@ -6,8 +6,9 @@ Extends: frozen Plans 12 and 13; neither plan is amended or reinterpreted
 
 Linear tracking: `ARK-183`, `ARK-184`, and `ARK-185` remain historically
 **Done** for the implementation published through PR #107. That publication did
-not include this corrective incomplete-seal candidate, which is not yet
-committed, independently reviewed, or published.
+not include this corrective incomplete-seal change. The correction is committed
+in the candidate under review; its exact revision, reviews, hosted checks, merge,
+and publication remain external lifecycle evidence.
 
 Sprint 9 is one learning-and-decision slice: implement the boundary test-first,
 execute the one owner-authorized candidate-artifact probe under supervision,
@@ -680,10 +681,11 @@ become self-referential.
 
 Sprint 9 repository closeout remains **CORRECTIVE PUBLICATION PENDING**. PR #107
 is immutable historical implementation publication evidence, and Linear
-ARK-183/184/185 remain historically Done, but this correction is not yet
-committed, independently reviewed, checked, or published. No approval is
-inferred from the successful HTTP envelope, implementation, sealing instant, or
-this specification.
+ARK-183/184/185 remain historically Done. The correction is committed in the
+candidate under review; its exact revision, reviews, hosted checks, merge, and
+publication remain external lifecycle evidence. No approval is inferred from
+the successful HTTP envelope, implementation, sealing instant, or this
+specification.
 
 Residual risk remains that exactly-once depends on human/release supervision and
 retained evidence rather than technical replay prevention; the candidate prefix

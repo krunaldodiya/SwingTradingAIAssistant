@@ -2,7 +2,7 @@
 
 Status: **BLOCKED — CORRECTIVE PUBLICATION PENDING; TERMINAL DECISION `BLOCKED / CAPABILITY_EVIDENCE_MISSING`**
 Historical planning and original implementation parent: `b8359f5cffded6122511c3ee8ebe290893007672`
-Corrective candidate base: `c74ee4788aa6d03864eb8c21f111afe7025ad9cc`
+Corrective change-series base: `c74ee4788aa6d03864eb8c21f111afe7025ad9cc`
 
 ## Goal and architecture placement
 
@@ -181,14 +181,14 @@ and finite sealing projections:
 |---|---|
 | Plan 12 exact bytes / market-regime contract | `b5b54bed2d4224fb496755c8e9d6a190d6cbb7fc8bd13a53feded72450af12af` |
 | Plan 13 exact bytes / Layer B protocol | `e8e2c712e4fba5cfe24fd51c6d9985df23e2e714c12e01c7f9f9d30ab670e19d` |
-| Final corrected Plan 16 exact bytes / acquisition scope | `9db4e8a05dc410dbc05adb6534ffc6c7f23d26b4eaca5acfdb57b59e4ba4625f` |
-| Manifest scope projection | `87b69b8da5d180c486e74907587c544aace9a7a057ca8b9ebb50138309e5f054` |
-| Final sealed manifest | `7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c` |
-| Canonical terminal report | `bf4e137dd8bb6bc7e2d4bd0d243d28c63b3b72a1c3d94dc109a898211fcd8a40` |
+| Final corrected Plan 16 exact bytes / acquisition scope | `61dacb24fb65e58870bbb830c6f6d03af938a657ccfcbb32185ccbe8cda7492a` |
+| Manifest scope projection | `64a51b6f318a25db698051c9a462eac1e8970c81cfc7d05b3240cbe6f9877b6a` |
+| Final sealed manifest | `53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c` |
+| Canonical terminal report | `140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5` |
 
 The offline reducer now returns canonical `BLOCKED` with primary blocker
 `CAPABILITY_EVIDENCE_MISSING`, sealed manifest identity
-`7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c`,
+`53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c`,
 and null authenticated capability, validation-receipt, and assessment-time
 outputs. This is the truthful corrective candidate outcome. It grants no
 acquisition or execution authority.
@@ -250,9 +250,10 @@ Linear reconciliation also remains historical:
 | ARK-185 | Implementation story | **Done**; PR #107 attached; one completion comment |
 
 Those Done states record the published implementation; they do not establish
-authority or publication of this correction. Current repository closeout is
-blocked pending corrective commit, exact-revision checks, independent review,
-hosted checks, and publication. The current candidate truth is
+authority or publication of this correction. The correction is committed in the
+candidate under review. Its exact revision, reviews, hosted checks, merge, and
+publication remain external lifecycle evidence; repository closeout remains
+blocked pending publication. The current candidate truth is
 `BLOCKED / CAPABILITY_EVIDENCE_MISSING` with a valid incomplete seal. No
 admissible capability projection, source/PIT evidence bundle, terms/use approval,
 operational-scope approval, owner full-acquisition authorization, or trusted
@@ -261,8 +262,6 @@ inadmissible, the authorized invocation remains consumed, and no rerun occurred.
 
 Sprint 10 and the separate GitHub workflow migration plan remain explicitly
 deferred until tomorrow, **2026-08-16**. Neither starts in this correction.
-No commit, review, hosted check, merge, or publication is claimed for the
-corrective candidate.
 
 ## Explicit exclusions and stop conditions
 
@@ -283,9 +282,10 @@ of the terminal decision.
 Sprint 9 repository closeout is **BLOCKED PENDING CORRECTIVE PUBLICATION**. The
 implementation, consumed-probe disposition, historical PR #107 publication, and
 historical Linear ARK-183/184/185 Done states remain recorded, but they do not
-cover this corrected seal. The current candidate must still be committed,
-verified at its exact revision, independently reviewed, checked in hosted CI,
-and published before repository completion can be claimed.
+cover this corrected seal. The correction is committed in the candidate under
+review; its exact revision, reviews, hosted checks, merge, and publication
+remain external lifecycle evidence required before repository completion can be
+claimed.
 
 The truthful terminal result is `BLOCKED / CAPABILITY_EVIDENCE_MISSING` with a
 content-addressed incomplete manifest. There is no admissible capability

@@ -57,12 +57,12 @@ increment and future process decisions.
   repository closeout is **BLOCKED PENDING CORRECTIVE PUBLICATION**, with
   truthful terminal decision `BLOCKED / CAPABILITY_EVIDENCE_MISSING`.
   The corrective candidate seals canonical incomplete manifest identity
-  `7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c`
+  `53940c33757fed4baf76ce1fe12ea4dda381c5337483aeb2e0869412fbb86d3c`
   from scope projection identity
-  `87b69b8da5d180c486e74907587c544aace9a7a057ca8b9ebb50138309e5f054`
+  `64a51b6f318a25db698051c9a462eac1e8970c81cfc7d05b3240cbe6f9877b6a`
   and source-controlled prerequisite assessment
   `2026-08-15T16:03:40.000000Z`. Its canonical report identity is
-  `bf4e137dd8bb6bc7e2d4bd0d243d28c63b3b72a1c3d94dc109a898211fcd8a40`.
+  `140eb50e52f8afd15fb4a6078c26370921af80ab2ae1403f45677e2613df50d5`.
   The capability group and all later evidence, approval, authorization, and
   validation-receipt identities are null; the assessment instant grants no
   authority.
@@ -76,8 +76,9 @@ increment and future process decisions.
   The consumed probe's historical receipt remains inadmissible as capability
   evidence because its old worker could attempt another resolved address; no
   provider-independent projection was retained or reconstructed, and no rerun
-  occurred. The correction is not yet committed, independently reviewed,
-  checked in hosted CI, or published. It grants no acquisition, readiness,
-  admission, label, or later execution authority.
+  occurred. The correction is committed in the candidate under review. Its exact
+  revision, reviews, hosted checks, merge, and publication remain external
+  lifecycle evidence. It grants no acquisition, readiness, admission, label, or
+  later execution authority.
   Sprint 10 and the separate GitHub workflow migration plan remain deferred
   until tomorrow, **2026-08-16**; neither starts in this correction.
