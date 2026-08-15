@@ -191,7 +191,7 @@ Liquidity / SMC owns only:
 
 ## Module contract boundary
 
-Before a module enters product scope, its approved contract must define:
+Before a module is implemented or activated, its approved contract must define:
 
 1. purpose;
 2. business requirements;
@@ -201,7 +201,7 @@ Before a module enters product scope, its approved contract must define:
 6. edge cases;
 7. validation approach;
 8. acceptance criteria; and
-9. implementation boundary.
+9. integration boundary.
 
 A module advances only after its requirements and validation are complete.
 

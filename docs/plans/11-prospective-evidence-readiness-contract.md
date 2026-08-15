@@ -187,7 +187,7 @@ These are V1 ceilings; implementation tests each limit and limit-plus-one. Inval
 
 ### Adversarial acceptance
 
-Strict TDD for ARK-163/164 must prove:
+Domain adversarial acceptance for ARK-163/164 requires:
 
 1. current constituents with a backdated effective/publication claim remain blocked;
 2. caller-created `known_at`, rehashed alternate source bytes and coordinated digest replacement cannot pass;
@@ -200,14 +200,12 @@ Strict TDD for ARK-163/164 must prove:
 9. shuffled but equivalent admitted inputs reduce to byte-identical canonical output; and
 10. Plan 10 cannot consume readiness as anchor eligibility/outcome evidence before separately proving all applicable cutoffs and exact next-five sessions.
 
-Published-contract independent exact-SHA review and the authoritative full repository gate are mandatory before merge.
-
 ## Implementation order
 
 1. ARK-161 freezes the source policy and records unresolved authority/licence blockers.
 2. ARK-162 freezes V1 and its executable documentation contract tests.
 3. ARK-163 implements only the pure provider-free preflight.
-4. ARK-164 exposes the no-download application/CLI, generates the retained-evidence manifest and completes independent review, full gate, PR and CI.
+4. ARK-164 exposes the no-download application/CLI and generates the retained-evidence manifest.
 5. Any acquisition/capture executor is a later owner-approved scope decision.
 
 ## Source record

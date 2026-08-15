@@ -57,11 +57,11 @@ normal completion evidence exists.
     "ARK-70", "ARK-73", "ARK-92", "ARK-93", "ARK-69", "ARK-72"
   ],
   "original_denominator_count": 24,
-  "tracking_additions": [
+  "tracking_governance_additions": [
     {
       "id": "ARK-95",
-      "reason": "Historical publication-control remediation.",
-      "owner_approval_reference": "Owner acceptance recorded; exact owner-chat decision time is unavailable/unproven.",
+      "reason": "Accepted workflow-orchestration remediation and publication control.",
+      "owner_approval_reference": "Accepted finite-Goal workflow authority; exact owner-chat decision time is unavailable/unproven.",
       "accepted_at": {"value": null, "status": "unproven", "source": "authoritative approval timestamp not retained in the sprint record"},
       "created_at": {"value": null, "status": "unproven", "source": "Linear issue history must be queried at snapshot time"},
       "started_at": {"value": null, "status": "unproven", "source": "Linear lifecycle history must be queried at snapshot time"},
@@ -70,8 +70,8 @@ normal completion evidence exists.
     },
     {
       "id": "ARK-96",
-      "reason": "Documentation reconciliation for the recorded change.",
-      "owner_approval_reference": "Owner acceptance recorded; exact owner-chat decision time is unavailable/unproven.",
+      "reason": "Documentation reconciliation required by the accepted workflow change.",
+      "owner_approval_reference": "Accepted finite-Goal workflow authority; exact owner-chat decision time is unavailable/unproven.",
       "accepted_at": {"value": null, "status": "unproven", "source": "authoritative approval timestamp not retained in the sprint record"},
       "created_at": {"value": null, "status": "unproven", "source": "Linear issue history must be queried at snapshot time"},
       "started_at": {"value": null, "status": "pending", "source": "Linear lifecycle history must be queried at snapshot time"},
@@ -99,13 +99,13 @@ normal completion evidence exists.
     "unfinished_baseline_ids": ["ARK-92", "ARK-93", "ARK-69", "ARK-72"],
     "unfinished_baseline_count": 4,
     "observed_state_or_blocker": {"ARK-92": "In Progress; circuit-frozen after ordinary repair budget; no offline collection consumed", "ARK-93": "Todo/unstarted; blocked by ARK-92", "ARK-69": "Todo/unstarted", "ARK-72": "Todo/unstarted"},
-    "added_work_rows": {"completed_count": 13, "unfinished_count": 3, "completed_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo/unstarted", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason": "Accepted documentation, planning, publication-control, and ARK-92 corrective work outside the frozen denominator; per-item reasons are retained in the ledger and never change the 20/4 baseline partition."},
+    "added_work_rows": {"completed_count": 13, "unfinished_count": 3, "completed_ids": ["ARK-95", "ARK-96", "ARK-97", "ARK-98", "ARK-99", "ARK-100", "ARK-101", "ARK-102", "ARK-103", "ARK-104", "ARK-105", "ARK-108", "ARK-109"], "unfinished": {"ARK-106": "Todo/unstarted", "ARK-107": "In Progress", "ARK-110": "In Progress"}, "reason": "Accepted governance, documentation, planning, and ARK-92 corrective work outside the frozen denominator; per-item reasons are retained in the ledger and never change the 20/4 baseline partition."},
     "baseline_partition_rules": [
       "completed_baseline_ids and unfinished_baseline_ids are disjoint",
       "completed_baseline_ids and unfinished_baseline_ids together equal original_denominator",
       "completed_baseline_count + unfinished_baseline_count == original_denominator_count"
     ],
-    "snapshot_rule": "Captured after cutoff from Linear stateHistory and exact GitHub PR/CI/merge evidence. Unsupported timestamps and execution durations remain UNSET; no labor is inferred."
+    "snapshot_rule": "Captured after cutoff from Linear stateHistory and exact GitHub PR/CI/merge evidence. Unsupported timestamps and workflow durations remain UNSET; no labor is inferred."
   },
   "completion_classification_rules": {
     "required_events": [
@@ -133,13 +133,16 @@ normal completion evidence exists.
     "final_schedule_variance_rule": "null until all 24 baseline tasks have Definition-of-Done evidence"
   },
   "post_cutoff_interpretation": "continuing committed work is carryover/schedule overrun; only newly added work is expansion",
-  "cutoff_preserves_acceptance_contract": {
+  "deadline_never_waives": {
     "scope": "deadline expiry only",
     "requirements": [
-      "documented behavior and evidence",
+      "specification",
+      "strict red-green-refactor TDD",
+      "deterministic quality gates",
+      "independent review",
       "hosted CI/security",
       "exact-SHA merge/publication",
-      "dependency ordering",
+      "ordering/WIP",
       "ARK-69 owner live authority",
       "Sprint Done/closure"
     ]

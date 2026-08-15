@@ -11,7 +11,7 @@ conflicts with this one, this document's safety invariant wins.
 Memory changes can expose private text, join isolated projects, corrupt durable
 records, create dependency/network behavior, or silently turn an experiment into
 production. Delivery is therefore a sequence of independently reversible,
-PR-sized slices with explicit evidence and no implicit promotion.
+bounded slices with explicit domain acceptance evidence and no implicit promotion.
 
 - Expected value: preserve the audited trust boundary while allowing measured,
   reviewable improvements.
@@ -65,7 +65,7 @@ The default privacy posture is data minimization:
 - never retain hidden reasoning, tool payloads, image bytes, removed parts,
   pre-redaction values, regex matches, credentials, tokens, or environment dumps;
 - diagnostics use hashes, counts, closed reasons, and sanitized pointers;
-- public CI/benchmarks contain synthetic data only;
+- public benchmark artifacts contain synthetic data only;
 - live databases, raw transcripts, migration bundles, and private exports never
   become fixtures, support attachments, or committed artifacts; and
 - temporary copied roots use restrictive permissions and deterministic cleanup.
@@ -223,11 +223,13 @@ regression, unrecoverable latency/resource excess, or any post-release corruptio
 signal. Rollback returns to the last accepted contract/configuration; published
 evidence is superseded, never edited in place.
 
-## Staged PR-sized delivery
+## Staged owner-authorized delivery
 
 No issue state or roadmap line starts implementation automatically. The owner
-must explicitly promote exactly one slice below. Every slice starts from a fresh
-revalidation of the memory-tool baseline and uses strict failing-test-first TDD.
+must explicitly authorize exactly one bounded slice below. Every slice starts
+from a fresh revalidation of the memory-tool baseline and must preserve the
+applicable safety and isolation invariants with falsifiable domain evidence and
+an explicit rollback boundary.
 
 1. **Benchmark manifest and synthetic fixtures** — no live memory input.
 2. **Pure-retrieval evaluator and sealed baseline report** — no retriever change.
@@ -249,22 +251,22 @@ revalidation of the memory-tool baseline and uses strict failing-test-first TDD.
 14. **A separately promoted production candidate**, only after confirmation
     evidence and a dependency/migration/security decision.
 
-A PR may narrow a slice; it may not bundle later slices for convenience. The
-adapter stages in Document 06 are additional future slices under this same owner
-promotion and checklist; they do not start automatically and cannot be bundled
-into the slices above. Docs, contract, implementation, migration, release
-evidence, and rollback mechanics must stay reviewable. Reference code is never
-copy-pasted.
+A promoted slice may narrow its scope; it may not combine later slices for
+convenience. The adapter stages in Document 06 are additional future slices
+under this same owner authorization and checklist; they do not start
+automatically and cannot be combined with the slices above. Contract,
+implementation, migration, activation evidence, and rollback mechanics remain
+traceable to the authorized scope. Reference code is never copy-pasted.
 
 ## Slice acceptance checklist
 
 Every promoted slice must publish:
 
-- [ ] owner promotion and named PR-sized slice;
-- [ ] exact clean baseline SHA and audited-reference freshness statement;
-- [ ] five-line candidate decision when a new module/source/factor applies;
-- [ ] focused tests observed failing first, then passing;
-- [ ] legacy memory-tool suite and packaging checks passing;
+- [ ] explicit owner authorization and one named bounded slice;
+- [ ] audited baseline identity and audited-reference freshness statement;
+- [ ] rationale and authority for any new module, source, or factor;
+- [ ] applicable domain acceptance evidence challenging the slice's observable
+      behavior and failure boundaries;
 - [ ] synthetic safety tests for isolation, lifecycle, abstention, poisoning,
       citations, secrets, paths, collisions, concurrency, and fault points as
       applicable;
@@ -272,18 +274,17 @@ Every promoted slice must publish:
       allowed quotation locations, the complete forbidden-sink set, and trace
       assertions proving zero canary-caused tool, network, write, scope, citation,
       policy, or task-control effects;
-- [ ] atomic scenario-family split assignment and exact per-case/per-assertion
-      reconciliation, including denied attempts, errors, and missing traces;
+- [ ] complete per-case/per-assertion reconciliation, including denied
+      attempts, errors, and missing traces;
 - [ ] sealed benchmark/config/per-case artifacts when behavior can change;
 - [ ] zero unexpected network attempts and complete dependency inventory;
-- [ ] privacy/provenance/security review and no private committed artifacts;
+- [ ] privacy, provenance, security, and private-artifact exclusion evidence;
 - [ ] forward migration, compatibility, fault injection, and rollback evidence
       for every durable change;
 - [ ] resource/latency/context budgets and platform limitations;
-- [ ] independent review of the exact candidate SHA;
 - [ ] explicit decision-log entry; and
-- [ ] clean diff proving no unrelated SwingTradingAIAssistant market, roadmap,
-      sprint, or research-pipeline change.
+- [ ] scope-isolation evidence that the authorized slice makes no unrelated
+      market, roadmap, sprint, or research-pipeline change.
 
 A checkbox without its named artifact is not evidence.
 

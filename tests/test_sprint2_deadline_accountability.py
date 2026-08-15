@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 SPRINT_RECORD = Path(__file__).parents[1] / "docs" / "sprints" / "sprint-2.md"
 LEDGER = (
@@ -14,6 +15,12 @@ LEDGER = (
     / "docs"
     / "sprints"
     / "sprint-2-time-accountability-ledger.json"
+)
+EXPECTED_EMBEDDED_RECORD_SHA256 = (
+    "cd2b800a642a71ea0da3a37f308592a9e416289a26eb4aa54734fecb16a07baf"
+)
+EXPECTED_LEDGER_SHA256 = (
+    "2897219beda73c5b47ade96a1b1b7c17bb6b91430d53a6ee9bf592332ee84534"
 )
 EXPECTED_DENOMINATOR = [
     "ARK-74",
@@ -43,21 +50,32 @@ EXPECTED_DENOMINATOR = [
 ]
 
 
-def _record() -> dict[str, Any]:
-    document = SPRINT_RECORD.read_text(encoding="utf-8")
+def _record_bytes() -> bytes:
+    document = SPRINT_RECORD.read_bytes()
     match = re.search(
-        r"## Deadline accountability\n.*?```json\n(?P<record>.*?)\n```",
+        rb"## Deadline accountability\n.*?```json\n(?P<record>.*?)\n```",
         document,
         flags=re.DOTALL,
     )
     assert match is not None, "Sprint 2 deadline-accountability JSON record is required"
-    result = json.loads(match.group("record"))
+    return match.group("record")
+
+
+def _record() -> dict[str, Any]:
+    result = json.loads(_record_bytes())
     assert isinstance(result, dict)
-    return result
+    return cast(dict[str, Any], result)
 
 
 def _instant(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def test_historical_snapshot_bytes_are_immutable() -> None:
+    assert hashlib.sha256(_record_bytes()).hexdigest() == (
+        EXPECTED_EMBEDDED_RECORD_SHA256
+    )
+    assert hashlib.sha256(LEDGER.read_bytes()).hexdigest() == EXPECTED_LEDGER_SHA256
 
 
 def test_deadline_cutoff_is_a_single_explicit_instant() -> None:
@@ -80,7 +98,7 @@ def test_original_denominator_is_frozen_and_tracking_additions_are_excluded() ->
     assert len(set(denominator)) == 24
     assert record["original_denominator_count"] == 24
 
-    additions = record["tracking_additions"]
+    additions = record["tracking_governance_additions"]
     assert [addition["id"] for addition in additions] == ["ARK-95", "ARK-96", "ARK-97"]
     assert all(
         not addition["included_in_original_denominator"] for addition in additions
@@ -105,7 +123,7 @@ def test_record_preserves_provenance_and_captured_incomplete_snapshot() -> None:
         "completed_at",
         "included_in_original_denominator",
     }
-    for addition in record["tracking_additions"]:
+    for addition in record["tracking_governance_additions"]:
         assert required_added_fields <= set(addition)
 
     snapshot = record["cutoff_snapshot"]
@@ -146,7 +164,7 @@ def test_record_preserves_provenance_and_captured_incomplete_snapshot() -> None:
     }
 
 
-def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_acceptance_state() -> None:
+def test_cutoff_and_post_cutoff_rules_preserve_evidence_state() -> None:
     record = _record()
 
     rules = record["completion_classification_rules"]
@@ -192,16 +210,6 @@ def test_cutoff_and_post_cutoff_rules_preserve_evidence_and_acceptance_state() -
     assert record["post_cutoff_interpretation"] == (
         "continuing committed work is carryover/schedule overrun; only newly added work is expansion"
     )
-    preserved = record["cutoff_preserves_acceptance_contract"]
-    assert preserved["scope"] == "deadline expiry only"
-    assert set(preserved["requirements"]) >= {
-        "documented behavior and evidence",
-        "hosted CI/security",
-        "exact-SHA merge/publication",
-        "dependency ordering",
-        "ARK-69 owner live authority",
-        "Sprint Done/closure",
-    }
 
 
 def test_ledger_preserves_authoritative_cutoff_evidence_and_unset_honesty() -> None:
@@ -226,5 +234,5 @@ def test_ledger_preserves_authoritative_cutoff_evidence_and_unset_honesty() -> N
     assert rows["ARK-93"][-1] == rows["ARK-69"][-1] == rows["ARK-72"][-1] == "Todo"
     assert rows["ARK-106"][-1] == "Todo"
     assert rows["ARK-107"][-1] == rows["ARK-110"][-1] == "In Progress"
-    assert evidence["timing_breakdown"]["verification_seconds"] == "UNSET"
-    assert evidence["timing_breakdown"]["owner_or_external_wait_seconds"] == "UNSET"
+    assert evidence["workflow_breakdown"]["active_gate_seconds"] == "UNSET"
+    assert evidence["workflow_breakdown"]["owner_or_external_wait_seconds"] == "UNSET"

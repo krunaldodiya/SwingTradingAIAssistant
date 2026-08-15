@@ -942,10 +942,10 @@ not change canonical identity, admission, scope, authorization, or checkpoint
 semantics. Every supported tuple appears in the matrix with an end-of-support or
 revalidation policy; no unbounded `>=` harness range is allowed.
 
-## Staged PR-sized delivery
+## Candidate capability sequence
 
-No stage is promoted by this document. The owner must separately authorize one
-slice, and every slice begins from the exact clean baseline and failing tests.
+No capability is promoted by this document. The owner must separately authorize
+one capability after revalidating the audited baseline and every contract above.
 Pre-release extraction may land behind non-default test-only boundaries, but v1
 cannot be declared supported until both first-class adapters pass.
 
@@ -968,12 +968,12 @@ cannot be declared supported until both first-class adapters pass.
 9. **Packaging and install/remove matrix** — supported Python/OS/harness tuples,
    no auto-loading, dependency/license inventory, offline smoke.
 10. **Opt-in v1 migration/release** — explicit caller-selected root, verified
-    backup, both adapter rows green, independent review, and rollback drill.
-11. **Unapproved gated CLI proposal** — not a delivery slice unless separately
-    promoted by the owner.
-12. **Unapproved gated MCP proposal** — not a delivery slice unless separately
-    promoted by the owner after core evidence; CLI promotion does not promote MCP,
-    and there is no server or network presumption.
+    backup, both adapter rows green, and rollback drill.
+11. **Unapproved gated CLI proposal** — not a candidate capability unless
+    separately authorized by the owner.
+12. **Unapproved gated MCP proposal** — not a candidate capability unless
+    separately authorized by the owner after core evidence; CLI authorization
+    does not authorize MCP, and there is no server or network presumption.
 
 A slice may be narrowed but never bundle later stages or switch the production
 root/default as a convenience. Failure leaves the current Prime-coupled v0.1

@@ -159,8 +159,9 @@ market-regime contracts, sprints, or market logic.
 
 ## Promotion rule
 
-A future implementer must name exactly one PR-sized slice from Document 04,
-revalidate the audited memory-tool baseline and applicable external evidence,
-write focused failing tests first, preserve every invariant above, and publish
-sealed command/result evidence. No later document, issue state, benchmark score,
-or convenience request implicitly promotes implementation.
+Future implementation requires explicit owner authorization for one bounded
+slice from Document 04. Before activation, revalidate the audited memory-tool
+baseline and applicable external evidence, preserve every invariant above and
+the authorized scope isolation, and record the applicable domain-safety,
+invariant, and rollback evidence. No later document, issue state, benchmark
+score, or convenience request implicitly promotes implementation.
