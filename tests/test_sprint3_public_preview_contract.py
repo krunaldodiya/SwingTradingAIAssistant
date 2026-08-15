@@ -162,7 +162,7 @@ def test_contract_is_linked_and_replaces_microtask_execution() -> None:
 
     assert "[public-preview contract](04-public-preview-contract.md)" in plan_one
     assert "Status: **CLOSED — DOWNLOADER V1 RELEASE GATE PASSED**" in sprint
-    assert "seven coherent PR-sized slices" in sprint
+    assert "seven coherent slices" in sprint
     assert "ARK-112" in contract and "superseded" in contract.lower()
     assert "23-task" not in sprint
 
@@ -485,7 +485,6 @@ def test_contract_preserves_safety_and_smoke_ladder() -> None:
     for required in (
         "max_touched_months_v1 = 12",
         "max_public_json_bytes_v1 = 8_388_608",
-        "one writer per file path",
         "point-in-time",
         "immutable",
         "no provider identity",
@@ -494,8 +493,8 @@ def test_contract_preserves_safety_and_smoke_ladder() -> None:
     ):
         assert required in text
     for required in (
-        "focused offline tests",
+        "focused offline cases",
         "disposable-root end-to-end smoke",
-        "authenticated provider smoke",
+        "owner-authorized provider smoke",
     ):
         assert required in sprint

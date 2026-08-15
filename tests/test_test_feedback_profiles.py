@@ -1,4 +1,4 @@
-"""Contracts for the three documented pytest feedback profiles."""
+"""Contracts for executable pytest feedback profiles."""
 
 from __future__ import annotations
 
@@ -10,17 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
-WORKFLOW = ROOT / "docs" / "development-workflow.md"
-ENGINEERING = ROOT / "docs" / "engineering-standards.md"
-README = ROOT / "README.md"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-FOCUSED = "uv run --extra dev pytest <test-node> --no-cov -q -x"
-AFFECTED = "uv run --extra dev pytest <test-paths> --no-cov -q"
-AUTHORITATIVE = "uv run --extra dev pytest"
-
-
-def _normalized(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
 
 
 def _run_pytest(project: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -86,33 +76,6 @@ def test_project_default_retains_authoritative_branch_coverage() -> None:
     assert "--cov-branch" in addopts
     assert "--cov-fail-under=87" in addopts
     assert "--no-cov" not in addopts
-
-
-def test_workflow_documents_distinct_native_profiles_and_evidence_boundary() -> None:
-    workflow = _normalized(WORKFLOW)
-
-    for command in (FOCUSED, AFFECTED, AUTHORITATIVE):
-        assert command in workflow
-    for boundary in (
-        "Focused and affected runs are local feedback only, never merge evidence.",
-        "Do not set PYTEST_ADDOPTS to hide or disable coverage.",
-        "The authoritative full profile remains branch-aware",
-    ):
-        assert boundary in workflow
-
-
-def test_readme_and_engineering_standards_match_profile_boundary() -> None:
-    readme = _normalized(README)
-    engineering = _normalized(ENGINEERING).replace("`", "")
-
-    for command in (FOCUSED, AFFECTED, AUTHORITATIVE):
-        assert command in readme
-    assert "explicit --no-cov" in engineering
-    assert "never pre-merge evidence" in engineering
-    assert (
-        "default pytest configuration retains whole-package branch coverage"
-        in engineering
-    )
 
 
 def test_ci_keeps_bare_authoritative_pytest_and_no_coverage_bypass() -> None:

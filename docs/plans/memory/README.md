@@ -12,9 +12,8 @@ with first-class Prime Agent and Pi coding agent adapters over the same stores a
 contracts. This does not claim universal zero-work compatibility. It does not
 implement, authorize, or schedule a memory-tool change. This delivery changes no
 memory source, schema, runtime dependency, database, service, migration bundle,
-benchmark result, or operating policy. Every implementation slice requires
-separate explicit promotion, strict TDD, review, and release evidence in the
-memory-tool repository.
+benchmark result, or operating policy. Any implementation must be separately
+authorized in the memory-tool repository; this suite grants none.
 
 ## Suite map and authority
 
@@ -160,8 +159,9 @@ market-regime contracts, sprints, or market logic.
 
 ## Promotion rule
 
-A future implementer must name exactly one PR-sized slice from Document 04,
-revalidate the audited memory-tool baseline and applicable external evidence,
-write focused failing tests first, preserve every invariant above, and publish
-sealed command/result evidence. No later document, issue state, benchmark score,
-or convenience request implicitly promotes implementation.
+Future implementation requires explicit owner authorization for one bounded
+slice from Document 04. Before activation, revalidate the audited memory-tool
+baseline and applicable external evidence, preserve every invariant above and
+the authorized scope isolation, and record the applicable domain-safety,
+invariant, and rollback evidence. No later document, issue state, benchmark
+score, or convenience request implicitly promotes implementation.

@@ -1,8 +1,5 @@
 # Agent Working Agreement
 
-This file owns product and research boundaries. Delivery mechanics live in
-`docs/development-workflow.md`; implementation safeguards live in `docs/engineering-standards.md`.
-
 ## Mission and scope
 
 Build a trustworthy, agent-agnostic research tool for point-in-time Nifty 50 equity swing trading. This is

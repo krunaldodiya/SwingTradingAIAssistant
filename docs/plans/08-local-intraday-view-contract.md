@@ -44,5 +44,4 @@ and no second candle copy is persisted.
 Tests cover every supported interval, regular and special sessions, shorter
 session tails, missing/duplicate/off-grid minutes, integer volume overflow,
 deadline/resource mapping, selected fields, current-session cutoff behavior,
-provenance, CLI routing, and provider non-use. The unchanged full gate passes
-before publication.
+provenance, CLI routing, and provider non-use.

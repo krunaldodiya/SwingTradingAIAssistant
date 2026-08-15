@@ -412,9 +412,9 @@ no-look-ahead equivalence.
   drawdown, loss streaks, and capital usage. It cannot support a profitability
   or risk claim.
 
-## Validation and strict TDD order
+## Validation coverage order
 
-Implementation proceeds only in this order:
+Validation is organized as follows:
 
 1. Contract tests freeze enums, reason precedence, impossible-state rejection,
    deep reconstruction, canonical JSON, digest rules, output bounds, warning
@@ -436,10 +436,10 @@ Implementation proceeds only in this order:
    verifies a read-only root and zero attempts, and compares two canonical
    reruns byte for byte.
 7. The retained evidence run records the exact code SHA, seal/config/data/report
-   digests, independent review SHA, authoritative full gate, CI evidence, and
-   Sprint 4 elapsed, blocked, and rework time.
+   digests, observed repository and CI results, and Sprint 4 elapsed, blocked,
+   and rework time.
 
-## Acceptance criteria and implementation handoff
+## Acceptance criteria and implementation boundary
 
 The slice is accepted only when:
 
@@ -455,11 +455,10 @@ The slice is accepted only when:
 - future-price mutation and deterministic-rerun tests pass;
 - exact 2% is not counted as greater than 2%;
 - no prediction, accuracy, strategy acceptance, profitability, or
-  recommendation claim appears in code, JSON, documentation, PR evidence, or
-  release wording; and
-- independent exact-SHA review and the unchanged authoritative full gate pass.
+  recommendation claim appears in code, JSON, documentation, or published
+  product wording.
 
-The implementation handoff is intentionally narrow: build the pure versioned
+The implementation boundary is intentionally narrow: build the pure versioned
 contracts first, adapt existing session-aware market-data facts second, and add
 one census command last. Do not download missing corporate-action data inside
 the command, weaken historical cutoffs, expose raw candles to an AI consumer, or

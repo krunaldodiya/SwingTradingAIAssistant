@@ -64,11 +64,11 @@ manifest.
 ## Bounds and acceptance
 
 One request, 1 MiB response, 1,000 events, 64-level JSON nesting, one immutable
-object, and a targeted two-row catalog query are hard bounds. Strict TDD proves
-Upstox parsing, token non-leakage, split/bonus/dividend/rights validation,
+object, and a targeted two-row catalog query are hard bounds. Executable checks
+cover Upstox parsing, token non-leakage, split/bonus/dividend/rights validation,
 cutoff no-look-ahead, date-only announcement visibility at the inclusive
 next-day 00:00 Asia/Kolkata boundary (with the prior microsecond hidden),
 independent retrieval cutoffs, retained revisions, missing/stale/ambiguous/corrupt
 states, raw immutability, unsupported adjustment, v4-to-v5 migration, and
-deterministic replay. The unchanged full gate and an independent schema/contract
-review are required before publication.
+deterministic replay. Publication is blocked unless the exact candidate
+evidences every behavior above and preserves schema compatibility.

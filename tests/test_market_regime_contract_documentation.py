@@ -224,7 +224,7 @@ def test_reason_order_bounds_and_readiness_are_explicit() -> None:
     ):
         assert required in bounds
 
-    handoff = " ".join(_section("Versioning and implementation handoff").split())
+    handoff = " ".join(_section("Versioning and implementation boundary").split())
     for required in (
         "31 sessions",
         "2026-07-01",
@@ -413,7 +413,7 @@ def test_stop_conditions_order_and_owner_gates_are_explicit() -> None:
     order = _validation_section("Implementation order and owner gates")
     expected = (
         "1. Freeze this protocol",
-        "2. Implement the pure contracts and Layer A tests",
+        "2. Implement the pure contracts and Layer A executable cases",
         "3. Obtain owner approval of the source policy",
         "4. Obtain separate owner approval for acquisition",
         "5. Acquire and seal",

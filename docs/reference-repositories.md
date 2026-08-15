@@ -16,11 +16,11 @@ references only—not dependencies, specifications, or sources to copy wholesale
   investing scope.
 - Do not modify a reference repository while working in this repository.
 
-## Local references
+## Named reference repositories
 
 ### `angel-one-portfolio-management`
 
-- Local: `/Users/krunaldodiya/WorkSpace/Code/angel-one-portfolio-management`
+- Logical checkout: sibling repository named `angel-one-portfolio-management`.
 - GitHub: <https://github.com/krunaldodiya/angel-one-portfolio-management>
 - Potential value: Angel One integration patterns, portfolio inspection, Greeks,
   payoff analysis, and position-management experiments.
@@ -29,7 +29,7 @@ references only—not dependencies, specifications, or sources to copy wholesale
 
 ### `swing_trading_scanner`
 
-- Local: `/Users/krunaldodiya/WorkSpace/Code/swing_trading_scanner`
+- Logical checkout: sibling repository named `swing_trading_scanner`.
 - GitHub: <https://github.com/krunaldodiya/swing_trading_scanner>
 - Potential value: an earlier equity-universe scanner, stock-list handling, and
   lessons about generating swing candidates.
@@ -38,7 +38,7 @@ references only—not dependencies, specifications, or sources to copy wholesale
 
 ### `genie-market-intelligence`
 
-- Local: `/Users/krunaldodiya/WorkSpace/Code/genie-market-intelligence`
+- Logical checkout: sibling repository named `genie-market-intelligence`.
 - GitHub: <https://github.com/krunaldodiya/genie-market-intelligence>
 - Potential value: sector analysis, swing scans, price action, ICT/SMC, market
   context, data producers, operational monitoring, and research organization.
@@ -48,7 +48,7 @@ references only—not dependencies, specifications, or sources to copy wholesale
 
 ### `fundamental-analysis`
 
-- Local: `/Users/krunaldodiya/WorkSpace/Code/fundamental-analysis`
+- Logical checkout: sibling repository named `fundamental-analysis`.
 - GitHub: <https://github.com/krunaldodiya/fundamental-analysis>
 - Potential value: earlier Indian-market swing, price-action, ICT/SMC, sector, and
   investment-research implementations.
@@ -60,7 +60,7 @@ references only—not dependencies, specifications, or sources to copy wholesale
 
 ### `smc_analysis`
 
-- Local: `/Users/krunaldodiya/WorkSpace/Code/smc_analysis`
+- Logical checkout: sibling repository named `smc_analysis`.
 - GitHub: <https://github.com/krunaldodiya/smc_analysis>
 - Potential value: deterministic swing detection, HH/HL/LH/LL-derived structure,
   BOS/CHoCH, order blocks, fair-value gaps, liquidity pools and sweeps,

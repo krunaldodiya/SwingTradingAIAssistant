@@ -13,10 +13,10 @@ research. The specification must define the first locked research module without
 claiming an observed regime, implementing a classifier, admitting a new market
 source, or weakening missing-evidence outcomes.
 
-The usable increment is an independently reviewed contract and validation handoff
-that makes the following implementation sprint unambiguous. Sprint 6 is complete
-when the specification can be implemented without inventing labels, formulas,
-cutoffs, evidence semantics, or validation rules.
+The usable increment is a validated contract and protocol that makes the
+following implementation scope unambiguous. Sprint 6 is complete when the
+specification can be implemented without inventing labels, formulas, cutoffs,
+evidence semantics, or validation rules.
 
 ## Proposed-boundary evaluation
 
@@ -24,7 +24,7 @@ cutoffs, evidence semantics, or validation rules.
 - Scope fit: accepted candidate for locked Module 1 and Roadmap Phase 2; Nifty 50 equities, end-of-day facts, and insufficient evidence only.
 - Material risk: premature labels, an opaque indicator proxy, current-constituent backdating, raw corporate-action distortion, or the short retained sample could manufacture confidence.
 - Smallest alternative: freeze purpose, labels, typed contracts, deterministic baseline candidates, and a falsifiable data/validation protocol without classifier code.
-- Decision: **proposed for specification-only Sprint 6; implementation and market-effectiveness claims remain deferred pending owner approval and the frozen handoff.**
+- Decision: **proposed for specification-only Sprint 6; implementation and market-effectiveness claims remain deferred pending owner approval and the accepted contract.**
 
 ## Product decisions proposed for owner approval
 
@@ -66,12 +66,10 @@ The Sprint 6 contract must complete the nine fields required by the architecture
 7. **Validation** — synthetic contract/property/metamorphic tests plus a
    preregistered future full-history, in-sample/out-of-sample and walk-forward
    protocol. Fixtures may prove mechanics only.
-8. **Acceptance** — independent exact-SHA contract review, no-look-ahead and
-   survivorship attacks, repository documentation tests, full quality gate,
-   hosted CI, and explicit residual blockers.
-9. **Implementation handoff** — package/application boundary, dependency order,
-   typed fixtures, smallest coding slices, and a stop condition if evidence
-   admission cannot be satisfied.
+8. **Acceptance evidence** — exact-version contract evidence, no-look-ahead and
+   survivorship attacks, and explicit residual blockers.
+9. **Implementation boundary** — package/application ownership, typed fixtures,
+   and a stop condition if evidence admission cannot be satisfied.
 
 ## Candidate baseline to evaluate, not an approved rule
 
@@ -109,43 +107,34 @@ regime taxonomy, accuracy, stability, prediction, strategy, profitability, or
 decision-support claim. Synthetic fixtures can validate a future contract but
 cannot cure these evidence blockers.
 
-## Delivery sequence and WIP
+## Historical issue sequence
 
-Exactly one issue may be `In Progress`. All issues are forecast at one point and
-no more than one working day. No stretch work is committed.
+The sprint recorded four ordered issues and no stretch work.
 
 | Order | Planned issue | Outcome | Exit evidence |
 | --- | --- | --- | --- |
 | 1 | ARK-165 — Approve Market Regime v1 scope and input policy | Freeze purpose, proposed labels, daily cutoff, factor/source evaluations, insufficiency and non-claims | Owner-approved decision record; no code |
-| 2 | ARK-166 — Freeze `nifty50-market-regime@v1` fact contract | Complete request/output/provenance/identity/rule/edge-case contract and executable documentation tests | Independent contract review candidate |
-| 3 | ARK-167 — Preregister validation and data-readiness protocol | Freeze synthetic tests, bias attacks, future historical partitions/metrics, data gate, and implementation handoff | Reproducible validation matrix; blockers explicit |
-| 4 | ARK-168 — Publish the reviewed Sprint 6 specification | Exact-SHA independent approval, full gate, PR, hosted CI, merge and sprint actuals | One merged specification increment |
+| 2 | ARK-166 — Freeze `nifty50-market-regime@v1` fact contract | Complete request/output/provenance/identity/rule/edge-case contract and executable documentation tests | Complete contract candidate |
+| 3 | ARK-167 — Preregister validation and data-readiness protocol | Freeze synthetic tests, bias attacks, future historical partitions/metrics, data gate, and implementation boundary | Reproducible validation matrix; blockers explicit |
+| 4 | ARK-168 — Publish the Sprint 6 specification | Record exact revision, repository and hosted evidence, PR, merge, and sprint actuals | One merged specification increment |
 
-If Issue 1 cannot freeze a truthful input/source policy, the sprint stops with a
-reviewed blocked decision package. It must not substitute conventional indicators,
-a new data source, a smaller denominator, or invented evidence.
+The recorded stop condition required truthful input/source policy. If that could
+not be frozen, the sprint could not substitute conventional indicators, a new
+data source, a smaller denominator, or invented evidence.
 
 ## Milestones
 
 - **M7 — Market Regime scope and frozen fact contract:** Issues 1–2; target
   2026-08-17.
-- **M8 — Validated implementation handoff:** Issues 3–4; target 2026-08-20,
+- **M8 — Validated contract and protocol:** Issues 3–4; target 2026-08-20,
   confidence date 2026-08-21.
 
-## Validation and release plan
+## Validation attack surface
 
-During specification work, use focused documentation/contract tests without
-coverage for red-green feedback. Before merge, run the unchanged authoritative
-five-tool gate: Ruff format, Ruff lint, strict Pyright, Vulture at 80%, and the
-configured full pytest profile. Because this is a published market-logic
-contract, require independent exact-SHA adversarial review before the PR is
-merged. GitHub owns hosted CI/review/merge evidence; Linear owns issue/milestone
-state and actuals.
-
-The review must attack look-ahead, current-constituent backdating, 49-name
-success, schedule inference, future revisions, same-close knowledge, raw-price
-comparability, indicator smuggling, caller-authored labels, mutable/free-form
-public diagnostics, and unsupported performance claims.
+The prescribed adversarial cases cover look-ahead, current-constituent
+backdating, 49-name success, schedule inference, future revisions, same-close
+knowledge, raw-price comparability, indicator smuggling, caller-authored labels,
+mutable or free-form public diagnostics, and unsupported performance claims.
 
 ## Explicit exclusions
 
@@ -181,17 +170,17 @@ implementation, new sources, evidence acquisition, portfolios, or orders.
 - Sum of Linear issue elapsed intervals: `01:01:15.065`.
 - Hosted Quality/build: passed in `00:07:28`; GitGuardian: passed in
   `00:01:26`.
-- Final local gate: 2,130 tests, 92.28% branch coverage, Ruff format/lint,
+- Final local checks: 2,130 tests, 92.28% branch coverage, Ruff format/lint,
   strict Pyright, Vulture at 80%, build, isolated Python 3.11 wheel install,
   and public CLI smoke passed.
 
 Rework was concentrated in ARK-166 and was scientifically material rather than
-cosmetic: independent review caught an unreachable close-time evidence cutoff,
-an unrepresentable insufficiency path, opaque evidence semantics, ambiguous
-canonicalization, incomplete cross-bindings, and duplicate schema definitions.
-All were corrected before approval. ARK-167 review then separated external
-future-data mutation from injected late evidence, bounded Decimal
-metamorphisms, and froze exact cutoff boundary tests.
+cosmetic: independent verification found an unreachable close-time evidence
+cutoff, an unrepresentable insufficiency path, opaque evidence semantics,
+ambiguous canonicalization, incomplete cross-bindings, and duplicate schema
+definitions. All were corrected before approval. ARK-167 validation then
+separated external future-data mutation from injected late evidence, bounded
+Decimal metamorphisms, and froze exact cutoff boundary tests.
 
 No provider/API call, credential access, download, market-data-root write,
 portfolio/account access, order operation, classifier implementation, runtime

@@ -42,8 +42,8 @@ is implied or scheduled by this decision.
 
 A future instrument module needs a new approved scope decision, data model,
 market microstructure and risk specification, point-in-time evidence, validation
-plan, and atomic implementation work. Up-front abstractions that serve only a
-hypothetical future instrument are rejected.
+plan, and separately authorized implementation. Up-front abstractions that serve
+only a hypothetical future instrument are rejected.
 
 ### Risk and capital preservation before opportunity count
 
@@ -180,11 +180,12 @@ availability.
 
 1. Complete and package the equity market-data foundation before implementing
    research modules.
-2. Specify and validate one locked-pipeline module at a time.
+2. Require a separately accepted and validated contract for each research
+   module.
 3. Keep shared contracts extensible but add only abstractions exercised by the
    current Nifty 50 equity implementation.
 4. Treat risk policy, point-in-time integrity, and reproducible validation as
-   release gates, not later enhancements.
+   release conditions, not later enhancements.
 5. Update this note and the authoritative architecture whenever an open decision
    becomes accepted, rejected, or superseded.
 

@@ -21,7 +21,7 @@ SOURCE = ROOT / "src" / "swing_trading_ai_assistant" / "market_data"
 def test_release_record_crosswalks_every_plan_one_acceptance_row() -> None:
     sprint = SPRINT.read_text()
     section = sprint.split("## Downloader-v1 acceptance crosswalk", maxsplit=1)[1]
-    section = section.split("## Publication gates", maxsplit=1)[0]
+    section = section.split("## Publication evidence", maxsplit=1)[0]
     identifiers = re.findall(r"(?m)^\| `(A\d{2})` \|", section)
 
     assert identifiers == [f"A{index:02d}" for index in range(1, 14)]
@@ -43,11 +43,11 @@ def test_release_record_keeps_publication_proof_separate_from_functional_proof()
     None
 ):
     sprint = SPRINT.read_text()
-    gates = sprint.split("## Publication gates", maxsplit=1)[1]
+    gates = sprint.split("## Publication evidence", maxsplit=1)[1]
 
     assert "CLOSED — DOWNLOADER V1 RELEASE GATE PASSED" in sprint
     assert "Independent exact-candidate review" in gates
-    assert "Fresh five-tool full gate" in gates
+    assert "Fresh five-tool repository checks" in gates
     assert "Clean wheel installation" in gates
     assert "Hosted pull-request CI" in gates
     assert "Final merge revision" in gates

@@ -93,11 +93,10 @@ the measured RELIANCE vertical-slice baseline rather than guessed in advance.
 
 ## Historical next step
 
-Status: **completed and superseded by the current Linear execution order**
+Status: **completed**
 
 The credential-safe RELIANCE capability probe was the next step at the time of
-this note. It is complete; current work must be selected from Linear and the
-active sprint rather than this historical section.
+this note. It is complete, and this section records historical work only.
 
 ## Milestone 0 implementation record
 
@@ -215,8 +214,8 @@ out-of-band developer convenience and is not read by production code.
 The first urllib request returned HTTP 403 even though the same token, URL, and
 headers succeeded through another HTTP client. A controlled live comparison
 isolated the difference to Python urllib's default user agent. ARK-30 added a
-stable application user agent at the shared transport boundary under TDD; the
-subsequent production probe returned HTTP 200 with a valid schema.
+stable application user agent at the shared transport boundary; the subsequent
+production probe returned HTTP 200 with a valid schema.
 
 Official references:
 

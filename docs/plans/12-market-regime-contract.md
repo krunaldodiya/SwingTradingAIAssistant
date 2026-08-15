@@ -6,9 +6,9 @@ Contract version: `nifty50-market-regime@v1`
 
 This document extends, and does not replace, ARK-165. It freezes the Market
 Regime V1 rule, evidence boundary, typed facts, deterministic failure behavior,
-identities, and implementation handoff. It approves no source adapter,
+identities, and implementation boundary. It approves no source adapter,
 classifier implementation, provider call, acquisition, CLI, API, MCP surface,
-or runtime. Implementation remains a later strict-TDD task.
+or runtime. Implementation requires a later separately authorized change.
 
 ## Boundary evaluation and rule decision
 
@@ -1157,7 +1157,7 @@ query`. Market Regime adds no mode or fields to it. Any future CLI/API/MCP
 wrapper uses the same domain request/report and a separate renderer; it cannot
 recompute facts or expose private close inputs.
 
-## Versioning and implementation handoff
+## Versioning and implementation boundary
 
 A change to endpoint distance, session selection, market/evidence boundary,
 `CLOSE`, decimal semantics, equality, comparability, denominator, threshold,

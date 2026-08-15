@@ -87,10 +87,6 @@ report zero provider attempts.
   stable ISIN order, and bounded aggregate output.
 - One/many coverage and query prove zero provider attempts and one retained
   point-in-time universe boundary.
-- Fast gates pass during work; before merge Ruff format/lint, strict Pyright on
-  production, Vulture, and pytest with branch coverage all pass unchanged.
-- Changed production lines and branches meet the workflow coverage floor and
-  project-wide branch coverage does not regress.
 
 ## Residual boundary
 

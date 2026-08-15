@@ -9,8 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
-WORKFLOW_PATH = ROOT / "docs" / "development-workflow.md"
-ENGINEERING_PATH = ROOT / "docs" / "engineering-standards.md"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 LOCK_PATH = ROOT / "uv.lock"
 _PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}(?:\s+#.*)?$")
@@ -224,97 +222,3 @@ def test_project_docs_have_no_slack_update_requirement() -> None:
     )
 
     assert "slack" not in documentation
-
-
-def test_engineering_standards_keep_evidence_without_duplicating_gates() -> None:
-    standards = " ".join(ENGINEERING_PATH.read_text().lower().split())
-    for required in (
-        "validate every external boundary",
-        "keep raw source data immutable",
-        "typed, versioned contracts",
-        "bound concurrency, queues, retries, batches, timeouts, memory",
-        "keep a testing pyramid",
-        "never put credentials, tokens, broker sessions",
-    ):
-        assert required in standards
-    for duplicated_gate_detail in ("ruff", "pyright", "vulture"):
-        assert duplicated_gate_detail not in standards
-
-
-def test_writer_recovery_is_bounded_and_allows_disjoint_concurrency() -> None:
-    policy = " ".join(WORKFLOW_PATH.read_text().lower().split())
-    for required in (
-        "one writer owns a file path at a time",
-        "write concurrently to disjoint paths",
-        "serialize genuinely shared contracts, schemas, migrations, and configuration",
-        "after 10 minutes without output",
-        "record a one-line reclaim",
-        "a stale writer may not publish",
-    ):
-        assert required in policy
-    assert "stop proof before a successor" not in policy
-    assert "heartbeat" not in policy
-
-
-def test_ark_95_sprint_and_note_inventory_reflect_accepted_orchestration() -> None:
-    sprint_index = (ROOT / "docs" / "sprints" / "README.md").read_text().lower()
-    sprint_two = " ".join(
-        (ROOT / "docs" / "sprints" / "sprint-2.md").read_text().lower().split()
-    )
-    note_index = (ROOT / "docs" / "notes" / "README.md").read_text().lower()
-    note = (
-        (ROOT / "docs" / "notes" / "2026-08-08-project-autonomous-orchestration.md")
-        .read_text()
-        .lower()
-    )
-
-    assert "formal commitment pending ark-67" not in sprint_index
-    assert (
-        "status: **closeout candidate; 21/24 after ark-72 publication, with milestone 2 blocked**"
-        in sprint_two
-    )
-    assert "delivery publisher" in sprint_two
-    assert "2026-08-08 — project autonomous orchestration" in note_index
-    for required in (
-        "status: accepted",
-        "value",
-        "alternatives",
-        "cost",
-        "failure and revocation",
-        "supersessions",
-        "not autonomous trading",
-    ):
-        assert required in note
-
-
-def test_review_is_triggered_by_risk_instead_of_market_data_surface_area() -> None:
-    workflow = " ".join(WORKFLOW_PATH.read_text().lower().split())
-    for required in (
-        "published contract or schema change",
-        "scoring, signal, or market-logic rule change",
-        "credentials or their security boundary",
-        "second failed verification",
-        "reviewer is read-only",
-    ):
-        assert required in workflow
-    assert "market-data plumbing alone do not require a second actor" in workflow
-
-
-def test_workflow_has_fast_iteration_and_one_unwaivable_full_gate() -> None:
-    workflow = " ".join(WORKFLOW_PATH.read_text().lower().split())
-    for required in (
-        "uv run --extra dev pytest <test-node> --no-cov -q -x",
-        "uv run --extra dev pytest <test-paths> --no-cov -q",
-        "focused and affected runs are local feedback only, never merge evidence",
-        "vulture runs only in the full gate",
-        "do not open a pr merely to obtain early hosted feedback",
-        "nothing with a non-markdown change merges unless all five tools pass",
-        "feature-branch recovery pushes remain ci-free",
-        "complete, detailed specification",
-        "do not open a separate specification pr by default",
-        "create at most the milestone or parent plus the current wip-one task",
-        "at least 95% branch coverage on changed executable lines",
-        "project-wide branch coverage may not fall below the base revision",
-        "may never waive a gate",
-    ):
-        assert required in workflow

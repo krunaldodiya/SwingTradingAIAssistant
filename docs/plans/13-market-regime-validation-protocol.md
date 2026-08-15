@@ -340,7 +340,7 @@ accuracy, prediction, or profitability conclusion.
 
 1. Freeze this protocol and its section-scoped executable documentation tests;
    this ARK-167 slice stops there.
-2. Implement the pure contracts and Layer A tests under strict TDD in a later
+2. Implement the pure contracts and Layer A executable cases in a later
    authorized slice; no source, network, retained data, or result is needed.
 3. Obtain owner approval of the source policy, including each authoritative
    source, historical PIT capability, correction/revision behavior, licence,
@@ -364,10 +364,6 @@ accuracy, prediction, or profitability conclusion.
 
 Source policy and acquisition are explicit owner gates because they can change
 research validity, licensing exposure, cost, and the admitted trust boundary.
-Ordinary pure implementation details below the frozen contract require no owner
-ceremony. Independent exact-SHA review is required for the future published
-market contract implementation or any market-logic change, followed by the
-unchanged authoritative repository gate.
 
 ## Acceptance of this preregistration slice
 

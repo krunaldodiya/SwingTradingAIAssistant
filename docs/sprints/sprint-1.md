@@ -4,19 +4,16 @@
 
 Establish the smallest trustworthy persistent-data slice: plan RELIANCE
 instrument-month work, skip already verified coverage without an Upstox candle
-request, and define the canonical Parquet/DuckDB persistence boundary under
-strict TDD.
+request, and define the canonical Parquet/DuckDB persistence boundary.
 
-## Timebox and WIP
+## Historical cadence and scope
 
 - Initial cadence: one week.
-- Implementation WIP: one executable story/task.
-- Tracking parent: ARK-10, which is not implemented directly.
+- Tracking parent: ARK-10, which was not implemented directly.
 
-## Committed scope
+## Included scope
 
-Sprint 1 is limited to atomic children of ARK-10 that fit the timebox after
-decomposition and meet the Definition of Ready. The ordered delivery path is:
+Sprint 1 included the following ordered ARK-10 children:
 
 1. **ARK-31:** freeze the versioned canonical candle schema and persistence
    boundary, independently of Arrow/Parquet;
@@ -32,12 +29,10 @@ decomposition and meet the Definition of Ready. The ordered delivery path is:
    metadata in DuckDB; and
 8. prove interruption recovery and a zero-candle-request repeated run.
 
-Only Ready children explicitly labeled `Sprint 1` are sprint commitments. Later
-items remain backlog rather than silently expanding the sprint. This is an
-explicit scope exchange: ARK-42 and ARK-43 are prerequisite contract work for
-the persistence path, so they precede the physical reconciliation and write
-steps without changing the sprint goal. ARK-44 is canceled and superseded by
-the equity-only downloader-v1 boundary.
+The recorded Sprint 1 set excluded later backlog items. ARK-42 and ARK-43 were
+prerequisite contract work for the persistence path, so they preceded physical
+reconciliation and write steps without changing the sprint goal. ARK-44 was
+canceled and superseded by the equity-only downloader-v1 boundary.
 
 ## Accepted behavioral rules
 
@@ -83,13 +78,12 @@ the equity-only downloader-v1 boundary.
   item and retained only as a reference audit.
 - Market-regime, indicator, strategy, backtesting, and agent-facing features.
 
-## Definition of Done
+## Historical acceptance evidence
 
-Each executable child requires red-green-refactor evidence, the deterministic
-quality gate, independent verification, manifest/provenance evidence, bounded
-resource behavior, and a concise Linear handoff. Storage, crash recovery,
-credentials, concurrency, and provider retry changes additionally require Sol
-high-risk review.
+Executable children closed with recorded implementation and verification
+evidence, manifest/provenance evidence, bounded resource behavior, and Linear
+disposition. Storage, crash recovery, credentials, concurrency, and provider
+retry changes also received additional verification.
 
 ## Final status
 
@@ -118,7 +112,7 @@ Closure evidence:
   Vulture, and **949 tests with 87.79% branch coverage**.
 - The required GitHub **Quality and build** and **GitGuardian Security Checks**
   completed successfully before merge.
-- The review/demo and retrospective are complete.
+- The demo and retrospective are complete.
 
 Scope disposition at close:
 
@@ -136,8 +130,8 @@ Scope disposition at close:
 
 What worked:
 
-- atomic TDD delivery, one repository writer, deterministic quality gates, and
-  independent review kept the storage and recovery contracts testable;
+- focused implementation and independent verification kept the storage and
+  recovery contracts testable;
 - immutable monthly evidence and request-minimal reconciliation protected the
   Upstox request budget and made interruption recovery explicit; and
 - final integration preserved the equity-only architecture and restored the
@@ -152,13 +146,11 @@ What did not work:
 - PR 24 was opened against the already-merged integration branch instead of
   current `main`, creating an avoidable branch-base reconciliation.
 
-Corrective actions:
+Historical follow-up:
 
-- close every sprint with one source-of-truth update containing the denominator,
-  merge commit, exact final gate, checks, deferred/canceled work, and
-  retrospective;
-- use event-first handoffs and durable graph-lite checkpoints, with heartbeat
-  only as recovery, while retaining the same one-writer and review rules; and
-- create post-sprint work from current `origin/main` and verify the PR base
-  before requesting review. Graph-lite remains subject to a measured future
-  pilot; this retrospective does not claim that the pilot is already proven.
+- the closure record was reconciled with its denominator, merge commit, exact
+  final checks, deferred and canceled work, and retrospective;
+- task-state reporting and durable checkpointing were identified as follow-up
+  needs; and
+- later documentation work used current `origin/main`. A proposed checkpoint
+  experiment remained unproven at this retrospective.

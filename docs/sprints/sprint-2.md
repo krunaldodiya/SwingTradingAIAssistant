@@ -3,11 +3,11 @@
 Status: **closeout candidate; 21/24 after ARK-72 publication, with Milestone 2 blocked**
 
 The owner-approved carryover route closes the Sprint 2 timebox without
-weakening Plan 03. See the
-[Sprint 2 closeout and Milestone 2 disposition](sprint-2-closeout.md) for the
-mandatory crosswalk, three incomplete carryover tasks, exact blocker evidence,
-and retrospective. Until that exact closeout candidate is reviewed, merged,
-and ARK-72 is synchronized to Done, the recorded result remains 20/24.
+weakening Plan 03. The
+[Sprint 2 closeout and Milestone 2 disposition](sprint-2-closeout.md) records
+the mandatory crosswalk, three incomplete carryover tasks, exact blocker
+evidence, and retrospective. Before that closeout was published, the recorded
+result remained 20/24.
 
 ## Sprint goal
 
@@ -15,37 +15,27 @@ Prove that the Sprint 1 RELIANCE one-minute pipeline works correctly on
 representative real data, recovers safely, remains request-minimal, and has
 reproducible performance and resource baselines.
 
-The approved direction is to close Milestone 2 evidence under ARK-11 before any
+The approved direction was to close Milestone 2 evidence under ARK-11 before
 multi-instrument, package/release, higher-timeframe, or research-module work.
-ARK-67 must first freeze the operational specification; only then can Ready
-implementation tasks be committed to the one-week Sprint 2 timebox.
+ARK-67 froze the operational specification before Sprint 2 work was selected.
 
-## Timebox, hierarchy, and WIP
+## Historical timebox and tracking
 
-- Execution timebox: **2026-08-08 through 2026-08-14** (one week). ARK-67 is
-  complete and every selected child has the accepted Plan 03 revision,
-  completion predicate, stop condition, dependency links, iteration budget,
-  and high-risk review path recorded in Linear.
-- Tracking Saga: **ARK-11**, which is not implemented directly.
-- Tracking Epic: **ARK-66**, which is not implemented directly.
-- Implementation WIP: one executable Story/Task.
-- Frozen denominator: **24 executable Tasks**. ARK-66, ARK-68, and ARK-71 are
-  tracking-only Epics/Sagas and are excluded. ARK-67 is completed pre-sprint
-  specification work and is also excluded.
-- The current Linear team exposes `Todo` rather than a literal `Ready` status.
-  For this sprint, `Todo` is the operational representation of the workflow's
-  `Ready` state and still requires the complete Definition of Ready.
+- Execution timebox: **2026-08-08 through 2026-08-14** (one week).
+- Tracking Saga: **ARK-11**, which was not implemented directly.
+- Tracking Epic: **ARK-66**, which was not implemented directly.
+- Frozen denominator: **24 executable Tasks**. ARK-66, ARK-68, and ARK-71 were
+  tracking-only Epics/Sagas and were excluded. ARK-67 was completed pre-sprint
+  specification work and was also excluded.
 
 ## Deadline accountability
 
 This is a tracking-only accountability record. It preserves the historical
-Sprint 2 timebox and does not change the committed work, its order, its WIP
-limit, or any Definition-of-Done requirement. It was deliberately pending until
-the cutoff so it did not precompute future completion or blocker evidence. The
-captured cutoff state below is not Sprint closure.
-Deadline expiry never marks work Done, closes the sprint, or waives any gate;
-committed work continues after the cutoff until its normal completion evidence
-exists.
+Sprint 2 timebox and does not change the committed work or its completion
+evidence. The captured cutoff state below is not Sprint closure.
+Deadline expiry never marks work Done, closes the sprint, or waives any
+acceptance condition; committed work continues after the cutoff until its
+normal completion evidence exists.
 
 ```json
 {
@@ -164,7 +154,7 @@ exists.
 
 The [structured time-accountability ledger](sprint-2-time-accountability-ledger.json)
 standardizes the prospective range, raw lifecycle/publication timestamps,
-derived elapsed fields, and separately measured workflow waits and gates for
+derived elapsed fields, and separately measured execution waits and checks for
 the frozen 24-item baseline plus ARK-95 through ARK-110 additions. Its current
 snapshot is **post-cutoff and incomplete**: Linear stateHistory yields a
 disjoint 20 Done / 4 unfinished frozen-baseline partition at
@@ -219,8 +209,8 @@ Their real children and the four retained atomic Tasks form this denominator:
 | ARK-69 | one owner-authorized closed-month live gate |
 | ARK-72 | exact-candidate Milestone 2 acceptance crosswalk |
 
-All 24 carry the `Sprint 2` and `Task` labels and use Linear `Todo` as Ready.
-Explicit blocker links are authoritative. The default single-WIP order is:
+All 24 carried the `Sprint 2` and `Task` labels. The recorded dependency order
+was:
 
 ```text
 74 -> 82 -> 70 -> 85 -> 90 -> 73 -> 75 -> 76 -> 77 -> 78 -> 80 -> 84
@@ -234,26 +224,12 @@ gate; the acceptance crosswalk remains last. A blocked live gate records the
 frozen failure and leaves the sprint incomplete; it does not authorize a retry
 or denominator change.
 
-## Standing execution authority
+## Owner-controlled product boundaries
 
-Committing a bounded Ready child inside an accepted finite Goal grants the root
-authority to route its safe normal lifecycle, but not to perform a mutating or
-blocking operation. Terra implementer is the sole content writer: strict TDD,
-reviewer-directed in-scope repairs within the recorded budget, deterministic
-gates, and the exact candidate commit. Delivery publisher is the sole external
-mutation actor: a bounded root handoff and one active mutator epoch authorize
-only scoped Linear lifecycle/checkpoint transitions before implementation or
-review. Worktree publication, push, PR, CI, merge, hosted verification, final
-closure, and final Linear synchronization require the exact independently
-approved SHA. These safe same-Goal steps do not require repeated owner approval.
-
-Owner input remains mandatory only for a scope, architecture, trading-rule, or
-product decision; the ARK-69 live provider/credential gate; destructive or
-non-recoverable shared-data action; a material security/licensing exception; or
-the mandatory circuit breaker after two materially identical failures. An owner
-interrupt requires quiescing and stop proof before another epoch starts.
-Ordinary review findings inside an approved child return automatically to the
-same implementer while its budget remains.
+Owner input remained mandatory for scope, architecture, trading-rule, or product
+decisions; the ARK-69 live provider/credential gate; destructive or
+non-recoverable shared-data action; and material security or licensing
+exceptions. This historical sprint record does not grant execution authority.
 
 ## Milestone 2 acceptance gate
 
@@ -287,12 +263,9 @@ Milestone 2 is accepted only when:
 - regression thresholds are evidence-based and limitations are explicit;
 - credentials, private responses, generated datasets, and machine-specific
   storage paths are absent from Git and sanitized evidence;
-- the complete deterministic quality gate and required independent review pass;
-  and
-- the pre-merge ARK-72 handoff records the exact candidate, selected denominator,
-  checks, review, carryover, and retrospective inputs; delivery publisher records
-  hosted merge evidence and performs final Linear synchronization after
-  publication. Root receives and reports that evidence only.
+- the candidate's recorded verification and review evidence passes; and
+- ARK-72 records the exact candidate, selected denominator, checks, carryover,
+  hosted merge evidence, publication result, and final sprint disposition.
 
 ## Explicit exclusions
 
@@ -323,21 +296,17 @@ record.
   harness behavior only; stable Python/CLI contracts remain owned by ARK-59.
 - **Premature scaling:** no additional equity or worker pool enters this sprint.
 
-## Workflow pilot
+## Historical delivery observation
 
-ARK-67 completed the first graph-lite workflow pilot. Exact-revision
-checkpoints, the isolated writer worktree, deterministic gates, and independent
-review preserved state correctly through repair rounds. ARK-95 supersedes its
-root-as-publisher assumption: the root now remains responsive and non-mutating,
-Terra implementer creates the candidate, and delivery publisher alone performs
-authorized scoped publication after review. The pilot's owner-wait finding is
-addressed by one finite-Goal authority envelope, not by autonomous execution.
+ARK-67 recorded exact-revision checkpoints and review results that preserved
+state through repair rounds. ARK-95 later recorded a separate scoped-publication
+responsibility. The historical record observed owner-wait time and did not claim
+autonomous product authority.
 
-Continue recording observable elapsed time, handoff delay, agent turns,
-retries, repair rounds, repeated gates, missed handoffs, owner-wait time, final
-acceptance, and visible subscription usage. Do not infer unavailable token or
-cache telemetry. Sprint closeout decides whether this revised graph-lite
-control is retained, revised again, or superseded.
+The associated ledger retained observable elapsed time, transition delay,
+retries, repair rounds, repeated checks, missed transitions, owner-wait time,
+acceptance, and visible subscription usage. Unavailable token and cache telemetry
+remained `UNSET`.
 
 ## Backlog reconciliation at planning
 
@@ -347,7 +316,6 @@ control is retained, revised again, or superseded.
 - ARK-21 and ARK-22 are canceled because implementing derivative adapters and
   identities is outside the approved equity-only architecture. This does not
   remove the frozen shared candle schema's nullable contract-identity fields.
-- ARK-25 is canceled as superseded by the merged engineering standards and
-  development workflow.
+- ARK-25 is canceled because its concern was resolved outside product scope.
 - ARK-19, ARK-20, and ARK-23 remain uncommitted Backlog hypotheses and are not
   Sprint 2 scope.

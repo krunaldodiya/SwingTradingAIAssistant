@@ -33,7 +33,7 @@ READINESS_CONTRACT_VERSION_V1: Final = "forward-pit-evidence-readiness@v1"
 SOURCE_POLICY_VERSION_V1: Final = "prospective-pit-evidence-source-policy@v1"
 # Both labels are defined by the exact canonical Plan 11 repository bytes.
 _PLAN11_CONTRACT_SHA256: Final = (
-    "4430c270c236660e04c30fa9cccd053c742eeb49b0f6c70724b93218121ec6ae"
+    "da933d1d35a068dafefc7d8f9cf38fc84eb13dc3efd75a95fa6a20b2c7648473"
 )
 READINESS_CONTRACT_IDENTITY_SHA256_V1: Final = _PLAN11_CONTRACT_SHA256
 SOURCE_POLICY_IDENTITY_SHA256_V1: Final = _PLAN11_CONTRACT_SHA256

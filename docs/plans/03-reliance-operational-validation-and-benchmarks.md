@@ -1,10 +1,7 @@
 # Plan 03: RELIANCE operational validation and benchmark contract
 
-Status: **Conditional activation — this document is an ARK-67 high-risk review
-candidate now.  It is accepted and active only if this exact reviewed candidate
-passes the required Sol review, is merged, and ARK-67 is closed; no later
-status-only edit may substitute for those conditions.  No implementation child
-is thereby a Sprint 2 commitment.**
+Status: **Accepted operational contract for ARK-67; no implementation child is
+thereby a Sprint 2 commitment.**
 Scope: ARK-11 Milestone 2 operational proof for one closed **RELIANCE** NSE
 equity calendar month at one-minute frequency
 Depends on: [Plan 01](01-data-foundation-and-upstox-ingestion.md),
@@ -299,17 +296,17 @@ in Plan 02 remains authoritative for all cancellation precedence/counts.
 
 ## 4. Authenticated live operational gate
 
-This is a manual, owner-authorized gate after deterministic evidence and the
-full quality/review prerequisites pass.  It is not a test retry loop.  Failure,
-insufficiency, missing authority, or unavailable credential leaves ARK-11 and
-Sprint 2 open; it never converts to a simulated pass.
+This is a manual, owner-authorized gate after deterministic evidence for the
+exact candidate is recorded. It is not a retry loop. Failure, insufficiency,
+missing authority, or unavailable credentials leave ARK-11 and Sprint 2 open;
+the outcome never converts to a simulated pass.
 
 ### 4.1 Preconditions and exact attempt shape
 
 Before opening a provider session, the operator records the exact candidate
-revision, quality-gate evidence, current owner authorization, selected closed
-month, `schedule-digest-v2` digest/as-of/source release, catalog-resolution
-proof, and caller-created isolated protected root.  The root must be distinct
+revision, verification evidence, current owner authorization, selected closed
+month, `schedule-digest-v2` digest/as-of/source release, catalog-resolution proof,
+and caller-created isolated protected root. The root must be distinct
 from shared/canonical/user datasets and must satisfy the existing ARK-34/35
 protected-root rules.  It is supplied by the caller; the command/tool must not
 create, discover, clean, or broaden it.
@@ -450,9 +447,9 @@ the schedule `source_release`. The schedule output and receipt are absent,
 absolute, ignored paths whose existing parent is owner-held `0700`; publication
 is no-overwrite and final mode `0400`. `ARK69_DOTENV` is an absolute path to the
 owner-held `0600` dotenv file and is read only inside lazy provider-session
-opening. `ARK69_REVISION` and `ARK69_TREE` are the exact 40-hex accepted commit
-and tree from the final reviewed handoff; placeholders must be replaced with
-that handoff, never calculated after an attempt starts.
+opening. `ARK69_REVISION` and `ARK69_TREE` are the accepted 40-hex commit and
+tree from the revision record; placeholders must be replaced with those values,
+never calculated after an attempt starts.
 
 From the accepted repository root, compose without network or credentials:
 
@@ -469,8 +466,8 @@ uv run --extra dev python tests/market_data/ark69_live_reliance_gate.py \
   --output "$PWD/artifacts/live-gate/ark69-schedule-2026-07.json"
 ```
 
-After that schedule's exact readback, the accepted full gate, and final
-high-risk review, create the empty live root once and execute exactly once:
+After that schedule's exact readback and acceptance of the exact candidate
+evidence, create the empty live root once and execute exactly once:
 
 ```bash
 export ARK69_DOTENV="<absolute-owner-private-dotenv-path>"
@@ -620,9 +617,9 @@ sampler is measurement-only and does not alter the production task, queue,
 worker, or provider cardinality.  On every valid controlled iteration,
 `open_fd_end == open_fd_start`.
 
-Before ARK-68q adds locked `psutil` to dev/test
-tooling, it must record the concrete dependency/license/security/maintenance
-assessment and stop for Sol/owner direction if that assessment is unacceptable.
+Before ARK-68q adds locked `psutil` to dev/test tooling, it must record the
+concrete dependency, license, security, and maintenance assessment and stop for
+owner direction if that assessment is unacceptable.
 
 ### 5.3 Warm-up, repetition, and environment comparability
 
@@ -686,11 +683,10 @@ a failed/uncontrolled measurement, never a statistical pass or a value to be
 absorbed by the FD-peak threshold.
 
 On `REGRESSION_SUSPECTED`, stop optimization/release acceptance, preserve the
-sanitized samples, rerun only the same bounded workload once to rule out a
-measurement error, and escalate the material finding to Sol.  Two materially
-identical measurement failures after repair trigger the workflow circuit
-breaker.  Any correctness, checksum, request-count, lifecycle, or resource-bound
-failure stops immediately and is not averaged.
+sanitized samples, and rerun only the same bounded workload once to rule out a
+measurement error. Two materially identical measurement failures after one
+correction keep the result blocked. Any correctness, checksum, request-count,
+lifecycle, or resource-bound failure stops immediately and is not averaged.
 
 The retained first B03 collection exposed the exact harness error
 `descriptor-bound-relative-root-v1`: its warm-up and five measured records are
@@ -722,13 +718,13 @@ instrument key, credential, raw payload, or live market value is serializable.
 Output and disposable work root must be distinct, absent absolute paths below
 the repository's gitignored `artifacts/` directory. Directories are private,
 the final file is mode `0400`, and publication never overwrites. Collection
-starts only from a clean reviewed HEAD/tree/lock identity, freezes that identity
+starts only from a clean accepted HEAD/tree/lock identity, freezes that identity
 in forked benchmark children, records
 `measurement_method=monotonic-parent-child-fork-v3`, and stops if it changes
-before publication. The reviewed 40-hex revision and tree from the accepted
-handoff are mandatory CLI pins; untracked executable code, `PYTHONPATH`, or a
-loaded repository module whose bytes differ from that commit stops before any
-artifact/work directory is created. The workload runs from the held work-root
+before publication. The accepted 40-hex revision and tree are mandatory CLI
+pins; untracked executable code, `PYTHONPATH`, or a loaded repository module
+whose bytes differ from that commit stops before any artifact/work directory is
+created. The workload runs from the held work-root
 descriptor as its current directory;
 pathname ABA, symlinks, a public directory, or permission changes cannot
 redirect writes.
@@ -870,24 +866,14 @@ candidate revision; a missing, rejected, or unproven row blocks ARK-11/Sprint
 | Resource/performance evidence | B01--B05, section 5 | comparable raw samples/provenance and evidence-based threshold status; no universal target claim; otherwise blocked from benchmark acceptance. |
 | Live representative proof | section 4 | one authorized closed month, one total attempt, catalog resolution, v2 schedule, isolated root, sanitized same-response comparison; failure/insufficiency blocks. |
 
-## 8. Atomic future handoffs and dependency order
+## 8. Candidate validation cases and dependency order
 
-The Sprint 2 list is a **backlog candidate set**, not a commitment.  Before any
-child is moved to Ready, its owner must record the one-sentence predicate,
-iteration budget, accepted specification revision, dependencies, and the
-high-risk Sol review path.  Each candidate below has one observable outcome and
-one primary reason to change.  Implement one only under the repository’s
-single-writer/single-WIP rule, strict red-green-refactor TDD, and full relevant
-quality gate.
+The Sprint 2 list is a **backlog candidate set**, not a commitment. Each
+candidate below has one observable outcome and one primary reason to change.
 
-Current ARK-68 is not atomic: it combines fixtures, validation cases,
-instrumentation, query proof, and benchmark policy.  Before any implementation,
-the coordinator must make ARK-68 cease to be an executable Task and reclassify
-or replace it as the appropriate non-executable tracking parent in Linear.
-The coordinator must then create real atomic child issue IDs with explicit
-blocker links before any child enters Ready.  The suffixes below are planning
-placeholders only; they neither create Linear issues nor satisfy the execution
-gate.
+Current ARK-68 combines fixtures, validation cases, instrumentation, query
+proof, and benchmark policy. The suffixes below identify bounded candidate
+cases only; they do not create Linear issues or claim implementation.
 
 | Candidate placeholder | Case ownership | One observable outcome / primary reason to change | Done | Depends on |
 | --- | --- | --- | --- | --- |
@@ -910,18 +896,16 @@ gate.
 | ARK-68p ordered range-reconciliation proof | D21 | One mixed three-month range emits the ordered skip/recover/request tuple for only independently affected months.  Reason: request selection. | Done when result order/counts and request cardinality equal the Plan 02 reconciliation decision. | ARK-70, ARK-68l |
 | ARK-68q bounded measurement recorder | B01--B05 fields | One fresh-child workload iteration records the complete section 5 provenance/resource measurement or an explicit blocked resource result.  Reason: reproducible instrumentation. | Done when the pinned-`psutil` assessment is recorded before dependency addition and one child/parent sample record satisfies the fixed sampler method or blocks. | 68a |
 | ARK-68r existing-boundary query proof | D22, B04, B05 | One configured DuckDB direct-Parquet query returns the frozen aggregate without a candle table.  Reason: query-boundary evidence. | Done when B04/B05 use the fixed one-connection settings and return their manifest-consistent aggregate. | 68a, ARK-68q |
-| ARK-69 live one-month gate | section 4 | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | Done when the one permitted response is ingested and compared under the live gate without a second request. | ARK-68b--ARK-68r, ARK-70, ARK-73, full gate/review, owner authorization |
+| ARK-69 live one-month gate | section 4 | One owner-authorized closed RELIANCE month yields one sanitized same-response result under exactly one attempt/no retry.  Reason: authenticated representative proof. | Done when the one permitted response is ingested and compared under the live gate without a second request. | ARK-68b--ARK-68r, ARK-70, ARK-73, all offline evidence, owner authorization |
 | ARK-73 targeted disposable repair proof | B03 | One exact checksum-mismatched disposable partition alone repairs while its control remains unchanged.  Reason: repair isolation. | Done when B03 records the February target-only invalidation/quarantine/request/publication and the out-of-plan control evidence. | ARK-68i, ARK-68l, ARK-68q |
 | ARK-71a baseline collection | section 5 samples | Five comparable B01--B05 measured samples are retained without a threshold claim.  Reason: establish evidence. | Done when each workload has its five raw comparable measurements or an explicit blocked status. | ARK-68q, ARK-68r, ARK-70, ARK-73 |
 | ARK-71b threshold decision | section 5.4 | One deterministic threshold status is derived from ARK-71a samples.  Reason: regression policy. | Done when every workload is `UNSET`, threshold-accepted, or rejected by the frozen sample rule without sample tuning. | ARK-71a |
-| ARK-72 M2 pre-merge crosswalk | section 7 | One candidate-revision dossier resolves every section 7 row, selected denominator, gates/review, carryover, and limitations.  Reason: acceptance reconciliation. | Done when every mandatory crosswalk row is evidenced or explicitly blocks acceptance. | ARK-69, ARK-70, ARK-73, ARK-71b |
+| ARK-72 M2 pre-merge crosswalk | section 7 | One candidate-revision dossier resolves every section 7 row, selected denominator, checks, carryover, and limitations.  Reason: acceptance reconciliation. | Done when every mandatory crosswalk row is evidenced or explicitly blocks acceptance. | ARK-69, ARK-70, ARK-73, ARK-71b |
 
 Each placeholder above has exactly one observable outcome, one primary reason
-to change, and one-sentence Done condition.  ARK-72 is a bounded
+to change, and one-sentence Done condition. ARK-72 is a bounded
 evidence/reconciliation task, not a claim that it will merge or close Linear.
-Only after the required Linear reclassification/replacement, real child creation,
-and blocker recording may the coordinator reconcile their actual IDs for
-scheduling; this document does not alter issue tracking.
+The placeholders are not actual Linear issue identifiers.
 
 Required order is:
 
@@ -932,25 +916,19 @@ Required order is:
 68l + 68q -> 73
 68a + 68q -> 68r
 {68b--68r, 70, 73} -> 71a -> 71b
-{68b--68r, 70, 73} + full deterministic gate + owner authorization -> 69
+{68b--68r, 70, 73} + all offline evidence + owner authorization -> 69
 69 + 70 + 73 + 71b -> 72
 ```
 
-Read-only review/reconciliation never runs in parallel with a repository
-writer.  Each code candidate has a Sol High combined independent review because
-it touches the high-risk data/provenance/provider/storage boundary; no duplicate
-Terra review applies to the same exact candidate.
 
-## 9. Definition of done and residual limitations
+## 9. Contract status and residual limitations
 
 ARK-67 is done when this document is the accepted bounded operational contract;
 it specifies deterministic fixtures/cases, the one-attempt live gate,
 measurements/provenance/threshold method, stop/safety rules, full Milestone 2
-crosswalk, and atomic candidate handoffs without changing production contracts.
-Its documentation change requires focused documentation checks, not artificial
-tests-first evidence.  It does not mean that any Milestone 2 behavior has been
-implemented, run live, benchmarked, reviewed, merged, published, or marked done
-in Linear.
+crosswalk, and bounded candidate cases without changing production contracts.
+This documentation record does not mean that any Milestone 2 behavior has been
+implemented, run live, benchmarked, merged, published, or marked done in Linear.
 
 Residual limitations are explicit:
 

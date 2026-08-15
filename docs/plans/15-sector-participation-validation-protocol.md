@@ -196,7 +196,7 @@ after its private handoff hash is recomputed. It does not claim an exhaustive
 generated-property campaign for every possible label partition or direction
 vector.
 
-## Redaction and zero-I/O review
+## Redaction and zero-I/O evidence
 
 For the observed path, canaries include all 50 ISINs and symbols plus private
 class names, member-direction syntax, raw-close provenance, and upstream source
@@ -212,10 +212,9 @@ absent. Structural error messages must remain nonempty and at most 128
 characters in the exercised cases.
 
 The reducer implementation contains no file, network, provider, resolver,
-storage, logging, or publication operation. Review must reject any future
-change that turns the pure in-memory reducer into an I/O boundary. The focused
-suite validates redacted surfaces; the completed exact-SHA reviews also
-inspected the reducer for zero-I/O preservation.
+storage, logging, or publication operation. A change that turns the pure
+in-memory reducer into an I/O boundary lies outside this contract. The focused
+suite validates redacted surfaces and zero-I/O preservation.
 
 ## Historical PR #102 boundary
 
