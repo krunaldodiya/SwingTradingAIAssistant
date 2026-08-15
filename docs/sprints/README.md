@@ -54,23 +54,30 @@ increment and future process decisions.
   evidence. Official taxonomy, Layer B, provider/public transport, live results,
   recommendation, ranking, and effectiveness remain deferred or unclaimed.
 - [Sprint 9 — Market Regime Layer B acquisition decision](sprint-9.md) —
-  **IMPLEMENTED / VERIFIED** with terminal decision `BLOCKED`; publication is pending.
-  Linear records parent Task `ARK-183` as **In Progress**; its child contract
-  Story `ARK-184` is **In Progress** and blocks its child implementation Story
-  `ARK-185`, which is **Todo**.
-  Plan 16 specifies a provider-independent pure reducer whose only authority is one
-  reviewed canonical manifest sealed in the candidate build; the initial absent
-  seal fails closed and stdin cannot supply authorization. One owner-supervised
-  release invocation may issue one credential-free GET of the fixed candidate
-  PDF within a 1,048,576-byte cap and an outer monotonic 30-second watchdog.
-  Exactly-once is supervision plus retained run evidence, not adapter replay
-  prevention; no live-probe CLI exists. Provider HTTP metadata remains in
-  `market_data`, while the decision sees only a manifest-authenticated capability
-  identity/state.
-  The one authorized invocation emitted a sanitized historical receipt whose old
-  worker could attempt another resolved address. Its one-call/one-attempt
-  counters are unverified, so the receipt is inadmissible as capability evidence;
-  no provider-independent projection was retained. The invocation is consumed.
-  With the build seal still `None`, the terminal result is `BLOCKED`
-  with first blocker `SEALED_MANIFEST_MISSING`; it grants no acquisition,
-  readiness, admission, Market Regime label, or later execution authority.
+  repository closeout is **BLOCKED PENDING CORRECTIVE PUBLICATION**, with
+  truthful terminal decision `BLOCKED / CAPABILITY_EVIDENCE_MISSING`.
+  The corrective candidate seals canonical incomplete manifest identity
+  `7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c`
+  from scope projection identity
+  `87b69b8da5d180c486e74907587c544aace9a7a057ca8b9ebb50138309e5f054`
+  and source-controlled prerequisite assessment
+  `2026-08-15T16:03:40.000000Z`. Its canonical report identity is
+  `bf4e137dd8bb6bc7e2d4bd0d243d28c63b3b72a1c3d94dc109a898211fcd8a40`.
+  The capability group and all later evidence, approval, authorization, and
+  validation-receipt identities are null; the assessment instant grants no
+  authority.
+  [PR #107](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/107)
+  remains historical implementation publication evidence. It merged to `main`
+  at **2026-08-15T15:40:16Z** as
+  `c74ee4788aa6d03864eb8c21f111afe7025ad9cc`, but did not contain this
+  correction. Linear ARK-183, ARK-184, and ARK-185 remain historically
+  **Done** with PR #107 attached; those tracker states do not publish or
+  authorize the corrective candidate.
+  The consumed probe's historical receipt remains inadmissible as capability
+  evidence because its old worker could attempt another resolved address; no
+  provider-independent projection was retained or reconstructed, and no rerun
+  occurred. The correction is not yet committed, independently reviewed,
+  checked in hosted CI, or published. It grants no acquisition, readiness,
+  admission, label, or later execution authority.
+  Sprint 10 and the separate GitHub workflow migration plan remain deferred
+  until tomorrow, **2026-08-16**; neither starts in this correction.

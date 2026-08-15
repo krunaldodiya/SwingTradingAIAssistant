@@ -33,6 +33,20 @@ TERMS_IDENTITY = "4" * 64
 OPERATIONAL_IDENTITY = "5" * 64
 AUTHORITY_IDENTITY = "6" * 64
 AUTHORIZATION_RECORD_IDENTITY = "7" * 64
+ACTUAL_INCOMPLETE_MANIFEST_IDENTITY = (
+    "7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c"
+)
+ACTUAL_INCOMPLETE_REPORT = (
+    b'{"assessed_at":null,"authenticated_capability_evidence_identity_sha256":null,'
+    b'"authorization_validation_receipt_identity_sha256":null,'
+    b'"contract_version":"market-regime-layer-b-acquisition-decision@v1",'
+    b'"decision_state":"BLOCKED","primary_blocker":"CAPABILITY_EVIDENCE_MISSING",'
+    b'"report_identity_sha256":"bf4e137dd8bb6bc7e2d4bd0d243d28c63b3b72a1c3d94dc109a898211fcd8a40",'
+    b'"sealed_manifest_identity_sha256":"7b0937444c1a2869ca05619329fcae811d9d4a9ee7b0860528b08e2111b2952c"}\n'
+)
+ACTUAL_INCOMPLETE_REPORT_IDENTITY = (
+    "bf4e137dd8bb6bc7e2d4bd0d243d28c63b3b72a1c3d94dc109a898211fcd8a40"
+)
 GOLDEN_REPORTS: dict[str, tuple[bytes, str]] = {
     "SEALED_MANIFEST_MISSING": (
         b'{"assessed_at":null,"authenticated_capability_evidence_identity_sha256":null,"authorization_validation_receipt_identity_sha256":null,"contract_version":"market-regime-layer-b-acquisition-decision@v1","decision_state":"BLOCKED","primary_blocker":"SEALED_MANIFEST_MISSING","report_identity_sha256":"456d3e08b337220cf20fbd8be3f50ee7d764b80a88a7c0182b5a4ec6afcfc4ff","sealed_manifest_identity_sha256":null}\n',
@@ -299,6 +313,207 @@ def test_missing_seal_is_byte_stable_and_caller_inputs_cannot_replace_it(
     assert first.assessed_at is None
     assert first.canonical_json_bytes() == altered.canonical_json_bytes()
     _assert_literal_golden_report(first, "SEALED_MANIFEST_MISSING")
+
+
+def test_complete_null_capability_group_is_sealed_before_missing_capability_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, receipt = _build_sealed_values(
+        manifest_updates={
+            "capability_evidence_state": None,
+            "capability_evidence_identity_sha256": None,
+            "capability_assessed_at": None,
+            "source_and_pit_evidence_bundle_identity_sha256": None,
+            "terms_and_use_approval_identity_sha256": None,
+            "operational_scope_approval_identity_sha256": None,
+            "acquisition_authorization": None,
+        },
+        include_receipt=False,
+    )
+    assert receipt is None
+    _pin_manifest(monkeypatch, manifest)
+
+    report = acquisition_decision.decide_acquisition_v1(
+        acquisition_decision.AcquisitionDecisionInputV1(
+            contract_version=CONTRACT_VERSION,
+            capability_evidence=None,
+            authorization_validation_receipt=None,
+        )
+    )
+
+    assert (
+        report.decision_state is acquisition_decision.AcquisitionDecisionStateV1.BLOCKED
+    )
+    assert (
+        report.primary_blocker
+        is acquisition_decision.AcquisitionBlockerV1.CAPABILITY_EVIDENCE_MISSING
+    )
+    assert (
+        report.sealed_manifest_identity_sha256 == manifest["manifest_identity_sha256"]
+    )
+    assert report.sealed_manifest_identity_sha256 is not None
+    assert report.authenticated_capability_evidence_identity_sha256 is None
+    assert report.authorization_validation_receipt_identity_sha256 is None
+    assert report.assessed_at is None
+
+
+@pytest.mark.parametrize(
+    (
+        "capability_state",
+        "capability_identity",
+        "capability_assessed_at",
+    ),
+    (
+        (None, CAPABILITY_IDENTITY, _instant(2)),
+        ("OBSERVED", None, _instant(2)),
+        ("OBSERVED", CAPABILITY_IDENTITY, None),
+        (None, None, _instant(2)),
+        (None, CAPABILITY_IDENTITY, None),
+        ("OBSERVED", None, None),
+    ),
+    ids=(
+        "missing-state",
+        "missing-identity",
+        "missing-assessed-at",
+        "only-assessed-at",
+        "only-identity",
+        "only-state",
+    ),
+)
+def test_partial_null_capability_group_is_sealed_manifest_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    capability_state: object,
+    capability_identity: object,
+    capability_assessed_at: object,
+) -> None:
+    manifest, receipt = _build_sealed_values(
+        manifest_updates={
+            "capability_evidence_state": capability_state,
+            "capability_evidence_identity_sha256": capability_identity,
+            "capability_assessed_at": capability_assessed_at,
+            "source_and_pit_evidence_bundle_identity_sha256": None,
+            "terms_and_use_approval_identity_sha256": None,
+            "operational_scope_approval_identity_sha256": None,
+            "acquisition_authorization": None,
+        },
+        include_receipt=False,
+    )
+    assert receipt is None
+    _pin_manifest(monkeypatch, manifest)
+
+    report = acquisition_decision.decide_acquisition_v1(
+        acquisition_decision.AcquisitionDecisionInputV1(
+            contract_version=CONTRACT_VERSION,
+            capability_evidence=None,
+            authorization_validation_receipt=None,
+        )
+    )
+
+    assert (
+        report.decision_state is acquisition_decision.AcquisitionDecisionStateV1.BLOCKED
+    )
+    assert (
+        report.primary_blocker
+        is acquisition_decision.AcquisitionBlockerV1.SEALED_MANIFEST_INVALID
+    )
+    assert report.sealed_manifest_identity_sha256 is None
+    assert report.authenticated_capability_evidence_identity_sha256 is None
+    assert report.authorization_validation_receipt_identity_sha256 is None
+    assert report.assessed_at is None
+
+
+def test_actual_build_seals_incomplete_manifest_and_reduces_missing_capability() -> (
+    None
+):
+    raw = acquisition_manifest.SEALED_ACQUISITION_MANIFEST_CANONICAL_JSON_LF
+    companion = acquisition_manifest.SEALED_ACQUISITION_MANIFEST_IDENTITY_SHA256
+
+    assert type(raw) is bytes
+    assert type(companion) is str
+    value = json.loads(raw)
+    assert type(value) is dict
+    assert raw == _canonical(value)
+    assert companion == value["manifest_identity_sha256"]
+    final_projection = {
+        key: item for key, item in value.items() if key != "manifest_identity_sha256"
+    }
+    assert companion == _identity(final_projection)
+    assert companion == ACTUAL_INCOMPLETE_MANIFEST_IDENTITY
+    root = Path(__file__).resolve().parents[2]
+    assert (
+        value["market_regime_contract_identity_sha256"]
+        == hashlib.sha256(
+            (root / "docs/plans/12-market-regime-contract.md").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        value["layer_b_protocol_identity_sha256"]
+        == hashlib.sha256(
+            (root / "docs/plans/13-market-regime-validation-protocol.md").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        value["acquisition_scope_identity_sha256"]
+        == hashlib.sha256(
+            (
+                root / "docs/plans/16-market-regime-layer-b-acquisition-decision.md"
+            ).read_bytes()
+        ).hexdigest()
+    )
+    assert {
+        "capability_evidence_state": value["capability_evidence_state"],
+        "capability_evidence_identity_sha256": value[
+            "capability_evidence_identity_sha256"
+        ],
+        "capability_assessed_at": value["capability_assessed_at"],
+        "source_and_pit_evidence_bundle_identity_sha256": value[
+            "source_and_pit_evidence_bundle_identity_sha256"
+        ],
+        "terms_and_use_approval_identity_sha256": value[
+            "terms_and_use_approval_identity_sha256"
+        ],
+        "operational_scope_approval_identity_sha256": value[
+            "operational_scope_approval_identity_sha256"
+        ],
+        "acquisition_authorization": value["acquisition_authorization"],
+        "authorization_validation_receipt_identity_sha256": value[
+            "authorization_validation_receipt_identity_sha256"
+        ],
+    } == {
+        "capability_evidence_state": None,
+        "capability_evidence_identity_sha256": None,
+        "capability_assessed_at": None,
+        "source_and_pit_evidence_bundle_identity_sha256": None,
+        "terms_and_use_approval_identity_sha256": None,
+        "operational_scope_approval_identity_sha256": None,
+        "acquisition_authorization": None,
+        "authorization_validation_receipt_identity_sha256": None,
+    }
+    assert type(value["prerequisites_assessed_at"]) is str
+    _datetime(value["prerequisites_assessed_at"])
+
+    report = acquisition_decision.decide_acquisition_v1(
+        acquisition_decision.AcquisitionDecisionInputV1(
+            contract_version=CONTRACT_VERSION,
+            capability_evidence=None,
+            authorization_validation_receipt=None,
+        )
+    )
+
+    assert (
+        report.decision_state is acquisition_decision.AcquisitionDecisionStateV1.BLOCKED
+    )
+    assert (
+        report.primary_blocker
+        is acquisition_decision.AcquisitionBlockerV1.CAPABILITY_EVIDENCE_MISSING
+    )
+    assert report.sealed_manifest_identity_sha256 == companion
+    assert report.sealed_manifest_identity_sha256 is not None
+    assert report.authenticated_capability_evidence_identity_sha256 is None
+    assert report.authorization_validation_receipt_identity_sha256 is None
+    assert report.assessed_at is None
+    assert report.canonical_json_bytes() == ACTUAL_INCOMPLETE_REPORT
+    assert report.report_identity_sha256 == ACTUAL_INCOMPLETE_REPORT_IDENTITY
 
 
 @pytest.mark.parametrize(
