@@ -1,11 +1,13 @@
 # Sprint 2 closeout and Milestone 2 disposition
 
-Status: **CLOSEOUT CANDIDATE — MILESTONE 2 BLOCKED**
+Status: **HISTORICAL CLOSEOUT CANDIDATE — MILESTONE 2 BLOCKED**
 
-This record becomes the Sprint 2 closeout when its exact reviewed revision is
-merged, hosted checks pass, and ARK-72 is synchronized to Done in Linear. It
-closes the one-week delivery timebox with explicit carryover; it does not waive
-Plan 03, accept a rejected candidate, or claim that Milestone 2 is complete.
+The recorded candidate required its reviewed revision to merge, hosted checks
+to pass, and ARK-72 to synchronize to Done in Linear. That Linear condition was
+not completed before the 2026-08-16 GitHub workflow cutover and is now frozen as
+read-only history. It is not a current instruction or a gate on future GitHub
+work. The record does not waive Plan 03, accept a rejected candidate, or claim
+that Milestone 2 is complete.
 
 ## Outcome
 
@@ -14,9 +16,9 @@ Plan 03, accept a rejected candidate, or claim that Milestone 2 is complete.
   measurement support before scaling.
 - Frozen denominator: **24 executable tasks**.
 - Completed before ARK-72 publication: **20/24 (83.3%)**.
-- Final delivery result: **21/24 (87.5%)**, conditional only on this exact
-  ARK-72 closeout candidate completing its review, hosted checks, merge, and
-  Linear synchronization.
+- Final delivery result: **21/24 (87.5%)**. Its historical closure
+  condition included ARK-72 review, hosted checks, merge, and Linear
+  synchronization; this record does not claim that condition was completed.
 - Carryover: **ARK-92, ARK-93, ARK-69**.
 - Milestone 2 disposition: **BLOCKED / NOT ACCEPTED**.
 - Exact accepted `main` starting point for this dossier:

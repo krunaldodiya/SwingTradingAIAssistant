@@ -150,10 +150,9 @@ and GitGuardian both passed.
 [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
 merged the slice to `main` at **2026-08-14T19:39:18Z** as
 `b6e34d3cdc598e1cd6dc50c50d517481d26e1391`; repository Sprint 8 delivery,
-review, and publication are complete. Linear now records ARK-175 through ARK-181
-as Done. The Sprint 8 file preserves the historical pending-reconciliation
-snapshot, while the sprint index and Sprint 9 record state the current
-operational truth.
+review, and publication are complete. Linear records ARK-175 through ARK-181
+as Done; they now remain read-only historical evidence and are not copied into
+the active GitHub backlog.
 
 Exact SHA `25d889a` received **REQUEST_CHANGES** for the identity-bearing-label
 privacy defect. Exact SHA `d79eecc` received **REQUEST_CHANGES** for the deep

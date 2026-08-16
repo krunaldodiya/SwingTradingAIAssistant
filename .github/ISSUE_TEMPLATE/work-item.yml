@@ -1,0 +1,36 @@
+name: Work item
+description: Create a goal, story, or atomic task for future work.
+title: ""
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: State the observable result, not the implementation approach.
+      placeholder: When complete, ...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the observable checks that prove completion.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and non-goals
+      description: Record product boundaries, safety requirements, and excluded work.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Completion evidence
+      description: Fill this when closing with tests, commands, PR, and immutable revision evidence.
+    validations:
+      required: false

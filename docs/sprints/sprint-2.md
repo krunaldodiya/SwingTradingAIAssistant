@@ -1,13 +1,16 @@
 # Sprint 2 — RELIANCE operational proof
 
-Status: **closeout candidate; 21/24 after ARK-72 publication, with Milestone 2 blocked**
+Status: **historical closeout candidate; Milestone 2 blocked**
 
-The owner-approved carryover route closes the Sprint 2 timebox without
+The owner-approved carryover route proposed closing the Sprint 2 timebox without
 weakening Plan 03. The
-[Sprint 2 closeout and Milestone 2 disposition](sprint-2-closeout.md) records
-the mandatory crosswalk, three incomplete carryover tasks, exact blocker
-evidence, and retrospective. Before that closeout was published, the recorded
-result remained 20/24.
+[Sprint 2 closeout and Milestone 2 disposition](sprint-2-closeout.md) preserves
+the candidate crosswalk, incomplete carryover tasks, exact blocker evidence,
+and retrospective. Its Linear synchronization condition was not completed
+before the 2026-08-16 GitHub workflow cutover and is now read-only historical
+evidence, not a current completion instruction. The embedded accountability
+ledger below remains an immutable snapshot of the rules and state recorded at
+that time.
 
 ## Sprint goal
 
