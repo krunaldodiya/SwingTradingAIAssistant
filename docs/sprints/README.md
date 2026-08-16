@@ -1,11 +1,16 @@
 # Sprint records
 
-Linear is the operational source of truth for backlog, hierarchy, status, and
-sprint assignment. This directory preserves concise sprint goals, outcomes,
-review evidence, carryover, and retrospective decisions with the codebase.
+GitHub Issues and the private
+[SwingTradingAIAssistant Delivery](https://github.com/users/krunaldodiya/projects/1)
+Project are the operational source of truth for new backlog, hierarchy, status,
+priority, estimate, work type, and risk. GitHub milestones own sprint
+assignment. Existing Linear `ARK-*` records are read-only historical evidence
+and are not migrated into the active GitHub backlog. This directory preserves
+concise sprint goals, outcomes, review evidence, carryover, and retrospective
+decisions with the codebase.
 
-Use one file per sprint. Do not duplicate every issue description; link or list
-issue identifiers and capture only information needed to understand the shipped
+Use one file per sprint. Do not duplicate every Issue description; link or list
+Issue identifiers and capture only information needed to understand the shipped
 increment and future process decisions.
 
 ## Index
@@ -45,10 +50,9 @@ increment and future process decisions.
   [PR #103](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/103)
   merged to `main` at **2026-08-14T19:39:18Z** as
   `b6e34d3cdc598e1cd6dc50c50d517481d26e1391`.
-  ARK-175 through ARK-181 now remain Done in Linear. The
-  [Sprint 8 record](sprint-8.md) preserves its historical pending-reconciliation
-  snapshot; this index records the current operational truth without rewriting
-  the delivered evidence.
+  ARK-175 through ARK-181 are Done in Linear and remain read-only historical
+  evidence. They are not copied into GitHub. Repository Sprint delivery is
+  complete.
   Exact SHAs `25d889a` and `d79eecc` remain superseded rejected revisions, not
   final evidence. PR #102 remains immutable historical planning/specification
   evidence. Official taxonomy, Layer B, provider/public transport, live results,

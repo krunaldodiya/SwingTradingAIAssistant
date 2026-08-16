@@ -1,0 +1,42 @@
+name: Defect
+description: Report observed behavior that violates an existing contract.
+title: "Defect: "
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: State what happened and include the exact error or output when available.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the existing contract that was violated.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest deterministic sequence that reproduces the defect.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and boundaries
+      description: Describe affected users, data, security, or research-integrity risk.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Resolution evidence
+      description: Fill this when closing with the regression check, PR, and immutable revision.
+    validations:
+      required: false

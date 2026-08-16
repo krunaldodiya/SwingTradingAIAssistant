@@ -23,6 +23,21 @@ Evaluate only proposed new modules, data sources, or scoring factors before buil
 lines state expected value, scope fit, material data/research risk, the smallest alternative, and `accepted`,
 `deferred`, or `rejected`. Ordinary implementation choices need no such ritual.
 
+## Development workflow
+
+GitHub is the sole active tracker for new work. Create repository Issues through the issue forms and manage
+them in the private [SwingTradingAIAssistant Delivery](https://github.com/users/krunaldodiya/projects/1)
+Project. The Project owns status, priority, estimate, work type, and risk; milestones own sprint assignment.
+New open Issues are added to the Project automatically.
+
+Existing Linear records are read-only historical evidence. Do not copy, reopen, update, delete, or use them
+as the active backlog. Preserve their `ARK-*` references in historical repository records.
+
+Prefer the smallest implementation that preserves the complete required behavior and evidence. Add
+architecture, abstractions, or process only for a concrete requirement or demonstrated risk. Every change
+links to a GitHub Issue, closes through a pull request, passes the repository and hosted gates, and records
+the exact reviewed revision.
+
 ## Tool and AI boundary
 
 The deterministic tool owns data access, calculations, validation, backtests, market facts, timestamps, and
