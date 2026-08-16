@@ -20,6 +20,7 @@ dev = [
     "pyright>=1.1.400",
     "pytest>=8.0",
     "pytest-cov>=7.0",
+    "pytest-xdist>=3.8,<4",
     "ruff>=0.15.0",
     "vulture>=2.14",
 ]
@@ -34,7 +35,7 @@ market-regime-acquisition-decision = "swing_trading_ai_assistant.historical_eval
 packages = ["src/swing_trading_ai_assistant"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-config --strict-markers --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87"
+addopts = "-ra --strict-config --strict-markers --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87 -n auto --dist=worksteal"
 testpaths = ["tests"]
 pythonpath = ["src"]
 

@@ -63,24 +63,33 @@ def _oracle(advances: int, declines: int) -> MarketRegimeLabelV1:
     return MarketRegimeLabelV1.MIXED_PARTICIPATION
 
 
-def test_exhaustive_1326_count_triples_match_independent_oracle() -> None:
+_COUNT_TRIPLES = tuple(
+    (advances, declines, 50 - advances - declines)
+    for advances in range(51)
+    for declines in range(51 - advances)
+)
+_COUNT_TRIPLE_SHARDS = tuple(_COUNT_TRIPLES[index::12] for index in range(12))
+
+
+@pytest.mark.parametrize(
+    "count_triples",
+    _COUNT_TRIPLE_SHARDS,
+    ids=tuple(f"shard-{index + 1}" for index in range(len(_COUNT_TRIPLE_SHARDS))),
+)
+def test_exhaustive_1326_count_triples_match_independent_oracle(
+    count_triples: tuple[tuple[int, int, int], ...],
+) -> None:
+    assert sum(map(len, _COUNT_TRIPLE_SHARDS)) == 1326
     facts = _admitted()
-    seen = 0
-    for advances in range(51):
-        for declines in range(51 - advances):
-            unchanged = 50 - advances - declines
-            directions = [1] * advances + [-1] * declines + [0] * unchanged
-            report = reduce_observed_market_regime_v1(
-                _with_directions(facts, directions)
-            )
-            assert (report.advances, report.declines, report.unchanged) == (
-                advances,
-                declines,
-                unchanged,
-            )
-            assert report.regime_label is _oracle(advances, declines)
-            seen += 1
-    assert seen == 1326
+    for advances, declines, unchanged in count_triples:
+        directions = [1] * advances + [-1] * declines + [0] * unchanged
+        report = reduce_observed_market_regime_v1(_with_directions(facts, directions))
+        assert (report.advances, report.declines, report.unchanged) == (
+            advances,
+            declines,
+            unchanged,
+        )
+        assert report.regime_label is _oracle(advances, declines)
 
 
 @pytest.mark.parametrize(
