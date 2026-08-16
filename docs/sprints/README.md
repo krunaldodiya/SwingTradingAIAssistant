@@ -83,5 +83,14 @@ increment and future process decisions.
   publication for the correction are external lifecycle evidence; this index
   asserts no current lifecycle state for them. The correction grants no
   acquisition, readiness, admission, label, or later execution authority.
-  Sprint 10 and the separate GitHub workflow migration plan remain deferred
-  until tomorrow, **2026-08-16**; neither starts in this correction.
+- [Sprint 10 — Market Regime Layer B evidence acquisition readiness](sprint-10.md) —
+  [parent acquisition goal — GitHub Issue #111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111), [planning/publication task — GitHub Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112), Milestone 2 (Sprint 10), and [Plan 17](../plans/17-market-regime-layer-b-evidence-acquisition.md)
+  record **`BLOCKED / CAPABILITY_EVIDENCE_MISSING`**. Planning has started;
+  acquisition has not started. The observed baseline is
+  `origin/main` `2d5cb3734a35a77d107c21147a50c120555cdfab`, whose sealed
+  incomplete manifest is
+  `53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f` and
+  canonical blocked report is
+  `dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
+  This planning evidence grants no provider access or runtime implementation
+  authority.

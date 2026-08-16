@@ -98,8 +98,18 @@ trusted authorization-validation receipt exists. Work stops before acquisition,
 readiness/admission, Market Regime labels, counts, outcomes, recommendations, or
 later execution authority.
 
-Sprint 10 and the separate GitHub workflow migration plan remain deferred until
-tomorrow, **2026-08-16**; neither starts in this correction.
+Sprint 10 planning has started as an R3 readiness record and remains
+**`BLOCKED / CAPABILITY_EVIDENCE_MISSING`**. [Plan 17](plans/17-market-regime-layer-b-evidence-acquisition.md)
+and [parent acquisition goal — GitHub Issue #111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111), [planning/publication task — GitHub Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112)
+are assigned to Milestone 2 (Sprint 10). The observed `origin/main` baseline is
+`2d5cb3734a35a77d107c21147a50c120555cdfab`, with sealed incomplete manifest
+`53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f` and
+canonical blocked report
+`dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
+Planning is not acquisition: no provider access or runtime implementation has
+started. Phase 0 planning/documentation publication remains current; only a
+future separately authorized, independently reviewable `APPROVED_TO_ACQUIRE`
+decision can open Plan 17 Phase 1 and later conditional runtime phases.
 
 ## Phase 3: Second module — Sector Analysis
 
