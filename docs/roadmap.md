@@ -1,5 +1,22 @@
 # Initial Roadmap
 
+## Current delivery priority
+
+All phases and module outcomes below remain planned. Only their delivery
+priority changes: make the current/live/realtime path usable first, then perform
+historical storage and backtest validation. Nothing in the original roadmap is
+removed.
+
+The immediate sequence is current price/volume, current Market Regime, current
+Sector Analysis, current news/events, and one integrated current packet for an
+external AI. Historical fixed-cohort OHLCV storage and validation follow. The
+tool continues to retain point-in-time provenance from now so later work cannot
+project current knowledge backward.
+
+[Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
+Sprints 10–16. It preserves the locked module order, historical work, release
+gates, `NO_TRADE`, and all explicit exclusions.
+
 ## Phase 0: Foundation
 
 - Freeze product scope and terminology.
@@ -98,18 +115,18 @@ trusted authorization-validation receipt exists. Work stops before acquisition,
 readiness/admission, Market Regime labels, counts, outcomes, recommendations, or
 later execution authority.
 
-Sprint 10 planning has started as an R3 readiness record and remains
-**`BLOCKED / CAPABILITY_EVIDENCE_MISSING`**. [Plan 17](plans/17-market-regime-layer-b-evidence-acquisition.md)
-and [parent acquisition goal — GitHub Issue #111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111), [planning/publication task — GitHub Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112)
-are assigned to Milestone 2 (Sprint 10). The observed `origin/main` baseline is
-`2d5cb3734a35a77d107c21147a50c120555cdfab`, with sealed incomplete manifest
-`53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f` and
-canonical blocked report
-`dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
-Planning is not acquisition: no provider access or runtime implementation has
-started. Phase 0 planning/documentation publication remains current; only a
-future separately authorized, independently reviewable `APPROVED_TO_ACQUIRE`
-decision can open Plan 17 Phase 1 and later conditional runtime phases.
+The former Sprint 10 R3 readiness proposal remains preserved as historical
+**`BLOCKED / CAPABILITY_EVIDENCE_MISSING`** evidence in
+[Plan 17](plans/17-market-regime-layer-b-evidence-acquisition.md). Its parent
+acquisition goal,
+[GitHub Issue #111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111),
+is closed as not planned after the current-first reprioritization; the associated
+planning context remains in
+[Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112).
+No provider access, acquisition, or historical runtime implementation started.
+This historical blocked record grants no authority and is not the active Sprint
+10 direction. The current Sprint 10–16 sequence is the one stated at the top of
+this roadmap and in the Upcoming Sprints Overview.
 
 ## Phase 3: Second module — Sector Analysis
 

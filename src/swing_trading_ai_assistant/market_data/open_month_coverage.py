@@ -298,6 +298,8 @@ def _available_report(
             None,
             metadata.cutoff,
             metadata.session_complete,
+            metadata.published_at,
+            metadata.published_at,
         )
         payload = CoveragePayloadV1(
             PublicCoverageRequestV1(

@@ -176,10 +176,17 @@ class OpenMonthOneMinuteQueryServiceV1:
     """Return persisted bars even when the current exchange session is incomplete."""
 
     def __init__(
-        self, policy: EquityAdmissionPolicyV1, *, clock: OpenMonthQueryClockV1
+        self,
+        policy: EquityAdmissionPolicyV1,
+        *,
+        clock: OpenMonthQueryClockV1,
+        allow_prior_month: bool = False,
     ) -> None:
+        if type(allow_prior_month) is not bool:
+            raise ValueError("invalid open-month query")
         self._policy = policy
         self._clock = clock
+        self._allow_prior_month = allow_prior_month
 
     def query(self, request: object) -> QueryReportV1:
         return self._query(request, None)
@@ -207,7 +214,9 @@ class OpenMonthOneMinuteQueryServiceV1:
         try:
             request = _request(request)
             invocation = _invocation(self._clock.now())
-            public_request = _public_request(request, invocation)
+            public_request = _public_request(
+                request, invocation, allow_prior_month=self._allow_prior_month
+            )
         except ValueError:
             return _terminal(
                 PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
@@ -299,6 +308,7 @@ class OpenMonthOneMinuteQueryServiceV1:
     ) -> QueryReportV1:
         _ensure_deadline_live(deadline)
         local_today = invocation.astimezone(_IST).date()
+        target_month = request.to_date if self._allow_prior_month else local_today
         with DuckDBCatalog(
             request.storage_root, read_only=True, lease=lease
         ) as catalog:
@@ -306,8 +316,8 @@ class OpenMonthOneMinuteQueryServiceV1:
             metadata = catalog.latest_provisional_partition_for_symbol(
                 segment=request.segment,
                 symbol=request.symbol,
-                year=local_today.year,
-                month=local_today.month,
+                year=target_month.year,
+                month=target_month.month,
                 cutoff_lte=invocation,
                 published_at_lte=invocation,
             )
@@ -315,7 +325,7 @@ class OpenMonthOneMinuteQueryServiceV1:
             catalog.ensure_read_identity()
         _ensure_deadline_live(deadline)
         if metadata is None:
-            month = _missing_month(local_today.year, local_today.month)
+            month = _missing_month(target_month.year, target_month.month)
             payload = QueryPayloadV1(public_request, 0, (month,), ())
             return PublicCommandReportV1(
                 "v1",
@@ -365,6 +375,8 @@ class OpenMonthOneMinuteQueryServiceV1:
             None,
             metadata.cutoff,
             metadata.session_complete,
+            metadata.published_at,
+            metadata.published_at,
         )
         public_rows = tuple(_public_row(row, public_request.fields) for row in selected)
         _ensure_deadline_live(deadline)
@@ -397,15 +409,19 @@ def _invocation(value: object) -> datetime:
 
 
 def _public_request(
-    request: QueryRequestV1, invocation: datetime
+    request: QueryRequestV1,
+    invocation: datetime,
+    *,
+    allow_prior_month: bool = False,
 ) -> PublicQueryRequestV1:
     local_today = invocation.astimezone(_IST).date()
+    target_month = request.to_date if allow_prior_month else local_today
     if (
         request.from_date > request.to_date
-        or request.from_date.year != local_today.year
-        or request.from_date.month != local_today.month
-        or request.to_date.year != local_today.year
-        or request.to_date.month != local_today.month
+        or request.from_date.year != target_month.year
+        or request.from_date.month != target_month.month
+        or request.to_date.year != target_month.year
+        or request.to_date.month != target_month.month
         or request.to_date > local_today
         or not 1 <= request.max_rows <= 10_000
     ):

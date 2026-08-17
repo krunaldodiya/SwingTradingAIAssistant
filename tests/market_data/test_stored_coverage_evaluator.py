@@ -211,6 +211,7 @@ def _seed(
     finalize: bool = True,
     policy_version: str | None = None,
     manifest_time: datetime = datetime(2026, 8, 2, tzinfo=UTC),
+    verification_time: datetime | None = None,
 ) -> tuple[str, str | None]:
     root.chmod(0o700)
     acquired = StorageRootLease.try_acquire(root)
@@ -253,7 +254,7 @@ def _seed(
             if finalize:
                 verified = verify_manifest(
                     active,
-                    started,
+                    verification_time or started,
                     published.actual_from_ts,
                     published.actual_to_ts,
                     published.row_count,
@@ -281,7 +282,8 @@ def _bytes(root: Path) -> dict[str, bytes]:
 def test_evaluator_proves_verified_partition_without_mutating_storage(
     tmp_path: Path,
 ) -> None:
-    _seed(tmp_path)
+    verification_time = datetime(2026, 8, 2, 1, tzinfo=UTC)
+    _seed(tmp_path, verification_time=verification_time)
     before = _bytes(tmp_path)
 
     result = StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
@@ -291,6 +293,8 @@ def test_evaluator_proves_verified_partition_without_mutating_storage(
     assert result.months[0].coverage_state is CoverageStateV1.VERIFIED
     assert result.months[0].validation_reason is ValidationReason.NONE
     assert result.months[0].row_count == 375
+    assert result.months[0].evidence_published_at is None
+    assert result.months[0].evidence_known_at is None
     assert len(result.verified_partitions) == 1
     assert result.verified_partitions[0].plan == _plan()
 

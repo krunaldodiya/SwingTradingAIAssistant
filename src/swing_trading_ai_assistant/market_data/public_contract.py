@@ -397,6 +397,8 @@ class PublicCoverageMonthV1:
     validation_reason: ValidationReason | None
     data_cutoff: datetime | None = None
     session_complete: bool | None = None
+    evidence_published_at: datetime | None = None
+    evidence_known_at: datetime | None = None
 
     def __post_init__(self) -> None:
         policy_digest = supported_equity_month_policy_digest(
@@ -440,6 +442,14 @@ class PublicCoverageMonthV1:
             or type(self.validation_reason) not in (ValidationReason, type(None))
             or not _optional_utc(self.data_cutoff)
             or type(self.session_complete) not in (bool, type(None))
+            or not _optional_utc(self.evidence_published_at)
+            or not _optional_utc(self.evidence_known_at)
+            or (self.evidence_published_at is None) != (self.evidence_known_at is None)
+            or (
+                self.evidence_published_at is not None
+                and self.evidence_known_at is not None
+                and self.evidence_published_at > self.evidence_known_at
+            )
         ):
             raise ValueError("invalid public coverage month")
         if self.coverage_state is CoverageStateV1.VERIFIED and (
@@ -475,7 +485,10 @@ class PublicCoverageMonthV1:
         ):
             raise ValueError("invalid public coverage month")
         if self.coverage_state is not CoverageStateV1.PROVISIONAL and (
-            self.data_cutoff is not None or self.session_complete is not None
+            self.data_cutoff is not None
+            or self.session_complete is not None
+            or self.evidence_published_at is not None
+            or self.evidence_known_at is not None
         ):
             raise ValueError("invalid public coverage month")
 
