@@ -7,11 +7,13 @@ import json
 import os
 import re
 import stat
+import sys
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Final, Protocol, cast
 from uuid import uuid4
@@ -40,6 +42,7 @@ from .public_contract import (
     QueryReportV1,
 )
 from .public_query import QueryRequestV1
+from .runtime_identity_manifest import MARKET_DATA_RUNTIME_SOURCE_SHA256_V1
 from .storage_root_lease import LeaseOutcome, StorageRootLease
 from .universe_snapshot import (
     Nifty50UniverseStoreV1,
@@ -82,23 +85,30 @@ CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1: Final = hashlib.sha256(
 
 _MAX_RUNTIME_CODE_MODULE_BYTES_V1: Final = 2 * 1024 * 1024
 _MAX_RUNTIME_CODE_MODULES_V1: Final = 128
+_RUNTIME_IDENTITY_MANIFEST_NAME_V1: Final = "runtime_identity_manifest.py"
 
 
 def _runtime_module_source_v1() -> tuple[Path, tuple[str, ...]]:
     source_path = Path(__file__)
     module_root = source_path.parent
+    module_names = tuple(sorted(MARKET_DATA_RUNTIME_SOURCE_SHA256_V1))
     try:
         source_metadata = source_path.lstat()
         root_metadata = module_root.lstat()
+        entries = {path.name: path for path in module_root.iterdir()}
+        required = {*module_names, _RUNTIME_IDENTITY_MANIFEST_NAME_V1}
         if (
             not source_path.is_absolute()
             or not stat.S_ISREG(source_metadata.st_mode)
             or not stat.S_ISDIR(root_metadata.st_mode)
+            or not required.issubset(entries)
+            or set(entries) - required - {"__pycache__"}
         ):
             raise ValueError
-        module_names = tuple(
-            sorted(path.name for path in module_root.iterdir() if path.suffix == ".py")
-        )
+        cache = entries.get("__pycache__")
+        if cache is not None and not stat.S_ISDIR(cache.lstat().st_mode):
+            raise ValueError
+        _verify_loaded_runtime_modules(module_root, module_names)
     except (OSError, ValueError):
         raise ValueError("runtime code identity unavailable") from None
     if not module_names or len(module_names) > _MAX_RUNTIME_CODE_MODULES_V1:
@@ -106,49 +116,85 @@ def _runtime_module_source_v1() -> tuple[Path, tuple[str, ...]]:
     return module_root, module_names
 
 
+def _verify_loaded_runtime_modules(
+    module_root: Path, module_names: tuple[str, ...]
+) -> None:
+    package = __package__
+    if type(package) is not str or not package:
+        raise ValueError
+    for name in (*module_names, _RUNTIME_IDENTITY_MANIFEST_NAME_V1):
+        qualified = package if name == "__init__.py" else f"{package}.{name[:-3]}"
+        loaded = sys.modules.get(qualified)
+        if loaded is None:
+            continue
+        location = getattr(loaded, "__file__", None)
+        loader = getattr(loaded, "__loader__", None)
+        if (
+            type(location) is not str
+            or Path(location) != module_root / name
+            or not isinstance(loader, SourceFileLoader)
+        ):
+            raise ValueError
+
+
+def _read_runtime_source(path: Path) -> bytes:
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size < 1
+            or metadata.st_size > _MAX_RUNTIME_CODE_MODULE_BYTES_V1
+        ):
+            raise ValueError
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != metadata.st_dev
+                or opened.st_ino != metadata.st_ino
+                or opened.st_size != metadata.st_size
+            ):
+                raise ValueError
+            chunks: list[bytes] = []
+            remaining = metadata.st_size + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            os.close(descriptor)
+    except (OSError, ValueError):
+        raise ValueError("runtime code identity unavailable") from None
+    raw = b"".join(chunks)
+    if len(raw) != metadata.st_size:
+        raise ValueError("runtime code identity unavailable")
+    return raw
+
+
 def current_cohort_runtime_code_identity_v1() -> str:
     """Digest the bounded source inputs implementing retained cohort facts."""
     module_root, module_names = _runtime_module_source_v1()
     digest = hashlib.sha256()
     for name in module_names:
-        path = module_root / name
-        try:
-            metadata = path.lstat()
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_size < 1
-                or metadata.st_size > _MAX_RUNTIME_CODE_MODULE_BYTES_V1
-            ):
-                raise ValueError
-            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-            try:
-                opened = os.fstat(descriptor)
-                if (
-                    not stat.S_ISREG(opened.st_mode)
-                    or opened.st_dev != metadata.st_dev
-                    or opened.st_ino != metadata.st_ino
-                    or opened.st_size != metadata.st_size
-                ):
-                    raise ValueError
-                chunks: list[bytes] = []
-                remaining = metadata.st_size + 1
-                while remaining:
-                    chunk = os.read(descriptor, min(65_536, remaining))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    remaining -= len(chunk)
-                raw = b"".join(chunks)
-            finally:
-                os.close(descriptor)
-        except (OSError, ValueError):
-            raise ValueError("runtime code identity unavailable") from None
-        if len(raw) != metadata.st_size:
+        observed = hashlib.sha256(_read_runtime_source(module_root / name)).hexdigest()
+        expected = MARKET_DATA_RUNTIME_SOURCE_SHA256_V1[name]
+        if observed != expected:
             raise ValueError("runtime code identity unavailable")
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(raw)
+        digest.update(observed.encode("ascii"))
         digest.update(b"\0")
+    manifest = hashlib.sha256(
+        _read_runtime_source(module_root / _RUNTIME_IDENTITY_MANIFEST_NAME_V1)
+    ).hexdigest()
+    digest.update(_RUNTIME_IDENTITY_MANIFEST_NAME_V1.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(manifest.encode("ascii"))
+    digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -381,6 +427,12 @@ class CurrentCohortMarketDataRequestV1:
             raise ValueError("invalid current market-data request")
         source_policy_identity_sha256 = _require_digest(source_policy_identity_sha256)
         schema_identity_sha256 = _require_digest(schema_identity_sha256)
+        if (
+            source_policy_identity_sha256
+            != CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1
+            or schema_identity_sha256 != CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1
+        ):
+            raise ValueError("invalid current market-data request")
         projection = {
             "cohort": cohort.value(),
             "contract_version": CURRENT_COHORT_CONTRACT_VERSION_V1,
@@ -446,6 +498,7 @@ class CompletedDailyOhlcvFactV1:
             or not _utc(self.data_cutoff)
             or not _utc(self.published_at)
             or not _utc(self.known_at)
+            or self.data_cutoff > self.published_at
             or self.published_at > self.known_at
             or self.data_cutoff.astimezone(_IST).date() != self.session
             or type(self.freshness_state) is not CurrentFreshnessStateV1
@@ -494,8 +547,9 @@ class PartialCurrentSessionSnapshotV1:
             or not _utc(self.last_bar_at)
             or not _utc(self.published_at)
             or not _utc(self.known_at)
+            or self.last_bar_at > self.published_at
             or self.published_at > self.known_at
-            or self.known_at < self.last_bar_at
+            or self.last_bar_at.astimezone(_IST).date() != self.session
             or self.bar_state is not CurrentBarStateV1.PARTIAL_CURRENT_SESSION
         ):
             raise ValueError("invalid partial current-session snapshot")
@@ -531,6 +585,10 @@ class CurrentCohortMemberFactV1:
             or (
                 self.partial_current_session is not None
                 and self.partial_current_session.member != self.member
+            )
+            or (
+                self.partial_current_session is not None
+                and self.completed_daily.session >= self.partial_current_session.session
             )
         ):
             raise ValueError("invalid current cohort member fact")
@@ -568,27 +626,24 @@ class CurrentCohortMarketDataReportV1:
     def __init__(
         self,
         *,
-        cohort_identity_sha256: str,
-        request_identity_sha256: str,
-        invocation_cutoff: datetime,
+        request: CurrentCohortMarketDataRequestV1,
         evidence_state: CurrentEvidenceStateV1,
         members: tuple[CurrentCohortMemberFactV1, ...] | None,
         reasons: tuple[CurrentCohortReasonV1, ...],
-        code_identity: str,
-        schema_identity_sha256: str,
     ) -> None:
-        cohort_identity_sha256 = _require_digest(cohort_identity_sha256)
-        request_identity_sha256 = _require_digest(request_identity_sha256)
-        schema_identity_sha256 = _require_digest(schema_identity_sha256)
+        if type(request) is not CurrentCohortMarketDataRequestV1:
+            raise ValueError("invalid current cohort report")
+        cohort_identity_sha256 = request.cohort.cohort_identity_sha256
+        request_identity_sha256 = request.request_identity_sha256
+        invocation_cutoff = request.invocation_cutoff
+        schema_identity_sha256 = request.schema_identity_sha256
+        code_identity = current_cohort_runtime_code_identity_v1()
         canonical_reasons = tuple(sorted(set(reasons), key=_REASON_ORDER.__getitem__))
         if (
-            not _utc(invocation_cutoff)
-            or type(evidence_state) is not CurrentEvidenceStateV1
+            type(evidence_state) is not CurrentEvidenceStateV1
             or type(reasons) is not tuple
             or any(type(reason) is not CurrentCohortReasonV1 for reason in reasons)
             or canonical_reasons != reasons
-            or type(code_identity) is not str
-            or _DIGEST.fullmatch(code_identity) is None
         ):
             raise ValueError("invalid current cohort report")
         if evidence_state is CurrentEvidenceStateV1.COMPLETE:
@@ -597,6 +652,37 @@ class CurrentCohortMarketDataReportV1:
                 or not members
                 or reasons
                 or any(type(item) is not CurrentCohortMemberFactV1 for item in members)
+                or (
+                    not request.include_partial_current_session
+                    and any(
+                        item.partial_current_session is not None for item in members
+                    )
+                )
+                or len({item.member for item in members}) != len(members)
+                or tuple(item.member for item in members) != request.cohort.members
+                or any(
+                    item.completed_daily.freshness_state
+                    is not CurrentFreshnessStateV1.FRESH
+                    or _CURRENT_FRESHNESS_POLICY_V1.state(
+                        item.completed_daily.known_at, invocation_cutoff
+                    )
+                    is not CurrentFreshnessStateV1.FRESH
+                    or item.completed_daily.data_cutoff > invocation_cutoff
+                    or item.completed_daily.published_at > invocation_cutoff
+                    or item.completed_daily.known_at > invocation_cutoff
+                    or (
+                        item.partial_current_session is not None
+                        and (
+                            item.partial_current_session.last_bar_at > invocation_cutoff
+                            or item.partial_current_session.published_at
+                            > invocation_cutoff
+                            or item.partial_current_session.known_at > invocation_cutoff
+                            or item.partial_current_session.session
+                            != invocation_cutoff.astimezone(_IST).date()
+                        )
+                    )
+                    for item in members
+                )
                 or tuple(
                     sorted(
                         members, key=lambda item: (item.member.isin, item.member.symbol)
@@ -706,15 +792,21 @@ class CurrentCohortRetainedQueryPortV1:
         )
 
 
+def _query_payload(report: object) -> QueryPayloadV1 | None:
+    if type(report) is not PublicCommandReportV1:
+        return None
+    payload = cast(PublicCommandReportV1[object], report).payload
+    return payload if type(payload) is QueryPayloadV1 else None
+
+
 def _minute_payload(report: object) -> QueryPayloadV1 | None:
     if type(report) is not PublicCommandReportV1:
         return None
     typed_report = cast(PublicCommandReportV1[object], report)
-    payload = typed_report.payload
+    payload = _query_payload(typed_report)
     if (
         typed_report.status is not PublicCommandStatusV1.SUCCEEDED
         or typed_report.failure is not None
-        or type(payload) is not QueryPayloadV1
     ):
         return None
     return payload
@@ -725,21 +817,36 @@ def _successful_minute_payload(report: object) -> QueryPayloadV1 | None:
     return payload if payload is not None and payload.rows else None
 
 
+def _prior_only_is_current(request: QueryRequestV1, payload: QueryPayloadV1) -> bool:
+    target = f"{request.to_date.year:04d}-{request.to_date.month:02d}"
+    return any(
+        month.month == target and month.session_complete is False
+        for month in payload.months
+    )
+
+
 def _merge_current_cohort_query_reports(
     request: QueryRequestV1,
     prior_report: QueryReportV1,
     current_report: QueryReportV1,
 ) -> QueryReportV1:
-    payloads = tuple(
-        payload
-        for payload in (
-            _minute_payload(prior_report),
-            _minute_payload(current_report),
-        )
-        if payload is not None
-    )
-    if not payloads:
+    prior_payload = _minute_payload(prior_report)
+    current_payload = _minute_payload(current_report)
+    observed_current = _query_payload(current_report)
+    if prior_payload is None:
         return current_report
+    if current_payload is None:
+        return (
+            prior_report
+            if observed_current is not None
+            and _prior_only_is_current(request, observed_current)
+            else current_report
+        )
+    if not current_payload.rows and not _prior_only_is_current(
+        request, current_payload
+    ):
+        return current_report
+    payloads = (prior_payload, current_payload)
     fields = tuple(CandleFieldV1(value) for value in request.fields)
     public_request = PublicQueryRequestV1(
         request.segment,
@@ -901,6 +1008,200 @@ class CurrentFreshnessPolicyV1:
         return CurrentFreshnessStateV1.FRESH
 
 
+_CURRENT_FRESHNESS_POLICY_V1: Final = CurrentFreshnessPolicyV1()
+
+
+def _archive_evidence_types_valid(
+    request: object,
+    report: object,
+    facts: object,
+    partials: object,
+    ledger: object,
+) -> bool:
+    return (
+        type(request) is CurrentCohortMarketDataRequestV1
+        and type(report) is CurrentCohortMarketDataReportV1
+        and type(facts) is tuple
+        and all(
+            type(item) is CurrentCohortMemberFactV1
+            for item in cast(tuple[object, ...], facts)
+        )
+        and type(partials) is tuple
+        and all(
+            type(item) is PartialCurrentSessionSnapshotV1
+            for item in cast(tuple[object, ...], partials)
+        )
+        and type(ledger) is tuple
+        and all(
+            type(item) is FeatureAvailabilityLedgerEntryV1
+            for item in cast(tuple[object, ...], ledger)
+        )
+    )
+
+
+def _archived_fact_matches_request(
+    request: CurrentCohortMarketDataRequestV1,
+    fact: CurrentCohortMemberFactV1,
+) -> bool:
+    completed = fact.completed_daily
+    partial = fact.partial_current_session
+    return (
+        completed.freshness_state is CurrentFreshnessStateV1.FRESH
+        and completed.data_cutoff <= request.invocation_cutoff
+        and completed.published_at <= request.invocation_cutoff
+        and completed.known_at <= request.invocation_cutoff
+        and _CURRENT_FRESHNESS_POLICY_V1.state(
+            completed.known_at, request.invocation_cutoff
+        )
+        is CurrentFreshnessStateV1.FRESH
+        and (
+            partial is None
+            or (
+                request.include_partial_current_session
+                and partial.last_bar_at <= request.invocation_cutoff
+                and partial.published_at <= request.invocation_cutoff
+                and partial.known_at <= request.invocation_cutoff
+                and partial.session == request.invocation_cutoff.astimezone(_IST).date()
+            )
+        )
+    )
+
+
+def _archived_partial_matches_request(
+    request: CurrentCohortMarketDataRequestV1,
+    partial: PartialCurrentSessionSnapshotV1,
+) -> bool:
+    return (
+        request.include_partial_current_session
+        and partial.last_bar_at <= request.invocation_cutoff
+        and partial.published_at <= request.invocation_cutoff
+        and partial.known_at <= request.invocation_cutoff
+        and partial.session == request.invocation_cutoff.astimezone(_IST).date()
+    )
+
+
+def _archive_members_match_request(
+    request: CurrentCohortMarketDataRequestV1,
+    facts: tuple[CurrentCohortMemberFactV1, ...],
+    partials: tuple[PartialCurrentSessionSnapshotV1, ...],
+) -> bool:
+    fact_by_member = {item.member: item for item in facts}
+    partial_by_member = {item.member: item for item in partials}
+    return (
+        len(fact_by_member) == len(facts)
+        and len(partial_by_member) == len(partials)
+        and (request.include_partial_current_session or not partials)
+        and tuple(fact_by_member)
+        == tuple(
+            member for member in request.cohort.members if member in fact_by_member
+        )
+        and tuple(partial_by_member)
+        == tuple(
+            member for member in request.cohort.members if member in partial_by_member
+        )
+        and all(
+            item.partial_current_session == partial_by_member.get(item.member)
+            for item in facts
+        )
+        and all(_archived_fact_matches_request(request, item) for item in facts)
+        and all(_archived_partial_matches_request(request, item) for item in partials)
+    )
+
+
+def _archive_report_matches_request(
+    request: CurrentCohortMarketDataRequestV1,
+    report: CurrentCohortMarketDataReportV1,
+    facts: tuple[CurrentCohortMemberFactV1, ...],
+) -> bool:
+    return (
+        report.cohort_identity_sha256 == request.cohort.cohort_identity_sha256
+        and report.request_identity_sha256 == request.request_identity_sha256
+        and report.invocation_cutoff == request.invocation_cutoff
+        and report.schema_identity_sha256 == request.schema_identity_sha256
+        and (
+            (
+                report.evidence_state is CurrentEvidenceStateV1.COMPLETE
+                and report.members == facts
+            )
+            or (
+                report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
+                and report.members is None
+            )
+        )
+    )
+
+
+def _archive_ledger_matches_request(
+    request: CurrentCohortMarketDataRequestV1,
+    report: CurrentCohortMarketDataReportV1,
+    facts: tuple[CurrentCohortMemberFactV1, ...],
+    partials: tuple[PartialCurrentSessionSnapshotV1, ...],
+    ledger: tuple[FeatureAvailabilityLedgerEntryV1, ...],
+) -> bool:
+    expected_count = len(request.cohort.members) * (
+        2 if request.include_partial_current_session else 1
+    )
+    if len(ledger) != expected_count:
+        return False
+    fact_by_member = {item.member: item.completed_daily for item in facts}
+    partial_by_member = {item.member: item for item in partials}
+    reported_unavailable_states = {_ledger_state(reason) for reason in report.reasons}
+    ledger_index = 0
+    for member in request.cohort.members:
+        daily_entry = ledger[ledger_index]
+        ledger_index += 1
+        daily_fact = fact_by_member.get(member)
+        if daily_entry != _available_ledger_entry(
+            feature="DAILY_OHLCV",
+            interval="1d",
+            member=member,
+            cutoff=request.invocation_cutoff,
+            fact=daily_fact,
+            state=daily_entry.availability_state,
+        ) or (
+            (daily_fact is not None)
+            != (
+                daily_entry.availability_state
+                is HistoricalAvailabilityStateV1.AVAILABLE
+            )
+            or (
+                daily_fact is None
+                and daily_entry.availability_state not in reported_unavailable_states
+            )
+        ):
+            return False
+        if request.include_partial_current_session:
+            partial_entry = ledger[ledger_index]
+            ledger_index += 1
+            partial = partial_by_member.get(member)
+            partial_unavailable_states = (
+                {HistoricalAvailabilityStateV1.NOT_RETAINED}
+                if daily_fact is not None
+                else reported_unavailable_states
+            )
+            if partial_entry != _available_ledger_entry(
+                feature="PARTIAL_CURRENT_SESSION",
+                interval="1m",
+                member=member,
+                cutoff=request.invocation_cutoff,
+                partial=partial,
+                state=partial_entry.availability_state,
+            ) or (
+                (partial is not None)
+                != (
+                    partial_entry.availability_state
+                    is HistoricalAvailabilityStateV1.AVAILABLE
+                )
+                or (
+                    partial is None
+                    and partial_entry.availability_state
+                    not in partial_unavailable_states
+                )
+            ):
+                return False
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class ImmutableCurrentFactArchiveV1:
     storage_root: Path
@@ -914,6 +1215,16 @@ class ImmutableCurrentFactArchiveV1:
         ledger: tuple[FeatureAvailabilityLedgerEntryV1, ...],
         lease: StorageRootLease,
     ) -> bool:
+        if not _archive_evidence_types_valid(request, report, facts, partials, ledger):
+            return False
+        if not _archive_members_match_request(request, facts, partials):
+            return False
+        if not _archive_report_matches_request(request, report, facts):
+            return False
+        if not _archive_ledger_matches_request(
+            request, report, facts, partials, ledger
+        ):
+            return False
         payload = {
             "code_identity": report.code_identity,
             "cohort_identity_sha256": request.cohort.cohort_identity_sha256,
@@ -1153,7 +1464,6 @@ def _identity_admission_reason(
     member: CurrentCohortMemberV1,
     lease: StorageRootLease,
     cutoff: datetime,
-    freshness_policy: CurrentFreshnessPolicyV1,
 ) -> tuple[CurrentCohortResolvedIdentityV1 | None, CurrentCohortReasonV1 | None]:
     try:
         resolved = resolver.resolve_under_lease(member, lease)
@@ -1168,7 +1478,7 @@ def _identity_admission_reason(
     if resolved is None:
         return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
     if (
-        freshness_policy.state(resolved.retrieved_at, cutoff)
+        _CURRENT_FRESHNESS_POLICY_V1.state(resolved.retrieved_at, cutoff)
         is not CurrentFreshnessStateV1.FRESH
     ):
         return None, CurrentCohortReasonV1.IDENTITY_STALE
@@ -1185,98 +1495,117 @@ class CurrentCohortMarketDataServiceV1:
     query_port: CurrentCohortQueryPortV1
     query_factory: CurrentCohortQueryFactoryV1
     storage_root: Path
-    code_identity: str
-    freshness_policy: CurrentFreshnessPolicyV1 = field(
-        default_factory=CurrentFreshnessPolicyV1
-    )
     archive_port: CurrentCohortArchivePortV1 | None = None
+    expected_root_identity: tuple[int, int] | None = None
 
     def evaluate(
         self, request: CurrentCohortMarketDataRequestV1
     ) -> CurrentCohortMarketDataReportV1:
-        acquired = StorageRootLease.try_acquire_existing(self.storage_root)
+        current_cohort_runtime_code_identity_v1()
+        expected_root_identity = self.expected_root_identity
+        if expected_root_identity is None:
+            expected_root_identity = StorageRootLease.admit_existing_private_identity(
+                self.storage_root
+            )
+        if expected_root_identity is None:
+            return self._insufficient(
+                request, {CurrentCohortReasonV1.PROVIDER_UNAVAILABLE}
+            )
+        acquired = StorageRootLease.try_acquire_existing_identity(
+            self.storage_root,
+            expected_root_identity,
+        )
         if acquired.outcome is not LeaseOutcome.ACQUIRED or acquired.lease is None:
             return self._insufficient(
                 request, {CurrentCohortReasonV1.PROVIDER_UNAVAILABLE}
             )
+        try:
+            report = self._evaluate_under_lease(request, acquired.lease)
+        except BaseException:
+            with suppress(RuntimeError):
+                acquired.lease.close()
+            raise
+        try:
+            acquired.lease.close()
+        except RuntimeError:
+            return self._insufficient(
+                request, {CurrentCohortReasonV1.PROVIDER_UNAVAILABLE}
+            )
+        return report
+
+    def _evaluate_under_lease(
+        self,
+        request: CurrentCohortMarketDataRequestV1,
+        lease: StorageRootLease,
+    ) -> CurrentCohortMarketDataReportV1:
         facts: dict[CurrentCohortMemberV1, CompletedDailyOhlcvFactV1] = {}
         partials: dict[CurrentCohortMemberV1, PartialCurrentSessionSnapshotV1] = {}
         member_reasons: dict[CurrentCohortMemberV1, CurrentCohortReasonV1] = {}
-        try:
-            member_reasons.update(
-                _cohort_scope_reasons(
-                    self.universe_resolver,
-                    request.cohort.members,
-                    acquired.lease,
-                    request.invocation_cutoff,
-                )
+        member_reasons.update(
+            _cohort_scope_reasons(
+                self.universe_resolver,
+                request.cohort.members,
+                lease,
+                request.invocation_cutoff,
             )
-            for member in request.cohort.members:
-                if member in member_reasons:
-                    continue
-                resolved, reason = _identity_admission_reason(
-                    self.policy,
-                    self.resolver,
-                    member,
-                    acquired.lease,
-                    request.invocation_cutoff,
-                    self.freshness_policy,
-                )
-                if reason is not None:
-                    member_reasons[member] = reason
-                if resolved is None:
-                    continue
-                fact, partial, reason = self._query_member(
-                    request, member, resolved.instrument, acquired.lease
-                )
-                if partial is not None:
-                    partials[member] = partial
-                if fact is not None:
-                    facts[member] = fact
-                if reason is not None:
-                    member_reasons[member] = reason
-            canonical_facts = tuple(
-                CurrentCohortMemberFactV1(member, facts[member], partials.get(member))
-                for member in request.cohort.members
-                if member in facts
+        )
+        for member in request.cohort.members:
+            if member in member_reasons:
+                continue
+            resolved, reason = _identity_admission_reason(
+                self.policy,
+                self.resolver,
+                member,
+                lease,
+                request.invocation_cutoff,
             )
-            canonical_partials = tuple(
-                partials[member]
-                for member in request.cohort.members
-                if member in partials
+            if reason is not None:
+                member_reasons[member] = reason
+            if resolved is None:
+                continue
+            fact, partial, reason = self._query_member(
+                request, member, resolved.instrument, lease
             )
-            reasons = set(member_reasons.values())
-            report = (
-                CurrentCohortMarketDataReportV1(
-                    cohort_identity_sha256=request.cohort.cohort_identity_sha256,
-                    request_identity_sha256=request.request_identity_sha256,
-                    invocation_cutoff=request.invocation_cutoff,
-                    evidence_state=CurrentEvidenceStateV1.COMPLETE,
-                    members=canonical_facts,
-                    reasons=(),
-                    code_identity=self.code_identity,
-                    schema_identity_sha256=request.schema_identity_sha256,
-                )
-                if not reasons and len(canonical_facts) == len(request.cohort.members)
-                else self._insufficient(
-                    request, reasons or {CurrentCohortReasonV1.DAILY_BAR_MISSING}
-                )
+            if partial is not None:
+                partials[member] = partial
+            if fact is not None:
+                facts[member] = fact
+            if reason is not None:
+                member_reasons[member] = reason
+        canonical_facts = tuple(
+            CurrentCohortMemberFactV1(member, facts[member], partials.get(member))
+            for member in request.cohort.members
+            if member in facts
+        )
+        canonical_partials = tuple(
+            partials[member] for member in request.cohort.members if member in partials
+        )
+        reasons = set(member_reasons.values())
+        report = (
+            CurrentCohortMarketDataReportV1(
+                request=request,
+                evidence_state=CurrentEvidenceStateV1.COMPLETE,
+                members=canonical_facts,
+                reasons=(),
             )
-            ledger = self._ledger(request, facts, partials, member_reasons)
-            if self.archive_port is None or not self.archive_port.archive(
-                request,
-                report,
-                canonical_facts,
-                canonical_partials,
-                ledger,
-                acquired.lease,
-            ):
-                return self._insufficient(
-                    request, {CurrentCohortReasonV1.SOURCE_RECEIPT_MISSING}
-                )
-            return report
-        finally:
-            acquired.lease.close()
+            if not reasons and len(canonical_facts) == len(request.cohort.members)
+            else self._insufficient(
+                request, reasons or {CurrentCohortReasonV1.DAILY_BAR_MISSING}
+            )
+        )
+        ledger = self._ledger(request, facts, partials, member_reasons)
+        if self.archive_port is None or not self.archive_port.archive(
+            request,
+            report,
+            canonical_facts,
+            canonical_partials,
+            ledger,
+            lease,
+        ):
+            return self._insufficient(
+                request, {CurrentCohortReasonV1.SOURCE_RECEIPT_MISSING}
+            )
+        return report
 
     def _query_member(
         self,
@@ -1306,7 +1635,7 @@ class CurrentCohortMarketDataServiceV1:
             instrument,
             query_report,
             request.invocation_cutoff,
-            self.freshness_policy,
+            _CURRENT_FRESHNESS_POLICY_V1,
             self.storage_root,
             lease,
         )
@@ -1366,14 +1695,10 @@ class CurrentCohortMarketDataServiceV1:
     ) -> CurrentCohortMarketDataReportV1:
         canonical_reasons = tuple(sorted(reasons, key=_REASON_ORDER.__getitem__))
         return CurrentCohortMarketDataReportV1(
-            cohort_identity_sha256=request.cohort.cohort_identity_sha256,
-            request_identity_sha256=request.request_identity_sha256,
-            invocation_cutoff=request.invocation_cutoff,
+            request=request,
             evidence_state=CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE,
             members=None,
             reasons=canonical_reasons,
-            code_identity=self.code_identity,
-            schema_identity_sha256=request.schema_identity_sha256,
         )
 
 

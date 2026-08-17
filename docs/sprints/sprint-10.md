@@ -67,8 +67,13 @@ and one trailing newline:
 {"contract_version":"current-supplied-cohort-market-data@v1","members":[{"isin":"INE002A01018","symbol":"RELIANCE"}],"selected_at":"2026-08-17T03:00:00.000000Z"}
 ```
 
-Run the retained-data path with absolute owner-private paths and an explicit UTC
-knowledge cutoff:
+Create the retained root once with owner-only permissions. Then run the
+retained-data path with absolute canonical paths and an explicit UTC knowledge
+cutoff:
+
+```text
+install -d -m 700 /absolute/private/market-data
+```
 
 ```text
 market-data cohort-current \
@@ -81,22 +86,25 @@ market-data cohort-current \
 The command reads retained evidence only. Exit `0` emits one canonical
 `COMPLETE` report; exit `1` emits one canonical whole-cohort
 `INSUFFICIENT_EVIDENCE` report with `members: null`; exit `2` rejects malformed
-CLI or cohort input before retained-root access. A complete result also publishes
-one content-addressed immutable fact/availability-ledger object below the
-protected retained root. This command does not authorize provider access.
+CLI or cohort input, a missing/changed root, or unsafe storage before retained
+root access. The command never creates its own authority root: the supplied
+root must already be the same owner-private `0700` directory admitted for that
+invocation. A complete result also publishes one content-addressed immutable
+fact/availability-ledger object below the protected retained root. This command
+does not authorize provider access.
 
 Local behavioral evidence:
 
 ```text
 uv run pytest -q -o addopts='' tests/market_data/test_current_cohort.py
-# 22 passed
+# 32 passed
 
 # Empty retained root smoke: canonical INSUFFICIENT_EVIDENCE,
-# reason PROVIDER_UNAVAILABLE, process exit 1; no provider call.
+# reason COHORT_INVALID, process exit 1; no provider call.
 ```
 
 Final local repository gate: Ruff format/check and Vulture passed; Pyright
-reported 0 errors and 0 warnings; 2,554 tests passed at 91.61% coverage; source
+reported 0 errors and 0 warnings; 2,567 tests passed at 91.50% coverage; source
 and wheel distributions built successfully; `git diff --check` passed.
 Exact revision review, hosted checks, merge, and publication remain pending.
 

@@ -88,18 +88,17 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   publication for the correction are external lifecycle evidence; this index
   asserts no current lifecycle state for them. The correction grants no
   acquisition, readiness, admission, label, or later execution authority.
-- [Sprint 10 — Market Regime Layer B evidence acquisition readiness](sprint-10.md) —
-  [parent acquisition goal — GitHub Issue #111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111), [planning/publication task — GitHub Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112), Milestone 2 (Sprint 10), and [Plan 17](../plans/17-market-regime-layer-b-evidence-acquisition.md)
-  record **`BLOCKED / CAPABILITY_EVIDENCE_MISSING`**. Planning has started;
-  acquisition has not started. The observed baseline is
-  `origin/main` `2d5cb3734a35a77d107c21147a50c120555cdfab`, whose sealed
-  incomplete manifest is
-  `53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f` and
-  canonical blocked report is
-  `dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
-  This planning evidence grants no provider access or runtime implementation
-  authority.
-  It remains preserved historical evidence after reprioritization.
+- Former Sprint 10 proposal — Market Regime Layer B evidence-acquisition
+  readiness — [Plan 17](../plans/17-market-regime-layer-b-evidence-acquisition.md)
+  preserves the historical **`BLOCKED / CAPABILITY_EVIDENCE_MISSING`** record.
+  GitHub Issues
+  [#111](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/111)
+  and
+  [#112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112)
+  retain the earlier planning context; #111 is closed as not planned after the
+  current-first reprioritization. No acquisition or implementation started, and
+  this historical record grants no provider access or runtime authority. It is
+  not the current Sprint 10 record and does not link to `sprint-10.md`.
 - [Sprint 10 — Current supplied-cohort market data](sprint-10.md) —
   [GitHub Issue #121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121)
   is the current foundation. It makes existing `market-data` usable for a

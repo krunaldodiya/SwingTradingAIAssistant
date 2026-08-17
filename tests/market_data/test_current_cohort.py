@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -15,6 +16,8 @@ from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_cohort import (
     CURRENT_COHORT_CONTRACT_VERSION_V1,
+    CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
+    CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
     CompletedDailyOhlcvFactV1,
     CurrentCohortMarketDataReportV1,
     CurrentCohortMarketDataRequestV1,
@@ -29,7 +32,10 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     CurrentFreshnessStateV1,
     CurrentSuppliedCohortAdmissionPolicyV1,
     CurrentSuppliedCohortManifestV1,
+    FeatureAvailabilityLedgerEntryV1,
+    HistoricalAvailabilityStateV1,
     ImmutableCurrentFactArchiveV1,
+    PartialCurrentSessionSnapshotV1,
     current_cohort_runtime_code_identity_v1,
     parse_current_cohort_manifest_bytes_v1,
 )
@@ -49,12 +55,17 @@ from swing_trading_ai_assistant.market_data.public_contract import (
     PublicCommandReportV1,
     PublicCommandStatusV1,
     PublicCoverageMonthV1,
+    PublicFailureCodeV1,
+    PublicFailureV1,
     PublicQueryRequestV1,
     PublicQueryRowV1,
     QueryPayloadV1,
     QueryReportV1,
 )
 from swing_trading_ai_assistant.market_data.public_query import QueryRequestV1
+from swing_trading_ai_assistant.market_data.runtime_identity_manifest import (
+    MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
+)
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
@@ -62,9 +73,8 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 _DIGEST = "a" * 64
-_SCHEMA = "b" * 64
-_POLICY = "c" * 64
-_CODE_IDENTITY = "e" * 64
+_SCHEMA = CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1
+_POLICY = CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1
 _SELECTED_AT = datetime(2026, 8, 17, 3, tzinfo=UTC)
 _CUTOFF = datetime(2026, 8, 17, 10, tzinfo=UTC)
 _PUBLISHED_AT = datetime(2026, 8, 17, 8, tzinfo=UTC)
@@ -81,8 +91,22 @@ def test_manifest_identity_is_independent_of_supplied_member_order() -> None:
 
     assert forward.members == reverse.members
     assert forward.cohort_identity_sha256 == reverse.cohort_identity_sha256
+
     assert len(forward.cohort_identity_sha256) == 64
     assert forward.canonical_json_bytes() == reverse.canonical_json_bytes()
+
+
+def test_request_rejects_unrecognized_schema_and_source_policy() -> None:
+    member = _member()
+
+    with pytest.raises(ValueError, match="invalid current market-data request"):
+        CurrentCohortMarketDataRequestV1(
+            CurrentSuppliedCohortManifestV1(_SELECTED_AT, (member,)),
+            _CUTOFF,
+            False,
+            "f" * 64,
+            "9" * 64,
+        )
 
 
 def test_manifest_admits_at_most_fifty_nifty_50_members() -> None:
@@ -135,6 +159,134 @@ def test_current_service_archives_completed_daily_and_partial_ledger(
     assert partial["availability_state"] == "AVAILABLE"
     assert partial["interval"] == "1m"
     assert partial["revision_identity_sha256"] == _DIGEST
+
+
+def test_current_service_maps_lease_cleanup_failure_to_closed_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    service = _service(root, member, _query_report())
+    original_close = StorageRootLease.close
+
+    def close_then_fail(lease: StorageRootLease) -> None:
+        original_close(lease)
+        raise RuntimeError("cleanup failure")
+
+    monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    report = service.evaluate(_request(member))
+
+    assert report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
+    assert report.members is None
+    assert report.reasons == (CurrentCohortReasonV1.PROVIDER_UNAVAILABLE,)
+
+
+def test_complete_report_rejects_duplicate_and_future_member_evidence(
+    tmp_path: Path,
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    request = _request(member, include_partial=True)
+    report = _service(root, member, _query_report_with_partial()).evaluate(request)
+    assert report.members is not None
+    member_fact = report.members[0]
+
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(_request(member), (member_fact,))
+
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(request, (member_fact, member_fact))
+
+    future_fact = replace(
+        member_fact,
+        completed_daily=replace(
+            member_fact.completed_daily,
+            known_at=report.invocation_cutoff + timedelta(microseconds=1),
+        ),
+    )
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(request, (future_fact,))
+
+    before_bar = member_fact.completed_daily.data_cutoff - timedelta(microseconds=1)
+    with pytest.raises(ValueError, match="invalid completed daily OHLCV fact"):
+        replace(
+            member_fact.completed_daily,
+            published_at=before_bar,
+            known_at=before_bar,
+        )
+
+    partial = member_fact.partial_current_session
+    assert partial is not None
+    stale_partial = replace(
+        partial,
+        session=partial.session - timedelta(days=1),
+        last_bar_at=partial.last_bar_at - timedelta(days=1),
+    )
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(
+            request,
+            (replace(member_fact, partial_current_session=stale_partial),),
+        )
+
+    completed_session_partial = replace(
+        partial,
+        session=member_fact.completed_daily.session,
+        last_bar_at=member_fact.completed_daily.data_cutoff,
+    )
+    with pytest.raises(ValueError, match="invalid current cohort member fact"):
+        replace(member_fact, partial_current_session=completed_session_partial)
+
+    stale_fact = replace(
+        member_fact,
+        completed_daily=replace(
+            member_fact.completed_daily,
+            freshness_state=CurrentFreshnessStateV1.STALE,
+        ),
+    )
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(request, (stale_fact,))
+
+    old_completed = replace(
+        member_fact.completed_daily,
+        session=member_fact.completed_daily.session - timedelta(days=5),
+        data_cutoff=member_fact.completed_daily.data_cutoff - timedelta(days=5),
+        published_at=member_fact.completed_daily.published_at - timedelta(days=5),
+        known_at=member_fact.completed_daily.known_at - timedelta(days=5),
+    )
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(
+            request,
+            (replace(member_fact, completed_daily=old_completed),),
+        )
+
+    with pytest.raises(ValueError, match="invalid partial current-session snapshot"):
+        replace(
+            partial,
+            published_at=partial.last_bar_at - timedelta(microseconds=1),
+        )
+
+    sbin = CurrentCohortMemberV1("INE062A01020", "SBIN")
+    mismatched = CurrentCohortMemberFactV1(
+        sbin,
+        replace(member_fact.completed_daily, member=sbin),
+    )
+    with pytest.raises(ValueError, match="invalid current cohort report"):
+        _rebuild_complete_report(request, (mismatched,))
+
+
+def test_partial_snapshot_rejects_cross_session_bar_timestamp(tmp_path: Path) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    report = _service(root, member, _query_report_with_partial()).evaluate(
+        _request(member, include_partial=True)
+    )
+    assert report.members is not None
+    partial = report.members[0].partial_current_session
+    assert partial is not None
+
+    with pytest.raises(ValueError, match="invalid partial current-session snapshot"):
+        replace(partial, session=partial.session - timedelta(days=1))
 
 
 def test_current_service_archives_insufficient_closed_daily_and_partial_ledger(
@@ -205,6 +357,48 @@ def test_current_service_archives_admitted_partial_when_daily_is_insufficient(
     } == {
         ("DAILY_OHLCV", "NOT_RETAINED"),
         ("PARTIAL_CURRENT_SESSION", "AVAILABLE"),
+    }
+
+
+def test_mixed_insufficient_cohort_archives_missing_optional_partial(
+    tmp_path: Path,
+) -> None:
+    root = _protected_root(tmp_path)
+    reliance = _member()
+    sbin = CurrentCohortMemberV1("INE062A01020", "SBIN")
+    members = (reliance, sbin)
+    request = CurrentCohortMarketDataRequestV1(
+        CurrentSuppliedCohortManifestV1(_SELECTED_AT, members),
+        _CUTOFF,
+        True,
+        _POLICY,
+        _SCHEMA,
+    )
+    service = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1(members),
+        _UniverseResolver((reliance,)),
+        _Resolver(),
+        _QueryPort(_query_report()),
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+
+    report = service.evaluate(request)
+
+    assert report.reasons == (CurrentCohortReasonV1.OUT_OF_COHORT,)
+    assert {
+        (
+            item["instrument_identity"],
+            item["feature"],
+            item["availability_state"],
+        )
+        for item in _archive_payload(root)["ledger"]
+    } == {
+        ("INE002A01018:RELIANCE", "DAILY_OHLCV", "AVAILABLE"),
+        ("INE002A01018:RELIANCE", "PARTIAL_CURRENT_SESSION", "NOT_RETAINED"),
+        ("INE062A01020:SBIN", "DAILY_OHLCV", "CONFLICTED"),
+        ("INE062A01020:SBIN", "PARTIAL_CURRENT_SESSION", "CONFLICTED"),
     }
 
 
@@ -319,7 +513,15 @@ def test_current_service_selects_prior_month_completed_row_with_seven_day_lookba
         to_date=date(2026, 8, 1),
     )
     current_report = _report(
-        QueryPayloadV1(current_request, 0, current_source.payload.months, ())
+        QueryPayloadV1(
+            current_request,
+            0,
+            tuple(
+                replace(value, session_complete=False)
+                for value in current_source.payload.months
+            ),
+            (),
+        )
     )
     acquired = StorageRootLease.try_acquire_existing(root)
     assert acquired.lease is not None
@@ -403,10 +605,134 @@ def test_current_service_selects_prior_month_completed_row_with_seven_day_lookba
         query_port,
         CurrentCohortQueryRequestFactoryV1(root),
         root,
-        _CODE_IDENTITY,
         archive_port=ImmutableCurrentFactArchiveV1(root),
     )
 
+    unavailable = replace(
+        current_report,
+        status=PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+        failure=PublicFailureV1(
+            PublicFailureCodeV1.COVERAGE_INSUFFICIENT,
+            None,
+            None,
+            None,
+            None,
+            ("2026-08",),
+        ),
+        payload=QueryPayloadV1(
+            current_report.payload.request,
+            0,
+            (
+                PublicCoverageMonthV1(
+                    "2026-08",
+                    CoverageStateV1.MISSING,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            (),
+        ),
+    )
+
+    class MissingCurrentPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            assert type(request) is QueryRequestV1
+            return (
+                unavailable if request.from_date == date(2026, 8, 1) else prior_report
+            )
+
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    one_sided = CurrentCohortRetainedQueryPortV1(
+        MissingCurrentPort(),
+        _QueryPort(prior_report),
+    ).query_under_lease(
+        CurrentCohortQueryRequestFactoryV1(root)(member, cutoff),
+        acquired.lease,
+    )
+    acquired.lease.close()
+
+    assert one_sided == unavailable
+    terminal_current = replace(
+        unavailable,
+        status=PublicCommandStatusV1.UNAVAILABLE,
+        failure=PublicFailureV1(
+            PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+            None,
+            None,
+            None,
+            None,
+            (),
+        ),
+        payload=None,
+    )
+
+    class TerminalCurrentPort:
+        def query_under_lease(
+            self, requested: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            assert type(requested) is QueryRequestV1
+            return (
+                terminal_current
+                if requested.from_date == date(2026, 8, 1)
+                else prior_report
+            )
+
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    terminal = CurrentCohortRetainedQueryPortV1(
+        TerminalCurrentPort(),
+        _QueryPort(prior_report),
+    ).query_under_lease(
+        CurrentCohortQueryRequestFactoryV1(root)(member, cutoff),
+        acquired.lease,
+    )
+    acquired.lease.close()
+
+    assert terminal == terminal_current
+    completed_current = replace(
+        unavailable,
+        payload=replace(
+            current_report.payload,
+            months=tuple(
+                replace(value, session_complete=True)
+                for value in current_report.payload.months
+            ),
+        ),
+    )
+
+    class MissingCompletedCurrentPort:
+        def query_under_lease(
+            self, requested: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            assert type(requested) is QueryRequestV1
+            return (
+                completed_current
+                if requested.from_date == date(2026, 8, 1)
+                else prior_report
+            )
+
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    stale_prior = CurrentCohortRetainedQueryPortV1(
+        MissingCompletedCurrentPort(),
+        _QueryPort(prior_report),
+    ).query_under_lease(
+        CurrentCohortQueryRequestFactoryV1(root)(member, cutoff),
+        acquired.lease,
+    )
+    acquired.lease.close()
+
+    assert stale_prior == completed_current
     report = service.evaluate(request)
     assert report.members is not None
     assert report.members[0].completed_daily.session == date(2026, 7, 31)
@@ -415,6 +741,94 @@ def test_current_service_selects_prior_month_completed_row_with_seven_day_lookba
         date(2026, 7, 25),
         date(2026, 8, 1),
     )
+
+
+def test_rollover_returns_current_success_when_prior_month_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    cutoff = datetime(2026, 8, 1, 10, tzinfo=UTC)
+    current_row = PublicQueryRowV1(
+        datetime(2026, 8, 1, 4, tzinfo=UTC),
+        100.0,
+        101.0,
+        99.0,
+        100.5,
+        10,
+    )
+    current_request = PublicQueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 1),
+        date(2026, 8, 1),
+        "1m",
+        tuple(CandleFieldV1),
+        10_000,
+    )
+    current_report = _report(
+        QueryPayloadV1(
+            current_request,
+            1,
+            (_month("2026-08", current_row.ts, complete=False),),
+            (current_row,),
+        )
+    )
+    prior_request = replace(
+        current_request,
+        from_date=date(2026, 7, 25),
+        to_date=date(2026, 7, 31),
+    )
+    prior_report = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+        PublicFailureV1(
+            PublicFailureCodeV1.COVERAGE_INSUFFICIENT,
+            None,
+            None,
+            None,
+            None,
+            ("2026-07",),
+        ),
+        0,
+        QueryPayloadV1(
+            prior_request,
+            0,
+            (
+                _month(
+                    "2026-07",
+                    datetime(2026, 7, 31, 10, tzinfo=UTC),
+                    complete=True,
+                ),
+            ),
+            (),
+        ),
+    )
+
+    class MissingPriorPort:
+        def query_under_lease(
+            self, requested: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            assert type(requested) is QueryRequestV1
+            return (
+                current_report
+                if requested.from_date == date(2026, 8, 1)
+                else prior_report
+            )
+
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    report = CurrentCohortRetainedQueryPortV1(
+        MissingPriorPort(),
+        _QueryPort(prior_report),
+    ).query_under_lease(
+        CurrentCohortQueryRequestFactoryV1(root)(member, cutoff),
+        acquired.lease,
+    )
+    acquired.lease.close()
+
+    assert report == current_report
 
 
 def test_current_service_uses_same_lease_for_identity_query_and_archive(
@@ -433,7 +847,6 @@ def test_current_service_uses_same_lease_for_identity_query_and_archive(
         query,
         CurrentCohortQueryRequestFactoryV1(root),
         root,
-        _CODE_IDENTITY,
         archive_port=archive,
     )
 
@@ -441,6 +854,122 @@ def test_current_service_uses_same_lease_for_identity_query_and_archive(
 
     assert report.evidence_state is CurrentEvidenceStateV1.COMPLETE
     assert universe.lease is resolver.lease is query.lease is archive.lease
+
+
+def test_archive_rejects_evidence_outside_request_contract(
+    tmp_path: Path,
+) -> None:
+    source_parent = tmp_path / "source"
+    target_parent = tmp_path / "target"
+    source_parent.mkdir()
+    target_parent.mkdir()
+    source_root = _protected_root(source_parent)
+    target_root = _protected_root(target_parent)
+    member = _member()
+    request = _request(member, include_partial=True)
+    archive = _RecordingArchive()
+    service = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1((member,)),
+        _UniverseResolver((member,)),
+        _Resolver(),
+        _QueryPort(_query_report_with_partial()),
+        CurrentCohortQueryRequestFactoryV1(source_root),
+        source_root,
+        archive_port=archive,
+    )
+    report = service.evaluate(request)
+    assert archive.partials
+
+    def accepted(
+        facts: tuple[CurrentCohortMemberFactV1, ...],
+        partials: tuple[PartialCurrentSessionSnapshotV1, ...],
+        ledger: tuple[FeatureAvailabilityLedgerEntryV1, ...],
+        candidate_report: CurrentCohortMarketDataReportV1 = report,
+    ) -> bool:
+        acquired = StorageRootLease.try_acquire_existing(target_root)
+        assert acquired.lease is not None
+        result = ImmutableCurrentFactArchiveV1(target_root).archive(
+            request,
+            candidate_report,
+            facts,
+            partials,
+            ledger,
+            acquired.lease,
+        )
+        acquired.lease.close()
+        return result
+
+    detached_partial = (replace(archive.facts[0], partial_current_session=None),)
+    assert not accepted(detached_partial, archive.partials, archive.ledger)
+
+    rogue_partial = replace(
+        archive.partials[0],
+        member=CurrentCohortMemberV1("INE002A01999", "ROGUE"),
+    )
+    assert not accepted(archive.facts, (rogue_partial,), archive.ledger)
+
+    future_instant = request.invocation_cutoff + timedelta(microseconds=1)
+    future_partial = replace(
+        archive.partials[0],
+        published_at=future_instant,
+        known_at=future_instant,
+    )
+    future_facts = (replace(archive.facts[0], partial_current_session=future_partial),)
+    future_ledger = tuple(
+        replace(
+            item,
+            published_at=future_instant,
+            known_at=future_instant,
+        )
+        if item.feature == "PARTIAL_CURRENT_SESSION"
+        else item
+        for item in archive.ledger
+    )
+    assert not accepted(future_facts, (future_partial,), future_ledger)
+
+    missing_archive = _RecordingArchive()
+    missing_report = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1((member,)),
+        _UniverseResolver((member,)),
+        _Resolver(),
+        _QueryPort(_empty_query_report()),
+        CurrentCohortQueryRequestFactoryV1(source_root),
+        source_root,
+        archive_port=missing_archive,
+    ).evaluate(request)
+    old_completed = replace(
+        archive.facts[0].completed_daily,
+        session=archive.facts[0].completed_daily.session - timedelta(days=5),
+        data_cutoff=archive.facts[0].completed_daily.data_cutoff - timedelta(days=5),
+        published_at=archive.facts[0].completed_daily.published_at - timedelta(days=5),
+        known_at=archive.facts[0].completed_daily.known_at - timedelta(days=5),
+    )
+    old_fact = replace(
+        archive.facts[0],
+        completed_daily=old_completed,
+        partial_current_session=None,
+    )
+    old_ledger = (
+        replace(
+            archive.ledger[0],
+            window_from=old_completed.data_cutoff,
+            window_through=old_completed.data_cutoff,
+            published_at=old_completed.published_at,
+            known_at=old_completed.known_at,
+        ),
+        missing_archive.ledger[1],
+    )
+    assert not accepted((old_fact,), (), old_ledger, missing_report)
+
+    forged_ledger = (
+        replace(
+            missing_archive.ledger[0],
+            availability_state=HistoricalAvailabilityStateV1.STALE,
+        ),
+        *missing_archive.ledger[1:],
+    )
+    assert not accepted((), (), forged_ledger, missing_report)
+    assert not (target_root / ".current-fact-archive-v1").exists()
 
 
 def test_current_service_maps_stale_identity_to_closed_stale_ledger(
@@ -455,7 +984,6 @@ def test_current_service_maps_stale_identity_to_closed_stale_ledger(
         _QueryPort(_query_report()),
         CurrentCohortQueryRequestFactoryV1(root),
         root,
-        _CODE_IDENTITY,
         archive_port=ImmutableCurrentFactArchiveV1(root),
     )
 
@@ -484,7 +1012,6 @@ def test_current_service_rejects_resolved_equity_outside_retained_nifty_50(
         query,
         CurrentCohortQueryRequestFactoryV1(root),
         root,
-        _CODE_IDENTITY,
         archive_port=ImmutableCurrentFactArchiveV1(root),
     )
 
@@ -506,13 +1033,35 @@ def test_runtime_code_identity_is_digest_and_is_archived(tmp_path: Path) -> None
     member = _member()
     code_identity = current_cohort_runtime_code_identity_v1()
 
-    report = _service(
-        root, member, _query_report(), code_identity=code_identity
-    ).evaluate(_request(member))
+    report = _service(root, member, _query_report()).evaluate(_request(member))
 
     assert re.fullmatch(r"[0-9a-f]{64}", code_identity)
     assert report.code_identity == code_identity
     assert _archive_payload(root)["code_identity"] == code_identity
+
+
+def test_direct_service_rejects_non_private_root_before_query(tmp_path: Path) -> None:
+    root = tmp_path / "shared"
+    root.mkdir(mode=0o755)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    acquired.lease.close()
+    member = _member()
+    query = _CountingQueryPort(_query_report())
+    service = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1((member,)),
+        _UniverseResolver((member,)),
+        _Resolver(),
+        query,
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+
+    report = service.evaluate(_request(member))
+
+    assert report.reasons == (CurrentCohortReasonV1.PROVIDER_UNAVAILABLE,)
+    assert query.calls == 0
 
 
 def test_runtime_code_identity_rejects_symlinked_defining_module(
@@ -525,6 +1074,78 @@ def test_runtime_code_identity_rejects_symlinked_defining_module(
 
     with pytest.raises(ValueError, match="runtime code identity unavailable"):
         current_cohort_runtime_code_identity_v1()
+
+
+def test_runtime_code_identity_rejects_regular_source_decoy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = Path(cohort_module.__file__).parent
+    module_root = tmp_path / "market_data"
+    module_root.mkdir()
+    for name in (
+        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
+        "runtime_identity_manifest.py",
+    ):
+        shutil.copyfile(source_root / name, module_root / name)
+    (module_root / "catalog.py").write_text("decoy = True\n")
+    monkeypatch.setattr(
+        cohort_module, "__file__", str(module_root / "current_cohort.py")
+    )
+
+    with pytest.raises(ValueError, match="runtime code identity unavailable"):
+        current_cohort_runtime_code_identity_v1()
+
+
+@pytest.mark.parametrize("shadow", ("catalog.cpython-test.so", "catalog"))
+def test_runtime_code_identity_rejects_import_shadow_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shadow: str
+) -> None:
+    source_root = Path(cohort_module.__file__).parent
+    module_root = tmp_path / "market_data"
+    module_root.mkdir()
+    for name in (
+        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
+        "runtime_identity_manifest.py",
+    ):
+        shutil.copyfile(source_root / name, module_root / name)
+    unexpected = module_root / shadow
+    if "." in shadow:
+        unexpected.write_bytes(b"extension")
+    else:
+        unexpected.mkdir()
+    monkeypatch.setattr(
+        cohort_module, "_verify_loaded_runtime_modules", lambda *_: None
+    )
+    monkeypatch.setattr(
+        cohort_module, "__file__", str(module_root / "current_cohort.py")
+    )
+
+    with pytest.raises(ValueError, match="runtime code identity unavailable"):
+        current_cohort_runtime_code_identity_v1()
+
+
+def test_runtime_code_identity_measures_its_source_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = current_cohort_runtime_code_identity_v1()
+    source_root = Path(cohort_module.__file__).parent
+    module_root = tmp_path / "market_data"
+    module_root.mkdir()
+    for name in (
+        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
+        "runtime_identity_manifest.py",
+    ):
+        shutil.copyfile(source_root / name, module_root / name)
+    manifest = module_root / "runtime_identity_manifest.py"
+    manifest.write_bytes(manifest.read_bytes() + b"\n")
+    monkeypatch.setattr(
+        cohort_module, "_verify_loaded_runtime_modules", lambda *_: None
+    )
+    monkeypatch.setattr(
+        cohort_module, "__file__", str(module_root / "current_cohort.py")
+    )
+
+    assert current_cohort_runtime_code_identity_v1() != baseline
 
 
 def test_current_service_rejects_hard_linked_archive_replay(tmp_path: Path) -> None:
@@ -627,6 +1248,25 @@ def test_cohort_current_cli_rejects_traversal_root_before_service(
     assert service.request is None
 
 
+def test_cohort_current_cli_rejects_missing_root_without_creating_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = tmp_path / "not-created"
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "invalid cohort-current request\n"
+    assert not root.exists()
+
+
 def test_cohort_current_cli_rejects_non_private_storage_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -671,6 +1311,34 @@ def test_cohort_current_cli_rejects_symlinked_storage_root(
     assert service.request is None
 
 
+def test_cohort_current_cli_rejects_symlinked_storage_root_ancestor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    actual_parent = tmp_path / "actual"
+    actual_parent.mkdir()
+    target = actual_parent / "retained"
+    target.mkdir(mode=0o700)
+    target.chmod(0o700)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    exit_code = main(
+        _cli_args(
+            cohort_file,
+            linked_parent / "retained",
+            "2026-08-17T10:00:00.000000Z",
+        ),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "invalid cohort-current request\n"
+
+
 def test_cohort_current_cli_sanitizes_deep_json_nesting(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -699,6 +1367,18 @@ def _manifest_value() -> dict[str, object]:
         "members": [{"isin": "INE002A01018", "symbol": "RELIANCE"}],
         "selected_at": "2026-08-17T03:00:00.000000Z",
     }
+
+
+def _rebuild_complete_report(
+    request: CurrentCohortMarketDataRequestV1,
+    members: tuple[CurrentCohortMemberFactV1, ...],
+) -> CurrentCohortMarketDataReportV1:
+    return CurrentCohortMarketDataReportV1(
+        request=request,
+        evidence_state=CurrentEvidenceStateV1.COMPLETE,
+        members=members,
+        reasons=(),
+    )
 
 
 def _manifest_bytes() -> bytes:
@@ -840,7 +1520,6 @@ def _service(
     member: CurrentCohortMemberV1,
     report: QueryReportV1,
     *,
-    code_identity: str = _CODE_IDENTITY,
     resolver: _Resolver | None = None,
 ) -> CurrentCohortMarketDataServiceV1:
     return CurrentCohortMarketDataServiceV1(
@@ -850,7 +1529,6 @@ def _service(
         _QueryPort(report),
         CurrentCohortQueryRequestFactoryV1(root),
         root,
-        code_identity,
         archive_port=ImmutableCurrentFactArchiveV1(root),
     )
 
@@ -943,18 +1621,24 @@ class _RecordingQueryPort:
 
 class _RecordingArchive:
     lease: StorageRootLease | None = None
+    facts: tuple[CurrentCohortMemberFactV1, ...] = ()
+    partials: tuple[PartialCurrentSessionSnapshotV1, ...] = ()
+    ledger: tuple[FeatureAvailabilityLedgerEntryV1, ...] = ()
 
     def archive(
         self,
         request: CurrentCohortMarketDataRequestV1,
         report: CurrentCohortMarketDataReportV1,
         facts: tuple[CurrentCohortMemberFactV1, ...],
-        partials: tuple[object, ...],
-        ledger: tuple[object, ...],
+        partials: tuple[PartialCurrentSessionSnapshotV1, ...],
+        ledger: tuple[FeatureAvailabilityLedgerEntryV1, ...],
         lease: StorageRootLease,
     ) -> bool:
-        del request, report, facts, partials, ledger
+        del request, report
         self.lease = lease
+        self.facts = facts
+        self.partials = partials
+        self.ledger = ledger
         return True
 
 
@@ -989,12 +1673,8 @@ class _CompleteService:
             CurrentFreshnessStateV1.FRESH,
         )
         return CurrentCohortMarketDataReportV1(
-            cohort_identity_sha256=request.cohort.cohort_identity_sha256,
-            request_identity_sha256=request.request_identity_sha256,
-            invocation_cutoff=request.invocation_cutoff,
+            request=request,
             evidence_state=CurrentEvidenceStateV1.COMPLETE,
             members=(CurrentCohortMemberFactV1(member, fact),),
             reasons=(),
-            code_identity=_CODE_IDENTITY,
-            schema_identity_sha256=request.schema_identity_sha256,
         )

@@ -105,13 +105,17 @@ class StorageRootLease:
     def __init__(
         self,
         descriptor: int,
+        root_descriptor: int,
         root_identity: tuple[int, int],
         *,
         read_only: bool = False,
+        root_private: bool = False,
     ) -> None:
         self._descriptor: int | None = descriptor
+        self._root_descriptor: int | None = root_descriptor
         self._root_identity = root_identity
         self._read_only = read_only
+        self._root_private = root_private
 
     @classmethod
     def try_acquire(cls, root: object) -> LeaseResult:
@@ -122,6 +126,47 @@ class StorageRootLease:
     def try_acquire_existing(cls, root: object) -> LeaseResult:
         """Acquire only a pre-existing safe lock without creating filesystem state."""
         return cls._try_acquire(root, create_lock=False)
+
+    @classmethod
+    def try_acquire_existing_identity(
+        cls, root: object, root_identity: tuple[int, int]
+    ) -> LeaseResult:
+        """Acquire an existing root only when it still has the admitted identity."""
+        if (
+            type(root_identity) is not tuple
+            or len(root_identity) != 2
+            or any(type(value) is not int or value < 0 for value in root_identity)
+        ):
+            return _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        return cls._try_acquire(
+            root,
+            create_lock=True,
+            expected_root_identity=root_identity,
+        )
+
+    @classmethod
+    def admit_existing_private_identity(cls, root: object) -> tuple[int, int] | None:
+        """Inspect an existing owner-private root without following path links."""
+        if not isinstance(root, Path):
+            return None
+        descriptor: int | None = None
+        identity: tuple[int, int] | None = None
+        try:
+            descriptor = _open_directory_without_symlink_components(root)
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) & 0o077
+            ):
+                raise RuntimeError
+            identity = (metadata.st_dev, metadata.st_ino)
+        except Exception:
+            identity = None
+        finally:
+            if not _close_descriptor(descriptor):
+                identity = None
+        return identity
 
     @classmethod
     def try_admit_read_existing(cls, root: object) -> LeaseResult:
@@ -137,12 +182,9 @@ class StorageRootLease:
         lock_descriptor: int | None = None
         result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         try:
-            root_path_stat = os.stat(root, follow_symlinks=False)
-            if not stat.S_ISDIR(root_path_stat.st_mode):
-                raise RuntimeError
-            root_descriptor = os.open(root, _ROOT_FLAGS)
+            root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
-            if not _same_inode(root_path_stat, root_descriptor_stat):
+            if not stat.S_ISDIR(root_descriptor_stat.st_mode):
                 raise RuntimeError
             lock_descriptor = os.open(
                 _LOCK_NAME,
@@ -155,11 +197,16 @@ class StorageRootLease:
             )
             if not _valid_lock_identity(lock_descriptor_stat, lock_path_stat):
                 raise RuntimeError
-            root_final_stat = os.stat(root, follow_symlinks=False)
+            path_descriptor = _open_directory_without_symlink_components(root)
+            try:
+                root_final_stat = os.fstat(path_descriptor)
+            finally:
+                os.close(path_descriptor)
             if not _same_inode(root_descriptor_stat, root_final_stat):
                 raise RuntimeError
             authority = cls(
                 lock_descriptor,
+                fcntl.fcntl(root_descriptor, fcntl.F_DUPFD_CLOEXEC, 0),
                 (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
                 read_only=True,
             )
@@ -195,6 +242,7 @@ class StorageRootLease:
         *,
         create_lock: bool,
         require_private_empty: bool = False,
+        expected_root_identity: tuple[int, int] | None = None,
     ) -> LeaseResult:
         if not isinstance(root, Path):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
@@ -203,26 +251,44 @@ class StorageRootLease:
         lock_descriptor: int | None = None
         result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
         try:
-            root_path_stat = os.stat(root, follow_symlinks=False)
-            if not stat.S_ISDIR(root_path_stat.st_mode):
-                raise RuntimeError
-
-            root_descriptor = os.open(root, _ROOT_FLAGS)
+            root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
-            if not _same_inode(root_path_stat, root_descriptor_stat):
+            root_private = require_private_empty or expected_root_identity is not None
+            if not stat.S_ISDIR(root_descriptor_stat.st_mode) or (
+                root_private
+                and (
+                    root_descriptor_stat.st_uid != os.geteuid()
+                    or stat.S_IMODE(root_descriptor_stat.st_mode) & 0o077
+                )
+            ):
                 raise RuntimeError
-            if not stat.S_ISDIR(root_descriptor_stat.st_mode):
+            if (
+                expected_root_identity is not None
+                and (
+                    root_descriptor_stat.st_dev,
+                    root_descriptor_stat.st_ino,
+                )
+                != expected_root_identity
+            ):
                 raise RuntimeError
 
             if require_private_empty:
                 _assert_private_empty_root(root, root_descriptor, root_descriptor_stat)
 
-            result, lock_descriptor = _acquire_lock(
-                root_descriptor,
-                (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
-                create=create_lock,
-                exclusive=require_private_empty,
-            )
+            try:
+                fcntl.flock(root_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno not in _CONTENTION_ERRNOS:
+                    raise
+                result = _failed(LeaseFailureCode.ALREADY_RUNNING, already_running=True)
+            else:
+                result, lock_descriptor = _acquire_lock(
+                    root_descriptor,
+                    (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino),
+                    create=create_lock,
+                    exclusive=require_private_empty,
+                    root_private=root_private,
+                )
             if require_private_empty and result.lease is not None:
                 try:
                     _assert_private_locked_root(
@@ -246,10 +312,14 @@ class StorageRootLease:
         return result
 
     def close(self) -> None:
-        """Release the advisory lock; repeated close calls are harmless."""
+        """Release the advisory lock and its pinned root descriptor."""
         descriptor = self._descriptor
+        root_descriptor = self._root_descriptor
         self._descriptor = None
-        if not _close_descriptor(descriptor):
+        self._root_descriptor = None
+        lock_closed = _close_descriptor(descriptor)
+        root_closed = _close_descriptor(root_descriptor)
+        if not lock_closed or not root_closed:
             raise RuntimeError("descriptor cleanup failed")
 
     def root_operation(self, root: object) -> StorageRootLeaseOperation:
@@ -268,10 +338,7 @@ class StorageRootLease:
         descriptor: int | None = None
         try:
             self._assert_lease_open()
-            path_stat = os.stat(root, follow_symlinks=False)
-            if not _valid_root_identity(path_stat, self._root_identity):
-                raise RuntimeError
-            descriptor = os.open(root, _ROOT_FLAGS)
+            descriptor = _open_directory_without_symlink_components(root)
             descriptor_stat = os.fstat(descriptor)
             if not _valid_root_identity(descriptor_stat, self._root_identity):
                 raise RuntimeError
@@ -281,22 +348,52 @@ class StorageRootLease:
             raise RuntimeError("storage lease authority unavailable") from None
 
     def _assert_root_authority(self, root: Path, descriptor: int) -> None:
+        path_descriptor: int | None = None
         try:
             self._assert_lease_open()
             descriptor_stat = os.fstat(descriptor)
-            path_stat = os.stat(root, follow_symlinks=False)
+            path_descriptor = _open_directory_without_symlink_components(root)
+            path_stat = os.fstat(path_descriptor)
             if not _valid_root_identity(
                 descriptor_stat, self._root_identity
             ) or not _valid_root_identity(path_stat, self._root_identity):
                 raise RuntimeError
         except Exception:
             raise RuntimeError("storage lease authority unavailable") from None
+        finally:
+            _close_descriptor(path_descriptor)
 
     def _assert_lease_open(self) -> None:
         descriptor = self._descriptor
-        if descriptor is None:
+        root_descriptor = self._root_descriptor
+        if descriptor is None or root_descriptor is None:
             raise RuntimeError
-        os.fstat(descriptor)
+        try:
+            root_stat = os.fstat(root_descriptor)
+            held_lock = os.fstat(descriptor)
+            named_lock = os.stat(
+                _LOCK_NAME,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not _valid_root_identity(root_stat, self._root_identity)
+                or (
+                    self._root_private
+                    and (
+                        root_stat.st_uid != os.geteuid()
+                        or stat.S_IMODE(root_stat.st_mode) & 0o077
+                    )
+                )
+                or not _valid_lock_identity(held_lock, named_lock)
+            ):
+                raise RuntimeError
+        except Exception:
+            self._descriptor = None
+            self._root_descriptor = None
+            _close_descriptor(descriptor)
+            _close_descriptor(root_descriptor)
+            raise RuntimeError from None
 
     def __enter__(self) -> StorageRootLease:
         if self._descriptor is None:
@@ -316,6 +413,7 @@ def _acquire_lock(
     root_descriptor: int,
     root_identity: tuple[int, int],
     *,
+    root_private: bool = False,
     create: bool,
     exclusive: bool = False,
 ) -> tuple[LeaseResult, int | None]:
@@ -350,8 +448,37 @@ def _acquire_lock(
         if not _close_descriptor(lock_descriptor):
             raise RuntimeError from None
         raise
-    lease = StorageRootLease(lock_descriptor, root_identity)
+    try:
+        root_copy = fcntl.fcntl(root_descriptor, fcntl.F_DUPFD_CLOEXEC, 0)
+    except Exception:
+        if not _close_descriptor(lock_descriptor):
+            raise RuntimeError from None
+        raise RuntimeError from None
+    lease = StorageRootLease(
+        lock_descriptor,
+        root_copy,
+        root_identity,
+        root_private=root_private,
+    )
     return LeaseResult(LeaseOutcome.ACQUIRED, LeaseFailureCode.NONE, lease), None
+
+
+def _open_directory_without_symlink_components(root: Path) -> int:
+    if not root.is_absolute() or any(part in {".", ".."} for part in root.parts):
+        raise RuntimeError
+    descriptor: int | None = os.open(os.sep, _ROOT_FLAGS)
+    try:
+        for component in root.parts[1:]:
+            opened = os.open(component, _ROOT_FLAGS, dir_fd=descriptor)
+            if not _close_descriptor(descriptor):
+                _close_descriptor(opened)
+                raise RuntimeError
+            descriptor = opened
+        result = descriptor
+        descriptor = None
+        return result
+    finally:
+        _close_descriptor(descriptor)
 
 
 def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:

@@ -139,10 +139,15 @@ unrequested or unavailable partial snapshot does not itself make an otherwise
 complete daily result insufficient; only a missing required completed daily fact
 does.
 
-`code_identity` covers every Python module in the bounded `market_data`
-implementation package, including the retained universe, identity, query,
-archive, and CLI dependencies. Missing, replaced, non-regular, oversized, or
-unreadable source input makes code identity unavailable and fails closed.
+`code_identity` verifies every Python module in the bounded `market_data`
+implementation package against the review-generated source inventory before
+digesting the observed hashes, including retained universe, identity, query,
+archive, and CLI dependencies. Loaded modules must resolve to their exact
+reviewed source path through the source loader. Additional package directories,
+extensions, or other import-shadow entries fail closed. A missing, replaced,
+non-regular, hard-linked, oversized, unreadable, or digest-mismatched source
+also fails closed. The generated inventory does not list itself recursively,
+but its exact source bytes are included in the final identity.
 
 ## Retained query, aggregation, and supplied-cohort download integration
 
@@ -209,10 +214,13 @@ market-data cohort-current \
 
 The adapter computes, rather than trusts a caller-supplied, cohort identity.
 It rejects relative, unreadable, oversized, duplicate-key, or noncanonical
-input before retained-root access or provider effect. The storage root is
-canonicalized and must be an owner-owned directory with no group/world
-permissions; a caller-supplied symlink root is rejected. The command emits one
-canonical JSON report on stdout and no report fragments. Exit `0` means
+input before retained-root access or provider effect. The storage root must
+already exist. Every path component is opened without following links; the
+owner-private mode and exact directory identity are pinned across the
+invocation. An exclusive lock on the directory itself prevents a replaced lock
+filename from creating a second writer. A missing root, linked component,
+identity change, permission change, or competing writer fails closed.
+The command emits one canonical JSON report on stdout and no report fragments. Exit `0` means
 `COMPLETE`; exit `1` means `INSUFFICIENT_EVIDENCE`; exit `2` means structural
 request/CLI rejection before a report. Sanitized diagnostics go to stderr only
 for exit `2`; credentials, raw provider payloads, and private paths never do.

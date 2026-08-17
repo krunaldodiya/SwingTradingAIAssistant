@@ -40,7 +40,6 @@ from .current_cohort import (
     ImmutableCurrentFactArchiveV1,
     RetainedCurrentCohortInstrumentResolverV1,
     RetainedCurrentNifty50UniverseResolverV1,
-    current_cohort_runtime_code_identity_v1,
     parse_current_cohort_manifest_bytes_v1,
 )
 from .daily_ohlcv import (
@@ -125,6 +124,7 @@ from .range_ingestion import (
     IngestionCoordinator,
     ProviderSessionAuthenticationError,
 )
+from .storage_root_lease import StorageRootLease
 from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
@@ -466,8 +466,14 @@ def _run_current_cohort_command(
             CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
             CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
         )
-        storage_root = _prepare_storage_root(storage_root)
         service = injected
+        expected_root_identity: tuple[int, int] | None = None
+        if service is None:
+            storage_root, expected_root_identity = _admit_existing_storage_root(
+                storage_root
+            )
+        else:
+            storage_root = _prepare_storage_root(storage_root)
         if service is None:
             policy = CurrentSuppliedCohortAdmissionPolicyV1(manifest.members)
             query_clock = _FixedClock(cutoff)
@@ -489,8 +495,8 @@ def _run_current_cohort_command(
                 ),
                 query_factory=CurrentCohortQueryRequestFactoryV1(storage_root),
                 storage_root=storage_root,
-                code_identity=current_cohort_runtime_code_identity_v1(),
                 archive_port=ImmutableCurrentFactArchiveV1(storage_root),
+                expected_root_identity=expected_root_identity,
             )
         report = service.evaluate(request)
         sys.stdout.write(report.canonical_json_bytes().decode("utf-8"))
@@ -955,6 +961,16 @@ def _prepare_storage_root(value: object) -> Path:
     ):
         raise ValueError("invalid storage root")
     return canonical
+
+
+def _admit_existing_storage_root(value: object) -> tuple[Path, tuple[int, int]]:
+    """Admit one pre-existing link-free root for identity-pinned cohort reads."""
+    if type(value) is not type(Path()) or not _valid_storage_root(value):
+        raise ValueError("invalid storage root")
+    identity = StorageRootLease.admit_existing_private_identity(value)
+    if identity is None:
+        raise ValueError("invalid storage root")
+    return value, identity
 
 
 def _symbols(value: str) -> tuple[str, ...]:
