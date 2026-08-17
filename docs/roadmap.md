@@ -1,5 +1,22 @@
 # Initial Roadmap
 
+## Current delivery priority
+
+All phases and module outcomes below remain planned. Only their delivery
+priority changes: make the current/live/realtime path usable first, then perform
+historical storage and backtest validation. Nothing in the original roadmap is
+removed.
+
+The immediate sequence is current price/volume, current Market Regime, current
+Sector Analysis, current news/events, and one integrated current packet for an
+external AI. Historical fixed-cohort OHLCV storage and validation follow. The
+tool continues to retain point-in-time provenance from now so later work cannot
+project current knowledge backward.
+
+[Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
+Sprints 10–16. It preserves the locked module order, historical work, release
+gates, `NO_TRADE`, and all explicit exclusions.
+
 ## Phase 0: Foundation
 
 - Freeze product scope and terminology.

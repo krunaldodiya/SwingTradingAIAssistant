@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import stat
 import sys
 import threading
 from dataclasses import dataclass
@@ -24,6 +26,23 @@ from .bounded_nifty50_workflow import (
     render_bounded_nifty50_download_json,
 )
 from .credentials import AccessToken, EnvironmentAccessTokenProvider
+from .current_cohort import (
+    CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
+    CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
+    MAX_COHORT_FILE_BYTES_V1,
+    CurrentCohortMarketDataReportV1,
+    CurrentCohortMarketDataRequestV1,
+    CurrentCohortMarketDataServiceV1,
+    CurrentCohortQueryRequestFactoryV1,
+    CurrentCohortRetainedQueryPortV1,
+    CurrentEvidenceStateV1,
+    CurrentSuppliedCohortAdmissionPolicyV1,
+    ImmutableCurrentFactArchiveV1,
+    RetainedCurrentCohortInstrumentResolverV1,
+    RetainedCurrentNifty50UniverseResolverV1,
+    current_cohort_runtime_code_identity_v1,
+    parse_current_cohort_manifest_bytes_v1,
+)
 from .daily_ohlcv import (
     DailyQueryServiceV1,
     DuckDBDailyOHLCVEngineV1,
@@ -124,6 +143,16 @@ class PublicQueryPortV1(Protocol):
     def query(self, request: object) -> QueryReportV1: ...
 
 
+class CurrentCohortServicePortV1(Protocol):
+    def evaluate(
+        self, request: CurrentCohortMarketDataRequestV1
+    ) -> CurrentCohortMarketDataReportV1: ...
+
+
+class _ClockV1(Protocol):
+    def now(self) -> datetime: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _CommandAdmissionV1:
     request: object
@@ -135,6 +164,25 @@ class _CommandAdmissionV1:
 class _SystemClock:
     def now(self) -> datetime:
         return datetime.now(UTC)
+
+
+class _FixedClock:
+    def __init__(self, instant: datetime) -> None:
+        self._instant = instant
+
+    def now(self) -> datetime:
+        return self._instant
+
+
+def _trusted_now(clock: _ClockV1) -> datetime:
+    value = clock.now()
+    if (
+        type(value) is not datetime
+        or value.tzinfo is None
+        or value.utcoffset() != timedelta(0)
+    ):
+        raise ValueError("invalid trusted clock")
+    return value
 
 
 class _UnavailableAuthoritativeScheduleSource:
@@ -188,6 +236,16 @@ def _date(value: str) -> date:
         raise argparse.ArgumentTypeError(
             "expected an actual date in YYYY-MM-DD format"
         ) from exc
+
+
+def _utc_instant(value: str) -> datetime:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "expected UTC instant YYYY-MM-DDTHH:MM:SS.ffffffZ"
+        ) from error
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -266,6 +324,24 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("--timeframe", required=True)
     query.add_argument("--fields", required=True)
     query.add_argument("--max-rows", type=int, required=True)
+    cohort_current = commands.add_parser(
+        "cohort-current",
+        help="return retained current market-data for an owner-supplied cohort",
+    )
+    cohort_current.add_argument(
+        "--cohort-file", type=Path, required=True, metavar="ABSOLUTE_JSON_FILE"
+    )
+    cohort_current.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    cohort_current.add_argument("--cutoff", type=_utc_instant, required=True)
+    cohort_current.add_argument(
+        "--include-partial-current-session", action="store_true"
+    )
+    cohort_current.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -305,10 +381,16 @@ def main(
     download_service: PublicDownloadPortV1 | None = None,
     coverage_service: PublicCoveragePortV1 | None = None,
     query_service: PublicQueryPortV1 | None = None,
+    current_cohort_service: CurrentCohortServicePortV1 | None = None,
+    trusted_clock: _ClockV1 | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "probe-upstox":
         return _run_probe(args)
+    if args.command == "cohort-current":
+        return _run_current_cohort_command(
+            args, current_cohort_service, trusted_clock or _SystemClock()
+        )
     injected = {
         "download": download_service,
         "coverage": coverage_service,
@@ -321,9 +403,10 @@ def main(
             return _render_admission_terminal(args, False, public)
     else:
         try:
-            _prepare_storage_root(args.storage_root)
-        except OSError:
+            args.storage_root = _prepare_storage_root(args.storage_root)
+        except (OSError, ValueError):
             return _render_admission_terminal(args, True, public)
+        admission = _command_request(args, injected is not None)
     request = admission.request
     if args.command == "download":
         return _run_download_command(
@@ -346,6 +429,96 @@ def main(
     batch = _default_bounded_read_service().execute(request)
     sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
     return bounded_nifty50_exit_code(batch.outcome)
+
+
+def _run_current_cohort_command(
+    args: argparse.Namespace,
+    injected: CurrentCohortServicePortV1 | None,
+    trusted_clock: _ClockV1,
+) -> int:
+    try:
+        cohort_file = args.cohort_file
+        storage_root = args.storage_root
+        cutoff = args.cutoff
+        include_partial = args.include_partial_current_session
+        if (
+            type(cohort_file) is not type(Path())
+            or not cohort_file.is_absolute()
+            or type(storage_root) is not type(Path())
+            or not storage_root.is_absolute()
+            or type(cutoff) is not datetime
+            or cutoff.tzinfo is None
+            or cutoff.utcoffset() != timedelta(0)
+            or type(include_partial) is not bool
+        ):
+            raise ValueError
+        if cutoff > _trusted_now(trusted_clock):
+            raise ValueError
+        if not _valid_storage_root(storage_root):
+            raise ValueError
+        manifest = parse_current_cohort_manifest_bytes_v1(
+            _read_cohort_file(cohort_file)
+        )
+        request = CurrentCohortMarketDataRequestV1(
+            manifest,
+            cutoff,
+            include_partial,
+            CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
+            CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
+        )
+        storage_root = _prepare_storage_root(storage_root)
+        service = injected
+        if service is None:
+            policy = CurrentSuppliedCohortAdmissionPolicyV1(manifest.members)
+            query_clock = _FixedClock(cutoff)
+            service = CurrentCohortMarketDataServiceV1(
+                policy=policy,
+                universe_resolver=RetainedCurrentNifty50UniverseResolverV1(
+                    storage_root
+                ),
+                resolver=RetainedCurrentCohortInstrumentResolverV1(
+                    storage_root, cutoff
+                ),
+                query_port=CurrentCohortRetainedQueryPortV1(
+                    _default_query_service(policy, clock=query_clock),
+                    OpenMonthOneMinuteQueryServiceV1(
+                        policy,
+                        clock=query_clock,
+                        allow_prior_month=True,
+                    ),
+                ),
+                query_factory=CurrentCohortQueryRequestFactoryV1(storage_root),
+                storage_root=storage_root,
+                code_identity=current_cohort_runtime_code_identity_v1(),
+                archive_port=ImmutableCurrentFactArchiveV1(storage_root),
+            )
+        report = service.evaluate(request)
+        sys.stdout.write(report.canonical_json_bytes().decode("utf-8"))
+        return 0 if report.evidence_state is CurrentEvidenceStateV1.COMPLETE else 1
+    except (AttributeError, OSError, RecursionError, TypeError, ValueError):
+        sys.stderr.write("invalid cohort-current request\n")
+        return 2
+
+
+def _read_cohort_file(path: Path) -> bytes:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size < 1
+            or metadata.st_size > MAX_COHORT_FILE_BYTES_V1
+        ):
+            raise ValueError
+        raw = os.read(descriptor, MAX_COHORT_FILE_BYTES_V1 + 1)
+        if len(raw) != metadata.st_size:
+            raise ValueError
+        return raw
+    finally:
+        os.close(descriptor)
 
 
 def _command_request(args: argparse.Namespace, injected: bool) -> _CommandAdmissionV1:
@@ -657,32 +830,34 @@ def _default_coverage_service(
 
 def _default_query_service(
     policy: EquityAdmissionPolicyV1 | None = None,
+    *,
+    clock: _ClockV1 | None = None,
 ) -> CurrentAwareQueryServiceV1:
     admission = policy or PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     evaluator = StoredCoverageEvaluatorV1()
-    clock = _SystemClock()
+    query_clock = clock or _SystemClock()
     retained_schedule = RetainedDailyScheduleResolverV1()
-    open_minute = OpenMonthOneMinuteQueryServiceV1(admission, clock=clock)
+    open_minute = OpenMonthOneMinuteQueryServiceV1(admission, clock=query_clock)
     closed = TimeframeQueryServiceV1(
         OneMinuteQueryServiceV1(
             admission,
             evaluator,
             engine=DuckDBOneMinuteQueryEngineV1(),
-            clock=clock,
+            clock=query_clock,
         ),
         DailyQueryServiceV1(
             admission,
             evaluator,
             resolver=retained_schedule,
             engine=DuckDBDailyOHLCVEngineV1(),
-            clock=clock,
+            clock=query_clock,
         ),
         intraday_service=DerivedIntradayQueryServiceV1(
             admission,
             evaluator,
             resolver=retained_schedule,
             engine=DuckDBIntradayViewEngineV1(),
-            clock=clock,
+            clock=query_clock,
         ),
     )
     return CurrentAwareQueryServiceV1(
@@ -691,9 +866,9 @@ def _default_query_service(
         open_intraday_service=OpenMonthDerivedIntradayQueryServiceV1(
             open_minute,
             RetainedOpenMonthScheduleResolverV1(),
-            clock=clock,
+            clock=query_clock,
         ),
-        clock=clock,
+        clock=query_clock,
     )
 
 
@@ -764,11 +939,22 @@ def _default_storage_root() -> Path:
 
 
 def _prepare_storage_root(value: object) -> Path:
-    """Create a syntactically valid CLI storage root without weakening admission."""
-    if not isinstance(value, Path) or not _valid_storage_root(value):
+    """Create and validate an owner-private canonical CLI storage root."""
+    if type(value) is not type(Path()) or not _valid_storage_root(value):
         return Path()
-    value.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return value
+    if value.is_symlink():
+        raise ValueError("invalid storage root")
+    canonical = value.resolve(strict=False)
+    canonical.mkdir(mode=0o700, parents=True, exist_ok=True)
+    canonical = canonical.resolve(strict=True)
+    metadata = canonical.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise ValueError("invalid storage root")
+    return canonical
 
 
 def _symbols(value: str) -> tuple[str, ...]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -128,6 +129,55 @@ def _seed(root: Path) -> None:
             catalog.save_provisional_partition(metadata)
 
 
+def _seed_previous_month(root: Path) -> None:
+    lease_result = StorageRootLease.try_acquire(root)
+    assert lease_result.outcome is LeaseOutcome.ACQUIRED
+    assert lease_result.lease is not None
+    with lease_result.lease as lease:
+        plan = replace(
+            _plan(),
+            year=2026,
+            month=7,
+            from_date=date(2026, 7, 1),
+            to_date=date(2026, 7, 31),
+        )
+        rows = (
+            replace(
+                _row(45),
+                ts=datetime(2026, 7, 31, 9, 58, tzinfo=UTC),
+                ingested_at=datetime(2026, 7, 31, 11, tzinfo=UTC),
+            ),
+            replace(
+                _row(46),
+                ts=datetime(2026, 7, 31, 9, 59, tzinfo=UTC),
+                ingested_at=datetime(2026, 7, 31, 11, tzinfo=UTC),
+            ),
+        )
+        digest = "a" * 64
+        published = publish_provisional_partition_under_lease(
+            root, lease, plan, rows[-1].ts, digest, rows
+        )
+        metadata = metadata_from_publication(
+            plan=published.plan,
+            schedule_digest_sha256=digest,
+            cutoff=published.cutoff,
+            session_complete=True,
+            actual_from_ts=published.actual_from_ts,
+            actual_to_ts=published.actual_to_ts,
+            row_count=published.row_count,
+            checksum_sha256=published.checksum_sha256,
+            byte_size=published.byte_size,
+            relative_path=published.canonical_path,
+            instrument_snapshot_digest_sha256="b" * 64,
+            instrument_snapshot_retrieved_at=datetime(2026, 7, 31, 11, tzinfo=UTC),
+            published_at=datetime(2026, 7, 31, 11, tzinfo=UTC),
+            historical_attempt_count=1,
+            intraday_attempt_count=0,
+        )
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            catalog.save_provisional_partition(metadata)
+
+
 class _Clock:
     def now(self) -> datetime:
         return datetime(2026, 8, 11, 10, 0, tzinfo=IST)
@@ -136,6 +186,11 @@ class _Clock:
 class _InvalidClock:
     def now(self) -> datetime:
         return datetime(2026, 8, 11, 10, 0)
+
+
+class _RolloverClock:
+    def now(self) -> datetime:
+        return datetime(2026, 8, 1, 4, 30, tzinfo=UTC)
 
 
 class _QueryStub:
@@ -203,6 +258,38 @@ def test_open_month_query_under_caller_lease_and_invalid_lease_are_bounded(
         clock=_Clock(),  # type: ignore[arg-type]
     ).query(request)
     assert mismatch.status is PublicCommandStatusV1.REJECTED
+
+
+def test_retained_prior_month_query_survives_calendar_rollover(
+    tmp_path: Path,
+) -> None:
+    _seed_previous_month(tmp_path)
+    service = OpenMonthOneMinuteQueryServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        clock=_RolloverClock(),
+        allow_prior_month=True,
+    )
+    request = QueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 7, 25),
+        date(2026, 7, 31),
+        "1m",
+        ("ts", "close"),
+        100,
+        tmp_path,
+    )
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        report = service.query_under_lease(request, lease)
+
+    assert report.status is PublicCommandStatusV1.SUCCEEDED
+    assert type(report.payload) is QueryPayloadV1
+    assert report.payload.months[0].month == "2026-07"
+    assert report.payload.months[0].session_complete is True
+    assert report.payload.rows[-1].ts == datetime(2026, 7, 31, 9, 59, tzinfo=UTC)
 
 
 def test_production_open_month_query_stops_at_the_shared_deadline_before_catalog(

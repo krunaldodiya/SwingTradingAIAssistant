@@ -6,6 +6,24 @@ Build an agent-agnostic Swing Trading Research Tool that supplies trustworthy,
 structured evidence to AI assistants researching safe, consistent, and
 explainable swing-trading opportunities in Nifty 50 equity stocks.
 
+## Delivery priority overlay
+
+The architecture, locked modules, pipeline, exclusions, and historical plan
+below remain intact. The owner has changed delivery priority only:
+
+1. make the current/live research path usable first through current
+   price/volume, Market Regime, Sector Analysis, news/events, and one integrated
+   packet for an external AI;
+2. retain every admitted current fact with point-in-time provenance so future
+   evaluation cannot invent what was knowable;
+3. complete the deferred historical store and backtest validation after the
+   current packet is usable.
+
+This ordering removes no feature or gate. Historical work is deferred, not
+deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
+current Sprint 10–16 dependency sequence; it does not change the module order
+or authorize autonomous signals, recommendations, or broker execution.
+
 ## Repository identity
 
 This repository implements the research-tool layer, not a particular AI agent.

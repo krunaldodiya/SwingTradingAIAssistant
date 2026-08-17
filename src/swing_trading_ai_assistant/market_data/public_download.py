@@ -726,6 +726,8 @@ def _convert_open_month_report(
                 validation_reason=None,
                 data_cutoff=metadata.cutoff,
                 session_complete=metadata.session_complete,
+                evidence_published_at=metadata.published_at,
+                evidence_known_at=metadata.published_at,
             )
             payload = OpenMonthDownloadPayloadV1(
                 PublicDownloadRequestV1(

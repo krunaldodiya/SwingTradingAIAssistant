@@ -46,6 +46,7 @@ from swing_trading_ai_assistant.market_data.provisional_metadata import (
 )
 from swing_trading_ai_assistant.market_data.public_contract import (
     MAX_PUBLIC_JSON_BYTES_V1,
+    CoverageStateV1,
     DownloadPayloadV1,
     OpenMonthDownloadPayloadV1,
     PublicCommandReportV1,
@@ -971,10 +972,10 @@ def test_open_month_payload_guards_reject_inconsistent_evidence(
         replace(payload)
 
 
-def test_provisional_only_fields_and_open_payload_serializer_are_closed() -> None:
+def test_verified_month_rejects_provisional_only_evidence_timestamps() -> None:
     verified = contract_module.PublicCoverageMonthV1(
         "2026-07",
-        contract_module.CoverageStateV1.VERIFIED,
+        CoverageStateV1.VERIFIED,
         datetime(2026, 7, 1, 3, 45, tzinfo=UTC),
         datetime(2026, 7, 31, 9, 59, tzinfo=UTC),
         1,
@@ -987,7 +988,13 @@ def test_provisional_only_fields_and_open_payload_serializer_are_closed() -> Non
     )
 
     with pytest.raises(ValueError, match="invalid public coverage month"):
-        replace(verified, data_cutoff=verified.actual_to_ts)
+        replace(
+            verified,
+            data_cutoff=verified.actual_to_ts,
+            session_complete=True,
+            evidence_published_at=verified.actual_to_ts,
+            evidence_known_at=verified.actual_to_ts,
+        )
     with pytest.raises(ValueError):
         contract_module._payload_value(object())  # type: ignore[arg-type]
 

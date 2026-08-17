@@ -13,6 +13,9 @@ Use one file per sprint. Do not duplicate every Issue description; link or list
 Issue identifiers and capture only information needed to understand the shipped
 increment and future process decisions.
 
+The owner-level minimum dependencies for Sprint 10 through the boundary before
+Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview.md).
+
 ## Index
 
 - [Sprint 0 — Foundation](sprint-0.md) — closed by [PR #1](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/1), merged to `main` as `0a518813ec26d32945ce49d1f27999e8618f64cc`.
@@ -59,6 +62,8 @@ increment and future process decisions.
   recommendation, ranking, and effectiveness remain deferred or unclaimed.
 - [Sprint 9 — Market Regime Layer B acquisition decision](sprint-9.md) —
   terminal decision `BLOCKED / CAPABILITY_EVIDENCE_MISSING`.
+  This is a historical record, not an active dependency after the
+  current/live-first priority reset in Issue #121.
   The corrected build seals canonical incomplete manifest identity
   `53717e75d9e93344d7df55ea2a5e94e48e133ff0ad673f27e38ba040cc91bb2f`
   from scope projection identity
@@ -94,3 +99,29 @@ increment and future process decisions.
   `dbbc0bdf32cf081d491a119c05571bebf4dbd274bae858dd0e3d418b96bd1408`.
   This planning evidence grants no provider access or runtime implementation
   authority.
+  It remains preserved historical evidence after reprioritization.
+- [Sprint 10 — Current supplied-cohort market data](sprint-10.md) —
+  [GitHub Issue #121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121)
+  is the current foundation. It makes existing `market-data` usable for a
+  supplied 1–50 Nifty 50 equity cohort, returning bounded current price/volume facts:
+  latest completed daily OHLCV and only explicit/available
+  `PARTIAL_CURRENT_SESSION` context. Every admitted fact is immutably archived
+  with temporal availability metadata; invalid identity or incomplete required
+  evidence fails closed, and a partial session is never a completed daily bar or
+  historical close. It does not calculate Market Regime, sector, news/events,
+  signals, recommendations, or orders.
+  [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is
+  the current Sprint 10 specification.
+
+  Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
+  historical news/events/sectors are not-yet-evaluated, not permanently
+  removed. Issues #111 and #115 are **closed / not planned** with no published
+  implementation. Plans 12 and 17 and their exact evidence remain preserved
+  historical records without a claim they were wrong when made. The
+  contemplated official-inquiry content SHA-256
+  `a2d762cd93dfca56d5623e260816c1aee0a6ae2a9a400097cc6f2d51c77f6412` and
+  authorization-payload SHA-256
+  `84797b9c424aa6da36d46b1b516f3cbe08d8205801d296953a5edf474d2ffe85` were
+  revoked before send. No inquiry email, provider contact, provider call,
+  credential use, or acquisition occurred. They are distinct from Plan 11's
+  historical public-page research receipts.
