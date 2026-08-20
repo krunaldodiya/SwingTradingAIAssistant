@@ -14,7 +14,7 @@ import json
 import os
 import socket
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -38,6 +38,9 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleClosure,
+    ScheduleEvidenceResult,
+    ScheduleFailureCode,
+    ScheduleOutcome,
     ScheduleEvidenceStore,
     ScheduleSession,
     canonical_schedule_bytes,
@@ -53,8 +56,8 @@ _SCREEN_MODULE = "swing_trading_ai_assistant.market_data.current_corporate_actio
 _SOURCE = "upstox-fundamentals-v2"
 _SOURCE_IDENTITY = "3853a15b853b73a945065486ca96b48d4ee3625e4ed7c6e4927579e2b0b372a2"
 _SNAPSHOT_SCHEMA_IDENTITY = "de03833b00d0d286fc3d0116f7ce81b8694547d43b13250f7415d6c95fdbbf8a"
-_SCREEN_SCHEMA_IDENTITY = "a789cbdd1c554ddd0e5029d02e263491af73c1b23754366cd78e2b2f3d75dbde"
-_POLICY_IDENTITY = "36d3c8ed4ce51acf4c9373bcc39d8e45b72621ea222abafa6468df9e31b20020"
+_SCREEN_SCHEMA_IDENTITY = "39847b9502bf12d45081833b0d4864c35d9afe196b1e415b3654d7ebe28a2e91"
+_POLICY_IDENTITY = "aa3b9d3b61a691442d37dcaa24d0448ac9d1592560f8bc6eb7a42bc27a146607"
 _SELECTED_SET_SCHEMA_IDENTITY = "a655abdd1ee44337ad28d9b6f9d148927d831d9eeb7cdeccdde68f90945d0775"
 _SCHEDULE_SOURCE = "nse-authoritative-calendar"
 _SCHEDULE_RELEASE = "sha256:" + "b" * 64
@@ -270,7 +273,7 @@ def _scenario(
     )
     schedule_sha256 = schedule_digest(schedule)
     retained = schedule_store.retain(schedule)
-    assert retained.digest_sha256 == schedule_sha256
+    assert retained.digest == schedule_sha256
     scenario = _Scenario(
         root, lease, catalog, schedule_store,
         CorporateActionSnapshotStoreV1(root, lease, catalog), schedule, schedule_sha256,
@@ -435,7 +438,9 @@ def _assert_public_redaction(report: Any, private: Any, request: Any) -> None:
         assert report.reason is None
 
 
-def test_plan21_module_surface_and_frozen_identities_are_exact() -> None:
+def test_plan21_module_surface_and_frozen_identities_are_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _assert_api(importlib.import_module(_SCREEN_MODULE))
 
     assert module.CURRENT_UPSTOX_ACTION_SCREEN_CONTRACT_VERSION_V1 == _CONTRACT_VERSION
@@ -446,6 +451,16 @@ def test_plan21_module_surface_and_frozen_identities_are_exact() -> None:
         "self", "request", "lease",
     )
     assert module.SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1 == _SELECTED_SET_SCHEMA_IDENTITY
+    assert len(module.current_upstox_action_screen_runtime_code_identity_v1()) == 64
+    original_read = module._read_runtime_source
+
+    def drifted(path: Path) -> bytes:
+        source = original_read(path)
+        return source + b"drift" if path.name == "catalog.py" else source
+
+    monkeypatch.setattr(module, "_read_runtime_source", drifted)
+    with pytest.raises(ValueError):
+        module.current_upstox_action_screen_runtime_code_identity_v1()
 
 
 @pytest.mark.parametrize("count", (1, 5, 50))
@@ -600,16 +615,16 @@ def test_date_only_event_visibility_reuses_plan09_without_expanding_the_screen(t
 @pytest.mark.parametrize(
     ("scenario_kwargs", "overrides", "expected"),
     (
-        ({}, {"schedule_evidence_sha256": "a" * 64}, "SCHEDULE_MISSING"),
+        ({}, {"schedule_evidence_sha256": "a" * 64}, "SCHEDULE_UNAVAILABLE"),
         (
             {"retained_schedule_source": "other-authoritative-calendar"},
             {},
-            "SCHEDULE_AMBIGUOUS",
+            "SCHEDULE_UNAVAILABLE",
         ),
         (
             {"retained_schedule_release": "sha256:" + "c" * 64},
             {},
-            "SCHEDULE_AMBIGUOUS",
+            "SCHEDULE_UNAVAILABLE",
         ),
         ({"snapshots": False}, {"decision_cutoff": datetime(2026, 8, 3, 9, 59, tzinfo=UTC)}, "SCHEDULE_LATE"),
         ({}, {"comparison_session": date(2026, 7, 7)}, "SCHEDULE_CONTINUITY_UNPROVEN"),
@@ -642,6 +657,98 @@ def test_schedule_binding_close_and_exact_twenty_position_failures_are_private_a
     assert private.decision_session_close_at is None
     assert private.selected_snapshot_set_identity_sha256 is None
     _assert_public_redaction(report, private, request)
+
+
+@pytest.mark.parametrize("case", ("absent", "corrupt", "attachment"))
+def test_schedule_store_unavailability_is_one_private_outcome(
+    tmp_path: Path, case: str
+) -> None:
+    module = _api()
+    scenario = _scenario(tmp_path, 1)
+    displaced = tmp_path / "schedule-root.displaced"
+    try:
+        if case == "absent":
+            request = _request(
+                module, scenario, schedule_evidence_sha256="a" * 64
+            )
+        else:
+            request = _request(module, scenario)
+            if case == "corrupt":
+                path = scenario.root / (
+                    f"calendar-schedules/sha256/{scenario.schedule_sha256}.json"
+                )
+                path.write_bytes(b"not-a-schedule")
+            else:
+                scenario.root.rename(displaced)
+                scenario.root.mkdir(mode=0o700)
+        private = module.PrivateUpstoxActionScreenResolverV1(
+            scenario.schedule_store, scenario.action_store
+        ).resolve_exact(request, scenario.lease)
+        report = private.to_public_report()
+    finally:
+        if case == "attachment" and displaced.exists():
+            scenario.root.rmdir()
+            displaced.rename(scenario.root)
+        scenario.close()
+
+    assert private.outcome.value == "SCHEDULE_UNAVAILABLE"
+    assert private.decision_session_close_at is None
+    _assert_public_redaction(report, private, request)
+
+
+def test_schedule_requires_complete_calendar_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _api()
+    scenario = _scenario(tmp_path, 1)
+    original_resolve = scenario.schedule_store.resolve
+    try:
+        incomplete = replace(scenario.schedule, closures=scenario.schedule.closures[:-1])
+
+        def resolve(*args: object, **kwargs: object) -> Any:
+            return replace(original_resolve(*args, **kwargs), schedule=incomplete)
+
+        monkeypatch.setattr(scenario.schedule_store, "resolve", resolve)
+        private, report, request = _resolve(module, scenario)
+    finally:
+        scenario.close()
+
+    assert private.outcome.value == "SCHEDULE_CONTINUITY_UNPROVEN"
+    _assert_public_redaction(report, private, request)
+
+def test_schedule_allows_classified_dates_outside_comparison_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _api()
+    scenario = _scenario(tmp_path, 1)
+    original_resolve = scenario.schedule_store.resolve
+    try:
+        before = ScheduleSession(
+            date(2026, 7, 3), datetime(2026, 7, 3, 3, 45, tzinfo=UTC),
+            datetime(2026, 7, 3, 10, tzinfo=UTC), "REGULAR",
+        )
+        after = ScheduleSession(
+            date(2026, 8, 4), datetime(2026, 8, 4, 3, 45, tzinfo=UTC),
+            datetime(2026, 8, 4, 10, tzinfo=UTC), "REGULAR",
+        )
+        wider = ExpectedSessionSchedule(
+            scenario.schedule.schema_version, scenario.schedule.source,
+            scenario.schedule.source_release, _CUTOFF, scenario.schedule.timezone,
+            before.trade_date, after.trade_date,
+            (before, *scenario.schedule.sessions, after), scenario.schedule.closures,
+        )
+
+        def resolve(*args: object, **kwargs: object) -> Any:
+            return replace(original_resolve(*args, **kwargs), schedule=wider)
+
+        monkeypatch.setattr(scenario.schedule_store, "resolve", resolve)
+        private, report, request = _resolve(module, scenario)
+    finally:
+        scenario.close()
+
+    assert private.outcome.value == "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"
+    _assert_public_redaction(report, private, request)
+
 
 
 @pytest.mark.parametrize(("kind", "retrieved_at", "expected"), (
@@ -705,6 +812,9 @@ def test_action_read_attachment_revalidation_maps_to_corrupt_and_generic_public_
         private = resolver.resolve_exact(request, scenario.lease)
         report = private.to_public_report()
     finally:
+        if case == "root_replaced" and displaced.exists():
+            scenario.root.rmdir()
+            displaced.rename(scenario.root)
         scenario.close()
 
     assert private.outcome == module.PrivateUpstoxActionScreenOutcomeV1.CORRUPT
@@ -719,9 +829,9 @@ def test_action_read_attachment_revalidation_maps_to_corrupt_and_generic_public_
         ({"snapshot_schema_identity_sha256": "a" * 64}, None),
         ({"screen_schema_identity_sha256": "a" * 64}, None),
         ({"screen_policy_identity_sha256": "a" * 64}, None),
-        ({"schedule_evidence_sha256": "a" * 64}, "SCHEDULE_MISSING"),
+        ({"schedule_evidence_sha256": "a" * 64}, "SCHEDULE_UNAVAILABLE"),
         ({"schedule_source": "other-authoritative-calendar"}, None),
-        ({"schedule_source_release": "sha256:" + "c" * 64}, "SCHEDULE_AMBIGUOUS"),
+        ({"schedule_source_release": "sha256:" + "c" * 64}, "SCHEDULE_UNAVAILABLE"),
         ({"corporate_action_source": ""}, None),
         ({"corporate_action_source_identity_sha256": "A" * 64}, None),
         ({"snapshot_schema_identity_sha256": "sha256:" + "a" * 64}, None),
@@ -835,6 +945,36 @@ def test_input_request_private_and_public_types_have_exact_fields_nullability_an
     _assert_public_redaction(report, private, request)
 
 
+def test_input_request_and_resolver_reject_manifest_alias_mutation_before_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        input_value = _input(module, scenario)
+        request = module.CurrentSuppliedCohortUpstoxActionScreenRequestV1(input_value)
+        assert input_value.cohort_manifest is not request.cohort_manifest
+        object.__setattr__(input_value.cohort_manifest, "members", ())
+        assert len(request.cohort_manifest.members) == 1
+        object.__setattr__(request.cohort_manifest, "members", ())
+        calls: list[str] = []
+
+        def forbidden(*_args: object, **_kwargs: object) -> None:
+            calls.append("read")
+            raise AssertionError("mutated request reached a store")
+
+        monkeypatch.setattr(scenario.schedule_store, "resolve", forbidden)
+        monkeypatch.setattr(scenario.action_store, "resolve", forbidden)
+        with pytest.raises(ValueError):
+            module.PrivateUpstoxActionScreenResolverV1(
+                scenario.schedule_store, scenario.action_store
+            ).resolve_exact(request, scenario.lease)
+    finally:
+        scenario.close()
+
+    assert calls == []
+
+
 def _retained_tree_state(root: Path) -> tuple[tuple[str, int, str], ...]:
     entries: list[tuple[str, int, str]] = []
     for directory, names, files in os.walk(root):
@@ -851,8 +991,48 @@ def _retained_tree_state(root: Path) -> tuple[tuple[str, int, str], ...]:
 
 def _catalog_state(catalog: DuckDBCatalog) -> tuple[tuple[object, ...], ...]:
     return tuple(catalog.connection.execute(
-        "SELECT * FROM corporate_action_snapshots ORDER BY isin, snapshot_sha256"
+        "SELECT isin, snapshot_sha256 FROM corporate_action_snapshots "
+        "ORDER BY isin, snapshot_sha256"
     ).fetchall())
+
+
+@pytest.mark.parametrize("lease_case", ("distinct_valid", "closed"))
+def test_passed_lease_must_be_the_live_admitted_store_lease_before_any_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lease_case: str
+) -> None:
+    module = _api()
+    scenario = _scenario(tmp_path, 1)
+    alternate_root = tmp_path / f"{lease_case}-root"
+    alternate_root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(alternate_root)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    alternate = acquired.lease
+    if lease_case == "closed":
+        alternate.close()
+    calls: list[str] = []
+    original_schedule_resolve = scenario.schedule_store.resolve
+    original_action_resolve = scenario.action_store.resolve
+    try:
+        def schedule_resolve(*args: object, **kwargs: object) -> Any:
+            calls.append("schedule")
+            return original_schedule_resolve(*args, **kwargs)
+
+        def action_resolve(*args: object, **kwargs: object) -> Any:
+            calls.append("action")
+            return original_action_resolve(*args, **kwargs)
+
+        monkeypatch.setattr(scenario.schedule_store, "resolve", schedule_resolve)
+        monkeypatch.setattr(scenario.action_store, "resolve", action_resolve)
+        with pytest.raises(ValueError):
+            module.PrivateUpstoxActionScreenResolverV1(
+                scenario.schedule_store, scenario.action_store
+            ).resolve_exact(_request(module, scenario), alternate)
+    finally:
+        if lease_case == "distinct_valid":
+            alternate.close()
+        scenario.close()
+
+    assert calls == []
 
 
 def test_resolver_has_zero_effects_and_uses_only_exact_schedule_and_manifest_resolutions(
