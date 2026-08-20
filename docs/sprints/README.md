@@ -126,9 +126,12 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   historical public-page research receipts.
 - [Sprint 11 — Current supplied-cohort Market Regime](sprint-11.md) —
   [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
-  has a local candidate implementation with focused and full local gates. [Plan
+  has a temporal-review repair implementation and a current focused two-file
+  result of **172 passed**. [Plan
   20](../plans/20-current-supplied-cohort-market-regime-contract.md) defines a
   separate current supplied-cohort archive/schedule contract; it does not alter
-  frozen Plan 12 or deferred Plan 18. Independent re-review, hosted CI/security
-  gates, merge, and publication remain pending; this index makes no current
-  exact-review approval claim.
+  frozen Plan 12 or deferred Plan 18. The prior full-local gate on
+  `d364bf11fac632b4d03b6c179b4519d3ca71f1bb` is superseded by this code change.
+  Final full local gates, independent exact-revision quality/security re-review,
+  hosted CI/security, merge, and publication remain pending; this index makes no
+  current approval claim.

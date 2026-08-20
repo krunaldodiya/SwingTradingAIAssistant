@@ -1,6 +1,6 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **LOCAL IMPLEMENTATION COMPLETE — focused contract suite GREEN; independent review, full repository/hosted CI-security gates, merge, and publication are not claimed**
+Status: **TEMPORAL REVIEW REPAIR IMPLEMENTED — focused contract suite GREEN; the prior full-local gate on `d364bf11fac632b4d03b6c179b4519d3ca71f1bb` is superseded by this code change; final full gates, exact re-review, hosted CI/security, merge, and publication are pending**
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
 Milestone: **Sprint 11**
 Plan: [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
@@ -73,17 +73,22 @@ owner-bound schedule source/release/digest, complete classified calendar-date
 coverage through cutoff-local date, and latest session with
 `close_at <= decision_cutoff` (`as_of` is timely only); Decimal directions;
 inclusive 60% boundaries; deterministic reason order; aggregate redaction; and
-whole-result insufficiency for every evidence failure. Local focused evidence is
-GREEN on this worktree:
+whole-result insufficiency for every evidence failure. The current temporal
+repair additionally requires every member fact at S0 through S20 to have
+`published_at >= close_at` and `known_at >= close_at`; facts at equality are
+accepted, while `data_cutoff` remains the last-bar time and may precede close.
+Focused evidence is GREEN on this worktree:
 
 ```text
-uv run pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
-140 passed
+uv run --no-sync --extra dev pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
+172 passed
 ```
 
-Independent review, applicable full repository and hosted CI/security gates,
-merge, and publication evidence remain future lifecycle work and are not
-performed or asserted by this record.
+The earlier full-local gate on
+`d364bf11fac632b4d03b6c179b4519d3ca71f1bb` does not cover this repair and is
+superseded. Final full local gates, independent exact-revision quality/security
+re-review, hosted CI/security, merge, and publication evidence are pending and
+are not asserted by this record.
 
 The main unresolved implementation risks are that the Sprint-10 archive is
 write-only/unindexed and persists only an opaque request identity—not the full

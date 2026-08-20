@@ -402,6 +402,8 @@ class CurrentSuppliedCohortMarketRegimeRequestV1:
 class PrivateCurrentCohortMemberCloseProjectionV1:
     member: CurrentCohortMemberV1
     close: Decimal
+    published_at: datetime
+    known_at: datetime
 
     def __post_init__(self) -> None:
         if (
@@ -409,6 +411,11 @@ class PrivateCurrentCohortMemberCloseProjectionV1:
             or type(self.close) is not Decimal
             or not self.close.is_finite()
             or self.close <= 0
+            or type(self.published_at) is not datetime
+            or self.published_at.tzinfo is not UTC
+            or type(self.known_at) is not datetime
+            or self.known_at.tzinfo is not UTC
+            or self.published_at > self.known_at
         ):
             raise ValueError
 
@@ -961,6 +968,10 @@ def _schedule_reasons(
             or item.close_at.astimezone(_IST).date() != item.trade_date
             or item.close_at > request.decision_cutoff
             or archive.invocation_cutoff < item.close_at
+            or any(
+                member.published_at < item.close_at or member.known_at < item.close_at
+                for member in archive.members
+            )
             for archive, item in zip(grid.sessions, projection.sessions, strict=True)
         )
     ):
@@ -1458,7 +1469,10 @@ def _archive_session(
             session,
             tuple(
                 PrivateCurrentCohortMemberCloseProjectionV1(
-                    fact.member, fact.completed_daily.close
+                    fact.member,
+                    fact.completed_daily.close,
+                    fact.completed_daily.published_at,
+                    fact.completed_daily.known_at,
                 )
                 for fact in facts
             ),

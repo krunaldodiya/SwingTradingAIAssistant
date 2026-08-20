@@ -325,7 +325,7 @@ def _archive_fixture(
                 _close_for(position, direction),
                 1,
                 datetime.combine(completed_session, time(9), UTC),
-                datetime.combine(completed_session, time(9, 30), UTC),
+                completed_cutoff,
                 completed_cutoff,
                 hashlib.sha256(
                     f"{completed_session}:{member.isin}".encode()
@@ -493,7 +493,12 @@ def _private_ready(
             datetime.combine(record["session"], time(10), UTC),
             record["session"],
             tuple(
-                close(fact.member, fact.completed_daily.close)
+                close(
+                    fact.member,
+                    fact.completed_daily.close,
+                    fact.completed_daily.published_at,
+                    fact.completed_daily.known_at,
+                )
                 for fact in record["facts"]
             ),
         )
@@ -1611,7 +1616,7 @@ def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(  # noqa: 
             )
         elif case == "daily_clock":
             item["facts"][0]["completed_daily"]["data_cutoff"] = (
-                "2025-12-10T09:31:00.000000Z"
+                "2025-12-10T10:00:00.000001Z"
             )
         elif case == "freshness_age":
             item["report"]["invocation_cutoff"] = "2025-12-15T10:00:00.000000Z"
@@ -1894,6 +1899,145 @@ def test_before_official_close_at_any_grid_position_is_schedule_insufficiency(
         evaluate(admitted, archive, resolver),
         ("SCHEDULE_CONTINUITY_UNPROVEN",),
     )
+
+
+@pytest.mark.parametrize("position", (0, 10, 20))
+@pytest.mark.parametrize("clock", ("published_at", "known_at"))
+def test_typed_port_completion_timing_before_close_is_schedule_insufficiency(
+    tmp_path: Path, position: int, clock: str
+) -> None:
+    module, evaluate = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, schedule = _schedule(root)
+    admitted = _admit_input(module, _input_value(fixture, ids, digest))
+    grid, continuity = _private_ready(module, fixture, ids, digest, schedule)
+    archive_session = grid.sessions[position]
+    close_at = continuity.sessions[position].close_at
+    member = archive_session.members[0]
+    if clock == "published_at":
+        member = replace(member, published_at=close_at - timedelta(microseconds=1))
+    else:
+        member = replace(
+            member,
+            published_at=close_at - timedelta(microseconds=2),
+            known_at=close_at - timedelta(microseconds=1),
+        )
+    members = (member,)
+    sessions = list(grid.sessions)
+    sessions[position] = replace(archive_session, members=members)
+    tampered_grid = _type(module, "PrivateCurrentCohortArchiveGridProjectionV1")(
+        grid.cohort_identity_sha256, grid.cohort_size, tuple(sessions)
+    )
+    archive = _RecordingArchivePort(
+        _type(module, "CurrentSuppliedCohortMarketRegimeRequestV1"),
+        _type(module, "ArchiveReadResultV1")("READY", tampered_grid, ()),
+        admitted,
+    )
+    resolver = _RecordingSchedulePort(
+        _type(module, "ScheduleReadResultV1")("RESOLVED", continuity, ()), admitted
+    )
+    _assert_insufficient(
+        module,
+        evaluate(admitted, archive, resolver),
+        ("SCHEDULE_CONTINUITY_UNPROVEN",),
+    )
+
+
+@pytest.mark.parametrize("position", (0, 10, 20))
+@pytest.mark.parametrize("clock", ("published_at", "known_at"))
+def test_canonical_archive_completion_timing_before_close_is_schedule_insufficiency(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    position: int,
+    clock: str,
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root)
+    value = _input_value(fixture, ids, digest)
+    record = fixture["records"][position]
+    close_at = datetime.combine(record["session"], time(10), UTC)
+    original_id = record["id"]
+
+    def mutate(item: dict[str, Any]) -> None:
+        completed = item["facts"][0]["completed_daily"]
+        if clock == "published_at":
+            completed["published_at"] = (close_at - timedelta(microseconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        else:
+            completed["published_at"] = (close_at - timedelta(microseconds=2)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+            completed["known_at"] = (close_at - timedelta(microseconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        for entry in item["ledger"]:
+            if entry["feature"] == "DAILY_OHLCV":
+                entry["published_at"] = completed["published_at"]
+                entry["known_at"] = completed["known_at"]
+
+    replacement_id = _replace_archive(record, mutate)
+    _replace_input_archive_id(value, original_id, replacement_id)
+    _recompute_input_identity(value)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 1 and captured.err == ""
+    _assert_public_report_bytes(
+        module,
+        captured.out.encode(),
+        value,
+        observed=False,
+        reasons=("SCHEDULE_CONTINUITY_UNPROVEN",),
+    )
+
+
+def test_canonical_archives_completed_at_official_close_are_observed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    for record in fixture["records"]:
+        completed = record["facts"][0].completed_daily
+        assert (completed.published_at, completed.known_at) == (
+            datetime.combine(record["session"], time(10), UTC),
+            datetime.combine(record["session"], time(10), UTC),
+        )
+    digest, _ = _schedule(root)
+    value = _input_value(fixture, ids, digest)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 0 and captured.err == ""
+    _assert_public_report_bytes(module, captured.out.encode(), value, observed=True)
+
+
+def test_private_member_close_projection_requires_utc_ordered_completion_timing() -> (
+    None
+):
+    module, _ = _api()
+    close = _type(module, "PrivateCurrentCohortMemberCloseProjectionV1")
+    member = _members(1)[0]
+    at_close = datetime(2026, 1, 12, 10, tzinfo=UTC)
+    assert type(close(member, Decimal("1"), at_close, at_close)) is close
+    with pytest.raises(ValueError):
+        close(
+            member,
+            Decimal("1"),
+            at_close,
+            datetime(2026, 1, 12, 11, tzinfo=timezone(timedelta(hours=1))),
+        )
+    with pytest.raises(ValueError):
+        close(
+            member,
+            Decimal("1"),
+            at_close,
+            at_close - timedelta(microseconds=1),
+        )
+    with pytest.raises(ValueError):
+        close(member, Decimal("1"), at_close, at_close.date())
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 # Current supplied-cohort Market Regime contract
 
-Status: **PLANNED — specification only for GitHub Issue #116; no implementation, test, review, CI, merge, or publication evidence**
+Status: **REPAIR IMPLEMENTED — current two-file focused evidence is recorded below; final full local gates, independent exact-revision re-review, hosted CI/security, merge, and publication remain pending**
 Contract revision: `current-supplied-cohort-market-regime@v1`
 Schema revision: `current-supplied-cohort-market-regime-schema@v1`
 Risk: **R3 / High** — financial-research integrity, immutable evidence, private current-data provenance, and a new cross-boundary public fact contract
@@ -183,6 +183,13 @@ is the SHA-256 of the canonical rule projection containing the literal contract
 revision, `completed_schedule_positions: 21`, `comparison_position_offset: 20`,
 direction enum, threshold expression, and reason declaration order. A digest is
 an integrity binding, not authority or proof that its content was timely.
+The temporal repair changes only the private archive projection and its
+schedule-continuity admission. It changes neither authoritative public canonical
+projection above, so the schema identity remains
+`1242118a1a48d484259f992784850173c9722d4d650df2e886d89af42e55ebd7` and
+the calculation identity remains
+`bc66f914bc6cafcef658e71814a4d8b0bbc180dc9676fdfc5a9bc628d6485d86`.
+
 
 The following two one-line JSON values, each followed by one LF, are the
 authoritative canonical projections. Implementations MUST construct these exact
@@ -434,7 +441,8 @@ The archive reader returns only immutable private values:
 
 ```text
 PrivateCurrentCohortMemberCloseProjectionV1 =
-  (member: CurrentCohortMemberV1, close: CanonicalDecimal)
+  (member: CurrentCohortMemberV1, close: CanonicalDecimal,
+   published_at: UtcInstant, known_at: UtcInstant)
 
 PrivateCurrentCohortArchiveSessionProjectionV1 =
   (archive_object_sha256: Sha256, request_identity_sha256: Sha256,
@@ -451,6 +459,13 @@ PrivateCurrentCohortArchiveGridProjectionV1 =
 identity each. `sessions` has exactly 21 entries strictly ordered by `session`;
 each position has the same sorted member tuple, and its archive ID is one of the
 input's 21 IDs exactly once. These types never serialize to a public report.
+
+At this typed private-port boundary `published_at` and `known_at` are exact
+`datetime` values with the UTC singleton timezone and
+`published_at <= known_at`; the direct reader projects their exact admitted
+Sprint-10 completed-fact values. `data_cutoff` is deliberately not projected:
+it remains the completed bar's last-bar time, not an official-close completion
+claim.
 
 ```text
 PrivateRetainedScheduleSessionProjectionV1 =
@@ -531,12 +546,18 @@ nor invented because this retained schedule schema does not carry them.
 `as_of` is a timeliness bound only; it never changes which sessions are complete.
 The schedule plus each selected Sprint-10 completed fact proves completion. A
 date counts as an admissible completed schedule session only when its `close_at
-<= decision_cutoff` and every corresponding selected
+<= decision_cutoff`, every corresponding selected
 `CompletedDailyOhlcvFactV1` is admitted completion evidence under its own
-archive-report cutoff. The schedule must prove both that the 21 archive sessions
-are all official completed NSE Capital Market sessions from `S[0]` through
-`S[20]`, without an omitted, duplicated, closure-misclassified, or unscoped
-special session, and that `S[20]` is the latest session with
+archive-report cutoff, and every member fact at that exact `S[0]` through
+`S[20]` position has both `published_at >= close_at` and
+`known_at >= close_at`. Equality at official close is admitted. A value before
+the matching official close fails the whole result as
+`SCHEDULE_CONTINUITY_UNPROVEN`, with comparison session, label, and all counts
+null. This does not constrain `data_cutoff` against official close: it remains
+the last-bar time and may precede close. The schedule must prove both that the 21
+archive sessions are all official completed NSE Capital Market sessions from
+`S[0]` through `S[20]`, without an omitted, duplicated, closure-misclassified,
+or unscoped special session, and that `S[20]` is the latest session with
 `close_at <= decision_cutoff`. It cannot add a close, select a different archive,
 replace a missing archive fact, reinterpret a partial snapshot, or recompute raw
 OHLC.
@@ -610,7 +631,7 @@ stated prerequisites are admitted.
 | `SCHEDULE_EVIDENCE_MISSING` | schedule resolve | `ScheduleEvidenceStore.resolve` is not `RESOLVED` for the input digest. | Schedule semantic checks. | `I(SCHEDULE_EVIDENCE_MISSING)` |
 | `SCHEDULE_EVIDENCE_AMBIGUOUS` | schedule admission | Resolved object is not v2/v3, has a digest/canonical-byte/source/source-release/timezone/row-shape conflict, or does not exactly match owner-bound source/release. | Continuity/latest-session checks. | `I(SCHEDULE_EVIDENCE_AMBIGUOUS)` |
 | `SCHEDULE_EVIDENCE_LATE` | schedule admission | `as_of > decision_cutoff`. | Continuity/latest-session checks. | `I(SCHEDULE_EVIDENCE_LATE)` |
-| `SCHEDULE_CONTINUITY_UNPROVEN` | schedule fold | Classified calendar-date coverage through cutoff-local date, S0..S20 coverage, closure/special-session scope, or no-omitted-session proof is absent/incomplete. | Latest-session/reducer admission. | `I(SCHEDULE_CONTINUITY_UNPROVEN)` |
+| `SCHEDULE_CONTINUITY_UNPROVEN` | schedule fold | Classified calendar-date coverage through cutoff-local date, S0..S20 coverage, closure/special-session scope, no-omitted-session proof, or any member fact at its matching position with `published_at < close_at` or `known_at < close_at` is absent/unproven. | Latest-session/reducer admission. | `I(SCHEDULE_CONTINUITY_UNPROVEN)` |
 | `DECISION_SESSION_NOT_LATEST_ADMISSIBLE` | schedule fold | Requested `S[20]` is not the final session with `close_at <= decision_cutoff`. | Reducer admission. | `I(DECISION_SESSION_NOT_LATEST_ADMISSIBLE)` |
 | `FACT_FUTURE_KNOWN` | fact timing | `known_at`, `published_at`, `data_cutoff`, or archive-report cutoff is after `decision_cutoff`. | The generic cutoff reason for that same future-clock violation; direction for that fact. | `I(FACT_FUTURE_KNOWN)` |
 | `FACT_CUTOFF_OR_FRESHNESS_UNPROVEN` | fact timing | A required fact is stale, lacks a required clock, or violates own-report cutoff ordering without a future-known clock. | Direction for that fact. | `I(FACT_CUTOFF_OR_FRESHNESS_UNPROVEN)` |
@@ -683,7 +704,7 @@ alter request IDs, select objects, or recompute a decision.
 
 ## Acceptance and evidence plan
 
-Focused exact-revision evidence is 142 passing cases for the command below.
+Focused exact-revision evidence is 172 passing cases for the command below.
 Applicable full/release gates remain required before it can claim completion.
 
 | Category | Required acceptance cases |
@@ -694,7 +715,14 @@ Applicable full/release gates remain required before it can claim completion.
 | Schedule, timing, and structural failure | Missing/unresolved or digest-mismatched retained schedule; source other than `nse-authoritative-calendar`; source-release mismatch or invalid `sha256:<64 lowercase hex>` form; noncanonical/over-1,000,000-byte/4,097-row schedule; unsupported v1, wrong timezone, `as_of > decision_cutoff`, incomplete classified coverage through cutoff-local date, omitted completed exchange session, conflicting/unscoped closure or special session, a typed `ArchiveReadResultV1` that cannot construct the exact 21-session common grid after its own admissions, decision not latest admissible, no comparison position, data/published/known instant after cutoff, future-known fact, or missing/extra/malformed/unreviewed runtime manifest, source-map digest mismatch, unsafe manifest/source, loader/path mismatch, or composite verification failure. Every runtime-manifest case is exact exit `2` with no report; the other post-admission faults are canonical insufficiency. |
 | Forbidden-path failure | Partial-shaped/value source placed in `completed_daily` or otherwise substituted for a completed close; raw daily OHLC query/candle reconstruction attempt; provider/network/source/clock/archive-enumeration attempt; denominator reduction; partial directions/counts; member/raw/path leakage in public output or diagnostics. Such member admission is `SPRINT10_MEMBER_FACT_INVALID`; valid partial presence alone is accepted then discarded, and the typed reducer has no partial input surface. Every failure case must yield the closed whole-result behavior or pre-report structural exit. |
 
-Focused gate — 142 passed:
+The focused portfolio includes typed-port and real canonical-archive cases for
+`published_at` and `known_at` before the official close at S0, an intermediate
+position, and S20. Each proves the single
+`SCHEDULE_CONTINUITY_UNPROVEN` whole-result with null comparison, label, and
+counts; canonical facts with both instants exactly at each official close remain
+observed.
+
+Focused gate — 172 passed:
 
 ```text
 uv run --no-sync --extra dev pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
