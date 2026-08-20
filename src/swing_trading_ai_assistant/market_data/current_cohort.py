@@ -1151,7 +1151,7 @@ def _archive_ledger_matches_request(
         daily_entry = ledger[ledger_index]
         ledger_index += 1
         daily_fact = fact_by_member.get(member)
-        if daily_entry != _available_ledger_entry(
+        if daily_entry != available_ledger_entry_v1(
             feature="DAILY_OHLCV",
             interval="1d",
             member=member,
@@ -1179,7 +1179,7 @@ def _archive_ledger_matches_request(
                 if daily_fact is not None
                 else reported_unavailable_states
             )
-            if partial_entry != _available_ledger_entry(
+            if partial_entry != available_ledger_entry_v1(
                 feature="PARTIAL_CURRENT_SESSION",
                 interval="1m",
                 member=member,
@@ -1269,7 +1269,7 @@ class ImmutableCurrentFactArchiveV1:
             return False
 
 
-def _available_ledger_entry(
+def available_ledger_entry_v1(
     *,
     feature: str,
     interval: str,
@@ -1658,7 +1658,7 @@ class CurrentCohortMarketDataServiceV1:
         for member in request.cohort.members:
             reason = reasons.get(member)
             entries.append(
-                _available_ledger_entry(
+                available_ledger_entry_v1(
                     feature="DAILY_OHLCV",
                     interval="1d",
                     member=member,
@@ -1673,7 +1673,7 @@ class CurrentCohortMarketDataServiceV1:
             )
             if request.include_partial_current_session:
                 entries.append(
-                    _available_ledger_entry(
+                    available_ledger_entry_v1(
                         feature="PARTIAL_CURRENT_SESSION",
                         interval="1m",
                         member=member,

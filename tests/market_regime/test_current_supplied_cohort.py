@@ -15,11 +15,12 @@ import json
 import os
 import socket
 import time as time_module
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal, localcontext
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -39,7 +40,7 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     HistoricalAvailabilityStateV1,
     ImmutableCurrentFactArchiveV1,
     PartialCurrentSessionSnapshotV1,
-    _available_ledger_entry,
+    available_ledger_entry_v1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
@@ -374,7 +375,7 @@ def _archive_fixture(
         ledger_items = []
         for fact in facts:
             ledger_items.append(
-                _available_ledger_entry(
+                available_ledger_entry_v1(
                     feature="DAILY_OHLCV",
                     interval="1d",
                     member=fact.member,
@@ -386,7 +387,7 @@ def _archive_fixture(
             if partial_enabled:
                 partial = fact.partial_current_session
                 ledger_items.append(
-                    _available_ledger_entry(
+                    available_ledger_entry_v1(
                         feature="PARTIAL_CURRENT_SESSION",
                         interval="1m",
                         member=fact.member,
@@ -445,7 +446,7 @@ def _input_value(
     schedule_id: str,
     *,
     decision_cutoff: datetime = _CUTOFF,
-    decision_session: date = _sessions()[-1],
+    decision_session: date = date(2026, 1, 12),
 ) -> dict[str, object]:
     value: dict[str, object] = {
         "contract_version": _CONTRACT,
@@ -1125,7 +1126,7 @@ def _assert_public_report_bytes(
         decoded["schema_identity_sha256"],
         decoded["calculation_identity_sha256"],
     ) == (_CONTRACT, _SCHEMA, _CALCULATION)
-    for field in (
+    for report_field in (
         "input_identity_sha256",
         "cohort_identity_sha256",
         "cohort_size",
@@ -1136,7 +1137,7 @@ def _assert_public_report_bytes(
         "schedule_source",
         "schedule_source_release",
     ):
-        assert decoded[field] == value[field]
+        assert decoded[report_field] == value[report_field]
     assert (
         decoded["code_identity_sha256"]
         == module.current_supplied_cohort_market_regime_runtime_code_identity_v1()
@@ -1285,7 +1286,7 @@ def _recompute_input_identity(value: dict[str, object]) -> None:
         ("FACT_FUTURE_KNOWN", "future"),
     ],
 )
-def test_cli_real_retained_artifacts_produce_each_closed_reason(
+def test_cli_real_retained_artifacts_produce_each_closed_reason(  # noqa: C901 - one case table mutates every closed evidence boundary
     tmp_path: Path, capsys: pytest.CaptureFixture[str], reason: str, mutation: str
 ) -> None:
     module, _ = _api()
@@ -1564,7 +1565,7 @@ def test_real_archive_two_independent_same_stage_faults_reverse_order_are_dedupl
         ("ledger_order", "SPRINT10_LEDGER_INVALID", True),
     ],
 )
-def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(
+def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(  # noqa: C901 - one case table mutates every retained-admission boundary
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     case: str,
@@ -1588,7 +1589,7 @@ def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(
     record = fixture["records"][-1] if partial else fixture["records"][0]
     original_id = record["id"]
 
-    def mutate(item: dict[str, Any]) -> None:
+    def mutate(item: dict[str, Any]) -> None:  # noqa: C901 - case table keeps each causal mutation local
         if case == "malformed_insufficient":
             _make_report_insufficient(item)
             item["report"]["reasons"] = []
@@ -1673,7 +1674,7 @@ def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(
         "unsafe_root",
     ),
 )
-def test_cli_structural_rejections_exit_two_with_sanitized_diagnostics(
+def test_cli_structural_rejections_exit_two_with_sanitized_diagnostics(  # noqa: C901 - one case table covers input and root boundaries
     tmp_path: Path, capsys: pytest.CaptureFixture[str], mutation: str
 ) -> None:
     module, _ = _api()
@@ -1731,6 +1732,31 @@ def test_cli_structural_rejections_exit_two_with_sanitized_diagnostics(
         assert private not in captured.err
 
 
+@pytest.mark.parametrize("payload", (b"[]\n", b"null\n"))
+def test_cli_rejects_canonical_non_object_owner_input_without_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], payload: bytes
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    input_file = tmp_path / "owner-input.json"
+    input_file.write_bytes(payload)
+    input_file.chmod(0o600)
+    code = _cli(module)(
+        [
+            "regime-current",
+            "--input-file",
+            str(input_file),
+            "--storage-root",
+            str(root),
+            "--output",
+            "json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2 and captured.out == ""
+    assert captured.err == "invalid regime-current request\n"
+
+
 def test_runtime_identity_is_exact_path_nul_digest_composite() -> None:
     module, _ = _api()
     manifest_module = importlib.import_module(
@@ -1775,7 +1801,7 @@ def test_runtime_identity_is_exact_path_nul_digest_composite() -> None:
         "composite",
     ),
 )
-def test_runtime_manifest_and_source_map_fail_before_report_with_sanitized_exit_two(
+def test_runtime_manifest_and_source_map_fail_before_report_with_sanitized_exit_two(  # noqa: C901 - one case table covers runtime-identity tamper paths
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,

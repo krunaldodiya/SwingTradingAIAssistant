@@ -674,9 +674,8 @@ alter request IDs, select objects, or recompute a decision.
 
 ## Acceptance and evidence plan
 
-No test in this section has run. The implementation must add focused,
-exact-revision evidence before it can claim completion, and then run applicable
-full/release gates on that same revision.
+Focused exact-revision evidence is 142 passing cases for the command below.
+Applicable full/release gates remain required before it can claim completion.
 
 | Category | Required acceptance cases |
 | --- | --- |
@@ -686,10 +685,10 @@ full/release gates on that same revision.
 | Schedule, timing, and structural failure | Missing/unresolved or digest-mismatched retained schedule; source other than `nse-authoritative-calendar`; source-release mismatch or invalid `sha256:<64 lowercase hex>` form; noncanonical/over-1,000,000-byte/4,097-row schedule; unsupported v1, wrong timezone, `as_of > decision_cutoff`, incomplete classified coverage through cutoff-local date, omitted completed exchange session, conflicting/unscoped closure or special session, a typed `ArchiveReadResultV1` that cannot construct the exact 21-session common grid after its own admissions, decision not latest admissible, no comparison position, data/published/known instant after cutoff, future-known fact, or missing/extra/malformed/unreviewed runtime manifest, source-map digest mismatch, unsafe manifest/source, loader/path mismatch, or composite verification failure. Every runtime-manifest case is exact exit `2` with no report; the other post-admission faults are canonical insufficiency. |
 | Forbidden-path failure | Partial-shaped/value source placed in `completed_daily` or otherwise substituted for a completed close; raw daily OHLC query/candle reconstruction attempt; provider/network/source/clock/archive-enumeration attempt; denominator reduction; partial directions/counts; member/raw/path leakage in public output or diagnostics. Such member admission is `SPRINT10_MEMBER_FACT_INVALID`; valid partial presence alone is accepted then discarded, and the typed reducer has no partial input surface. Every failure case must yield the closed whole-result behavior or pre-report structural exit. |
 
-Focused gate (not run by this planning change):
+Focused gate — 142 passed:
 
 ```text
-uv run pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
+uv run --no-sync --extra dev pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
 ```
 
 Full candidate-revision gate (not run by this planning change) first performs

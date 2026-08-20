@@ -8,14 +8,13 @@ import importlib.machinery
 import json
 import os
 import re
-import sys
 import stat
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeGuard
 
 from swing_trading_ai_assistant.market_data.current_cohort import (
     CURRENT_COHORT_CONTRACT_VERSION_V1,
@@ -31,11 +30,10 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     FeatureAvailabilityLedgerEntryV1,
     HistoricalAvailabilityStateV1,
     PartialCurrentSessionSnapshotV1,
-    _available_ledger_entry,
+    available_ledger_entry_v1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
-    ExpectedSessionSchedule,
     ScheduleEvidenceStore,
     ScheduleOutcome,
 )
@@ -142,12 +140,50 @@ def _digest(value: object) -> str:
     return value
 
 
+def _string(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError
+    return value
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    return _string(value)
+
+
 def _ordered_reasons(reasons: tuple[str, ...]) -> tuple[str, ...]:
     if type(reasons) is not tuple or any(
         type(x) is not str or x not in _REASON_ORDER for x in reasons
     ):
         raise ValueError
     return tuple(sorted(set(reasons), key=_REASON_ORDER.__getitem__))
+
+
+def _nonnegative_int(value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError
+    return value
+
+
+def _is_closed_object(value: object) -> TypeGuard[dict[str, object]]:
+    return type(value) is dict
+
+
+def _closed_object(value: object) -> dict[str, object]:
+    if not _is_closed_object(value):
+        raise ValueError
+    return value
+
+
+def _is_closed_list(value: object) -> TypeGuard[list[object]]:
+    return type(value) is list
+
+
+def _closed_list(value: object) -> list[object]:
+    if not _is_closed_list(value):
+        raise ValueError
+    return value
 
 
 def _json_depth(value: object) -> int:
@@ -158,9 +194,9 @@ def _json_depth(value: object) -> int:
         deepest = max(deepest, depth)
         if deepest > 32:
             raise ValueError
-        if type(current) is dict:
+        if _is_closed_object(current):
             stack.extend((item, depth + 1) for item in current.values())
-        elif type(current) is list:
+        elif _is_closed_list(current):
             stack.extend((item, depth + 1) for item in current)
     return deepest
 
@@ -178,9 +214,10 @@ def _closed(raw: bytes) -> dict[str, object]:
         return value
 
     try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=object_from_pairs)
-        if type(value) is not dict:
-            raise ValueError
+        decoded: object = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=object_from_pairs
+        )
+        value = _closed_object(decoded)
         _json_depth(value)
     except (
         UnicodeDecodeError,
@@ -235,26 +272,27 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
         cutoff = _parse_instant(value["decision_cutoff"])
         session = _parse_date(value["decision_session"])
         ids_raw = value["archive_object_sha256s"]
+        ids = _closed_list(ids_raw)
         if (
             type(size) is not int
             or type(size) is bool
             or not 1 <= size <= 50
-            or type(ids_raw) is not list
-            or len(ids_raw) != 21
+            or len(ids) != 21
         ):
             raise ValueError
-        ids = tuple(_digest(item) for item in ids_raw)
+        ids = tuple(_digest(item) for item in ids)
         if tuple(sorted(ids)) != ids or len(set(ids)) != 21:
             raise ValueError
         schedule = _digest(value["schedule_evidence_sha256"])
+        release = value["schedule_source_release"]
         if (
             value["schedule_source"] != "nse-authoritative-calendar"
-            or type(value["schedule_source_release"]) is not str
-            or _RELEASE.fullmatch(value["schedule_source_release"]) is None
+            or type(release) is not str
+            or _RELEASE.fullmatch(release) is None
         ):
             raise ValueError
         identity = _digest(value["input_identity_sha256"])
-        projection = {k: value[k] for k in fields - {"input_identity_sha256"}}
+        projection = {key: value[key] for key in fields - {"input_identity_sha256"}}
         if _sha(projection) != identity:
             raise ValueError
         for name, item in (
@@ -269,7 +307,7 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
             ("archive_object_sha256s", ids),
             ("schedule_evidence_sha256", schedule),
             ("schedule_source", "nse-authoritative-calendar"),
-            ("schedule_source_release", value["schedule_source_release"]),
+            ("schedule_source_release", release),
             ("input_identity_sha256", identity),
         ):
             object.__setattr__(self, name, item)
@@ -277,7 +315,7 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
     @classmethod
     def from_canonical_json_bytes(
         cls, raw: bytes
-    ) -> "CurrentSuppliedCohortMarketRegimeInputV1":
+    ) -> CurrentSuppliedCohortMarketRegimeInputV1:
         if len(raw) > _MAX_INPUT_BYTES:
             raise ValueError("invalid current-regime input")
         try:
@@ -619,20 +657,19 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
         manifest = importlib.import_module(
             CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1
         )
-        mapping = getattr(
-            manifest, "CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1"
+        mapping = _closed_object(
+            manifest.CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1
         )
     except (ImportError, AttributeError, TypeError, ValueError):
         raise ValueError("runtime identity invalid") from None
-    if (
-        type(mapping) is not dict
-        or tuple(mapping) != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1
-        or any(
-            type(value) is not str or _DIGEST.fullmatch(value) is None
-            for value in mapping.values()
-        )
+    if tuple(
+        mapping
+    ) != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1 or any(
+        type(value) is not str or _DIGEST.fullmatch(value) is None
+        for value in mapping.values()
     ):
         raise ValueError("runtime identity invalid")
+    digests = {relative: _digest(mapping[relative]) for relative in mapping}
     root = _runtime_root()
     loaded = {
         "src/swing_trading_ai_assistant/market_data/cli.py": "swing_trading_ai_assistant.market_data.cli",
@@ -645,7 +682,7 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
         _require_loaded_source(loaded[relative], root, relative)
         if (
             hashlib.sha256(_read_literal_project_file(root, relative)).hexdigest()
-            != mapping[relative]
+            != digests[relative]
         ):
             raise ValueError("runtime identity invalid")
     manifest_relative = CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_V1
@@ -659,7 +696,7 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
     ).hexdigest()
     composite = (
         b"".join(
-            relative.encode() + b"\0" + mapping[relative].encode() + b"\0"
+            relative.encode() + b"\0" + digests[relative].encode() + b"\0"
             for relative in CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1
         )
         + manifest_relative.encode()
@@ -716,16 +753,22 @@ class CurrentSuppliedCohortMarketRegimeReportV1:
         reasons = _ordered_reasons(reasons)
         observed = not reasons
         if observed:
+            admitted_advances = _nonnegative_int(advances)
+            admitted_declines = _nonnegative_int(declines)
+            admitted_unchanged = _nonnegative_int(unchanged)
             if (
                 type(comparison_session) is not date
                 or label
                 not in ("BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION")
-                or any(
-                    type(x) is not int or x < 0 for x in (advances, declines, unchanged)
-                )
-                or advances + declines + unchanged != request.cohort_size
+                or admitted_advances + admitted_declines + admitted_unchanged
+                != request.cohort_size
             ):
                 raise ValueError
+            advances, declines, unchanged = (
+                admitted_advances,
+                admitted_declines,
+                admitted_unchanged,
+            )
             state = "OBSERVED"
         else:
             if any(
@@ -926,8 +969,7 @@ def evaluate_current_supplied_cohort_market_regime_v1(
         raise ValueError
     if archive.outcome != "READY":
         return _report(request, code, archive.reasons)
-    assert archive.grid is not None
-    if not _valid_grid(archive.grid, request):
+    if archive.grid is None or not _valid_grid(archive.grid, request):
         return _report(request, code, ("COMMON_SESSION_GRID_INVALID",))
     schedule = schedule_resolver.resolve_exact(
         request.schedule_evidence_sha256,
@@ -940,7 +982,8 @@ def evaluate_current_supplied_cohort_market_regime_v1(
         raise ValueError
     if schedule.outcome != "RESOLVED":
         return _report(request, code, schedule.reasons)
-    assert schedule.projection is not None
+    if schedule.projection is None:
+        return _report(request, code, ("SCHEDULE_EVIDENCE_AMBIGUOUS",))
     reasons = _schedule_reasons(archive.grid, schedule.projection, request)
     if reasons:
         return _report(request, code, reasons)
@@ -980,50 +1023,20 @@ class DirectCurrentCohortArchiveReaderV1:
         lease = self._lease if lease is None else lease
         if type(lease) is not StorageRootLease:
             raise ValueError
-        reason_list: list[str] = []
-        sessions: list[PrivateCurrentCohortArchiveSessionProjectionV1] = []
-        cohort: str | None = None
-        member_tuple: tuple[CurrentCohortMemberV1, ...] | None = None
         try:
-            with lease.read_operation(self._root) as operation:
-                directory = os.open(
-                    ".current-fact-archive-v1",
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    dir_fd=operation.descriptor,
-                )
-                try:
-                    directory_meta = os.fstat(directory)
-                    if (
-                        not stat.S_ISDIR(directory_meta.st_mode)
-                        or stat.S_IMODE(directory_meta.st_mode) & 0o077
-                    ):
-                        raise OSError
-                    for object_id in request.archive_object_sha256s:
-                        parsed, reason = _read_archive_object(directory, object_id)
-                        if reason is not None:
-                            reason_list.append(reason)
-                            continue
-                        assert parsed is not None
-                        item, reason = _archive_session(parsed, object_id, request)
-                        if reason is not None:
-                            reason_list.append(reason)
-                            continue
-                        assert item is not None
-                        if cohort is None:
-                            cohort = parsed["cohort_identity_sha256"]
-                            member_tuple = tuple(x.member for x in item.members)
-                        elif cohort != parsed[
-                            "cohort_identity_sha256"
-                        ] or member_tuple != tuple(x.member for x in item.members):
-                            reason_list.append("COHORT_BINDING_MISMATCH")
-                            continue
-                        sessions.append(item)
-                finally:
-                    os.close(directory)
+            sessions, cohort, member_tuple, reason_list = _read_archive_sessions(
+                self._root, lease, request
+            )
         except FileNotFoundError:
-            reason_list.append("ARCHIVE_OBJECT_MISSING")
+            reason_list = ["ARCHIVE_OBJECT_MISSING"]
+            sessions = []
+            cohort = None
+            member_tuple = None
         except OSError:
-            reason_list.append("ARCHIVE_OBJECT_UNSAFE")
+            reason_list = ["ARCHIVE_OBJECT_UNSAFE"]
+            sessions = []
+            cohort = None
+            member_tuple = None
         if reason_list:
             return ArchiveReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, _ordered_reasons(tuple(reason_list))
@@ -1046,10 +1059,60 @@ class DirectCurrentCohortArchiveReaderV1:
         return ArchiveReadResultV1(
             "READY",
             PrivateCurrentCohortArchiveGridProjectionV1(
-                cohort, request.cohort_size, tuple(sessions)
+                _digest(cohort), request.cohort_size, tuple(sessions)
             ),
             (),
         )
+
+
+def _read_archive_sessions(
+    root: Path,
+    lease: StorageRootLease,
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+) -> tuple[
+    list[PrivateCurrentCohortArchiveSessionProjectionV1],
+    str | None,
+    tuple[CurrentCohortMemberV1, ...] | None,
+    list[str],
+]:
+    reason_list: list[str] = []
+    sessions: list[PrivateCurrentCohortArchiveSessionProjectionV1] = []
+    cohort: str | None = None
+    member_tuple: tuple[CurrentCohortMemberV1, ...] | None = None
+    with lease.read_operation(root) as operation:
+        directory = os.open(
+            ".current-fact-archive-v1",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=operation.descriptor,
+        )
+        try:
+            directory_meta = os.fstat(directory)
+            if (
+                not stat.S_ISDIR(directory_meta.st_mode)
+                or stat.S_IMODE(directory_meta.st_mode) & 0o077
+            ):
+                raise OSError
+            for object_id in request.archive_object_sha256s:
+                parsed, reason = _read_archive_object(directory, object_id)
+                if reason is not None or parsed is None:
+                    reason_list.append(reason or "ARCHIVE_OBJECT_INVALID")
+                    continue
+                item, reason = _archive_session(parsed, object_id, request)
+                if reason is not None or item is None:
+                    reason_list.append(reason or "ARCHIVE_OBJECT_INVALID")
+                    continue
+                if cohort is None:
+                    cohort = _digest(parsed["cohort_identity_sha256"])
+                    member_tuple = tuple(member.member for member in item.members)
+                elif cohort != parsed[
+                    "cohort_identity_sha256"
+                ] or member_tuple != tuple(member.member for member in item.members):
+                    reason_list.append("COHORT_BINDING_MISMATCH")
+                    continue
+                sessions.append(item)
+        finally:
+            os.close(directory)
+    return sessions, cohort, member_tuple, reason_list
 
 
 def _read_archive_object(
@@ -1116,15 +1179,17 @@ def _decimal(value: object) -> Decimal:
 
 
 def _member(value: object) -> CurrentCohortMemberV1:
-    if type(value) is not dict or set(value) != {"isin", "symbol"}:
+    value = _closed_object(value)
+    if set(value) != {"isin", "symbol"}:
         raise ValueError
-    member = CurrentCohortMemberV1(value["isin"], value["symbol"])
+    member = CurrentCohortMemberV1(_string(value["isin"]), _string(value["symbol"]))
     if member.value() != value:
         raise ValueError
     return member
 
 
 def _completed(value: object) -> CompletedDailyOhlcvFactV1:
+    value = _closed_object(value)
     fields = {
         "close",
         "data_cutoff",
@@ -1139,11 +1204,7 @@ def _completed(value: object) -> CompletedDailyOhlcvFactV1:
         "source_receipt_sha256",
         "volume",
     }
-    if (
-        type(value) is not dict
-        or set(value) != fields
-        or type(value["volume"]) is not int
-    ):
+    if set(value) != fields or type(value["volume"]) is not int:
         raise ValueError
     fact = CompletedDailyOhlcvFactV1(
         _member(value["member"]),
@@ -1165,6 +1226,7 @@ def _completed(value: object) -> CompletedDailyOhlcvFactV1:
 
 
 def _partial(value: object) -> PartialCurrentSessionSnapshotV1:
+    value = _closed_object(value)
     fields = {
         "bar_state",
         "known_at",
@@ -1176,11 +1238,7 @@ def _partial(value: object) -> PartialCurrentSessionSnapshotV1:
         "session",
         "source_receipt_sha256",
     }
-    if (
-        type(value) is not dict
-        or set(value) != fields
-        or type(value["observed_volume"]) is not int
-    ):
+    if set(value) != fields or type(value["observed_volume"]) is not int:
         raise ValueError
     partial = PartialCurrentSessionSnapshotV1(
         _member(value["member"]),
@@ -1199,8 +1257,9 @@ def _partial(value: object) -> PartialCurrentSessionSnapshotV1:
 
 
 def _member_fact(value: object) -> CurrentCohortMemberFactV1:
+    value = _closed_object(value)
     fields = {"member", "completed_daily", "partial_current_session"}
-    if type(value) is not dict or set(value) != fields:
+    if set(value) != fields:
         raise ValueError
     partial = value["partial_current_session"]
     fact = CurrentCohortMemberFactV1(
@@ -1214,6 +1273,7 @@ def _member_fact(value: object) -> CurrentCohortMemberFactV1:
 
 
 def _ledger_entry(value: object) -> FeatureAvailabilityLedgerEntryV1:
+    value = _closed_object(value)
     fields = {
         "affected_identity_sha256",
         "availability_state",
@@ -1227,12 +1287,12 @@ def _ledger_entry(value: object) -> FeatureAvailabilityLedgerEntryV1:
         "window_from",
         "window_through",
     }
-    if type(value) is not dict or set(value) != fields:
+    if set(value) != fields:
         raise ValueError
     entry = FeatureAvailabilityLedgerEntryV1(
-        value["feature"],
-        value["instrument_identity"],
-        value["interval"],
+        _string(value["feature"]),
+        _string(value["instrument_identity"]),
+        _string(value["interval"]),
         _parse_instant(value["window_from"]),
         _parse_instant(value["window_through"]),
         HistoricalAvailabilityStateV1(value["availability_state"]),
@@ -1240,8 +1300,8 @@ def _ledger_entry(value: object) -> FeatureAvailabilityLedgerEntryV1:
         if value["published_at"] is None
         else _parse_instant(value["published_at"]),
         None if value["known_at"] is None else _parse_instant(value["known_at"]),
-        value["source_identity"],
-        value["revision_identity_sha256"],
+        _optional_string(value["source_identity"]),
+        _optional_string(value["revision_identity_sha256"]),
         _digest(value["affected_identity_sha256"]),
     )
     if entry.value() != value:
@@ -1257,6 +1317,7 @@ def _archive_report(
     tuple[dict[str, object], ...] | None,
     str,
 ]:
+    value = _closed_object(value)
     fields = {
         "code_identity",
         "cohort_identity_sha256",
@@ -1269,7 +1330,7 @@ def _archive_report(
         "request_identity_sha256",
         "schema_identity_sha256",
     }
-    if type(value) is not dict or set(value) != fields:
+    if set(value) != fields:
         raise ValueError
     report_id = _digest(value["report_identity_sha256"])
     if (
@@ -1290,9 +1351,9 @@ def _archive_report(
     _digest(value["request_identity_sha256"])
     cutoff = _parse_instant(value["invocation_cutoff"])
     state = CurrentEvidenceStateV1(value["evidence_state"])
-    if type(value["reasons"]) is not list:
-        raise ValueError
-    reasons = tuple(CurrentCohortReasonV1(reason) for reason in value["reasons"])
+    reasons = tuple(
+        CurrentCohortReasonV1(reason) for reason in _closed_list(value["reasons"])
+    )
     reason_order = {reason: index for index, reason in enumerate(CurrentCohortReasonV1)}
     if tuple(sorted(set(reasons), key=reason_order.__getitem__)) != reasons:
         raise ValueError
@@ -1300,20 +1361,16 @@ def _archive_report(
         if value["members"] is not None or not reasons:
             raise ValueError
         return state, cutoff, None, report_id
-    if (
-        state is not CurrentEvidenceStateV1.COMPLETE
-        or reasons
-        or type(value["members"]) is not list
-    ):
+    if state is not CurrentEvidenceStateV1.COMPLETE or reasons:
         raise ValueError
-    members = value["members"]
-    assert type(members) is list
+    members = _closed_list(value["members"])
     member_fields = {"member", "completed_daily", "partial_current_session"}
     try:
+        member_values = tuple(_closed_object(item) for item in members)
         identities = tuple(
             _member(item["member"])
-            for item in members
-            if type(item) is dict and set(item) == member_fields
+            for item in member_values
+            if set(item) == member_fields
         )
     except (KeyError, TypeError, ValueError, RecursionError):
         raise ValueError from None
@@ -1325,7 +1382,7 @@ def _archive_report(
         != identities
     ):
         raise ValueError
-    return state, cutoff, tuple(members), report_id
+    return state, cutoff, member_values, report_id
 
 
 def _archive_session(
@@ -1357,133 +1414,22 @@ def _archive_session(
         )
     except (KeyError, TypeError, ValueError, RecursionError):
         return None, "SPRINT10_REPORT_INVALID"
-    if state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE:
-        return None, "SPRINT10_REPORT_INSUFFICIENT"
-    assert reported_members is not None
-    report = value["report"]
-    assert type(report) is dict
-    if (
-        value["contract_version"] != report["contract_version"]
-        or code != report["code_identity"]
-        or cohort != report["cohort_identity_sha256"]
-        or request_id != report["request_identity_sha256"]
-    ):
+    report_reason, reported_members = _archive_report_admission(state, reported_members)
+    if report_reason is not None:
+        return None, report_reason
+    report = _closed_object(value["report"])
+    if not _archive_binding_matches(value, report, code, cohort, request_id):
         return None, "ARCHIVE_BINDING_MISMATCH"
     if cohort != request.cohort_identity_sha256:
         return None, "COHORT_BINDING_MISMATCH"
-    try:
-        if (
-            type(value["facts"]) is not list
-            or len(value["facts"]) != request.cohort_size
-            or value["facts"] != report["members"]
-        ):
-            raise ValueError
-        facts = tuple(_member_fact(item) for item in value["facts"])
-    except (KeyError, TypeError, ValueError, RecursionError):
-        return None, "SPRINT10_MEMBER_FACT_INVALID"
-    try:
-        if type(value["partials"]) is not list:
-            raise ValueError
-        partials = tuple(_partial(item) for item in value["partials"])
-        expected_partials = tuple(
-            item.partial_current_session
-            for item in facts
-            if item.partial_current_session is not None
-        )
-        if partials != expected_partials:
-            raise ValueError
-    except (KeyError, TypeError, ValueError, RecursionError):
-        return None, "SPRINT10_MEMBER_FACT_INVALID"
-    if invocation_cutoff > request.decision_cutoff or any(
-        moment > request.decision_cutoff
-        for fact in facts
-        for moment in (
-            fact.completed_daily.data_cutoff,
-            fact.completed_daily.published_at,
-            fact.completed_daily.known_at,
-        )
-    ):
-        return None, "FACT_FUTURE_KNOWN"
-    freshness = CurrentFreshnessPolicyV1()
-    for fact in facts:
-        completed = fact.completed_daily
-        if (
-            completed.freshness_state is not CurrentFreshnessStateV1.FRESH
-            or freshness.state(completed.known_at, invocation_cutoff)
-            is not CurrentFreshnessStateV1.FRESH
-            or not (
-                completed.data_cutoff
-                <= completed.published_at
-                <= completed.known_at
-                <= invocation_cutoff
-            )
-        ):
-            return None, "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN"
-        partial = fact.partial_current_session
-        if partial is not None and (
-            partial.session != invocation_cutoff.astimezone(_IST).date()
-            or any(
-                moment > invocation_cutoff
-                for moment in (
-                    partial.last_bar_at,
-                    partial.published_at,
-                    partial.known_at,
-                )
-            )
-        ):
-            return None, "SPRINT10_MEMBER_FACT_INVALID"
-    try:
-        if type(value["ledger"]) is not list:
-            raise ValueError
-        ledger = tuple(_ledger_entry(item) for item in value["ledger"])
-        if len(ledger) == len(facts):
-            partial_requested = False
-        elif len(ledger) == len(facts) * 2:
-            partial_requested = True
-        else:
-            raise ValueError
-        expected: list[FeatureAvailabilityLedgerEntryV1] = []
-        expected_states: list[HistoricalAvailabilityStateV1] = []
-        for fact in facts:
-            expected.append(
-                _available_ledger_entry(
-                    feature="DAILY_OHLCV",
-                    interval="1d",
-                    member=fact.member,
-                    cutoff=invocation_cutoff,
-                    fact=fact.completed_daily,
-                    state=HistoricalAvailabilityStateV1.AVAILABLE,
-                )
-            )
-            expected_states.append(HistoricalAvailabilityStateV1.AVAILABLE)
-            if partial_requested:
-                partial = fact.partial_current_session
-                state = (
-                    HistoricalAvailabilityStateV1.AVAILABLE
-                    if partial is not None
-                    else HistoricalAvailabilityStateV1.NOT_RETAINED
-                )
-                expected.append(
-                    _available_ledger_entry(
-                        feature="PARTIAL_CURRENT_SESSION",
-                        interval="1m",
-                        member=fact.member,
-                        cutoff=invocation_cutoff,
-                        partial=partial,
-                        state=state,
-                    )
-                )
-                expected_states.append(state)
-    except (KeyError, TypeError, ValueError, RecursionError):
-        return None, "SPRINT10_LEDGER_INVALID"
-    for actual, expected_state in zip(ledger, expected_states, strict=True):
-        if (
-            expected_state is HistoricalAvailabilityStateV1.AVAILABLE
-            and actual.availability_state is not HistoricalAvailabilityStateV1.AVAILABLE
-        ):
-            return None, "SPRINT10_LEDGER_UNAVAILABLE"
-    if tuple(expected) != ledger:
-        return None, "SPRINT10_LEDGER_INVALID"
+    facts, fact_reason = _archive_facts(
+        value, reported_members, request, invocation_cutoff
+    )
+    if fact_reason is not None:
+        return None, fact_reason
+    ledger_reason = _archive_ledger(value, facts, invocation_cutoff)
+    if ledger_reason is not None:
+        return None, ledger_reason
     session = facts[0].completed_daily.session
     if any(fact.completed_daily.session != session for fact in facts):
         return None, "ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING"
@@ -1506,6 +1452,155 @@ def _archive_session(
     )
 
 
+def _archive_report_admission(
+    state: CurrentEvidenceStateV1,
+    reported_members: tuple[dict[str, object], ...] | None,
+) -> tuple[str | None, tuple[dict[str, object], ...]]:
+    if state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE:
+        return "SPRINT10_REPORT_INSUFFICIENT", ()
+    if reported_members is None:
+        return "SPRINT10_REPORT_INVALID", ()
+    return None, reported_members
+
+
+def _archive_binding_matches(
+    value: dict[str, object],
+    report: dict[str, object],
+    code: str,
+    cohort: str,
+    request_id: str,
+) -> bool:
+    return (
+        value["contract_version"] == report["contract_version"]
+        and code == report["code_identity"]
+        and cohort == report["cohort_identity_sha256"]
+        and request_id == report["request_identity_sha256"]
+    )
+
+
+def _archive_facts(
+    value: dict[str, object],
+    reported_members: tuple[dict[str, object], ...],
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+    invocation_cutoff: datetime,
+) -> tuple[tuple[CurrentCohortMemberFactV1, ...], str | None]:
+    try:
+        facts_raw = _closed_list(value["facts"])
+        if (
+            len(facts_raw) != request.cohort_size
+            or tuple(facts_raw) != reported_members
+        ):
+            raise ValueError
+        facts = tuple(_member_fact(item) for item in facts_raw)
+        partials = tuple(_partial(item) for item in _closed_list(value["partials"]))
+        expected_partials = tuple(
+            item.partial_current_session
+            for item in facts
+            if item.partial_current_session is not None
+        )
+        if partials != expected_partials:
+            raise ValueError
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return (), "SPRINT10_MEMBER_FACT_INVALID"
+    if invocation_cutoff > request.decision_cutoff or any(
+        moment > request.decision_cutoff
+        for fact in facts
+        for moment in (
+            fact.completed_daily.data_cutoff,
+            fact.completed_daily.published_at,
+            fact.completed_daily.known_at,
+        )
+    ):
+        return (), "FACT_FUTURE_KNOWN"
+    freshness = CurrentFreshnessPolicyV1()
+    for fact in facts:
+        completed = fact.completed_daily
+        if (
+            completed.freshness_state is not CurrentFreshnessStateV1.FRESH
+            or freshness.state(completed.known_at, invocation_cutoff)
+            is not CurrentFreshnessStateV1.FRESH
+            or not (
+                completed.data_cutoff
+                <= completed.published_at
+                <= completed.known_at
+                <= invocation_cutoff
+            )
+        ):
+            return (), "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN"
+        partial = fact.partial_current_session
+        if partial is not None and (
+            partial.session != invocation_cutoff.astimezone(_IST).date()
+            or any(
+                moment > invocation_cutoff
+                for moment in (
+                    partial.last_bar_at,
+                    partial.published_at,
+                    partial.known_at,
+                )
+            )
+        ):
+            return (), "SPRINT10_MEMBER_FACT_INVALID"
+    return facts, None
+
+
+def _archive_ledger(
+    value: dict[str, object],
+    facts: tuple[CurrentCohortMemberFactV1, ...],
+    invocation_cutoff: datetime,
+) -> str | None:
+    try:
+        ledger = tuple(_ledger_entry(item) for item in _closed_list(value["ledger"]))
+        if len(ledger) == len(facts):
+            partial_requested = False
+        elif len(ledger) == len(facts) * 2:
+            partial_requested = True
+        else:
+            raise ValueError
+        expected: list[FeatureAvailabilityLedgerEntryV1] = []
+        expected_states: list[HistoricalAvailabilityStateV1] = []
+        for fact in facts:
+            expected.append(
+                available_ledger_entry_v1(
+                    feature="DAILY_OHLCV",
+                    interval="1d",
+                    member=fact.member,
+                    cutoff=invocation_cutoff,
+                    fact=fact.completed_daily,
+                    state=HistoricalAvailabilityStateV1.AVAILABLE,
+                )
+            )
+            expected_states.append(HistoricalAvailabilityStateV1.AVAILABLE)
+            if partial_requested:
+                partial = fact.partial_current_session
+                state = (
+                    HistoricalAvailabilityStateV1.AVAILABLE
+                    if partial is not None
+                    else HistoricalAvailabilityStateV1.NOT_RETAINED
+                )
+                expected.append(
+                    available_ledger_entry_v1(
+                        feature="PARTIAL_CURRENT_SESSION",
+                        interval="1m",
+                        member=fact.member,
+                        cutoff=invocation_cutoff,
+                        partial=partial,
+                        state=state,
+                    )
+                )
+                expected_states.append(state)
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return "SPRINT10_LEDGER_INVALID"
+    for actual, expected_state in zip(ledger, expected_states, strict=True):
+        if (
+            expected_state is HistoricalAvailabilityStateV1.AVAILABLE
+            and actual.availability_state is not HistoricalAvailabilityStateV1.AVAILABLE
+        ):
+            return "SPRINT10_LEDGER_UNAVAILABLE"
+    if tuple(expected) != ledger:
+        return "SPRINT10_LEDGER_INVALID"
+    return None
+
+
 class DirectCurrentCohortScheduleResolverV1:
     def __init__(self, root: Path, lease: StorageRootLease | None = None) -> None:
         self._root = root
@@ -1513,21 +1608,23 @@ class DirectCurrentCohortScheduleResolverV1:
 
     def resolve_exact(
         self,
-        digest: str,
-        source: str,
-        release: str,
-        cutoff: datetime,
+        schedule_evidence_sha256: str,
+        schedule_source: str,
+        schedule_source_release: str,
+        decision_cutoff: datetime,
         lease: StorageRootLease | None,
     ) -> ScheduleReadResultV1:
         lease = self._lease if lease is None else lease
         if type(lease) is not StorageRootLease:
             raise ValueError
-        result = ScheduleEvidenceStore(self._root, lease).resolve(digest)
+        result = ScheduleEvidenceStore(self._root, lease).resolve(
+            schedule_evidence_sha256
+        )
         if (
             result.outcome is not ScheduleOutcome.RESOLVED
             or result.schedule is None
             or result.canonical_bytes is None
-            or result.digest != digest
+            or result.digest != schedule_evidence_sha256
         ):
             return ScheduleReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_MISSING",)
@@ -1536,9 +1633,9 @@ class DirectCurrentCohortScheduleResolverV1:
         if (
             len(result.canonical_bytes) > MAX_SCHEDULE_BYTES
             or schedule.schema_version not in (2, 3)
-            or schedule.source != source
+            or schedule.source != schedule_source
             or schedule.source != "nse-authoritative-calendar"
-            or schedule.source_release != release
+            or schedule.source_release != schedule_source_release
             or _RELEASE.fullmatch(schedule.source_release) is None
             or schedule.timezone != "Asia/Kolkata"
             or len(schedule.sessions) + len(schedule.closures) > 4096
@@ -1546,18 +1643,17 @@ class DirectCurrentCohortScheduleResolverV1:
             return ScheduleReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_AMBIGUOUS",)
             )
-        if schedule.as_of > cutoff:
+        if schedule.as_of > decision_cutoff:
             return ScheduleReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_LATE",)
             )
-        cutoff_date = cutoff.astimezone(_IST).date()
+        cutoff_date = decision_cutoff.astimezone(_IST).date()
         classified = {x.trade_date for x in schedule.sessions} | {
             x.trade_date for x in schedule.closures
         }
-        day = schedule.covered_from
         if schedule.covered_to < cutoff_date or any(
-            (day := schedule.covered_from + timedelta(days=i)) not in classified
-            for i in range((cutoff_date - schedule.covered_from).days + 1)
+            schedule.covered_from + timedelta(days=offset) not in classified
+            for offset in range((cutoff_date - schedule.covered_from).days + 1)
         ):
             return ScheduleReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_CONTINUITY_UNPROVEN",)
@@ -1565,7 +1661,7 @@ class DirectCurrentCohortScheduleResolverV1:
         applicable = tuple(
             PrivateRetainedScheduleSessionProjectionV1(x.trade_date, x.close_at, x.kind)
             for x in schedule.sessions
-            if x.close_at <= cutoff
+            if x.close_at <= decision_cutoff
         )
         if len(applicable) < 21:
             return ScheduleReadResultV1(
@@ -1574,7 +1670,7 @@ class DirectCurrentCohortScheduleResolverV1:
         return ScheduleReadResultV1(
             "RESOLVED",
             PrivateRetainedScheduleContinuityProjectionV1(
-                digest,
+                schedule_evidence_sha256,
                 schedule.schema_version,
                 schedule.source,
                 schedule.source_release,

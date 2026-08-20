@@ -15,6 +15,14 @@ from typing import Any, Literal, Protocol
 
 from dotenv import load_dotenv
 
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
+    CurrentSuppliedCohortMarketRegimeInputV1,
+    DirectCurrentCohortArchiveReaderV1,
+    DirectCurrentCohortScheduleResolverV1,
+    current_supplied_cohort_market_regime_runtime_code_identity_v1,
+    evaluate_current_supplied_cohort_market_regime_v1,
+)
+
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
@@ -125,13 +133,6 @@ from .range_ingestion import (
     ProviderSessionAuthenticationError,
 )
 from .storage_root_lease import StorageRootLease
-from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
-    DirectCurrentCohortArchiveReaderV1,
-    DirectCurrentCohortScheduleResolverV1,
-    CurrentSuppliedCohortMarketRegimeInputV1,
-    current_supplied_cohort_market_regime_runtime_code_identity_v1,
-    evaluate_current_supplied_cohort_market_regime_v1,
-)
 from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
@@ -414,6 +415,15 @@ def main(
         )
     if args.command == "regime-current":
         return _run_current_regime_command(args)
+    return _run_public_command(args, download_service, coverage_service, query_service)
+
+
+def _run_public_command(
+    args: argparse.Namespace,
+    download_service: PublicDownloadPortV1 | None,
+    coverage_service: PublicCoveragePortV1 | None,
+    query_service: PublicQueryPortV1 | None,
+) -> int:
     injected = {
         "download": download_service,
         "coverage": coverage_service,
