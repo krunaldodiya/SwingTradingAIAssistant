@@ -126,7 +126,7 @@ def _parse_instant(value: object) -> datetime:
 
 
 def _parse_date(value: object) -> date:
-    if type(value) is not str:
+    if type(value) is not str or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
         raise ValueError
     try:
         return date.fromisoformat(value)
@@ -587,18 +587,32 @@ class PrivateCurrentCohortScheduleResolverPortV1(Protocol):
 
 
 def _runtime_root() -> Path:
-    return Path(__file__).parents[3]
+    source_path = Path(__file__)
+    package_root = source_path.parent.parent
+    if (
+        not source_path.is_absolute()
+        or package_root.name != "swing_trading_ai_assistant"
+    ):
+        raise ValueError("runtime identity invalid")
+    return package_root
+
+
+def _package_relative_runtime_source(relative: str) -> Path:
+    parts = relative.split("/")
+    if (
+        len(parts) < 3
+        or parts[:2] != ["src", "swing_trading_ai_assistant"]
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise ValueError("runtime identity invalid")
+    return Path(*parts[2:])
 
 
 def _read_literal_project_file(root: Path, relative: str) -> bytes:
-    if not relative.startswith("src/") or any(
-        part in ("", ".", "..") for part in relative.split("/")
-    ):
-        raise ValueError("runtime identity invalid")
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     descriptor = root_fd
     try:
-        parts = relative.split("/")
+        parts = _package_relative_runtime_source(relative).parts
         for part in parts[:-1]:
             next_descriptor = os.open(
                 part,
@@ -642,7 +656,7 @@ def _require_loaded_source(module_name: str, root: Path, relative: str) -> None:
     module = importlib.import_module(module_name)
     loader = getattr(module, "__loader__", None)
     source_path = getattr(module, "__file__", None)
-    expected = root / relative
+    expected = root / _package_relative_runtime_source(relative)
     if (
         not isinstance(loader, importlib.machinery.SourceFileLoader)
         or type(source_path) is not str
@@ -946,7 +960,8 @@ def _schedule_reasons(
             item.close_at.tzinfo is not UTC
             or item.close_at.astimezone(_IST).date() != item.trade_date
             or item.close_at > request.decision_cutoff
-            for item in projection.sessions
+            or archive.invocation_cutoff < item.close_at
+            for archive, item in zip(grid.sessions, projection.sessions, strict=True)
         )
     ):
         return ("SCHEDULE_CONTINUITY_UNPROVEN",)

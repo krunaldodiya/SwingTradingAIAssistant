@@ -16,7 +16,7 @@ import os
 import socket
 import time as time_module
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -1785,6 +1785,117 @@ def test_runtime_identity_is_exact_path_nul_digest_composite() -> None:
     )
 
 
+def test_runtime_identity_accepts_checkout_and_installed_package_layouts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module, _ = _api()
+    manifest_module = importlib.import_module(
+        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_runtime_identity_manifest"
+    )
+    checkout_root = Path(module.__file__).parent.parent
+    checkout_identity = (
+        module.current_supplied_cohort_market_regime_runtime_code_identity_v1()
+    )
+    assert module._runtime_root() == checkout_root
+
+    installed_root = tmp_path / "venv" / "site-packages" / "swing_trading_ai_assistant"
+    modules = {
+        "src/swing_trading_ai_assistant/market_data/cli.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.cli"
+        ),
+        "src/swing_trading_ai_assistant/market_data/current_cohort.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.current_cohort"
+        ),
+        "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.schedule_evidence"
+        ),
+        "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.storage_root_lease"
+        ),
+        "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": module,
+        _RUNTIME_MANIFEST: manifest_module,
+    }
+    for logical_path, imported_module in modules.items():
+        destination = installed_root.joinpath(*logical_path.split("/")[2:])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(Path(imported_module.__file__).read_bytes())
+        destination.chmod(0o600)
+        monkeypatch.setattr(imported_module, "__file__", str(destination))
+        monkeypatch.setattr(
+            imported_module,
+            "__loader__",
+            importlib.machinery.SourceFileLoader(
+                imported_module.__name__, str(destination)
+            ),
+        )
+
+    assert module._runtime_root() == installed_root
+    assert (
+        module.current_supplied_cohort_market_regime_runtime_code_identity_v1()
+        == checkout_identity
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ("20260112", "2026-W03-1", "2026-1-12", "2026-01-12T00:00:00"),
+)
+def test_local_date_requires_canonical_calendar_spelling_and_preserves_identity_roundtrip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], invalid: str
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root)
+    valid = _input_value(fixture, ids, digest)
+    admitted = _admit_input(module, valid)
+    assert admitted.decision_session.isoformat() == valid["decision_session"]
+    assert admitted.canonical_json_bytes() == _canonical(valid)
+
+    valid["decision_session"] = invalid
+    _recompute_input_identity(valid)
+    args = _cli_args(tmp_path, root, valid)
+    assert _cli(module)(args) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "invalid regime-current request\n"
+
+
+@pytest.mark.parametrize("position", (0, 10, 20))
+def test_before_official_close_at_any_grid_position_is_schedule_insufficiency(
+    tmp_path: Path, position: int
+) -> None:
+    module, evaluate = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, schedule = _schedule(root)
+    admitted = _admit_input(module, _input_value(fixture, ids, digest))
+    grid, continuity = _private_ready(module, fixture, ids, digest, schedule)
+    session = grid.sessions[position]
+    tampered_sessions = list(grid.sessions)
+    tampered_sessions[position] = replace(
+        session,
+        invocation_cutoff=continuity.sessions[position].close_at
+        - timedelta(microseconds=1),
+    )
+    tampered_grid = _type(module, "PrivateCurrentCohortArchiveGridProjectionV1")(
+        grid.cohort_identity_sha256, grid.cohort_size, tuple(tampered_sessions)
+    )
+    archive = _RecordingArchivePort(
+        _type(module, "CurrentSuppliedCohortMarketRegimeRequestV1"),
+        _type(module, "ArchiveReadResultV1")("READY", tampered_grid, ()),
+        admitted,
+    )
+    resolver = _RecordingSchedulePort(
+        _type(module, "ScheduleReadResultV1")("RESOLVED", continuity, ()), admitted
+    )
+    _assert_insufficient(
+        module,
+        evaluate(admitted, archive, resolver),
+        ("SCHEDULE_CONTINUITY_UNPROVEN",),
+    )
+
+
 @pytest.mark.parametrize(
     "fault",
     (
@@ -1859,6 +1970,173 @@ def test_runtime_manifest_and_source_map_fail_before_report_with_sanitized_exit_
     captured = capsys.readouterr()
     assert code == 2 and captured.out == ""
     _assert_redacted(captured.err, fixture, root, Path(args[2]))
+
+
+def test_regime_current_requires_existing_lock_without_mutating_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module, _ = _api()
+    root = tmp_path / "owner-private-root"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    input_file = tmp_path / "owner-private-input.json"
+    input_file.write_bytes(b"{}\n")
+    input_file.chmod(0o600)
+    before = tuple(root.iterdir())
+
+    assert (
+        _cli(module)(
+            [
+                "regime-current",
+                "--input-file",
+                str(input_file),
+                "--storage-root",
+                str(root),
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "invalid regime-current request\n"
+    assert tuple(root.iterdir()) == before
+    assert not (root / ".ingestion.lock").exists()
+
+
+@pytest.mark.parametrize("fault", ("replacement", "loss", "cleanup"))
+def test_regime_current_normalizes_root_lease_and_cleanup_runtime_failures(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root)
+    args = _cli_args(tmp_path, root, _input_value(fixture, ids, digest))
+    original_acquire = StorageRootLease.try_acquire_existing_identity.__func__
+    original_close = StorageRootLease.close
+
+    if fault == "replacement":
+
+        def replace_then_acquire(
+            cls: type[StorageRootLease], candidate: object, identity: tuple[int, int]
+        ) -> object:
+            root.rename(tmp_path / "replaced-root")
+            root.mkdir(mode=0o700)
+            root.chmod(0o700)
+            return original_acquire(cls, candidate, identity)
+
+        monkeypatch.setattr(
+            StorageRootLease,
+            "try_acquire_existing_identity",
+            classmethod(replace_then_acquire),
+        )
+    elif fault == "loss":
+
+        def acquire_then_lose(
+            cls: type[StorageRootLease], candidate: object, identity: tuple[int, int]
+        ) -> object:
+            acquired = original_acquire(cls, candidate, identity)
+            assert acquired.lease is not None
+            acquired.lease.close()
+            return acquired
+
+        monkeypatch.setattr(
+            StorageRootLease,
+            "try_acquire_existing_identity",
+            classmethod(acquire_then_lose),
+        )
+    else:
+
+        def close_then_fail(lease: StorageRootLease) -> None:
+            original_close(lease)
+            raise RuntimeError
+
+        monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    assert _cli(module)(args) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    _assert_redacted(captured.err, fixture, root, Path(args[2]))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        [
+            "regime-current",
+            "--input-file",
+            "/owner/private/input.json",
+            "--storage-root",
+            "/owner/private/root",
+            "--output",
+            "not-json",
+        ],
+        [
+            "regime-current",
+            "--input-file",
+            "/owner/private/input.json",
+            "--storage-root",
+            "/owner/private/root",
+            "--private-path",
+            "/secret/raw-token",
+        ],
+        [
+            "regime-current",
+            "--input-file",
+            "relative/private/input.json",
+            "--storage-root",
+            "/owner/private/root",
+            "--output",
+            "json",
+        ],
+    ),
+)
+def test_regime_current_argument_admission_redacts_raw_tokens(
+    capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    module, _ = _api()
+    assert _cli(module)(argv) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "invalid regime-current request\n"
+    for token in argv[1:]:
+        assert token not in captured.err
+
+
+def test_regime_current_admission_leaves_other_command_values_to_argparse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, _ = _api()
+    cli = importlib.import_module("swing_trading_ai_assistant.market_data.cli")
+    observed: list[object] = []
+
+    def safe_probe(args: object) -> int:
+        observed.append(args)
+        return 0
+
+    monkeypatch.setattr(cli, "_run_probe", safe_probe)
+    assert (
+        _cli(module)(
+            [
+                "probe-upstox",
+                "--segment",
+                "regime-current",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-01-01",
+                "--to",
+                "2026-01-02",
+            ]
+        )
+        == 0
+    )
+    assert len(observed) == 1
 
 
 def test_evaluator_has_no_filesystem_provider_network_clock_or_storage_side_effect(

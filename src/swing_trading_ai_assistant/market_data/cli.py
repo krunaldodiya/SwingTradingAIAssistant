@@ -406,6 +406,9 @@ def main(
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
+    if not _admit_regime_current_argv(argv):
+        sys.stderr.write("invalid regime-current request\n")
+        return 2
     args = build_parser().parse_args(argv)
     if args.command == "probe-upstox":
         return _run_probe(args)
@@ -416,6 +419,31 @@ def main(
     if args.command == "regime-current":
         return _run_current_regime_command(args)
     return _run_public_command(args, download_service, coverage_service, query_service)
+
+
+def _admit_regime_current_argv(argv: list[str] | None) -> bool:
+    raw = sys.argv[1:] if argv is None else argv
+    if not raw or raw[0] != "regime-current":
+        return True
+    if not all(type(value) is str for value in raw) or len(raw) != 7:
+        return False
+    values: dict[str, str] = {}
+    for flag, value in zip(raw[1::2], raw[2::2], strict=True):
+        if flag not in {"--input-file", "--storage-root", "--output"} or flag in values:
+            return False
+        values[flag] = value
+    input_file = values.get("--input-file")
+    root = values.get("--storage-root")
+    if (
+        input_file is None
+        or root is None
+        or any(
+            "\x00" in value or not Path(value).is_absolute()
+            for value in (input_file, root)
+        )
+    ):
+        return False
+    return values.get("--output") == "json"
 
 
 def _run_public_command(
@@ -466,6 +494,9 @@ def _run_public_command(
 
 def _run_current_regime_command(args: argparse.Namespace) -> int:
     lease: StorageRootLease | None = None
+    report_bytes: bytes | None = None
+    exit_code = 2
+    failed = False
     try:
         input_file = args.input_file
         root = args.storage_root
@@ -495,16 +526,21 @@ def _run_current_regime_command(args: argparse.Namespace) -> int:
             DirectCurrentCohortArchiveReaderV1(admitted_root, lease),
             DirectCurrentCohortScheduleResolverV1(admitted_root, lease),
         )
-        lease.close()
-        lease = None
-        sys.stdout.write(report.canonical_json_bytes().decode("utf-8"))
-        return 0 if report.evidence_state == "OBSERVED" else 1
-    except (OSError, ValueError):
-        sys.stderr.write("invalid regime-current request\n")
-        return 2
+        report_bytes = report.canonical_json_bytes()
+        exit_code = 0 if report.evidence_state == "OBSERVED" else 1
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        failed = True
     finally:
         if lease is not None:
-            lease.close()
+            try:
+                lease.close()
+            except RuntimeError:
+                failed = True
+    if failed or report_bytes is None:
+        sys.stderr.write("invalid regime-current request\n")
+        return 2
+    sys.stdout.write(report_bytes.decode("utf-8"))
+    return exit_code
 
 
 def _read_current_regime_input(path: Path) -> bytes:

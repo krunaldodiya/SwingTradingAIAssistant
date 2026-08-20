@@ -93,7 +93,12 @@ classified cutoff-date coverage, admissible `as_of`, authoritative
 source/release binding, closure, and special-session proof. The v1 envelope
 remains admissible through persisted envelope/report/facts/ledger/partials
 consistency plus the owner-supplied cohort hash; neither risk permits a fallback
-or archive scan. Implementation of that reader/projection proceeds under Issue
+or archive scan. `code_identity_sha256` is source-at-rest inventory/drift
+evidence only: it neither attests executed bytes nor protects against actors
+that replace package source, alter `__pycache__`/import state, or execute before
+verification. No external trusted launcher or custom import system is added in
+Sprint 11; that adjudicated external runtime-root threat boundary remains
+unresolved. Implementation of the narrow reader/projection proceeds under Issue
 #116, while any provider, source, or material scope change needs its own
 approved decision.
 

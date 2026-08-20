@@ -327,14 +327,16 @@ itself. A missing/extra/malformed map key or digest, an unordered/non-literal
 mapping representation, or an unreviewed/generated-at-runtime manifest is a
 structural identity failure.
 
-For every inventory source and the manifest file, the runtime verifies the
-trusted loaded-module source path and loader, exact regular unlinked file below
-the installed project root, stable file identity, and safe readable bytes. No
-added package directory, extension, import shadow, replaced path, unreadable
-file, or unsafe link is admitted. It hashes each inventory source's observed
-bytes and requires exact equality with the manifest map's expected digest. It
-then hashes the manifest file's verified observed bytes, without seeking a
-recursive expected digest for that file.
+For every inventory source and the manifest file, the runtime derives the actual
+package root from the verified module locations, then maps each logical
+`src/swing_trading_ai_assistant/...` inventory path to its package-relative file.
+It verifies the trusted loaded-module source path and loader, exact regular
+unlinked file below that package root, stable file identity, and safe readable
+bytes. No added package directory, extension, import shadow, replaced path,
+unreadable file, or unsafe link is admitted. It hashes each inventory source's
+observed bytes and requires exact equality with the manifest map's expected
+digest. It then hashes the manifest file's verified observed bytes, without
+seeking a recursive expected digest for that file.
 
 `code_identity_sha256` is `SHA-256` over the following exact byte sequence, in
 the inventory order shown: for each inventory entry append UTF-8 relative path,
@@ -342,6 +344,13 @@ one `0x00`, the **expected** lowercase digest ASCII, and one `0x00`; after the
 fifth entry append the manifest relative path, one `0x00`, the manifest file's
 observed lowercase digest ASCII, and one final `0x00`. Thus the manifest
 participates only through this final nonrecursive manifest-digest rule.
+
+`code_identity_sha256` is verified **source-at-rest inventory/drift evidence
+only**. It is not executed-byte attestation, authenticity, authorization, or
+protection against actors able to write or replace package source, alter
+`__pycache__`/import state, or execute before verification. Sprint 11 adds no
+external trusted launcher or custom import system; the fail-closed
+source/path/loader/hash checks above remain the complete local boundary.
 
 An altered inventory source, changed/unsafe manifest, map mismatch, loaded-source
 path/loader mismatch, or composite construction failure is a pre-report
@@ -734,8 +743,12 @@ persisted envelope/report/facts/ledger/partials and owner-supplied cohort hash.
 The owner-selected retained schedule may lack a canonical decoder, an exact
 `nse-authoritative-calendar` source/release binding, admissible `as_of`, complete
 classified cutoff-date coverage, or closure/special-session coverage. It then
-fails closed; an arbitrary retained schedule cannot replace it. Implementation of
-the narrow archive reader and schedule projection proceeds under Issue #116; a
-change to schedule authority, privacy boundary, provider/source, or Issue #116
-acceptance criteria reopens this R3 decision and requires the applicable owner
-review and updated exact-revision evidence plan.
+fails closed; an arbitrary retained schedule cannot replace it. The
+source-at-rest identity check does not attest the executed bytes or defend
+against pre-verification execution or actors who can replace package source or
+import-cache state; this external runtime-root threat boundary remains
+adjudicated but unresolved without a trusted launcher/custom import system.
+Implementation of the narrow archive reader and schedule projection proceeds
+under Issue #116; a change to schedule authority, privacy boundary,
+provider/source, or Issue #116 acceptance criteria reopens this R3 decision and
+requires the applicable owner review and updated exact-revision evidence plan.
