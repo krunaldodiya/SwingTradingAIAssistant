@@ -1249,6 +1249,93 @@ def test_input_roundtrip_report_schema_identity_and_cli_bytes_are_closed_and_red
     _assert_redacted(cli.out, fixture, root, Path(args[2]))
 
 
+def _replace_archive_directory(root: Path, *, recreate: bool = True) -> None:
+    archive = root / ".current-fact-archive-v1"
+    archive.rename(root / ".detached-current-fact-archive-v1")
+    if recreate:
+        archive.mkdir(mode=0o700)
+
+
+@pytest.mark.parametrize(
+    "timing",
+    ("after_open", "after_open_removed", "mid_read", "before_final_validation"),
+)
+def test_cli_rejects_detached_archive_bytes_at_every_directory_identity_boundary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    timing: str,
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root)
+    value = _input_value(fixture, ids, digest)
+    archive_object = fixture["records"][0]["path"].stat()
+    replaced = False
+
+    if timing in ("after_open", "after_open_removed"):
+        original_open = module.os.open
+
+        def replace_after_open(
+            path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+        ) -> int:
+            nonlocal replaced
+            descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+            if path == ".current-fact-archive-v1" and not replaced:
+                _replace_archive_directory(root, recreate=timing == "after_open")
+                replaced = True
+            return descriptor
+
+        monkeypatch.setattr(module.os, "open", replace_after_open)
+    elif timing == "mid_read":
+        original_read = module.os.read
+
+        def replace_after_read(descriptor: int, size: int) -> bytes:
+            nonlocal replaced
+            raw = original_read(descriptor, size)
+            metadata = module.os.fstat(descriptor)
+            if (
+                size == module._MAX_ARCHIVE_BYTES + 1
+                and (metadata.st_dev, metadata.st_ino)
+                == (archive_object.st_dev, archive_object.st_ino)
+                and not replaced
+            ):
+                _replace_archive_directory(root)
+                replaced = True
+            return raw
+
+        monkeypatch.setattr(module.os, "read", replace_after_read)
+    else:
+        original_archive_session = module._archive_session
+
+        def replace_before_final_validation(
+            archive_value: dict[str, object], object_id: str, request: object
+        ) -> tuple[object, str | None]:
+            nonlocal replaced
+            result = original_archive_session(archive_value, object_id, request)
+            if object_id == ids[-1] and not replaced:
+                _replace_archive_directory(root)
+                replaced = True
+            return result
+
+        monkeypatch.setattr(module, "_archive_session", replace_before_final_validation)
+
+    args = _cli_args(tmp_path, root, value)
+    code = _cli(module)(args)
+    captured = capsys.readouterr()
+
+    assert replaced and code == 1 and captured.err == ""
+    _assert_public_report_bytes(
+        module,
+        captured.out.encode(),
+        value,
+        observed=False,
+        reasons=("ARCHIVE_OBJECT_UNSAFE",),
+    )
+    _assert_redacted(captured.out, fixture, root, Path(args[2]))
+
+
 def _replace_input_archive_id(
     value: dict[str, object], old_id: str, new_id: str
 ) -> None:

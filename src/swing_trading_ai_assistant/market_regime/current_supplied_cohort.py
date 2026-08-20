@@ -31,6 +31,7 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     HistoricalAvailabilityStateV1,
     PartialCurrentSessionSnapshotV1,
     available_ledger_entry_v1,
+    current_fact_archive_directory_matches_v1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
@@ -1112,14 +1113,20 @@ def _read_archive_sessions(
             dir_fd=operation.descriptor,
         )
         try:
-            directory_meta = os.fstat(directory)
-            if (
-                not stat.S_ISDIR(directory_meta.st_mode)
-                or stat.S_IMODE(directory_meta.st_mode) & 0o077
+            if not current_fact_archive_directory_matches_v1(
+                operation.descriptor, directory
             ):
                 raise OSError
             for object_id in request.archive_object_sha256s:
+                if not current_fact_archive_directory_matches_v1(
+                    operation.descriptor, directory
+                ):
+                    raise OSError
                 parsed, reason = _read_archive_object(directory, object_id)
+                if not current_fact_archive_directory_matches_v1(
+                    operation.descriptor, directory
+                ):
+                    raise OSError
                 if reason is not None or parsed is None:
                     reason_list.append(reason or "ARCHIVE_OBJECT_INVALID")
                     continue
@@ -1136,6 +1143,10 @@ def _read_archive_sessions(
                     reason_list.append("COHORT_BINDING_MISMATCH")
                     continue
                 sessions.append(item)
+            if not current_fact_archive_directory_matches_v1(
+                operation.descriptor, directory
+            ):
+                raise OSError
         finally:
             os.close(directory)
     return sessions, cohort, member_tuple, reason_list

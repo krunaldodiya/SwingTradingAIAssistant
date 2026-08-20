@@ -12,7 +12,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "cli.py": "5cb5e4313e92e860ba70add25414b9096421aea6c45b05f25397963599004829",
     "corporate_actions.py": "3fcd4b01c3e2137f6cddf75409bcfc35a20b90a85639d152301c3abe90640205",
     "credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
-    "current_cohort.py": "583e83332c3bb775abb432bc7ea5ecadec9b368189e9b307496a0f1d2bb64a68",
+    "current_cohort.py": "fc2bd1b981cefbcf6511928e0f90d3200a61c55faa2a3a4051c601b4482ff567",
     "daily_ohlcv.py": "e400561577ca68559c2690c5135cbb7abfc0ef0ad225c41e67af5005ec259f25",
     "download_preparation.py": "5ae33504c20421d00944c50f8d2cee0780918c156e13e427ab4ef3495231efee",
     "equity_admission.py": "0d456d181505bf30d42e8a42d5f32dce0a0128afc52e08999955d69ac5a720ad",

@@ -371,13 +371,18 @@ domain insufficiency reason.
 The reader is a narrow private capability under an already-admitted owner-private
 root. For each of exactly 21 declared IDs, it opens only
 `.current-fact-archive-v1/<sha256>.json` by that literal name with directory and
-file descriptors that never follow links. It must pin and recheck root/directory
-identity, owner-only mode, regular-file type, single link, stable metadata, and
-bytes across the read. It must not list, glob, scan, choose a nearest object, or
-follow a redirect/symlink/hard link. The selected filename must be the declared
-ID, the raw bytes must be canonical, and SHA-256(raw bytes) must equal both the
-filename stem and declared ID. A missing, unsafe, changed, oversized, malformed,
-noncanonical, or digest-mismatched object is insufficiency.
+file descriptors that never follow links. Immediately after directory open,
+before and after each object read, and after all reads, it compares the opened
+directory descriptor with a literal no-follow directory stat beneath the pinned
+root. The descriptor and named directory must remain the same owner-private
+`0700` directory. It must also pin and recheck root identity, regular-file type,
+single link, stable metadata, and bytes across each read. It must not list, glob,
+scan, choose a nearest object, or follow a redirect/symlink/hard link. The
+selected filename must be the declared ID, the raw bytes must be canonical, and
+SHA-256(raw bytes) must equal both the filename stem and declared ID. A missing,
+unsafe, changed, oversized, malformed, noncanonical, or digest-mismatched object
+is insufficiency; a directory continuity failure discards accumulated projections
+and returns only `ARCHIVE_OBJECT_UNSAFE`.
 
 Each object has a maximum 2 MiB canonical byte size and maximum JSON nesting 32;
 the input is at most 16 KiB and the public report at most 16 KiB. The adapter

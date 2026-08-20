@@ -1255,12 +1255,14 @@ class ImmutableCurrentFactArchiveV1:
                     dir_fd=operation.descriptor,
                 )
                 try:
-                    if not _archive_directory_matches(operation.descriptor, directory):
+                    if not current_fact_archive_directory_matches_v1(
+                        operation.descriptor, directory
+                    ):
                         return False
                     published = _publish_archive_object(
                         directory, f"{digest}.json", raw
                     )
-                    return published and _archive_directory_matches(
+                    return published and current_fact_archive_directory_matches_v1(
                         operation.descriptor, directory
                     )
                 finally:
@@ -1307,13 +1309,16 @@ def available_ledger_entry_v1(
     )
 
 
-def _archive_directory_matches(parent: int, descriptor: int) -> bool:
-    opened = os.fstat(descriptor)
-    named = os.stat(
-        ".current-fact-archive-v1",
-        dir_fd=parent,
-        follow_symlinks=False,
-    )
+def current_fact_archive_directory_matches_v1(parent: int, descriptor: int) -> bool:
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(
+            ".current-fact-archive-v1",
+            dir_fd=parent,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return False
     return (
         stat.S_ISDIR(opened.st_mode)
         and opened.st_uid == os.geteuid()
