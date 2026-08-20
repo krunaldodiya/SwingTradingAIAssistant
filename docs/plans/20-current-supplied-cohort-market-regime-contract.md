@@ -198,10 +198,10 @@ is exactly `1242118a1a48d484259f992784850173c9722d4d650df2e886d89af42e55ebd7`):
 
 Calculation projection
 (`CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1` is
-exactly `037f80eca9caff6d6081bd464047b18a437511b1d5fa31e290c8622e1e0a9fd7`):
+exactly `bc66f914bc6cafcef658e71814a4d8b0bbc180dc9676fdfc5a9bc628d6485d86`):
 
 ```json
-{"comparison_position_offset":20,"completed_schedule_positions":21,"contract_version":"current-supplied-cohort-market-regime@v1","direction_values":["ADVANCE","DECLINE","UNCHANGED"],"evidence_states":["OBSERVED","INSUFFICIENT_EVIDENCE"],"labels":["BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION"],"reason_order":["ARCHIVE_OBJECT_MISSING","ARCHIVE_OBJECT_UNSAFE","ARCHIVE_OBJECT_INVALID","ARCHIVE_CONTENT_ID_MISMATCH","ARCHIVE_BINDING_MISMATCH","SPRINT10_REPORT_INSUFFICIENT","SPRINT10_REPORT_INVALID","SPRINT10_MEMBER_FACT_INVALID","SPRINT10_LEDGER_UNAVAILABLE","SPRINT10_LEDGER_INVALID","COHORT_BINDING_MISMATCH","ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING","COMMON_SESSION_GRID_INVALID","SCHEDULE_EVIDENCE_MISSING","SCHEDULE_EVIDENCE_AMBIGUOUS","SCHEDULE_EVIDENCE_LATE","SCHEDULE_CONTINUITY_UNPROVEN","DECISION_SESSION_NOT_LATEST_ADMISSIBLE","FACT_CUTOFF_OR_FRESHNESS_UNPROVEN","FACT_FUTURE_KNOWN","PARTIAL_CURRENT_SESSION_SUBSTITUTION_FORBIDDEN"],"schedule_authority":{"source":"nse-authoritative-calendar","source_release_pattern":"sha256:<64 lowercase hex>"},"threshold_order":["BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION"],"threshold_rule":"advances*5>=cohort_size*3;declines*5>=cohort_size*3"}
+{"comparison_position_offset":20,"completed_schedule_positions":21,"contract_version":"current-supplied-cohort-market-regime@v1","direction_values":["ADVANCE","DECLINE","UNCHANGED"],"evidence_states":["OBSERVED","INSUFFICIENT_EVIDENCE"],"labels":["BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION"],"reason_order":["ARCHIVE_OBJECT_MISSING","ARCHIVE_OBJECT_UNSAFE","ARCHIVE_OBJECT_INVALID","ARCHIVE_CONTENT_ID_MISMATCH","ARCHIVE_BINDING_MISMATCH","SPRINT10_REPORT_INSUFFICIENT","SPRINT10_REPORT_INVALID","SPRINT10_MEMBER_FACT_INVALID","SPRINT10_LEDGER_UNAVAILABLE","SPRINT10_LEDGER_INVALID","COHORT_BINDING_MISMATCH","ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING","COMMON_SESSION_GRID_INVALID","SCHEDULE_EVIDENCE_MISSING","SCHEDULE_EVIDENCE_AMBIGUOUS","SCHEDULE_EVIDENCE_LATE","SCHEDULE_CONTINUITY_UNPROVEN","DECISION_SESSION_NOT_LATEST_ADMISSIBLE","FACT_CUTOFF_OR_FRESHNESS_UNPROVEN","FACT_FUTURE_KNOWN"],"schedule_authority":{"source":"nse-authoritative-calendar","source_release_pattern":"sha256:<64 lowercase hex>"},"threshold_order":["BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION"],"threshold_rule":"advances*5>=cohort_size*3;declines*5>=cohort_size*3"}
 ```
 
 ### 1. Owner input — `CurrentSuppliedCohortMarketRegimeInputV1`
@@ -301,9 +301,24 @@ CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1 = (
   "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py",
 )
 
+CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1 =
+  "swing_trading_ai_assistant.market_regime.current_supplied_cohort_runtime_identity_manifest"
 CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_V1 =
   "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_runtime_identity_manifest.py"
 ```
+
+The generated manifest module defines exactly one reviewed source-map seam:
+`CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1:
+Mapping[str, str]`. The
+authoritative `current_supplied_cohort` module exports exactly one verifier seam:
+
+```python
+def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str: ...
+```
+
+These named mapping/verifier seams are the sole interfaces for reviewed
+source-map verification and its tests. No alternate map constant, verifier
+function, alias, or package-root re-export is permitted.
 
 The manifest is generated and independently reviewed on the exact candidate
 revision. It is a nonrecursive mapping from **every and only** the five inventory
@@ -389,9 +404,10 @@ result:
    it is rejected when its own admitted archive evidence was stale, future-known,
    or unavailable by its own cutoff.
 5. Any included partial snapshot and the envelope `partials` array must validate
-   and match the nested member facts, but are discarded before the regime
-   projection. A partial value can never supply, alter, or contextualize a
-   decision/comparison close.
+   and match the nested member facts, then are discarded before the regime
+   projection. A partial-shaped/value source placed in `completed_daily`, or
+   otherwise substituted for a completed close, fails member admission as
+   `SPRINT10_MEMBER_FACT_INVALID`; the typed reducer has no partial input surface.
 6. The ledger contains exactly one `DAILY_OHLCV` / `1d` entry for every member
    with `availability_state = AVAILABLE`, matching the completed fact's precise
    window, member, source, revision, affected identity, publication and known
@@ -459,10 +475,15 @@ PrivateCurrentCohortScheduleResolverPortV1.resolve_exact(
 ```
 
 `ArchiveReadResultV1.READY` carries exactly one valid grid; its insufficient
-outcome carries `grid = null` and ordered closed reasons. `ScheduleReadResultV1`
-has the analogous `projection` nullability. Neither outcome contains a member
-list, close, canonical schedule bytes, relative path, or free-text diagnostics
-outside the private boundary. The schedule port delegates to
+outcome carries `grid = null` and ordered closed reasons. A conforming typed
+archive-reader port MAY return `COMMON_SESSION_GRID_INVALID` when, after its own
+admissions, it cannot construct the exact 21-session common grid; this named
+reader-result boundary is directly testable without malformed owner input. The
+default direct reader MAY instead have already returned an earlier more-specific
+reason. `ScheduleReadResultV1` has the analogous `projection` nullability.
+Neither outcome contains a member list, close, canonical schedule bytes, relative
+path, or free-text diagnostics outside the private boundary. The schedule port
+delegates to
 `ScheduleEvidenceStore.resolve` under the same admitted retained-root lease; it
 does not accept a caller path, a supplied schedule byte string, or a provider.
 
@@ -538,7 +559,6 @@ CurrentSuppliedCohortMarketRegimeReasonV1 = Literal[
   "DECISION_SESSION_NOT_LATEST_ADMISSIBLE",
   "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN",
   "FACT_FUTURE_KNOWN",
-  "PARTIAL_CURRENT_SESSION_SUBSTITUTION_FORBIDDEN",
 ]
 ```
 
@@ -556,7 +576,7 @@ with `comparison_session`, label, counts, and `member_directions` null. Stage
 precedence is: pre-report runtime/CLI; direct archive I/O in listed order; B1
 intrinsic report; B2 envelope/report binding; member/ledger; grid; schedule
 resolve, then authority/shape ambiguity, then `as_of` lateness, then continuity
-fold; fact timing future-known, then other cutoff/freshness; reducer guard.
+fold; fact timing future-known, then other cutoff/freshness.
 Within one stage, only independent failing objects may contribute multiple
 reasons; their set is deduplicated then declaration ordered. Each trigger is
 exclusive within its stage: the listed suppression selects one outcome rather
@@ -577,7 +597,7 @@ stated prerequisites are admitted.
 | `SPRINT10_LEDGER_INVALID` | ledger admission | Ledger is missing, duplicate, malformed, or mismatches fact/member/window/provenance. | Ledger admission for that entry. | `I(SPRINT10_LEDGER_INVALID)` |
 | `COHORT_BINDING_MISMATCH` | grid assembly | Input hash/size, envelope/report hash, or complete sorted member tuple differs across objects. | Cross-object grid/reducer admission. | `I(COHORT_BINDING_MISMATCH)` |
 | `ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING` | grid assembly | Two objects claim one session, an object contains conflicting session/close candidates, or ID/date mapping is not one-to-one. | Schedule continuity/reducer admission. | `I(ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING)` |
-| `COMMON_SESSION_GRID_INVALID` | grid assembly | Fewer/more than 21 usable sessions, non-increasing sessions, or non-common member grid remains after safe admission. | Schedule continuity/reducer admission. | `I(COMMON_SESSION_GRID_INVALID)` |
+| `COMMON_SESSION_GRID_INVALID` | typed archive grid assembly | A conforming `ArchiveReadResultV1` reports insufficiency because its own admitted archive evidence cannot construct exactly 21 strictly ordered sessions with one common member tuple. | Schedule continuity/reducer admission. More-specific default direct-reader causes may have been suppressed earlier. | `I(COMMON_SESSION_GRID_INVALID)` |
 | `SCHEDULE_EVIDENCE_MISSING` | schedule resolve | `ScheduleEvidenceStore.resolve` is not `RESOLVED` for the input digest. | Schedule semantic checks. | `I(SCHEDULE_EVIDENCE_MISSING)` |
 | `SCHEDULE_EVIDENCE_AMBIGUOUS` | schedule admission | Resolved object is not v2/v3, has a digest/canonical-byte/source/source-release/timezone/row-shape conflict, or does not exactly match owner-bound source/release. | Continuity/latest-session checks. | `I(SCHEDULE_EVIDENCE_AMBIGUOUS)` |
 | `SCHEDULE_EVIDENCE_LATE` | schedule admission | `as_of > decision_cutoff`. | Continuity/latest-session checks. | `I(SCHEDULE_EVIDENCE_LATE)` |
@@ -585,7 +605,6 @@ stated prerequisites are admitted.
 | `DECISION_SESSION_NOT_LATEST_ADMISSIBLE` | schedule fold | Requested `S[20]` is not the final session with `close_at <= decision_cutoff`. | Reducer admission. | `I(DECISION_SESSION_NOT_LATEST_ADMISSIBLE)` |
 | `FACT_FUTURE_KNOWN` | fact timing | `known_at`, `published_at`, `data_cutoff`, or archive-report cutoff is after `decision_cutoff`. | The generic cutoff reason for that same future-clock violation; direction for that fact. | `I(FACT_FUTURE_KNOWN)` |
 | `FACT_CUTOFF_OR_FRESHNESS_UNPROVEN` | fact timing | A required fact is stale, lacks a required clock, or violates own-report cutoff ordering without a future-known clock. | Direction for that fact. | `I(FACT_CUTOFF_OR_FRESHNESS_UNPROVEN)` |
-| `PARTIAL_CURRENT_SESSION_SUBSTITUTION_FORBIDDEN` | projection/reducer guard | A partial snapshot is proposed as either decision or comparison close. | That proposed value; never substitute it. | `I(PARTIAL_CURRENT_SESSION_SUBSTITUTION_FORBIDDEN)` |
 
 ## CLI and API boundary
 
@@ -601,7 +620,9 @@ market-data regime-current \
 
 `--input-file` carries the exact 21 IDs,
 `schedule_evidence_sha256`, `schedule_source =
-"nse-authoritative-calendar"`, and exact `schedule_source_release`. The
+"nse-authoritative-calendar"`, and exact `schedule_source_release`. The CLI
+reads those raw bytes only through
+`CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes`. The
 repository owner selected that already-retained schedule evidence under Issue
 #116; the deterministic adapter validates the exact source/release/digest and
 never treats an arbitrary nonempty retained schedule as official. `--storage-root`
@@ -621,13 +642,33 @@ structural rejection before a report. Only sanitized structural diagnostics may
 go to stderr for exit `2`; they must not disclose a private path, member, symbol,
 ISIN, close, raw JSON, source payload, credential, or schedule row.
 
-The corresponding Python/API boundary is
-`evaluate_current_supplied_cohort_market_regime_v1(input, private_archive_reader,
-retained_schedule_resolver) -> CurrentSuppliedCohortMarketRegimeReportV1`. It
-accepts only the typed immutable input and narrow private read capabilities. It
-returns the same report as the CLI; it exposes neither an archive directory API
-nor a raw-candle/provider API, and it must not alter request IDs, select objects,
-or recompute a decision.
+The authoritative Python surface is only
+`swing_trading_ai_assistant.market_regime.current_supplied_cohort`:
+
+```python
+class CurrentSuppliedCohortMarketRegimeInputV1:
+    @classmethod
+    def from_canonical_json_bytes(
+        cls, raw: bytes
+    ) -> CurrentSuppliedCohortMarketRegimeInputV1: ...
+
+    def canonical_json_bytes(self) -> bytes: ...
+
+def evaluate_current_supplied_cohort_market_regime_v1(
+    input: CurrentSuppliedCohortMarketRegimeInputV1,
+    archive_reader: PrivateCurrentCohortArchiveReaderPortV1,
+    schedule_resolver: PrivateCurrentCohortScheduleResolverPortV1,
+) -> CurrentSuppliedCohortMarketRegimeReportV1: ...
+
+class CurrentSuppliedCohortMarketRegimeReportV1:
+    def canonical_json_bytes(self) -> bytes: ...
+```
+
+The evaluator accepts only the typed immutable input and narrow private read
+capabilities, returns the same report as the CLI, and exposes neither an archive
+directory API nor a raw-candle/provider API. No alternate parser name, package
+root re-export, or co-authoritative surface is permitted. The evaluator must not
+alter request IDs, select objects, or recompute a decision.
 
 ## Acceptance and evidence plan
 
@@ -637,11 +678,11 @@ full/release gates on that same revision.
 
 | Category | Required acceptance cases |
 | --- | --- |
-| Positive | Cohort sizes 1, 5 with exactly 3 advances, and 50 with exactly 30 advances; exact Decimal advance/decline/equality; owner-bound `nse-authoritative-calendar` schedule/source-release/digest; 21 retained official sessions across a month/closure boundary; a timely, unambiguous applicable closure and special session accepted; decision close and comparison close at positions 20 and 0; reviewed nonrecursive runtime manifest with every-and-only frozen source map entry; exact source/map verification and ordered path-NUL-digest composite including the final manifest digest; canonical identity stability; archive/request/report/cohort/schedule/code/schema binding; aggregate-only redacted observed report. |
+| Positive | Cohort sizes 1, 5 with exactly 3 advances, and 50 with exactly 30 advances; exact Decimal advance/decline/equality; owner-bound `nse-authoritative-calendar` schedule/source-release/digest; 21 retained official sessions across a month/closure boundary; a timely, unambiguous applicable closure and special session accepted; decision close and comparison close at positions 20 and 0; reviewed nonrecursive `current_supplied_cohort_runtime_identity_manifest` map `CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1`; exact verification by `current_supplied_cohort_market_regime_runtime_code_identity_v1()` and ordered path-NUL-digest composite including the final manifest digest; `CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes` byte-roundtrip, authoritative evaluator invocation, and report `canonical_json_bytes` byte-roundtrip from the sole current-supplied-cohort module; canonical identity stability; archive/request/report/cohort/schedule/code/schema binding; aggregate-only redacted observed report. |
 | Boundary | 2/5 versus 3/5 advances and declines; 29/50 versus 30/50; all unchanged; exactly 21 IDs, 21 sessions, and 1/50 members; fact and schedule `as_of` exactly at cutoff; decision session equal to latest session with `close_at <= decision_cutoff`; complete classified calendar-date coverage through cutoff-local date; exact 1,000,000-byte schedule and 4,096 combined rows; canonical owner-input identity stability and preserved declared archive-ID array order. |
 | Archive and persisted-envelope failure | Fewer/more than 21 IDs; duplicate/noncanonical ID; missing, linked, hard-linked, replaced, unsafe, oversized, malformed, noncanonical, or filename/content-digest-mismatched object; malformed/mismatched envelope/report/member/partial/ledger; Sprint-10 insufficiency report; report `schema_identity_sha256` not equal to `CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1`; wrong envelope/report/cohort/request/code identity binding; stale/non-fresh fact, missing receipt, unavailable ledger, conflicting close, duplicate date, or member substitution. The suite must also prove opaque request identities are not decoded as a missing request/manifest or used to infer source-policy/schema/selection fields. |
-| Schedule, timing, and structural failure | Missing/unresolved or digest-mismatched retained schedule; source other than `nse-authoritative-calendar`; source-release mismatch or invalid `sha256:<64 lowercase hex>` form; noncanonical/over-1,000,000-byte/4,097-row schedule; unsupported v1, wrong timezone, `as_of > decision_cutoff`, incomplete classified coverage through cutoff-local date, omitted completed exchange session, conflicting/unscoped closure or special session, non-common/non-increasing grid, decision not latest admissible, no comparison position, data/published/known instant after cutoff, future-known fact, or missing/extra/malformed/unreviewed runtime manifest, source-map digest mismatch, unsafe manifest/source, loader/path mismatch, or composite verification failure. Every runtime-manifest case is exact exit `2` with no report; the other post-admission faults are canonical insufficiency. |
-| Forbidden-path failure | Partial snapshot offered as a decision/comparison close; raw daily OHLC query/candle reconstruction attempt; provider/network/source/clock/archive-enumeration attempt; denominator reduction; partial directions/counts; member/raw/path leakage in public output or diagnostics. Valid partial presence alone is accepted then discarded. Every failure case must yield the closed whole-result behavior or pre-report structural exit. |
+| Schedule, timing, and structural failure | Missing/unresolved or digest-mismatched retained schedule; source other than `nse-authoritative-calendar`; source-release mismatch or invalid `sha256:<64 lowercase hex>` form; noncanonical/over-1,000,000-byte/4,097-row schedule; unsupported v1, wrong timezone, `as_of > decision_cutoff`, incomplete classified coverage through cutoff-local date, omitted completed exchange session, conflicting/unscoped closure or special session, a typed `ArchiveReadResultV1` that cannot construct the exact 21-session common grid after its own admissions, decision not latest admissible, no comparison position, data/published/known instant after cutoff, future-known fact, or missing/extra/malformed/unreviewed runtime manifest, source-map digest mismatch, unsafe manifest/source, loader/path mismatch, or composite verification failure. Every runtime-manifest case is exact exit `2` with no report; the other post-admission faults are canonical insufficiency. |
+| Forbidden-path failure | Partial-shaped/value source placed in `completed_daily` or otherwise substituted for a completed close; raw daily OHLC query/candle reconstruction attempt; provider/network/source/clock/archive-enumeration attempt; denominator reduction; partial directions/counts; member/raw/path leakage in public output or diagnostics. Such member admission is `SPRINT10_MEMBER_FACT_INVALID`; valid partial presence alone is accepted then discarded, and the typed reducer has no partial input surface. Every failure case must yield the closed whole-result behavior or pre-report structural exit. |
 
 Focused gate (not run by this planning change):
 

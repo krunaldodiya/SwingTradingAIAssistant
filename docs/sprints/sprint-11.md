@@ -18,8 +18,8 @@ aggregate breadth label or one whole-result insufficiency.
 
 `BROAD_ADVANCE` and `BROAD_DECLINE` use inclusive integer 60% tests; otherwise
 the fact is `MIXED_PARTICIPATION`. Any incomplete, unsafe, stale, future-known,
-conflicting, cross-cohort, schedule-unproven, or partial-current-session data
-offered or used as a decision/comparison close returns
+conflicting, cross-cohort, schedule-unproven, or partial-shaped/value source
+placed in `completed_daily` or otherwise substituted for a completed close returns
 `INSUFFICIENT_EVIDENCE` with label, counts, and the required public
 `member_directions` field null. Private member directions, identities, raw
 closes, archive paths, private-root details, provider payloads, and schedule rows
