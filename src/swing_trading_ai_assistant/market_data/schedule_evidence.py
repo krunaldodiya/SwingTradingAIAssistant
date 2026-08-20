@@ -236,6 +236,16 @@ class ScheduleEvidenceStore:
         self._storage_root = storage_root
         self._lease = lease
 
+    @property
+    def storage_root(self) -> Path:
+        """Return the exact root capability admitted at construction."""
+        return self._storage_root
+
+    @property
+    def lease(self) -> StorageRootLease:
+        """Return the exact lease capability admitted at construction."""
+        return self._lease
+
     def retain(
         self,
         schedule: object,
