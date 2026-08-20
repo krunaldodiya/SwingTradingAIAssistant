@@ -37,8 +37,11 @@ from .schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V2,
     SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
+    ScheduleEvidenceResult,
     ScheduleEvidenceStore,
     ScheduleOutcome,
+    canonical_schedule_bytes,
+    schedule_digest,
 )
 from .storage_root_lease import StorageRootLease
 
@@ -46,13 +49,13 @@ CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1: Final = (
     "current-supplied-cohort-corporate-action-screen@v1"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "19171eebc3bd8421e782b7de9e54ecb52cc02a18a68f6c6dcd8d3858f26491f7"
+    "aa85801e5f425213d4b4fd7b1e990f2302fa331a291ed4a3bf68439b45cd5023"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "52656e4b209d4d350397a42913d85ad6f74df15351fe0ce2af54fa9d443bef20"
+    "addf3ea9b575dd9e1c959861316b670f5b5b1f485b3b3843bae0631ae652a12f"
 )
 SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "74c2e55bddcdc886f2aaf2d5db13fa76d28fc242e9546756fa9a3e3529220816"
+    "1944347eb87b7faeff309581b11fd1a9e02dcba8423b718e97eceb496ebd8f1e"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1: Final = (
     "3853a15b853b73a945065486ca96b48d4ee3625e4ed7c6e4927579e2b0b372a2"
@@ -61,25 +64,32 @@ UPSTOX_CORPORATE_ACTION_SCREEN_SNAPSHOT_SCHEMA_IDENTITY_SHA256_V1: Final = (
     "de03833b00d0d286fc3d0116f7ce81b8694547d43b13250f7415d6c95fdbbf8a"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "55c66a5f53433231122c12be34f076d42d418fdb1dc8e98b2221622ef49aab03"
+    "e5f9503077f3f16498a222c4c93f6532e60d2514ac6ebf9a42c0666879c28e41"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1: Final = (
-    "a78a06576d293a8aa805772c376286b6d15ca6cbcbdc2804c64f1d4dadbf30eb"
+    "6c74354a6cb3e8b8d272d18296c4fa64cae2709677b963f53091cfa7ca7c03fe"
 )
 
 _SCHEDULE_SOURCE: Final = "nse-authoritative-calendar"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _PREFIXED_DIGEST: Final = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_PROVIDER_ID: Final = re.compile(r"[a-z0-9-]{1,32}\Z")
+_PROVIDER_ID: Final = re.compile(r"[A-Z0-9-]{1,32}\Z")
 _ISIN: Final = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
-_MAX_DTO_BYTES: Final = 16 * 1024
+_MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES: Final = 16 * 1024
+_MAX_PROVIDER_RESULT_DTO_BYTES: Final = 128 * 1024
+_MAX_PRIVATE_AGGREGATE_DTO_BYTES: Final = 256 * 1024
 _MAX_JSON_DEPTH: Final = 64
+_MAX_NORMALIZED_EVENTS: Final = 1_000
 _MAX_RUNTIME_CODE_MODULE_BYTES_V1: Final = 2 * 1024 * 1024
 _RUNTIME_IDENTITY_MANIFEST_NAME_V1: Final = (
     "current_corporate_action_screen_runtime_identity_manifest.py"
 )
 
-_PRIVATE_RESULT_PUBLICATION_SEAL_V1: Final = object()
+
+@dataclass(frozen=True, slots=True)
+class _PrivateResultPublicationSealV1:
+    private_result_identity_sha256: str
+    canonical_content_sha256: str
 
 
 class SupportedCorporateActionKindV1(StrEnum):
@@ -216,8 +226,10 @@ def _assert_depth(value: object, depth: int = 0) -> None:
             _assert_depth(child, depth + 1)
 
 
-def _decode_canonical(raw: object) -> dict[str, object]:
-    if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_DTO_BYTES:
+def _decode_canonical(
+    raw: object, *, max_bytes: int = _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
+) -> dict[str, object]:
+    if type(raw) is not bytes or not 1 <= len(raw) <= max_bytes:
         raise ValueError("invalid canonical Plan-21 JSON")
     try:
         value = json.loads(
@@ -430,12 +442,16 @@ class CurrentSuppliedCohortCorporateActionScreenInputV1:
             or type(comparison_session) is not date
             or type(decision_session) is not date
             or comparison_session > decision_session
+            or (decision_session - comparison_session).days > 63
             or not _is_utc(decision_cutoff)
             or schedule_source != _SCHEDULE_SOURCE
+            or provider_id != "UPSTOX"
         ):
             raise ValueError("invalid Plan-21 input")
         manifest = _manifest_from_value(cohort_manifest.value())
-        if manifest.selected_at > decision_cutoff:
+        if manifest.selected_at > decision_cutoff or any(
+            not _valid_isin(member.isin) for member in manifest.members
+        ):
             raise ValueError("invalid Plan-21 input")
         _require_digest(schedule_evidence_sha256)
         _require_prefixed_digest(schedule_source_release)
@@ -465,6 +481,11 @@ class CurrentSuppliedCohortCorporateActionScreenInputV1:
             ("screen_policy_identity_sha256", screen_policy_identity_sha256),
         ):
             object.__setattr__(self, name, value)
+        if (
+            len(self.canonical_json_bytes(include_identity=False))
+            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
+        ):
+            raise ValueError("invalid Plan-21 input")
         object.__setattr__(self, "input_identity_sha256", _sha256(self.value(False)))
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
@@ -581,6 +602,11 @@ class CurrentSuppliedCohortCorporateActionScreenRequestV1:
             "screen_policy_identity_sha256",
         ):
             object.__setattr__(self, name, getattr(input_value, name))
+        if (
+            len(self.canonical_json_bytes(include_identity=False))
+            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
+        ):
+            raise ValueError("invalid Plan-21 request")
         object.__setattr__(self, "request_identity_sha256", _sha256(self.value(False)))
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
@@ -674,6 +700,7 @@ class PrivateCorporateActionScreenProviderResultV1:
             or type(self.outcome) is not ProviderObservationOutcomeV1
             or not _is_utc(self.knowledge_cutoff)
             or type(self.normalized_supported_events) is not tuple
+            or len(self.normalized_supported_events) > _MAX_NORMALIZED_EVENTS
             or any(
                 type(event) is not NormalizedSupportedCorporateActionEventV1
                 for event in self.normalized_supported_events
@@ -745,13 +772,16 @@ class PrivateCorporateActionScreenProviderResultV1:
         }
 
     def canonical_json_bytes(self) -> bytes:
-        return _canonical(self.value())
+        raw = _canonical(self.value())
+        if len(raw) > _MAX_PROVIDER_RESULT_DTO_BYTES:
+            raise ValueError("invalid provider result")
+        return raw
 
     @classmethod
     def from_canonical_json_bytes(
         cls, raw: bytes
     ) -> PrivateCorporateActionScreenProviderResultV1:
-        value = _decode_canonical(raw)
+        value = _decode_canonical(raw, max_bytes=_MAX_PROVIDER_RESULT_DTO_BYTES)
         fields = {
             "isin",
             "provider_id",
@@ -769,9 +799,12 @@ class PrivateCorporateActionScreenProviderResultV1:
         events = value.get("normalized_supported_events")
         if set(value) != fields or type(events) is not list:
             raise ValueError("invalid canonical provider result")
+        parsed_events_value = cast(list[object], events)
+        if len(parsed_events_value) > _MAX_NORMALIZED_EVENTS:
+            raise ValueError("invalid canonical provider result")
         parsed_events: list[NormalizedSupportedCorporateActionEventV1] = []
         try:
-            for event in cast(list[object], events):
+            for event in parsed_events_value:
                 parsed = cast(dict[str, object], event)
                 if type(event) is not dict or set(parsed) != {
                     "kind",
@@ -840,12 +873,12 @@ class CorporateActionScreenProviderPortV1(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class UpstoxCorporateActionScreenProviderV1:
-    action_store: CorporateActionSnapshotStoreV1
+    store: CorporateActionSnapshotStoreV1
 
     @property
     def descriptor(self) -> CorporateActionScreenProviderDescriptorV1:
         return CorporateActionScreenProviderDescriptorV1(
-            "upstox",
+            "UPSTOX",
             UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1,
             UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1,
             UPSTOX_CORPORATE_ACTION_SCREEN_SNAPSHOT_SCHEMA_IDENTITY_SHA256_V1,
@@ -862,12 +895,12 @@ class UpstoxCorporateActionScreenProviderV1:
             type(request) is not CurrentSuppliedCohortCorporateActionScreenRequestV1
             or not _valid_isin(isin)
             or type(lease) is not StorageRootLease
-            or lease is not self.action_store.lease
+            or lease is not self.store.lease
         ):
             raise ValueError("invalid Plan-21 provider resolution")
         descriptor = self.descriptor
         try:
-            metadata, snapshot = self.action_store.resolve(
+            metadata, snapshot = self.store.resolve(
                 isin=isin, knowledge_cutoff=request.decision_cutoff
             )
         except CorporateActionMissingError:
@@ -1014,118 +1047,12 @@ class PrivateCorporateActionScreenResultV1:
     outcome: PrivateCorporateActionScreenOutcomeV1
     selected_snapshot_set_identity_sha256: str | None
     private_result_identity_sha256: str
-    _publication_seal: object | None = field(
+    _publication_seal: _PrivateResultPublicationSealV1 | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
-    def __post_init__(self) -> None:  # noqa: C901
-        if (
-            self.contract_version != CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1
-            or type(self.comparison_session) is not date
-            or type(self.decision_session) is not date
-            or self.comparison_session > self.decision_session
-            or not _is_utc(self.decision_cutoff)
-            or self.schedule_source != _SCHEDULE_SOURCE
-            or type(self.outcome) is not PrivateCorporateActionScreenOutcomeV1
-            or type(self.member_results) is not tuple
-        ):
-            raise ValueError("invalid private Plan-21 result")
-        for value in (
-            self.input_identity_sha256,
-            self.request_identity_sha256,
-            self.runtime_code_identity_sha256,
-            self.cohort_identity_sha256,
-            self.schedule_evidence_sha256,
-            self.provider_capability_identity_sha256,
-            self.provider_source_identity_sha256,
-            self.provider_snapshot_schema_identity_sha256,
-            self.provider_policy_identity_sha256,
-            self.private_result_identity_sha256,
-        ):
-            _require_digest(value)
-        _require_prefixed_digest(self.schedule_source_release)
-        descriptor = CorporateActionScreenProviderDescriptorV1(
-            self.provider_id,
-            self.provider_capability_identity_sha256,
-            self.provider_source_identity_sha256,
-            self.provider_snapshot_schema_identity_sha256,
-            self.provider_policy_identity_sha256,
-        )
-        schedule_failure = self.outcome in {
-            PrivateCorporateActionScreenOutcomeV1.SCHEDULE_UNAVAILABLE,
-            PrivateCorporateActionScreenOutcomeV1.SCHEDULE_LATE,
-            PrivateCorporateActionScreenOutcomeV1.SCHEDULE_CONTINUITY_UNPROVEN,
-        }
-        if schedule_failure:
-            if (
-                self.decision_session_close_at is not None
-                or self.member_results
-                or self.selected_snapshot_set_identity_sha256 is not None
-            ):
-                raise ValueError("invalid private Plan-21 result")
-            return
-        if (
-            not _is_utc(self.decision_session_close_at)
-            or cast(datetime, self.decision_session_close_at) > self.decision_cutoff
-            or not self.member_results
-            or self.member_results
-            != tuple(
-                sorted(
-                    self.member_results,
-                    key=lambda member: member.provider_result.isin,
-                )
-            )
-            or len({member.provider_result.isin for member in self.member_results})
-            != len(self.member_results)
-            or any(
-                member.provider_result.descriptor != descriptor
-                or member.provider_result.knowledge_cutoff != self.decision_cutoff
-                for member in self.member_results
-            )
-        ):
-            raise ValueError("invalid private Plan-21 result")
-        precedence = (
-            AggregateMemberOutcomeV1.MISSING,
-            AggregateMemberOutcomeV1.STALE,
-            AggregateMemberOutcomeV1.AMBIGUOUS,
-            AggregateMemberOutcomeV1.CORRUPT,
-            AggregateMemberOutcomeV1.ACTION_OBSERVED,
-            AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED,
-        )
-        for member in self.member_results:
-            provider = member.provider_result
-            if provider.outcome is not ProviderObservationOutcomeV1.AVAILABLE:
-                expected = AggregateMemberOutcomeV1(provider.outcome.value)
-            elif cast(datetime, provider.retrieved_at) < cast(
-                datetime, self.decision_session_close_at
-            ):
-                expected = AggregateMemberOutcomeV1.STALE
-            elif any(
-                self.comparison_session <= event.effective_date <= self.decision_session
-                for event in provider.normalized_supported_events
-            ):
-                expected = AggregateMemberOutcomeV1.ACTION_OBSERVED
-            else:
-                expected = (
-                    AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
-                )
-            if member.row_outcome is not expected:
-                raise ValueError("invalid private Plan-21 result")
-        expected_outcome = next(
-            item
-            for item in precedence
-            if item in {row.row_outcome for row in self.member_results}
-        )
-        if self.outcome.value != expected_outcome.value:
-            raise ValueError("invalid private Plan-21 result")
-        ready = (
-            self.outcome
-            is PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
-        )
-        if ready != (self.selected_snapshot_set_identity_sha256 is not None):
-            raise ValueError("invalid private Plan-21 result")
-        if self.selected_snapshot_set_identity_sha256 is not None:
-            _require_digest(self.selected_snapshot_set_identity_sha256)
+    def __post_init__(self) -> None:
+        _validate_private_result_invariants(self)
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
@@ -1159,13 +1086,16 @@ class PrivateCorporateActionScreenResultV1:
         return result
 
     def canonical_json_bytes(self, include_identity: bool = True) -> bytes:
-        return _canonical(self.value(include_identity))
+        raw = _canonical(self.value(include_identity))
+        if len(raw) > _MAX_PRIVATE_AGGREGATE_DTO_BYTES:
+            raise ValueError("private Plan-21 aggregate exceeds its byte limit")
+        return raw
 
     @classmethod
     def from_canonical_json_bytes(
         cls, raw: bytes
     ) -> PrivateCorporateActionScreenResultV1:
-        value = _decode_canonical(raw)
+        value = _decode_canonical(raw, max_bytes=_MAX_PRIVATE_AGGREGATE_DTO_BYTES)
         fields = {
             "contract_version",
             "input_identity_sha256",
@@ -1249,7 +1179,14 @@ class PrivateCorporateActionScreenResultV1:
         return result
 
     def to_public_report(self) -> CurrentSuppliedCohortCorporateActionScreenReportV1:
-        if self._publication_seal is not _PRIVATE_RESULT_PUBLICATION_SEAL_V1:
+        _validate_private_result_invariants(self, require_identity=True)
+        seal = self._publication_seal
+        if (
+            type(seal) is not _PrivateResultPublicationSealV1
+            or seal.private_result_identity_sha256
+            != self.private_result_identity_sha256
+            or seal.canonical_content_sha256 != _sha256(self.value())
+        ):
             raise ValueError("unsealed private Plan-21 result")
         screened = (
             self.outcome
@@ -1280,6 +1217,190 @@ class PrivateCorporateActionScreenResultV1:
             if screened
             else CorporateActionScreenReasonV1.CORPORATE_ACTION_SCREEN_INSUFFICIENT,
         )
+
+
+def _private_result_descriptor(
+    result: PrivateCorporateActionScreenResultV1,
+) -> CorporateActionScreenProviderDescriptorV1:
+    return CorporateActionScreenProviderDescriptorV1(
+        result.provider_id,
+        result.provider_capability_identity_sha256,
+        result.provider_source_identity_sha256,
+        result.provider_snapshot_schema_identity_sha256,
+        result.provider_policy_identity_sha256,
+    )
+
+
+def _validate_private_result_header(
+    result: PrivateCorporateActionScreenResultV1,
+) -> None:
+    if (
+        result.contract_version != CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1
+        or type(result.comparison_session) is not date
+        or type(result.decision_session) is not date
+        or result.comparison_session > result.decision_session
+        or not _is_utc(result.decision_cutoff)
+        or result.schedule_source != _SCHEDULE_SOURCE
+        or type(result.outcome) is not PrivateCorporateActionScreenOutcomeV1
+        or type(result.member_results) is not tuple
+    ):
+        raise ValueError("invalid private Plan-21 result")
+    for value in (
+        result.input_identity_sha256,
+        result.request_identity_sha256,
+        result.runtime_code_identity_sha256,
+        result.cohort_identity_sha256,
+        result.schedule_evidence_sha256,
+        result.provider_capability_identity_sha256,
+        result.provider_source_identity_sha256,
+        result.provider_snapshot_schema_identity_sha256,
+        result.provider_policy_identity_sha256,
+        result.private_result_identity_sha256,
+    ):
+        _require_digest(value)
+    _require_prefixed_digest(result.schedule_source_release)
+
+
+def _is_schedule_failure(
+    outcome: PrivateCorporateActionScreenOutcomeV1,
+) -> bool:
+    return outcome in {
+        PrivateCorporateActionScreenOutcomeV1.SCHEDULE_UNAVAILABLE,
+        PrivateCorporateActionScreenOutcomeV1.SCHEDULE_LATE,
+        PrivateCorporateActionScreenOutcomeV1.SCHEDULE_CONTINUITY_UNPROVEN,
+    }
+
+
+def _validate_schedule_failure_result(
+    result: PrivateCorporateActionScreenResultV1,
+) -> None:
+    if (
+        result.decision_session_close_at is not None
+        or result.member_results
+        or result.selected_snapshot_set_identity_sha256 is not None
+    ):
+        raise ValueError("invalid private Plan-21 result")
+
+
+def _validate_private_result_members(
+    result: PrivateCorporateActionScreenResultV1,
+    descriptor: CorporateActionScreenProviderDescriptorV1,
+) -> None:
+    if (
+        not _is_utc(result.decision_session_close_at)
+        or cast(datetime, result.decision_session_close_at) > result.decision_cutoff
+        or not result.member_results
+        or result.member_results
+        != tuple(
+            sorted(
+                result.member_results,
+                key=lambda member: member.provider_result.isin,
+            )
+        )
+        or len({member.provider_result.isin for member in result.member_results})
+        != len(result.member_results)
+        or any(
+            member.provider_result.descriptor != descriptor
+            or member.provider_result.knowledge_cutoff != result.decision_cutoff
+            for member in result.member_results
+        )
+    ):
+        raise ValueError("invalid private Plan-21 result")
+
+
+def _expected_member_outcome(
+    result: PrivateCorporateActionScreenResultV1,
+    member: PrivateCorporateActionScreenMemberResultV1,
+) -> AggregateMemberOutcomeV1:
+    provider = member.provider_result
+    if provider.outcome is not ProviderObservationOutcomeV1.AVAILABLE:
+        return AggregateMemberOutcomeV1(provider.outcome.value)
+    if cast(datetime, provider.retrieved_at) < cast(
+        datetime, result.decision_session_close_at
+    ):
+        return AggregateMemberOutcomeV1.STALE
+    if any(
+        result.comparison_session <= event.effective_date <= result.decision_session
+        for event in provider.normalized_supported_events
+    ):
+        return AggregateMemberOutcomeV1.ACTION_OBSERVED
+    return AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
+
+
+def _validate_private_member_outcomes(
+    result: PrivateCorporateActionScreenResultV1,
+) -> None:
+    for member in result.member_results:
+        if member.row_outcome is not _expected_member_outcome(result, member):
+            raise ValueError("invalid private Plan-21 result")
+
+
+def _private_result_budget_exceeded(
+    result: PrivateCorporateActionScreenResultV1,
+) -> bool:
+    return (
+        sum(
+            len(member.provider_result.normalized_supported_events)
+            for member in result.member_results
+        )
+        > _MAX_NORMALIZED_EVENTS
+        or len(_canonical(result.value(include_identity=False)))
+        > _MAX_PRIVATE_AGGREGATE_DTO_BYTES
+    )
+
+
+def _validate_private_result_outcome(
+    result: PrivateCorporateActionScreenResultV1,
+) -> None:
+    precedence = (
+        AggregateMemberOutcomeV1.MISSING,
+        AggregateMemberOutcomeV1.STALE,
+        AggregateMemberOutcomeV1.AMBIGUOUS,
+        AggregateMemberOutcomeV1.CORRUPT,
+        AggregateMemberOutcomeV1.ACTION_OBSERVED,
+        AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED,
+    )
+    expected = next(
+        item
+        for item in precedence
+        if item in {row.row_outcome for row in result.member_results}
+    )
+    budget_exceeded = _private_result_budget_exceeded(result)
+    if result.outcome.value != expected.value and not (
+        budget_exceeded
+        and result.outcome is PrivateCorporateActionScreenOutcomeV1.CORRUPT
+    ):
+        raise ValueError("invalid private Plan-21 result")
+    if (
+        budget_exceeded
+        and result.outcome is not PrivateCorporateActionScreenOutcomeV1.CORRUPT
+    ):
+        raise ValueError("invalid private Plan-21 result")
+    ready = (
+        result.outcome
+        is PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
+    )
+    if ready != (result.selected_snapshot_set_identity_sha256 is not None):
+        raise ValueError("invalid private Plan-21 result")
+    if result.selected_snapshot_set_identity_sha256 is not None:
+        _require_digest(result.selected_snapshot_set_identity_sha256)
+
+
+def _validate_private_result_invariants(
+    result: PrivateCorporateActionScreenResultV1, *, require_identity: bool = False
+) -> None:
+    _validate_private_result_header(result)
+    descriptor = _private_result_descriptor(result)
+    if _is_schedule_failure(result.outcome):
+        _validate_schedule_failure_result(result)
+    else:
+        _validate_private_result_members(result, descriptor)
+        _validate_private_member_outcomes(result)
+        _validate_private_result_outcome(result)
+    if require_identity and result.private_result_identity_sha256 != _sha256(
+        result.value(include_identity=False)
+    ):
+        raise ValueError("invalid private Plan-21 result")
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -1428,6 +1549,11 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
             ("reason", reason),
         ):
             object.__setattr__(self, name, value)
+        if (
+            len(_canonical(self.value(include_identity=False)))
+            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
+        ):
+            raise ValueError("invalid public Plan-21 report")
         object.__setattr__(self, "report_identity_sha256", _sha256(self.value(False)))
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
@@ -1465,13 +1591,16 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
         return result
 
     def canonical_json_bytes(self, include_identity: bool = True) -> bytes:
-        return _canonical(self.value(include_identity))
+        raw = _canonical(self.value(include_identity))
+        if len(raw) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid public Plan-21 report")
+        return raw
 
     @classmethod
     def from_canonical_json_bytes(
         cls, raw: bytes
     ) -> CurrentSuppliedCohortCorporateActionScreenReportV1:
-        value = _decode_canonical(raw)
+        value = _decode_canonical(raw, max_bytes=_MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES)
         fields = {
             "contract_version",
             "input_identity_sha256",
@@ -1555,14 +1684,23 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
         if (
             type(input_value) is not CurrentSuppliedCohortCorporateActionScreenInputV1
             or type(lease) is not StorageRootLease
+            or type(self.schedule_store) is not ScheduleEvidenceStore
+            or type(self.provider) is not UpstoxCorporateActionScreenProviderV1
+            or type(self.provider.store) is not CorporateActionSnapshotStoreV1
             or lease is not self.schedule_store.lease
+            or lease is not self.provider.store.lease
+            or self.schedule_store.storage_root != self.provider.store.storage_root
         ):
             raise ValueError("invalid Plan-21 resolution")
         descriptor = self.provider.descriptor
-        if (
-            type(descriptor) is not CorporateActionScreenProviderDescriptorV1
-            or input_value.provider_id != descriptor.provider_id
-        ):
+        expected_descriptor = CorporateActionScreenProviderDescriptorV1(
+            "UPSTOX",
+            UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1,
+            UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1,
+            UPSTOX_CORPORATE_ACTION_SCREEN_SNAPSHOT_SCHEMA_IDENTITY_SHA256_V1,
+            UPSTOX_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1,
+        )
+        if descriptor != expected_descriptor or input_value.provider_id != "UPSTOX":
             raise ValueError("invalid Plan-21 provider selection")
         admitted_input = (
             CurrentSuppliedCohortCorporateActionScreenInputV1.from_canonical_json_bytes(
@@ -1572,11 +1710,7 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
         runtime = current_corporate_action_screen_runtime_code_identity_v1()
         request = CurrentSuppliedCohortCorporateActionScreenRequestV1(admitted_input)
         schedule_result = self.schedule_store.resolve(request.schedule_evidence_sha256)
-        schedule = (
-            schedule_result.schedule
-            if schedule_result.outcome is not ScheduleOutcome.FAILED
-            else None
-        )
+        schedule = _admitted_schedule_result(request, schedule_result)
         schedule_outcome, close = _schedule_close(request, schedule)
         if schedule_outcome is not None:
             return _aggregate(
@@ -1614,6 +1748,14 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
                 )
             )
         outcome = _aggregate_member_outcome(member_results)
+        if (
+            sum(
+                len(member.provider_result.normalized_supported_events)
+                for member in member_results
+            )
+            > _MAX_NORMALIZED_EVENTS
+        ):
+            outcome = PrivateCorporateActionScreenOutcomeV1.CORRUPT
         selected = (
             _selected_snapshot_set_hash(request, descriptor, runtime, member_results)
             if outcome
@@ -1631,6 +1773,29 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
         )
 
 
+def _admitted_schedule_result(
+    request: CurrentSuppliedCohortCorporateActionScreenRequestV1, result: object
+) -> ExpectedSessionSchedule | None:
+    if (
+        type(result) is not ScheduleEvidenceResult
+        or result.outcome is not ScheduleOutcome.RESOLVED
+        or type(result.schedule) is not ExpectedSessionSchedule
+        or type(result.canonical_bytes) is not bytes
+        or result.digest != request.schedule_evidence_sha256
+    ):
+        return None
+    try:
+        canonical = canonical_schedule_bytes(result.schedule)
+    except ValueError:
+        return None
+    if (
+        canonical != result.canonical_bytes
+        or schedule_digest(result.schedule) != request.schedule_evidence_sha256
+    ):
+        return None
+    return result.schedule
+
+
 def _schedule_close(
     request: CurrentSuppliedCohortCorporateActionScreenRequestV1, schedule: object
 ) -> tuple[PrivateCorporateActionScreenOutcomeV1 | None, datetime | None]:
@@ -1642,6 +1807,8 @@ def _schedule_close(
         or schedule.source_release != request.schedule_source_release
     ):
         return PrivateCorporateActionScreenOutcomeV1.SCHEDULE_UNAVAILABLE, None
+    if schedule.as_of > request.decision_cutoff:
+        return PrivateCorporateActionScreenOutcomeV1.SCHEDULE_LATE, None
     try:
         sessions = tuple(schedule.sessions)
         closures = tuple(schedule.closures)
@@ -1770,7 +1937,46 @@ def _aggregate(
     results: tuple[PrivateCorporateActionScreenMemberResultV1, ...],
     selected: str | None,
 ) -> PrivateCorporateActionScreenResultV1:
-    private = PrivateCorporateActionScreenResultV1(
+    try:
+        private = _private_aggregate(
+            request, descriptor, runtime, close, outcome, results, selected
+        )
+    except ValueError:
+        if outcome is PrivateCorporateActionScreenOutcomeV1.CORRUPT:
+            raise
+        private = _private_aggregate(
+            request,
+            descriptor,
+            runtime,
+            close,
+            PrivateCorporateActionScreenOutcomeV1.CORRUPT,
+            results,
+            None,
+        )
+    object.__setattr__(
+        private, "private_result_identity_sha256", _sha256(private.value(False))
+    )
+    _validate_private_result_invariants(private, require_identity=True)
+    object.__setattr__(
+        private,
+        "_publication_seal",
+        _PrivateResultPublicationSealV1(
+            private.private_result_identity_sha256, _sha256(private.value())
+        ),
+    )
+    return private
+
+
+def _private_aggregate(
+    request: CurrentSuppliedCohortCorporateActionScreenRequestV1,
+    descriptor: CorporateActionScreenProviderDescriptorV1,
+    runtime: str,
+    close: datetime | None,
+    outcome: PrivateCorporateActionScreenOutcomeV1,
+    results: tuple[PrivateCorporateActionScreenMemberResultV1, ...],
+    selected: str | None,
+) -> PrivateCorporateActionScreenResultV1:
+    return PrivateCorporateActionScreenResultV1(
         request.contract_version,
         request.input_identity_sha256,
         request.request_identity_sha256,
@@ -1793,10 +1999,3 @@ def _aggregate(
         selected,
         "0" * 64,
     )
-    object.__setattr__(
-        private, "private_result_identity_sha256", _sha256(private.value(False))
-    )
-    object.__setattr__(
-        private, "_publication_seal", _PRIVATE_RESULT_PUBLICATION_SEAL_V1
-    )
-    return private

@@ -63,7 +63,7 @@ class _Scenario:
     lease: StorageRootLease
     catalog: DuckDBCatalog
     schedule_store: ScheduleEvidenceStore
-    action_store: CorporateActionSnapshotStoreV1
+    store: CorporateActionSnapshotStoreV1
     manifest: CurrentSuppliedCohortManifestV1
     schedule_sha256: str
 
@@ -189,7 +189,7 @@ def _scenario(tmp_path: Path, count: int = 2, *, retain: bool = True) -> _Scenar
     )
     if retain:
         for member in manifest.members:
-            scenario.action_store.retain(
+            scenario.store.retain(
                 UpstoxCorporateActionsClientV1(
                     _Transport(_payload()), clock=lambda: _CUTOFF
                 ).fetch(member.isin, "fixture-token")
@@ -201,7 +201,7 @@ def _api() -> Any:
     return current_corporate_action_screen
 
 
-def _input(api: Any, scenario: _Scenario, provider_id: str = "upstox") -> Any:
+def _input(api: Any, scenario: _Scenario, provider_id: str = "UPSTOX") -> Any:
     return api.CurrentSuppliedCohortCorporateActionScreenInputV1(
         scenario.manifest,
         _S0,
@@ -217,7 +217,7 @@ def _input(api: Any, scenario: _Scenario, provider_id: str = "upstox") -> Any:
 def _resolve(api: Any, scenario: _Scenario) -> Any:
     return api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
         scenario.schedule_store,
-        api.UpstoxCorporateActionScreenProviderV1(scenario.action_store),
+        api.UpstoxCorporateActionScreenProviderV1(scenario.store),
     ).resolve_exact(_input(api, scenario), scenario.lease)
 
 
@@ -309,7 +309,7 @@ def test_adapter_mismatch_fails_before_schedule_or_provider_call(
     try:
         fake = Fake(
             api.CorporateActionScreenProviderDescriptorV1(
-                "other", "1" * 64, "2" * 64, "3" * 64, "4" * 64
+                "OTHER", "1" * 64, "2" * 64, "3" * 64, "4" * 64
             )
         )
         resolver = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
@@ -322,45 +322,27 @@ def test_adapter_mismatch_fails_before_schedule_or_provider_call(
         scenario.close()
 
 
-def test_exact_sorted_per_isin_calls_and_second_descriptor_port(tmp_path: Path) -> None:
+def test_nonexact_store_fails_before_schedule_or_provider_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     api = _api()
-    scenario = _scenario(tmp_path, count=5)
+    scenario = _scenario(tmp_path)
     calls: list[str] = []
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
 
-    @dataclass(frozen=True)
-    class Fake:
-        descriptor: Any
-
-        def resolve_exact(self, request: Any, isin: str, lease: Any) -> Any:
-            calls.append(isin)
-            return api.PrivateCorporateActionScreenProviderResultV1(
-                isin,
-                self.descriptor.provider_id,
-                self.descriptor.capability_identity_sha256,
-                self.descriptor.source_identity_sha256,
-                self.descriptor.snapshot_schema_identity_sha256,
-                self.descriptor.policy_identity_sha256,
-                "5" * 64,
-                1,
-                _CUTOFF,
-                request.decision_cutoff,
-                (),
-                api.ProviderObservationOutcomeV1.AVAILABLE,
-            )
+    def fail_schedule(_digest: str) -> Any:
+        calls.append("schedule")
+        raise AssertionError
 
     try:
-        result = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
-            scenario.schedule_store, Fake(descriptor)
-        ).resolve_exact(_input(api, scenario, "fixture"), scenario.lease)
-        assert calls == sorted(member.isin for member in scenario.manifest.members)
-        assert (
-            result.outcome
-            is api.PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
+        provider = api.UpstoxCorporateActionScreenProviderV1(scenario.store)
+        object.__setattr__(provider, "store", object())
+        monkeypatch.setattr(scenario.schedule_store, "resolve", fail_schedule)
+        resolver = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
+            scenario.schedule_store, provider
         )
-        assert result.selected_snapshot_set_identity_sha256 is not None
+        with pytest.raises(ValueError):
+            resolver.resolve_exact(_input(api, scenario), scenario.lease)
+        assert calls == []
     finally:
         scenario.close()
 
@@ -373,7 +355,7 @@ def test_upstox_adapter_maps_all_supported_non_dividend_kinds(
     scenario = _scenario(tmp_path, count=1, retain=False)
     try:
         isin = scenario.manifest.members[0].isin
-        scenario.action_store.retain(
+        scenario.store.retain(
             UpstoxCorporateActionsClientV1(
                 _Transport(_payload(kind)), clock=lambda: _CUTOFF
             ).fetch(isin, "fixture-token")
@@ -430,12 +412,12 @@ def test_upstox_adapter_maps_each_plan09_failure(
         def fail(**_kwargs: object) -> None:
             raise error_type("fixture")
 
-        monkeypatch.setattr(scenario.action_store, "resolve", fail)
+        monkeypatch.setattr(scenario.store, "resolve", fail)
         request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
             _input(api, scenario)
         )
         result = api.UpstoxCorporateActionScreenProviderV1(
-            scenario.action_store
+            scenario.store
         ).resolve_exact(request, scenario.manifest.members[0].isin, scenario.lease)
         assert result.outcome.value == expected
         assert result.snapshot_identity_sha256 is None
@@ -474,125 +456,12 @@ def test_all_supported_kinds_use_only_inclusive_effective_date_window(
     scenario = _scenario(tmp_path, 1, retain=False)
     try:
         isin = scenario.manifest.members[0].isin
-        scenario.action_store.retain(
+        scenario.store.retain(
             UpstoxCorporateActionsClientV1(
                 _Transport(_payload(kind, effective)), clock=lambda: _CUTOFF
             ).fetch(isin, "fixture-token")
         )
         assert _resolve(api, scenario).outcome.value == expected
-    finally:
-        scenario.close()
-
-
-def _fake_provider(
-    api: Any,
-    descriptor: Any,
-    outcomes: tuple[Any, ...],
-    retrieved_at: datetime = _CUTOFF,
-) -> Any:
-    @dataclass(frozen=True)
-    class Fake:
-        descriptor: Any
-        outcomes: tuple[Any, ...]
-
-        def resolve_exact(self, request: Any, isin: str, lease: Any) -> Any:
-            outcome = self.outcomes[len(calls)]
-            calls.append(isin)
-            if outcome is not api.ProviderObservationOutcomeV1.AVAILABLE:
-                return api.PrivateCorporateActionScreenProviderResultV1(
-                    isin,
-                    self.descriptor.provider_id,
-                    self.descriptor.capability_identity_sha256,
-                    self.descriptor.source_identity_sha256,
-                    self.descriptor.snapshot_schema_identity_sha256,
-                    self.descriptor.policy_identity_sha256,
-                    None,
-                    None,
-                    None,
-                    request.decision_cutoff,
-                    (),
-                    outcome,
-                )
-            return api.PrivateCorporateActionScreenProviderResultV1(
-                isin,
-                self.descriptor.provider_id,
-                self.descriptor.capability_identity_sha256,
-                self.descriptor.source_identity_sha256,
-                self.descriptor.snapshot_schema_identity_sha256,
-                self.descriptor.policy_identity_sha256,
-                "5" * 64,
-                1,
-                retrieved_at,
-                request.decision_cutoff,
-                (),
-                outcome,
-            )
-
-    calls: list[str] = []
-    return Fake(descriptor, outcomes), calls
-
-
-@pytest.mark.parametrize(
-    ("provider_outcome", "retrieved_at", "expected"),
-    (
-        ("MISSING", _CUTOFF, "MISSING"),
-        ("STALE", _CUTOFF, "STALE"),
-        ("AMBIGUOUS", _CUTOFF, "AMBIGUOUS"),
-        ("CORRUPT", _CUTOFF, "CORRUPT"),
-        ("AVAILABLE", _CLOSE - timedelta(microseconds=1), "STALE"),
-        ("AVAILABLE", _CLOSE, "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
-        ("AVAILABLE", _CUTOFF, "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
-    ),
-)
-def test_generic_provider_observation_is_classified_only_by_aggregate(
-    tmp_path: Path, provider_outcome: str, retrieved_at: datetime, expected: str
-) -> None:
-    api = _api()
-    scenario = _scenario(tmp_path, 1)
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
-    try:
-        outcome = api.ProviderObservationOutcomeV1(provider_outcome)
-        provider, calls = _fake_provider(api, descriptor, (outcome,), retrieved_at)
-        result = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
-            scenario.schedule_store, provider
-        ).resolve_exact(_input(api, scenario, "fixture"), scenario.lease)
-        assert calls == [scenario.manifest.members[0].isin]
-        assert result.outcome.value == expected
-    finally:
-        scenario.close()
-
-
-@pytest.mark.parametrize(
-    ("outcomes", "expected"),
-    (
-        (("MISSING", "STALE"), "MISSING"),
-        (("STALE", "AMBIGUOUS"), "STALE"),
-        (("AMBIGUOUS", "CORRUPT"), "AMBIGUOUS"),
-        (("CORRUPT", "AVAILABLE"), "CORRUPT"),
-        (("AVAILABLE", "MISSING"), "MISSING"),
-        (("AVAILABLE", "AVAILABLE"), "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
-    ),
-)
-def test_mixed_member_outcomes_use_frozen_precedence(
-    tmp_path: Path, outcomes: tuple[str, str], expected: str
-) -> None:
-    api = _api()
-    scenario = _scenario(tmp_path, 2)
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
-    try:
-        provider, _ = _fake_provider(
-            api,
-            descriptor,
-            tuple(api.ProviderObservationOutcomeV1(item) for item in outcomes),
-        )
-        result = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
-            scenario.schedule_store, provider
-        ).resolve_exact(_input(api, scenario, "fixture"), scenario.lease)
-        assert result.outcome.value == expected
     finally:
         scenario.close()
 
@@ -639,7 +508,7 @@ def test_provider_result_canonical_schema_is_closed(
             _input(api, scenario)
         )
         result = api.UpstoxCorporateActionScreenProviderV1(
-            scenario.action_store
+            scenario.store
         ).resolve_exact(request, scenario.manifest.members[0].isin, scenario.lease)
         raw = json.loads(result.canonical_json_bytes())
         if mutation == "unknown":
@@ -674,7 +543,7 @@ def test_upstox_adapter_rejects_exact_metadata_tuple_substitutions(
 ) -> None:
     api = _api()
     scenario = _scenario(tmp_path, 1)
-    original = scenario.action_store.resolve
+    original = scenario.store.resolve
     try:
 
         def substituted(**kwargs: object) -> tuple[Any, Any]:
@@ -682,64 +551,14 @@ def test_upstox_adapter_rejects_exact_metadata_tuple_substitutions(
             object.__setattr__(metadata, field, replacement)
             return metadata, snapshot
 
-        monkeypatch.setattr(scenario.action_store, "resolve", substituted)
+        monkeypatch.setattr(scenario.store, "resolve", substituted)
         request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
             _input(api, scenario)
         )
         result = api.UpstoxCorporateActionScreenProviderV1(
-            scenario.action_store
+            scenario.store
         ).resolve_exact(request, scenario.manifest.members[0].isin, scenario.lease)
         assert result.outcome is api.ProviderObservationOutcomeV1.CORRUPT
-    finally:
-        scenario.close()
-
-
-@pytest.mark.parametrize(
-    ("effective", "expected"),
-    (
-        (_S0 - timedelta(days=1), "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
-        (_S0, "ACTION_OBSERVED"),
-        (_S20, "ACTION_OBSERVED"),
-        (_S20 + timedelta(days=1), "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
-    ),
-)
-def test_aggregate_event_classification_is_independent_of_provider_adapter(
-    tmp_path: Path, effective: date, expected: str
-) -> None:
-    api = _api()
-    scenario = _scenario(tmp_path, 1)
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
-    event = api.NormalizedSupportedCorporateActionEventV1(
-        api.SupportedCorporateActionKindV1.SPLIT, effective
-    )
-    try:
-
-        @dataclass(frozen=True)
-        class Fake:
-            descriptor: Any
-
-            def resolve_exact(self, request: Any, isin: str, lease: Any) -> Any:
-                return api.PrivateCorporateActionScreenProviderResultV1(
-                    isin,
-                    "fixture",
-                    "1" * 64,
-                    "2" * 64,
-                    "3" * 64,
-                    "4" * 64,
-                    "5" * 64,
-                    1,
-                    _CUTOFF,
-                    request.decision_cutoff,
-                    (event,),
-                    api.ProviderObservationOutcomeV1.AVAILABLE,
-                )
-
-        resolved = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
-            scenario.schedule_store, Fake(descriptor)
-        ).resolve_exact(_input(api, scenario, "fixture"), scenario.lease)
-        assert resolved.outcome.value == expected
     finally:
         scenario.close()
 
@@ -748,9 +567,9 @@ def test_stores_expose_only_read_only_root_and_lease_bindings(tmp_path: Path) ->
     scenario = _scenario(tmp_path, 1)
     try:
         assert scenario.schedule_store.storage_root == scenario.root
-        assert scenario.action_store.storage_root == scenario.root
+        assert scenario.store.storage_root == scenario.root
         assert scenario.schedule_store.lease is scenario.lease
-        assert scenario.action_store.lease is scenario.lease
+        assert scenario.store.lease is scenario.lease
     finally:
         scenario.close()
 
@@ -820,48 +639,13 @@ def test_schedule_close_and_continuity_boundaries(
             scenario.schedule_sha256,
             "nse-authoritative-calendar",
             _RELEASE,
-            "upstox",
+            "UPSTOX",
         )
         outcome, _ = api._schedule_close(
             api.CurrentSuppliedCohortCorporateActionScreenRequestV1(input_value),
             schedule,
         )
         assert (None if outcome is None else outcome.value) == expected
-    finally:
-        scenario.close()
-
-
-@pytest.mark.parametrize("byte_count", (1, 2))
-def test_selected_set_projection_binds_snapshot_byte_count(
-    tmp_path: Path, byte_count: int
-) -> None:
-    api = _api()
-    scenario = _scenario(tmp_path, 1)
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
-    try:
-        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
-            _input(api, scenario, "fixture")
-        )
-        provider = api.PrivateCorporateActionScreenProviderResultV1(
-            scenario.manifest.members[0].isin,
-            "fixture",
-            "1" * 64,
-            "2" * 64,
-            "3" * 64,
-            "4" * 64,
-            "5" * 64,
-            byte_count,
-            _CUTOFF,
-            request.decision_cutoff,
-            (),
-            api.ProviderObservationOutcomeV1.AVAILABLE,
-        )
-        row = api.PrivateCorporateActionScreenMemberResultV1(
-            provider, api.AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
-        )
-        assert api._selected_snapshot_set_hash(request, descriptor, "6" * 64, [row])
     finally:
         scenario.close()
 
@@ -883,50 +667,6 @@ def test_request_exposes_no_derived_close_and_member_rows_are_private(
         scenario.close()
 
 
-def test_invalid_provider_result_is_mapped_to_corrupt_after_the_exact_call(
-    tmp_path: Path,
-) -> None:
-    api = _api()
-    scenario = _scenario(tmp_path, 1)
-    descriptor = api.CorporateActionScreenProviderDescriptorV1(
-        "fixture", "1" * 64, "2" * 64, "3" * 64, "4" * 64
-    )
-    try:
-
-        @dataclass(frozen=True)
-        class Fake:
-            descriptor: Any
-
-            def resolve_exact(self, request: Any, isin: str, lease: Any) -> Any:
-                result = api.PrivateCorporateActionScreenProviderResultV1(
-                    isin,
-                    "fixture",
-                    "1" * 64,
-                    "2" * 64,
-                    "3" * 64,
-                    "4" * 64,
-                    "5" * 64,
-                    1,
-                    _CUTOFF,
-                    request.decision_cutoff,
-                    (),
-                    api.ProviderObservationOutcomeV1.AVAILABLE,
-                )
-                object.__setattr__(
-                    result,
-                    "retrieved_at",
-                    request.decision_cutoff + timedelta(microseconds=1),
-                )
-                return result
-
-        resolved = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
-            scenario.schedule_store, Fake(descriptor)
-        ).resolve_exact(_input(api, scenario, "fixture"), scenario.lease)
-        assert resolved.outcome.value == "CORRUPT"
-    finally:
-        scenario.close()
-
-
 def test_admitted_request_is_isolated_from_input_manifest_mutation(
     tmp_path: Path,
 ) -> None:
@@ -941,7 +681,7 @@ def test_admitted_request_is_isolated_from_input_manifest_mutation(
         scenario.close()
 
 
-@pytest.mark.parametrize("provider_id", ("UPSTOX", "", "provider_with_underscore"))
+@pytest.mark.parametrize("provider_id", ("", "provider_with_underscore"))
 def test_provider_descriptor_rejects_noncanonical_provider_ids(
     provider_id: str,
 ) -> None:
@@ -970,5 +710,177 @@ def test_private_canonical_replay_is_non_authorizing_even_after_row_reduction(
         assert len(restored.member_results) == 1
         with pytest.raises(ValueError):
             restored.to_public_report()
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize("retain", (True, False), ids=("ready", "insufficient"))
+@pytest.mark.parametrize("mutation", ("outcome", "close", "hash", "rows", "descriptor"))
+def test_sealed_private_result_rejects_every_content_mutation(
+    tmp_path: Path, retain: bool, mutation: str
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 2, retain=retain)
+    try:
+        private = _resolve(api, scenario)
+        if mutation == "outcome":
+            object.__setattr__(
+                private, "outcome", api.PrivateCorporateActionScreenOutcomeV1.CORRUPT
+            )
+        elif mutation == "close":
+            object.__setattr__(private, "decision_session_close_at", _CUTOFF)
+        elif mutation == "hash":
+            object.__setattr__(private, "private_result_identity_sha256", "f" * 64)
+        elif mutation == "rows":
+            object.__setattr__(private, "member_results", private.member_results[:1])
+        else:
+            object.__setattr__(private, "provider_id", "NSE")
+        with pytest.raises(ValueError):
+            private.to_public_report()
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(("days", "valid"), ((63, True), (64, False)))
+def test_input_bounds_calendar_span_before_schedule_materialization(
+    tmp_path: Path, days: int, valid: bool
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        arguments = (
+            scenario.manifest,
+            _S0,
+            _S0 + timedelta(days=days),
+            _CUTOFF,
+            scenario.schedule_sha256,
+            "nse-authoritative-calendar",
+            _RELEASE,
+            "UPSTOX",
+        )
+        if valid:
+            assert api.CurrentSuppliedCohortCorporateActionScreenInputV1(*arguments)
+        else:
+            with pytest.raises(ValueError):
+                api.CurrentSuppliedCohortCorporateActionScreenInputV1(*arguments)
+    finally:
+        scenario.close()
+
+
+def test_input_rejects_every_non_luhn_or_non_uppercase_manifest_isin(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        assert all(api._valid_isin(_isin(index)) for index in range(1, 51))
+        assert not api._valid_isin(_isin(1)[:-1] + "9")
+        assert not api._valid_isin(_isin(1).lower())
+        object.__setattr__(scenario.manifest.members[0], "isin", _isin(1)[:-1] + "9")
+        with pytest.raises(ValueError):
+            _input(api, scenario)
+    finally:
+        scenario.close()
+
+
+def test_date_extremes_fail_before_schedule_date_allocation(tmp_path: Path) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        with pytest.raises(ValueError):
+            api.CurrentSuppliedCohortCorporateActionScreenInputV1(
+                scenario.manifest,
+                date.min,
+                date.max,
+                _CUTOFF,
+                scenario.schedule_sha256,
+                "nse-authoritative-calendar",
+                _RELEASE,
+                "UPSTOX",
+            )
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
+    ("as_of", "expected"),
+    ((_CUTOFF, None), (_CUTOFF + timedelta(microseconds=1), "SCHEDULE_LATE")),
+)
+def test_schedule_as_of_is_bounded_by_decision_cutoff(
+    tmp_path: Path, as_of: datetime, expected: str | None
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
+            _input(api, scenario)
+        )
+        outcome, _ = api._schedule_close(request, replace(_schedule(), as_of=as_of))
+        assert (None if outcome is None else outcome.value) == expected
+    finally:
+        scenario.close()
+
+
+def test_provider_result_event_and_aggregate_event_budgets_are_private_corrupt(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 2)
+    try:
+        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
+            _input(api, scenario)
+        )
+        descriptor = api.UpstoxCorporateActionScreenProviderV1(
+            scenario.store
+        ).descriptor
+        event = api.NormalizedSupportedCorporateActionEventV1(
+            api.SupportedCorporateActionKindV1.DIVIDEND, _S0
+        )
+        with pytest.raises(ValueError):
+            api.PrivateCorporateActionScreenProviderResultV1(
+                scenario.manifest.members[0].isin,
+                descriptor.provider_id,
+                descriptor.capability_identity_sha256,
+                descriptor.source_identity_sha256,
+                descriptor.snapshot_schema_identity_sha256,
+                descriptor.policy_identity_sha256,
+                "5" * 64,
+                1,
+                _CUTOFF,
+                request.decision_cutoff,
+                (event,) * 1001,
+                api.ProviderObservationOutcomeV1.AVAILABLE,
+            )
+        rows = tuple(
+            api.PrivateCorporateActionScreenMemberResultV1(
+                api.PrivateCorporateActionScreenProviderResultV1(
+                    member.isin,
+                    descriptor.provider_id,
+                    descriptor.capability_identity_sha256,
+                    descriptor.source_identity_sha256,
+                    descriptor.snapshot_schema_identity_sha256,
+                    descriptor.policy_identity_sha256,
+                    "5" * 64,
+                    1,
+                    _CUTOFF,
+                    request.decision_cutoff,
+                    (event,) * count,
+                    api.ProviderObservationOutcomeV1.AVAILABLE,
+                ),
+                api.AggregateMemberOutcomeV1.ACTION_OBSERVED,
+            )
+            for member, count in zip(scenario.manifest.members, (500, 501), strict=True)
+        )
+        private = api._aggregate(
+            request,
+            descriptor,
+            "6" * 64,
+            _CLOSE,
+            api.PrivateCorporateActionScreenOutcomeV1.ACTION_OBSERVED,
+            rows,
+            None,
+        )
+        assert private.outcome is api.PrivateCorporateActionScreenOutcomeV1.CORRUPT
+        assert private.to_public_report().screen_state is None
     finally:
         scenario.close()
