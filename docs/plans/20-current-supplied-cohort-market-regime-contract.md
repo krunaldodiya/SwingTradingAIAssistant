@@ -654,11 +654,13 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
 
     def canonical_json_bytes(self) -> bytes: ...
 
+
 def evaluate_current_supplied_cohort_market_regime_v1(
     input: CurrentSuppliedCohortMarketRegimeInputV1,
     archive_reader: PrivateCurrentCohortArchiveReaderPortV1,
     schedule_resolver: PrivateCurrentCohortScheduleResolverPortV1,
 ) -> CurrentSuppliedCohortMarketRegimeReportV1: ...
+
 
 class CurrentSuppliedCohortMarketRegimeReportV1:
     def canonical_json_bytes(self) -> bytes: ...
