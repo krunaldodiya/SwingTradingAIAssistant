@@ -1,6 +1,6 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **IN PROGRESS — planning/specification only; implementation, tests, review, CI/security, merge, and publication are not claimed**
+Status: **LOCAL IMPLEMENTATION COMPLETE — focused contract suite GREEN; independent review, full repository/hosted CI-security gates, merge, and publication are not claimed**
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
 Milestone: **Sprint 11**
 Plan: [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
@@ -25,7 +25,7 @@ placed in `completed_daily` or otherwise substituted for a completed close retur
 closes, archive paths, private-root details, provider payloads, and schedule rows
 are never public output.
 
-## Current planning decision
+## Current implementation decision
 
 [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md) is the
 R3 implementation specification for Issue #116. It selects direct no-follow
@@ -35,7 +35,7 @@ contract, or querying/recomputing raw retained OHLC. The schedule proves only
 that no completed exchange session was omitted; it never supplies a price fact.
 The resulting reducer is pure and receives only a validated private projection.
 
-The planned public surface is:
+The implemented public surface is:
 
 ```text
 market-data regime-current \
@@ -55,10 +55,10 @@ through `ScheduleEvidenceStore.resolve` below the same private retained root;
 there is no schedule path or supplied schedule bytes. The command is read-only:
 no provider/network fallback, archive scan, raw-candle query, data acquisition,
 or persistence effect. Archive partial snapshots may be present and must
-validate, but can never substitute for a decision/comparison close. Planned exit
+validate, but can never substitute for a decision/comparison close. Exit
 semantics are `0` for an observed report, `1` for canonical whole-result
 insufficiency, and `2` for runtime-code-identity or other pre-report structural
-rejection; public output and diagnostics must redact private paths and member/raw
+rejection; public output and diagnostics redact private paths and member/raw
 facts.
 
 ## Acceptance and lifecycle conditions
@@ -73,9 +73,16 @@ owner-bound schedule source/release/digest, complete classified calendar-date
 coverage through cutoff-local date, and latest session with
 `close_at <= decision_cutoff` (`as_of` is timely only); Decimal directions;
 inclusive 60% boundaries; deterministic reason order; aggregate redaction; and
-whole-result insufficiency for every evidence failure. Focused exact-revision
-checks, an independent review, applicable full repository and hosted CI/security
-gates, merge, and publication evidence remain future lifecycle work and are not
+whole-result insufficiency for every evidence failure. Local focused evidence is
+GREEN on this worktree:
+
+```text
+uv run pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
+140 passed
+```
+
+Independent review, applicable full repository and hosted CI/security gates,
+merge, and publication evidence remain future lifecycle work and are not
 performed or asserted by this record.
 
 The main unresolved implementation risks are that the Sprint-10 archive is

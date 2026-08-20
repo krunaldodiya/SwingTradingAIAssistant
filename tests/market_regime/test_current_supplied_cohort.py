@@ -10,14 +10,14 @@ from __future__ import annotations
 import builtins
 import glob as glob_module
 import hashlib
-import importlib
+import importlib.machinery
 import json
 import os
 import socket
 import time as time_module
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime, time, timedelta, timezone
+from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any, Callable
 
@@ -168,8 +168,11 @@ def _members(size: int) -> tuple[CurrentCohortMemberV1, ...]:
     return tuple(CurrentCohortMemberV1(f"INE{index:03d}A01018", f"M{index:03d}") for index in range(1, size + 1))
 
 
-def _schedule(root: Path, *, schema_version: int = 3, as_of: datetime = _CUTOFF) -> tuple[str, ExpectedSessionSchedule]:
-    dates = _sessions()
+def _schedule(
+    root: Path, *, schema_version: int = 3, as_of: datetime = _CUTOFF,
+    include_next_current_session: bool = False,
+) -> tuple[str, ExpectedSessionSchedule]:
+    dates = _sessions() + ((date(2026, 1, 13),) if include_next_current_session else ())
     session_dates = set(dates)
     schedule = ExpectedSessionSchedule(
         schema_version=schema_version, source=_SOURCE, source_release=_RELEASE, as_of=as_of,
@@ -180,8 +183,13 @@ def _schedule(root: Path, *, schema_version: int = 3, as_of: datetime = _CUTOFF)
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
     try:
+        expected = (
+            ScheduleOutcome.RESOLVED
+            if (root / "calendar-schedules" / "sha256" / f"{schedule_digest(schedule)}.json").exists()
+            else ScheduleOutcome.RETAINED
+        )
         retained = ScheduleEvidenceStore(root, acquired.lease).retain(schedule)
-        assert retained.outcome is ScheduleOutcome.RESOLVED
+        assert retained.outcome is expected
     finally:
         acquired.lease.close()
     return schedule_digest(schedule), schedule
@@ -192,22 +200,43 @@ def _close_for(position: int, direction: Decimal) -> Decimal:
     if position == 0:
         return Decimal("100")
     if position == 20:
-        return Decimal("100") + direction
+        with localcontext() as context:
+            context.prec = 64
+            return Decimal("100") + direction
     return Decimal("99") if direction >= 0 else Decimal("101")
 
 
 def _archive_fixture(
-    root: Path, *, size: int, directions: tuple[Decimal, ...], include_partial: bool = False
+    root: Path, *, size: int, directions: tuple[Decimal, ...],
+    include_partial: bool = False, partial_cutoff: datetime | None = None,
+    partial_member_indexes: tuple[int, ...] | None = None,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     assert len(directions) == size
+    if include_partial and partial_cutoff is None:
+        partial_cutoff = datetime(2026, 1, 13, 9, 30, tzinfo=UTC)
+    if (
+        (not include_partial and partial_cutoff is not None)
+        or (
+            partial_member_indexes is not None
+            and (
+                not include_partial
+                or any(
+                    type(index) is not int or not 0 <= index < size
+                    for index in partial_member_indexes
+                )
+                or len(set(partial_member_indexes)) != len(partial_member_indexes)
+            )
+        )
+    ):
+        raise ValueError("invalid partial fixture")
     members = _members(size)
     cohort = CurrentSuppliedCohortManifestV1(datetime(2025, 12, 1, tzinfo=UTC), members)
     archive = ImmutableCurrentFactArchiveV1(root)
     records: list[dict[str, Any]] = []
     ids: list[str] = []
     for position, session in enumerate(_sessions()):
-        cutoff = datetime.combine(session, time(10), UTC)
         partial_enabled = include_partial and position == 20
+        cutoff = partial_cutoff if partial_enabled else datetime.combine(session, time(10), UTC)
         completed_session = session
         completed_cutoff = datetime.combine(completed_session, time(10), UTC)
         request = CurrentCohortMarketDataRequestV1(
@@ -225,19 +254,27 @@ def _archive_fixture(
             )
             for member, direction in zip(members, directions, strict=True)
         )
+        partial_session = date(2026, 1, 13)
+        selected_partial_indexes = (
+            tuple(range(size))
+            if partial_member_indexes is None
+            else partial_member_indexes
+        )
         partials = (
             tuple(
                 PartialCurrentSessionSnapshotV1(
-                    fact.member, session, Decimal("1"), 1,
-                    datetime.combine(session, time(9), UTC),
-                    datetime.combine(session, time(9, 15), UTC),
-                    datetime.combine(session, time(9, 30), UTC),
+                    fact.member, partial_session, Decimal("1"), 1,
+                    datetime.combine(partial_session, time(9), UTC),
+                    datetime.combine(partial_session, time(9, 15), UTC),
+                    datetime.combine(partial_session, time(9, 30), UTC),
                     hashlib.sha256(f"partial:{fact.member.isin}".encode()).hexdigest(),
                     CurrentBarStateV1.PARTIAL_CURRENT_SESSION,
                 )
-                for fact in completed
+                for index, fact in enumerate(completed)
+                if index in selected_partial_indexes
             )
-            if partial_enabled else ()
+            if partial_enabled
+            else ()
         )
         partial_by_member = {partial.member: partial for partial in partials}
         facts = tuple(
@@ -251,8 +288,17 @@ def _archive_fixture(
                 _available_ledger_entry(feature="DAILY_OHLCV", interval="1d", member=fact.member, cutoff=cutoff, fact=fact.completed_daily, state=HistoricalAvailabilityStateV1.AVAILABLE)
             )
             if partial_enabled:
+                partial = fact.partial_current_session
                 ledger_items.append(
-                    _available_ledger_entry(feature="PARTIAL_CURRENT_SESSION", interval="1m", member=fact.member, cutoff=cutoff, partial=fact.partial_current_session, state=HistoricalAvailabilityStateV1.AVAILABLE)
+                    _available_ledger_entry(
+                        feature="PARTIAL_CURRENT_SESSION", interval="1m",
+                        member=fact.member, cutoff=cutoff, partial=partial,
+                        state=(
+                            HistoricalAvailabilityStateV1.AVAILABLE
+                            if partial is not None
+                            else HistoricalAvailabilityStateV1.NOT_RETAINED
+                        ),
+                    )
                 )
         ledger = tuple(ledger_items)
         acquired = StorageRootLease.try_acquire(root)
@@ -275,13 +321,17 @@ def _archive_fixture(
         records.append({"id": digest, "path": path, "value": value, "session": session, "request": request, "report": report, "facts": facts})
     return {"cohort": cohort, "members": members, "records": records}, tuple(sorted(ids))
 
-
-def _input_value(fixture: dict[str, Any], archive_ids: tuple[str, ...], schedule_id: str) -> dict[str, object]:
+def _input_value(
+    fixture: dict[str, Any], archive_ids: tuple[str, ...], schedule_id: str,
+    *, decision_cutoff: datetime = _CUTOFF, decision_session: date = _sessions()[-1],
+) -> dict[str, object]:
     value: dict[str, object] = {
         "contract_version": _CONTRACT,
         "cohort_identity_sha256": fixture["cohort"].cohort_identity_sha256,
-        "cohort_size": len(fixture["members"]), "decision_cutoff": "2026-01-12T10:00:00.000000Z",
-        "decision_session": "2026-01-12", "archive_object_sha256s": list(archive_ids),
+        "cohort_size": len(fixture["members"]),
+        "decision_cutoff": decision_cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "decision_session": decision_session.isoformat(),
+        "archive_object_sha256s": list(archive_ids),
         "schedule_evidence_sha256": schedule_id, "schedule_source": _SOURCE,
         "schedule_source_release": _RELEASE,
     }
@@ -353,6 +403,7 @@ def _cli(module: Any) -> Callable[[list[str]], int]:
 def _cli_args(tmp_path: Path, root: Path, value: dict[str, object]) -> list[str]:
     input_file = tmp_path / "owner-input.json"
     input_file.write_bytes(_canonical(value))
+    input_file.chmod(0o600)
     return ["regime-current", "--input-file", str(input_file), "--storage-root", str(root), "--output", "json"]
 
 
@@ -375,11 +426,14 @@ def _make_report_insufficient(item: dict[str, Any]) -> None:
 def _replace_archive(record: dict[str, Any], mutate: Callable[[dict[str, Any]], None]) -> str:
     value = json.loads(_canonical(record["value"]))
     mutate(value)
+    if value["report"]["evidence_state"] == "COMPLETE":
+        value["report"]["members"] = value["facts"]
     _refresh_identity(value["report"], "report_identity_sha256")
     raw = _canonical(value)
     digest = hashlib.sha256(raw).hexdigest()
     new_path = record["path"].with_name(f"{digest}.json")
     new_path.write_bytes(raw)
+    new_path.chmod(0o600)
     record["path"].unlink()
     record.update(id=digest, path=new_path, value=value)
     return digest
@@ -505,30 +559,234 @@ def test_typed_archive_port_propagates_common_session_grid_invalid_without_defau
     assert len(archive.calls) == 1 and resolver.calls == []
 
 
+@pytest.mark.parametrize("fault", ("future", "date_mismatch", "non_utc"))
+def test_typed_resolved_schedule_port_rejects_invalid_close_projections(
+    tmp_path: Path, fault: str
+) -> None:
+    module, evaluate = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, schedule = _schedule(root)
+    admitted = _admit_input(module, _input_value(fixture, ids, digest))
+    grid, continuity = _private_ready(module, fixture, ids, digest, schedule)
+    sessions = list(continuity.sessions)
+    target = sessions[-1]
+    if fault == "future":
+        close_at = _CUTOFF + timedelta(microseconds=1)
+    elif fault == "date_mismatch":
+        close_at = datetime(2026, 1, 11, 10, tzinfo=UTC)
+    else:
+        close_at = datetime(2026, 1, 12, 10, tzinfo=timezone(timedelta(hours=1)))
+    schedule_session = _type(module, "PrivateRetainedScheduleSessionProjectionV1")
+    sessions[-1] = schedule_session(target.trade_date, close_at, target.kind)
+    continuity_type = _type(module, "PrivateRetainedScheduleContinuityProjectionV1")
+    invalid_continuity = continuity_type(
+        continuity.schedule_evidence_sha256,
+        continuity.schema_version,
+        continuity.source,
+        continuity.source_release,
+        continuity.as_of,
+        tuple(sessions),
+    )
+    archive = _RecordingArchivePort(
+        _type(module, "CurrentSuppliedCohortMarketRegimeRequestV1"),
+        _type(module, "ArchiveReadResultV1")("READY", grid, ()),
+        admitted,
+    )
+    resolver = _RecordingSchedulePort(
+        _type(module, "ScheduleReadResultV1")(
+            "RESOLVED", invalid_continuity, ()
+        ),
+        admitted,
+    )
+    report = evaluate(admitted, archive, resolver)
+    _assert_insufficient(module, report, ("SCHEDULE_CONTINUITY_UNPROVEN",))
+
+
 @pytest.mark.parametrize("schema_version", (2, 3))
-def test_s20_partial_archive_is_admissible_and_leaves_observed_result_unchanged(tmp_path: Path, capsys: pytest.CaptureFixture[str], schema_version: int) -> None:
+def test_s20_completed_archives_are_admissible_for_each_schedule_schema(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], schema_version: int
+) -> None:
     module, _ = _api()
     root = _private_root(tmp_path)
-    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),), include_partial=True)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root, schema_version=schema_version)
+    value = _input_value(fixture, ids, digest)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 0 and captured.err == ""
+    _assert_public_report_bytes(module, captured.out.encode(), value, observed=True)
+
+
+def test_s20_partial_archive_is_admissible_and_discarded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    partial_cutoff = datetime(2026, 1, 13, 9, 30, tzinfo=UTC)
+    fixture, ids = _archive_fixture(
+        root, size=1, directions=(Decimal("1"),), include_partial=True,
+        partial_cutoff=partial_cutoff,
+    )
     s20 = fixture["records"][-1]
     assert s20["request"].include_partial_current_session is True
     assert s20["value"]["partials"]
     assert s20["facts"][0].partial_current_session == PartialCurrentSessionSnapshotV1(
-        s20["facts"][0].member, _sessions()[-1], Decimal("1"), 1,
-        datetime.combine(_sessions()[-1], time(9), UTC),
-        datetime.combine(_sessions()[-1], time(9, 15), UTC),
-        datetime.combine(_sessions()[-1], time(9, 30), UTC),
+        s20["facts"][0].member, date(2026, 1, 13), Decimal("1"), 1,
+        datetime(2026, 1, 13, 9, tzinfo=UTC),
+        datetime(2026, 1, 13, 9, 15, tzinfo=UTC),
+        partial_cutoff,
         hashlib.sha256(f"partial:{s20['facts'][0].member.isin}".encode()).hexdigest(),
         CurrentBarStateV1.PARTIAL_CURRENT_SESSION,
     )
     assert [(entry["feature"], entry["interval"]) for entry in s20["value"]["ledger"]] == [("DAILY_OHLCV", "1d"), ("PARTIAL_CURRENT_SESSION", "1m")]
-    digest, _ = _schedule(root, schema_version=schema_version)
-    value = _input_value(fixture, ids, digest)
-    args = _cli_args(tmp_path, root, value)
-    code = _cli(module)(args)
+    digest, _ = _schedule(
+        root, schema_version=3, as_of=partial_cutoff, include_next_current_session=True
+    )
+    value = _input_value(fixture, ids, digest, decision_cutoff=partial_cutoff)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
     captured = capsys.readouterr()
     assert code == 0 and captured.err == ""
     _assert_public_report_bytes(module, captured.out.encode(), value, observed=True)
+
+@pytest.mark.parametrize(
+    ("include_partial", "partial_member_indexes", "expected_ledger_count"),
+    [
+        (False, None, 2),
+        (True, None, 4),
+        (True, (0,), 4),
+    ],
+)
+def test_direct_archive_reader_admits_authentic_sprint10_ledger_shapes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    include_partial: bool,
+    partial_member_indexes: tuple[int, ...] | None,
+    expected_ledger_count: int,
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    partial_cutoff = datetime(2026, 1, 13, 9, 30, tzinfo=UTC)
+    fixture, ids = _archive_fixture(
+        root,
+        size=2,
+        directions=(Decimal("1"), Decimal("0")),
+        include_partial=include_partial,
+        partial_cutoff=partial_cutoff if include_partial else None,
+        partial_member_indexes=partial_member_indexes,
+    )
+    digest, _ = _schedule(
+        root,
+        as_of=partial_cutoff if include_partial else _CUTOFF,
+        include_next_current_session=include_partial,
+    )
+    value = _input_value(
+        fixture,
+        ids,
+        digest,
+        decision_cutoff=partial_cutoff if include_partial else _CUTOFF,
+    )
+    final = fixture["records"][-1]["value"]
+    assert len(final["ledger"]) == expected_ledger_count
+    if partial_member_indexes == (0,):
+        assert [
+            entry["availability_state"] for entry in final["ledger"]
+        ] == ["AVAILABLE", "AVAILABLE", "AVAILABLE", "NOT_RETAINED"]
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 0 and captured.err == ""
+    _assert_public_report_bytes(module, captured.out.encode(), value, observed=True)
+
+
+@pytest.mark.parametrize("mutation", ("partial_state", "partial_binding", "partial_order"))
+def test_direct_archive_reader_rejects_malformed_requested_partial_ledger_rows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], mutation: str
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    cutoff = datetime(2026, 1, 13, 9, 30, tzinfo=UTC)
+    fixture, ids = _archive_fixture(
+        root,
+        size=2,
+        directions=(Decimal("1"), Decimal("0")),
+        include_partial=True,
+        partial_cutoff=cutoff,
+        partial_member_indexes=None if mutation == "partial_order" else (0,),
+    )
+    digest, _ = _schedule(root, as_of=cutoff, include_next_current_session=True)
+    value = _input_value(fixture, ids, digest, decision_cutoff=cutoff)
+    record = fixture["records"][-1]
+    original_id = record["id"]
+
+    def corrupt(item: dict[str, Any]) -> None:
+        if mutation == "partial_state":
+            item["ledger"][3]["availability_state"] = "SOURCE_GAP"
+        elif mutation == "partial_binding":
+            item["ledger"][3]["source_identity"] = "retained-market-data"
+        else:
+            item["ledger"][1], item["ledger"][3] = item["ledger"][3], item["ledger"][1]
+
+    new_id = _replace_archive(record, corrupt)
+    _replace_input_archive_id(value, original_id, new_id)
+    _recompute_input_identity(value)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 1 and captured.err == ""
+    _assert_public_report_bytes(
+        module,
+        captured.out.encode(),
+        value,
+        observed=False,
+        reasons=("SPRINT10_LEDGER_INVALID",),
+    )
+
+
+@pytest.mark.parametrize("case", ("earlier", "later"))
+def test_direct_archive_reader_rejects_partial_session_not_equal_to_archive_cutoff(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: str
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(
+        root,
+        size=1,
+        directions=(Decimal("1"),),
+        include_partial=True,
+    )
+    digest, _ = _schedule(root)
+    record = fixture["records"][-1]
+    original_id = record["id"]
+    decision_cutoff = datetime(2026, 1, 14 if case == "earlier" else 15, 9, 30, tzinfo=UTC)
+    value = _input_value(fixture, ids, digest, decision_cutoff=decision_cutoff)
+
+    def change_session(item: dict[str, Any]) -> None:
+        item["report"]["invocation_cutoff"] = decision_cutoff.strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+        if case == "later":
+            partial = item["facts"][0]["partial_current_session"]
+            assert type(partial) is dict
+            partial.update(
+                session="2026-01-14",
+                last_bar_at="2026-01-14T09:00:00.000000Z",
+                published_at="2026-01-14T09:15:00.000000Z",
+                known_at="2026-01-14T09:30:00.000000Z",
+            )
+            item["partials"][0] = partial
+
+    new_id = _replace_archive(record, change_session)
+    _replace_input_archive_id(value, original_id, new_id)
+    _recompute_input_identity(value)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 1 and captured.err == ""
+    _assert_public_report_bytes(
+        module,
+        captured.out.encode(),
+        value,
+        observed=False,
+        reasons=("SPRINT10_MEMBER_FACT_INVALID",),
+    )
 
 
 _PUBLIC_REPORT_FIELDS = {
@@ -588,7 +846,7 @@ def _assert_redacted(output: str, fixture: dict[str, Any], root: Path, input_pat
     sentinels = (
         *(member.isin for member in fixture["members"]),
         *(member.symbol for member in fixture["members"]),
-        *(fact.completed_daily.close.to_eng_string() for record in fixture["records"] for fact in record["facts"]),
+        *(json.dumps(fact.completed_daily.close.to_eng_string()) for record in fixture["records"] for fact in record["facts"]),
         *(fact.completed_daily.source_receipt_sha256 for record in fixture["records"] for fact in record["facts"]),
         str(root), str(input_path), ".current-fact-archive-v1", "calendar-schedules",
         "WEEKEND_OR_OFFICIAL_CLOSURE", '"close"',
@@ -662,6 +920,7 @@ def test_cli_real_retained_artifacts_produce_each_closed_reason(tmp_path: Path, 
     value = _input_value(fixture, ids, digest)
     record = fixture["records"][-1] if mutation == "partial_as_completed" else fixture["records"][0]
     original_id = record["id"]
+    record["path"].chmod(0o600)
     if mutation == "missing":
         record["path"].unlink()
     elif mutation == "unsafe":
@@ -688,7 +947,7 @@ def test_cli_real_retained_artifacts_produce_each_closed_reason(tmp_path: Path, 
         new_id = _replace_archive(record, lambda item: item["facts"][0].__setitem__("completed_daily", item["partials"][0]))
         _replace_input_archive_id(value, original_id, new_id)
     elif mutation == "unavailable_ledger":
-        new_id = _replace_archive(record, lambda item: item["ledger"][0].__setitem__("availability_state", "UNAVAILABLE"))
+        new_id = _replace_archive(record, lambda item: item["ledger"][0].__setitem__("availability_state", "NOT_RETAINED"))
         _replace_input_archive_id(value, original_id, new_id)
     elif mutation == "ledger":
         new_id = _replace_archive(record, lambda item: item["ledger"].pop())
@@ -806,6 +1065,127 @@ def test_real_archive_two_independent_same_stage_faults_reverse_order_are_dedupl
     assert json.loads(capsys.readouterr().out)["reasons"] == ["SPRINT10_MEMBER_FACT_INVALID", "SPRINT10_LEDGER_INVALID"]
 
 
+@pytest.mark.parametrize(
+    ("case", "reason", "partial"),
+    [
+        ("malformed_insufficient", "SPRINT10_REPORT_INVALID", False),
+        ("report_cutoff", "SPRINT10_REPORT_INVALID", False),
+        ("report_state", "SPRINT10_REPORT_INVALID", False),
+        ("report_reasons", "SPRINT10_REPORT_INVALID", False),
+        ("envelope_contract", "ARCHIVE_BINDING_MISMATCH", False),
+        ("daily_open", "SPRINT10_MEMBER_FACT_INVALID", False),
+        ("daily_volume", "SPRINT10_MEMBER_FACT_INVALID", False),
+        ("daily_receipt", "SPRINT10_MEMBER_FACT_INVALID", False),
+        ("daily_clock", "SPRINT10_MEMBER_FACT_INVALID", False),
+        ("freshness_age", "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN", False),
+        ("partial_envelope_relation", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("partial_state", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("partial_price", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("partial_volume", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("partial_receipt", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("partial_clock", "SPRINT10_MEMBER_FACT_INVALID", True),
+        ("ledger_source", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_revision", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_affected", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_window", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_published", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_clock", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_feature", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_instrument", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_count", "SPRINT10_LEDGER_INVALID", False),
+        ("ledger_order", "SPRINT10_LEDGER_INVALID", True),
+    ],
+)
+def test_direct_archive_reader_rejects_closed_sprint10_admission_gaps(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+    reason: str,
+    partial: bool,
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(
+        root, size=1, directions=(Decimal("1"),), include_partial=partial
+    )
+    digest, _ = _schedule(root)
+    value = _input_value(
+        fixture,
+        ids,
+        digest,
+        decision_cutoff=(
+            datetime(2026, 1, 13, 9, 30, tzinfo=UTC) if partial else _CUTOFF
+        ),
+    )
+    record = fixture["records"][-1] if partial else fixture["records"][0]
+    original_id = record["id"]
+
+    def mutate(item: dict[str, Any]) -> None:
+        if case == "malformed_insufficient":
+            _make_report_insufficient(item)
+            item["report"]["reasons"] = []
+        elif case == "report_cutoff":
+            item["report"]["invocation_cutoff"] = "not-an-instant"
+        elif case == "report_state":
+            item["report"]["evidence_state"] = "UNKNOWN"
+        elif case == "report_reasons":
+            item["report"]["reasons"] = ["DAILY_BAR_MISSING"]
+        elif case == "envelope_contract":
+            item["contract_version"] = "current-supplied-cohort-market-data@v0"
+        elif case == "daily_open":
+            item["facts"][0]["completed_daily"]["open"] = "0"
+        elif case == "daily_volume":
+            item["facts"][0]["completed_daily"]["volume"] = True
+        elif case == "daily_receipt":
+            item["facts"][0]["completed_daily"]["source_receipt_sha256"] = "not-a-digest"
+        elif case == "daily_clock":
+            item["facts"][0]["completed_daily"]["data_cutoff"] = "2025-12-10T09:31:00.000000Z"
+        elif case == "freshness_age":
+            item["report"]["invocation_cutoff"] = "2025-12-15T10:00:00.000000Z"
+        elif case == "partial_envelope_relation":
+            item["partials"].pop()
+        elif case == "partial_state":
+            item["partials"][0]["bar_state"] = "COMPLETED_DAILY"
+        elif case == "partial_price":
+            item["partials"][0]["observed_price"] = "0"
+        elif case == "partial_volume":
+            item["partials"][0]["observed_volume"] = True
+        elif case == "partial_receipt":
+            item["partials"][0]["source_receipt_sha256"] = "not-a-digest"
+        elif case == "partial_clock":
+            item["partials"][0]["published_at"] = "2026-01-13T09:31:00.000000Z"
+        elif case == "ledger_source":
+            item["ledger"][0]["source_identity"] = "other-retained-source"
+        elif case == "ledger_revision":
+            item["ledger"][0]["revision_identity_sha256"] = "a" * 64
+        elif case == "ledger_affected":
+            item["ledger"][0]["affected_identity_sha256"] = "a" * 64
+        elif case == "ledger_window":
+            item["ledger"][0]["window_through"] = "2025-12-10T09:01:00.000000Z"
+        elif case == "ledger_published":
+            item["ledger"][0]["published_at"] = "2025-12-10T09:31:00.000000Z"
+        elif case == "ledger_clock":
+            item["ledger"][0]["known_at"] = "2025-12-10T09:29:00.000000Z"
+        elif case == "ledger_feature":
+            item["ledger"][0]["feature"] = "OTHER"
+        elif case == "ledger_instrument":
+            item["ledger"][0]["instrument_identity"] = "wrong"
+        elif case == "ledger_count":
+            item["ledger"].pop()
+        else:
+            item["ledger"].reverse()
+
+    new_id = _replace_archive(record, mutate)
+    _replace_input_archive_id(value, original_id, new_id)
+    _recompute_input_identity(value)
+    code = _cli(module)(_cli_args(tmp_path, root, value))
+    captured = capsys.readouterr()
+    assert code == 1 and captured.err == ""
+    _assert_public_report_bytes(
+        module, captured.out.encode(), value, observed=False, reasons=(reason,)
+    )
+
+
 @pytest.mark.parametrize("mutation", ("fewer_ids", "more_ids", "duplicate_id", "noncanonical_id", "wrong_contract", "bad_cutoff", "malformed_release", "relative_root", "missing_root", "unsafe_root"))
 def test_cli_structural_rejections_exit_two_with_sanitized_diagnostics(tmp_path: Path, capsys: pytest.CaptureFixture[str], mutation: str) -> None:
     module, _ = _api()
@@ -855,7 +1235,7 @@ def test_runtime_identity_is_exact_path_nul_digest_composite() -> None:
     assert module.current_supplied_cohort_market_regime_runtime_code_identity_v1() == hashlib.sha256(expected_bytes).hexdigest()
 
 
-@pytest.mark.parametrize("fault", ("missing", "extra", "malformed", "digest_mismatch", "unsafe_source", "unsafe_manifest", "loader_path_mismatch", "path_mismatch", "composite"))
+@pytest.mark.parametrize("fault", ("missing", "extra", "malformed", "digest_mismatch", "unsafe_source", "unsafe_manifest", "loader_lookalike", "loader_source_path_mismatch", "loader_path_mismatch", "path_mismatch", "composite"))
 def test_runtime_manifest_and_source_map_fail_before_report_with_sanitized_exit_two(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
     module, _ = _api()
     manifest_module = importlib.import_module(
@@ -877,6 +1257,16 @@ def test_runtime_manifest_and_source_map_fail_before_report_with_sanitized_exit_
         source_digests = {"../unsafe.py": "a" * 64}
     elif fault == "unsafe_manifest":
         monkeypatch.setattr(manifest_module, "__file__", "../unsafe-manifest.py")
+    elif fault == "loader_lookalike":
+        monkeypatch.setattr(module, "__loader__", type("SourceFileLoader", (), {})())
+    elif fault == "loader_source_path_mismatch":
+        monkeypatch.setattr(
+            module,
+            "__loader__",
+            importlib.machinery.SourceFileLoader(
+                module.__name__, str(tmp_path / "shadowed-source.py")
+            ),
+        )
     elif fault == "loader_path_mismatch":
         monkeypatch.setattr(module, "__file__", str(tmp_path / "shadowed-current-supplied-cohort.py"))
     elif fault == "path_mismatch":
@@ -906,6 +1296,11 @@ def test_evaluator_has_no_filesystem_provider_network_clock_or_storage_side_effe
         _type(module, "CurrentSuppliedCohortMarketRegimeRequestV1"),
         _type(module, "ArchiveReadResultV1")("READY", grid, ()),
         admitted,
+    )
+    monkeypatch.setattr(
+        module,
+        "current_supplied_cohort_market_regime_runtime_code_identity_v1",
+        lambda: "0" * 64,
     )
     resolver = _RecordingSchedulePort(_type(module, "ScheduleReadResultV1")("RESOLVED", continuity, ()), admitted)
 
