@@ -16,6 +16,13 @@ project current knowledge backward.
 [Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
 Sprints 10–16. It preserves the locked module order, historical work, release
 gates, `NO_TRADE`, and all explicit exclusions.
+Current Market Regime remains blocked by [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+until the standalone provider-screened capability in
+[Plan 21](plans/21-upstox-current-corporate-action-screen-contract.md) is
+implemented, reviewed, and merged, then consumed by a rebased current-regime v2
+cutover. It is a limited current/live screen, not authoritative no-break proof,
+an adjustment engine, or an implementation of historical availability policy.
+
 
 ## Phase 0: Foundation
 

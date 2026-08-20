@@ -112,6 +112,14 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is
   the current Sprint 10 specification.
 
+- Sprint 11 — Current supplied-cohort Market Regime remains **Todo / blocked**
+  under [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+  until [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+  delivers the standalone provider-screened capability specified by
+  [Plan 21](../plans/21-upstox-current-corporate-action-screen-contract.md).
+  Plan 21 merges before a rebased current-regime v2 consumes its successful
+  report; the limited Upstox label is not authoritative no-break proof.
+
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
   removed. Issues #111 and #115 are **closed / not planned** with no published

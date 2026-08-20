@@ -23,6 +23,15 @@ This ordering removes no feature or gate. Historical work is deferred, not
 deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
 current Sprint 10–16 dependency sequence; it does not change the module order
 or authorize autonomous signals, recommendations, or broker execution.
+For current/live Market Regime, raw completed-close comparison is allowed only
+when its versioned comparability contract states the evidence basis and limits.
+[Plan 21](plans/21-upstox-current-corporate-action-screen-contract.md) defines
+the standalone limited Upstox screen that must merge before the later
+current-regime v2 cutover. It reports no supported action observed or a generic
+screen insufficiency; the consuming current-regime contract applies the
+whole-result gate and never represents an empty provider result as authoritative
+no-break proof.
+
 
 ## Repository identity
 
