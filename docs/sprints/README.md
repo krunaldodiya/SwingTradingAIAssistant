@@ -124,3 +124,9 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   revoked before send. No inquiry email, provider contact, provider call,
   credential use, or acquisition occurred. They are distinct from Plan 11's
   historical public-page research receipts.
+- [Sprint 11 — Current supplied-cohort Market Regime](sprint-11.md) —
+  [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+  is **in progress for planning/specification only**. [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
+  defines a separate current supplied-cohort archive/schedule contract; it does
+  not alter frozen Plan 12 or deferred Plan 18 and asserts no implementation,
+  test, review, merge, or publication evidence.
