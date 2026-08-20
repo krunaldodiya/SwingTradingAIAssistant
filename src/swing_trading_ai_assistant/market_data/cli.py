@@ -357,7 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-file", type=Path, required=True, metavar="ABSOLUTE_OWNER_PRIVATE_JSON"
     )
     regime_current.add_argument(
-        "--storage-root", type=Path, required=True, metavar="ABSOLUTE_OWNER_PRIVATE_ROOT"
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
@@ -466,12 +469,16 @@ def _run_current_regime_command(args: argparse.Namespace) -> int:
         # Runtime source verification is a pre-report structural boundary.
         current_supplied_cohort_market_regime_runtime_code_identity_v1()
         admitted_root, identity = _admit_existing_storage_root(root)
-        acquired = StorageRootLease.try_acquire_existing_identity(admitted_root, identity)
+        acquired = StorageRootLease.try_acquire_existing_identity(
+            admitted_root, identity
+        )
         if acquired.lease is None:
             raise ValueError
         lease = acquired.lease
-        admitted_input = CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes(
-            _read_current_regime_input(input_file)
+        admitted_input = (
+            CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes(
+                _read_current_regime_input(input_file)
+            )
         )
         report = evaluate_current_supplied_cohort_market_regime_v1(
             admitted_input,
@@ -496,20 +503,42 @@ def _read_current_regime_input(path: Path) -> bytes:
     parts = path.parts[1:]
     if not parts:
         raise ValueError
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptor = os.open(
+        "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
     try:
         for part in parts[:-1]:
-            next_descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+            next_descriptor = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=descriptor,
+            )
             os.close(descriptor)
             descriptor = next_descriptor
-        file_descriptor = os.open(parts[-1], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        file_descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=descriptor,
+        )
         try:
             before = os.fstat(file_descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) & 0o077 or before.st_size < 1 or before.st_size > 16 * 1024:
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) & 0o077
+                or before.st_size < 1
+                or before.st_size > 16 * 1024
+            ):
                 raise ValueError
             raw = os.read(file_descriptor, 16 * 1024 + 1)
             after = os.fstat(file_descriptor)
-            if len(raw) != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            if len(raw) != before.st_size or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
                 raise ValueError
             return raw
         finally:

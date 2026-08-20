@@ -1,4 +1,5 @@
 """Current supplied-cohort Market Regime V1, with private immutable evidence ports."""
+
 from __future__ import annotations
 
 import hashlib
@@ -40,9 +41,15 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
-CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1: Final = "current-supplied-cohort-market-regime@v1"
-CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1: Final = "1242118a1a48d484259f992784850173c9722d4d650df2e886d89af42e55ebd7"
-CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1: Final = "bc66f914bc6cafcef658e71814a4d8b0bbc180dc9676fdfc5a9bc628d6485d86"
+CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1: Final = (
+    "current-supplied-cohort-market-regime@v1"
+)
+CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1: Final = (
+    "1242118a1a48d484259f992784850173c9722d4d650df2e886d89af42e55ebd7"
+)
+CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1: Final = (
+    "bc66f914bc6cafcef658e71814a4d8b0bbc180dc9676fdfc5a9bc628d6485d86"
+)
 CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1: Final = (
     "src/swing_trading_ai_assistant/market_data/cli.py",
     "src/swing_trading_ai_assistant/market_data/current_cohort.py",
@@ -57,31 +64,88 @@ _MAX_REPORT_BYTES: Final = 16 * 1024
 _MAX_ARCHIVE_BYTES: Final = 2 * 1024 * 1024
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _RELEASE = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_INSTANT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z\Z")
+_INSTANT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z\Z"
+)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-class CurrentSuppliedCohortMarketRegimeReasonV1(StrEnum):
-    ARCHIVE_OBJECT_MISSING = "ARCHIVE_OBJECT_MISSING"; ARCHIVE_OBJECT_UNSAFE = "ARCHIVE_OBJECT_UNSAFE"; ARCHIVE_OBJECT_INVALID = "ARCHIVE_OBJECT_INVALID"; ARCHIVE_CONTENT_ID_MISMATCH = "ARCHIVE_CONTENT_ID_MISMATCH"; ARCHIVE_BINDING_MISMATCH = "ARCHIVE_BINDING_MISMATCH"; SPRINT10_REPORT_INSUFFICIENT = "SPRINT10_REPORT_INSUFFICIENT"; SPRINT10_REPORT_INVALID = "SPRINT10_REPORT_INVALID"; SPRINT10_MEMBER_FACT_INVALID = "SPRINT10_MEMBER_FACT_INVALID"; SPRINT10_LEDGER_UNAVAILABLE = "SPRINT10_LEDGER_UNAVAILABLE"; SPRINT10_LEDGER_INVALID = "SPRINT10_LEDGER_INVALID"; COHORT_BINDING_MISMATCH = "COHORT_BINDING_MISMATCH"; ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING = "ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING"; COMMON_SESSION_GRID_INVALID = "COMMON_SESSION_GRID_INVALID"; SCHEDULE_EVIDENCE_MISSING = "SCHEDULE_EVIDENCE_MISSING"; SCHEDULE_EVIDENCE_AMBIGUOUS = "SCHEDULE_EVIDENCE_AMBIGUOUS"; SCHEDULE_EVIDENCE_LATE = "SCHEDULE_EVIDENCE_LATE"; SCHEDULE_CONTINUITY_UNPROVEN = "SCHEDULE_CONTINUITY_UNPROVEN"; DECISION_SESSION_NOT_LATEST_ADMISSIBLE = "DECISION_SESSION_NOT_LATEST_ADMISSIBLE"; FACT_CUTOFF_OR_FRESHNESS_UNPROVEN = "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN"; FACT_FUTURE_KNOWN = "FACT_FUTURE_KNOWN"
 
-_REASON_ORDER: Final = {reason.value: index for index, reason in enumerate(CurrentSuppliedCohortMarketRegimeReasonV1)}
+class CurrentSuppliedCohortMarketRegimeReasonV1(StrEnum):
+    ARCHIVE_OBJECT_MISSING = "ARCHIVE_OBJECT_MISSING"
+    ARCHIVE_OBJECT_UNSAFE = "ARCHIVE_OBJECT_UNSAFE"
+    ARCHIVE_OBJECT_INVALID = "ARCHIVE_OBJECT_INVALID"
+    ARCHIVE_CONTENT_ID_MISMATCH = "ARCHIVE_CONTENT_ID_MISMATCH"
+    ARCHIVE_BINDING_MISMATCH = "ARCHIVE_BINDING_MISMATCH"
+    SPRINT10_REPORT_INSUFFICIENT = "SPRINT10_REPORT_INSUFFICIENT"
+    SPRINT10_REPORT_INVALID = "SPRINT10_REPORT_INVALID"
+    SPRINT10_MEMBER_FACT_INVALID = "SPRINT10_MEMBER_FACT_INVALID"
+    SPRINT10_LEDGER_UNAVAILABLE = "SPRINT10_LEDGER_UNAVAILABLE"
+    SPRINT10_LEDGER_INVALID = "SPRINT10_LEDGER_INVALID"
+    COHORT_BINDING_MISMATCH = "COHORT_BINDING_MISMATCH"
+    ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING = (
+        "ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING"
+    )
+    COMMON_SESSION_GRID_INVALID = "COMMON_SESSION_GRID_INVALID"
+    SCHEDULE_EVIDENCE_MISSING = "SCHEDULE_EVIDENCE_MISSING"
+    SCHEDULE_EVIDENCE_AMBIGUOUS = "SCHEDULE_EVIDENCE_AMBIGUOUS"
+    SCHEDULE_EVIDENCE_LATE = "SCHEDULE_EVIDENCE_LATE"
+    SCHEDULE_CONTINUITY_UNPROVEN = "SCHEDULE_CONTINUITY_UNPROVEN"
+    DECISION_SESSION_NOT_LATEST_ADMISSIBLE = "DECISION_SESSION_NOT_LATEST_ADMISSIBLE"
+    FACT_CUTOFF_OR_FRESHNESS_UNPROVEN = "FACT_CUTOFF_OR_FRESHNESS_UNPROVEN"
+    FACT_FUTURE_KNOWN = "FACT_FUTURE_KNOWN"
+
+
+_REASON_ORDER: Final = {
+    reason.value: index
+    for index, reason in enumerate(CurrentSuppliedCohortMarketRegimeReasonV1)
+}
+
 
 def _canonical(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
-def _sha(value: object) -> str: return hashlib.sha256(_canonical(value)).hexdigest()
-def _instant(value: datetime) -> str: return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return (
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _sha(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _instant(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _parse_instant(value: object) -> datetime:
-    if type(value) is not str or _INSTANT.fullmatch(value) is None: raise ValueError
-    try: return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
-    except ValueError: raise ValueError from None
+    if type(value) is not str or _INSTANT.fullmatch(value) is None:
+        raise ValueError
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        raise ValueError from None
+
+
 def _parse_date(value: object) -> date:
-    if type(value) is not str: raise ValueError
-    try: return date.fromisoformat(value)
-    except ValueError: raise ValueError from None
+    if type(value) is not str:
+        raise ValueError
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError from None
+
+
 def _digest(value: object) -> str:
-    if type(value) is not str or _DIGEST.fullmatch(value) is None: raise ValueError
+    if type(value) is not str or _DIGEST.fullmatch(value) is None:
+        raise ValueError
     return value
+
+
 def _ordered_reasons(reasons: tuple[str, ...]) -> tuple[str, ...]:
-    if type(reasons) is not tuple or any(type(x) is not str or x not in _REASON_ORDER for x in reasons):
+    if type(reasons) is not tuple or any(
+        type(x) is not str or x not in _REASON_ORDER for x in reasons
+    ):
         raise ValueError
     return tuple(sorted(set(reasons), key=_REASON_ORDER.__getitem__))
 
@@ -99,9 +163,12 @@ def _json_depth(value: object) -> int:
         elif type(current) is list:
             stack.extend((item, depth + 1) for item in current)
     return deepest
+
+
 def _closed(raw: bytes) -> dict[str, object]:
     if type(raw) is not bytes:
         raise ValueError
+
     def object_from_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         value: dict[str, object] = {}
         for key, item in pairs:
@@ -109,12 +176,19 @@ def _closed(raw: bytes) -> dict[str, object]:
                 raise ValueError
             value[key] = item
         return value
+
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=object_from_pairs)
         if type(value) is not dict:
             raise ValueError
         _json_depth(value)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+        TypeError,
+    ):
         raise ValueError from None
     try:
         if _canonical(value) != raw:
@@ -123,113 +197,401 @@ def _closed(raw: bytes) -> dict[str, object]:
         raise ValueError from None
     return value
 
+
 @dataclass(frozen=True, slots=True, init=False)
 class CurrentSuppliedCohortMarketRegimeInputV1:
-    contract_version: str; cohort_identity_sha256: str; cohort_size: int; decision_cutoff: datetime; decision_session: date; archive_object_sha256s: tuple[str, ...]; schedule_evidence_sha256: str; schedule_source: str; schedule_source_release: str; input_identity_sha256: str
+    contract_version: str
+    cohort_identity_sha256: str
+    cohort_size: int
+    decision_cutoff: datetime
+    decision_session: date
+    archive_object_sha256s: tuple[str, ...]
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
+    input_identity_sha256: str
+
     def __init__(self, value: dict[str, object]) -> None:
-        fields = {"contract_version","cohort_identity_sha256","cohort_size","decision_cutoff","decision_session","archive_object_sha256s","schedule_evidence_sha256","schedule_source","schedule_source_release","input_identity_sha256"}
-        if set(value) != fields or value.get("contract_version") != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1: raise ValueError
-        cohort = _digest(value["cohort_identity_sha256"]); size = value["cohort_size"]
-        cutoff = _parse_instant(value["decision_cutoff"]); session = _parse_date(value["decision_session"])
+        fields = {
+            "contract_version",
+            "cohort_identity_sha256",
+            "cohort_size",
+            "decision_cutoff",
+            "decision_session",
+            "archive_object_sha256s",
+            "schedule_evidence_sha256",
+            "schedule_source",
+            "schedule_source_release",
+            "input_identity_sha256",
+        }
+        if (
+            set(value) != fields
+            or value.get("contract_version")
+            != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1
+        ):
+            raise ValueError
+        cohort = _digest(value["cohort_identity_sha256"])
+        size = value["cohort_size"]
+        cutoff = _parse_instant(value["decision_cutoff"])
+        session = _parse_date(value["decision_session"])
         ids_raw = value["archive_object_sha256s"]
-        if type(size) is not int or type(size) is bool or not 1 <= size <= 50 or type(ids_raw) is not list or len(ids_raw) != 21: raise ValueError
+        if (
+            type(size) is not int
+            or type(size) is bool
+            or not 1 <= size <= 50
+            or type(ids_raw) is not list
+            or len(ids_raw) != 21
+        ):
+            raise ValueError
         ids = tuple(_digest(item) for item in ids_raw)
-        if tuple(sorted(ids)) != ids or len(set(ids)) != 21: raise ValueError
+        if tuple(sorted(ids)) != ids or len(set(ids)) != 21:
+            raise ValueError
         schedule = _digest(value["schedule_evidence_sha256"])
-        if value["schedule_source"] != "nse-authoritative-calendar" or type(value["schedule_source_release"]) is not str or _RELEASE.fullmatch(value["schedule_source_release"]) is None: raise ValueError
+        if (
+            value["schedule_source"] != "nse-authoritative-calendar"
+            or type(value["schedule_source_release"]) is not str
+            or _RELEASE.fullmatch(value["schedule_source_release"]) is None
+        ):
+            raise ValueError
         identity = _digest(value["input_identity_sha256"])
         projection = {k: value[k] for k in fields - {"input_identity_sha256"}}
-        if _sha(projection) != identity: raise ValueError
-        for name, item in (("contract_version", CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1),("cohort_identity_sha256",cohort),("cohort_size",size),("decision_cutoff",cutoff),("decision_session",session),("archive_object_sha256s",ids),("schedule_evidence_sha256",schedule),("schedule_source","nse-authoritative-calendar"),("schedule_source_release",value["schedule_source_release"]),("input_identity_sha256",identity)): object.__setattr__(self,name,item)
+        if _sha(projection) != identity:
+            raise ValueError
+        for name, item in (
+            (
+                "contract_version",
+                CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1,
+            ),
+            ("cohort_identity_sha256", cohort),
+            ("cohort_size", size),
+            ("decision_cutoff", cutoff),
+            ("decision_session", session),
+            ("archive_object_sha256s", ids),
+            ("schedule_evidence_sha256", schedule),
+            ("schedule_source", "nse-authoritative-calendar"),
+            ("schedule_source_release", value["schedule_source_release"]),
+            ("input_identity_sha256", identity),
+        ):
+            object.__setattr__(self, name, item)
+
     @classmethod
-    def from_canonical_json_bytes(cls, raw: bytes) -> "CurrentSuppliedCohortMarketRegimeInputV1":
-        if len(raw) > _MAX_INPUT_BYTES: raise ValueError("invalid current-regime input")
-        try: return cls(_closed(raw))
-        except ValueError: raise ValueError("invalid current-regime input") from None
+    def from_canonical_json_bytes(
+        cls, raw: bytes
+    ) -> "CurrentSuppliedCohortMarketRegimeInputV1":
+        if len(raw) > _MAX_INPUT_BYTES:
+            raise ValueError("invalid current-regime input")
+        try:
+            return cls(_closed(raw))
+        except ValueError:
+            raise ValueError("invalid current-regime input") from None
+
     def value(self) -> dict[str, object]:
-        return {"contract_version":self.contract_version,"cohort_identity_sha256":self.cohort_identity_sha256,"cohort_size":self.cohort_size,"decision_cutoff":_instant(self.decision_cutoff),"decision_session":self.decision_session.isoformat(),"archive_object_sha256s":list(self.archive_object_sha256s),"schedule_evidence_sha256":self.schedule_evidence_sha256,"schedule_source":self.schedule_source,"schedule_source_release":self.schedule_source_release,"input_identity_sha256":self.input_identity_sha256}
-    def canonical_json_bytes(self) -> bytes: return _canonical(self.value())
+        return {
+            "contract_version": self.contract_version,
+            "cohort_identity_sha256": self.cohort_identity_sha256,
+            "cohort_size": self.cohort_size,
+            "decision_cutoff": _instant(self.decision_cutoff),
+            "decision_session": self.decision_session.isoformat(),
+            "archive_object_sha256s": list(self.archive_object_sha256s),
+            "schedule_evidence_sha256": self.schedule_evidence_sha256,
+            "schedule_source": self.schedule_source,
+            "schedule_source_release": self.schedule_source_release,
+            "input_identity_sha256": self.input_identity_sha256,
+        }
+
+    def canonical_json_bytes(self) -> bytes:
+        return _canonical(self.value())
+
 
 @dataclass(frozen=True, slots=True, init=False)
 class CurrentSuppliedCohortMarketRegimeRequestV1:
-    contract_version: str; input_identity_sha256: str; cohort_identity_sha256: str; cohort_size: int; decision_cutoff: datetime; decision_session: date; archive_object_sha256s: tuple[str,...]; schedule_evidence_sha256: str; schedule_source: str; schedule_source_release: str; schema_identity_sha256: str; calculation_identity_sha256: str; request_identity_sha256: str
+    contract_version: str
+    input_identity_sha256: str
+    cohort_identity_sha256: str
+    cohort_size: int
+    decision_cutoff: datetime
+    decision_session: date
+    archive_object_sha256s: tuple[str, ...]
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
+    schema_identity_sha256: str
+    calculation_identity_sha256: str
+    request_identity_sha256: str
+
     def __init__(self, input: CurrentSuppliedCohortMarketRegimeInputV1) -> None:
-        if type(input) is not CurrentSuppliedCohortMarketRegimeInputV1: raise ValueError
-        projection = {"contract_version":CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1,"input_identity_sha256":input.input_identity_sha256,"cohort_identity_sha256":input.cohort_identity_sha256,"cohort_size":input.cohort_size,"decision_cutoff":_instant(input.decision_cutoff),"decision_session":input.decision_session.isoformat(),"archive_object_sha256s":list(input.archive_object_sha256s),"schedule_evidence_sha256":input.schedule_evidence_sha256,"schedule_source":input.schedule_source,"schedule_source_release":input.schedule_source_release,"schema_identity_sha256":CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1,"calculation_identity_sha256":CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1}
-        for name, item in (("contract_version",projection["contract_version"]),("input_identity_sha256",input.input_identity_sha256),("cohort_identity_sha256",input.cohort_identity_sha256),("cohort_size",input.cohort_size),("decision_cutoff",input.decision_cutoff),("decision_session",input.decision_session),("archive_object_sha256s",input.archive_object_sha256s),("schedule_evidence_sha256",input.schedule_evidence_sha256),("schedule_source",input.schedule_source),("schedule_source_release",input.schedule_source_release),("schema_identity_sha256",CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1),("calculation_identity_sha256",CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1),("request_identity_sha256",_sha(projection))): object.__setattr__(self,name,item)
+        if type(input) is not CurrentSuppliedCohortMarketRegimeInputV1:
+            raise ValueError
+        projection = {
+            "contract_version": CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CONTRACT_VERSION_V1,
+            "input_identity_sha256": input.input_identity_sha256,
+            "cohort_identity_sha256": input.cohort_identity_sha256,
+            "cohort_size": input.cohort_size,
+            "decision_cutoff": _instant(input.decision_cutoff),
+            "decision_session": input.decision_session.isoformat(),
+            "archive_object_sha256s": list(input.archive_object_sha256s),
+            "schedule_evidence_sha256": input.schedule_evidence_sha256,
+            "schedule_source": input.schedule_source,
+            "schedule_source_release": input.schedule_source_release,
+            "schema_identity_sha256": CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1,
+            "calculation_identity_sha256": CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1,
+        }
+        for name, item in (
+            ("contract_version", projection["contract_version"]),
+            ("input_identity_sha256", input.input_identity_sha256),
+            ("cohort_identity_sha256", input.cohort_identity_sha256),
+            ("cohort_size", input.cohort_size),
+            ("decision_cutoff", input.decision_cutoff),
+            ("decision_session", input.decision_session),
+            ("archive_object_sha256s", input.archive_object_sha256s),
+            ("schedule_evidence_sha256", input.schedule_evidence_sha256),
+            ("schedule_source", input.schedule_source),
+            ("schedule_source_release", input.schedule_source_release),
+            (
+                "schema_identity_sha256",
+                CURRENT_SUPPLIED_COHORT_MARKET_REGIME_SCHEMA_IDENTITY_SHA256_V1,
+            ),
+            (
+                "calculation_identity_sha256",
+                CURRENT_SUPPLIED_COHORT_MARKET_REGIME_CALCULATION_IDENTITY_SHA256_V1,
+            ),
+            ("request_identity_sha256", _sha(projection)),
+        ):
+            object.__setattr__(self, name, item)
+
 
 @dataclass(frozen=True, slots=True)
 class PrivateCurrentCohortMemberCloseProjectionV1:
-    member: CurrentCohortMemberV1; close: Decimal
+    member: CurrentCohortMemberV1
+    close: Decimal
+
     def __post_init__(self) -> None:
-        if type(self.member) is not CurrentCohortMemberV1 or type(self.close) is not Decimal or not self.close.is_finite() or self.close <= 0: raise ValueError
+        if (
+            type(self.member) is not CurrentCohortMemberV1
+            or type(self.close) is not Decimal
+            or not self.close.is_finite()
+            or self.close <= 0
+        ):
+            raise ValueError
+
+
 @dataclass(frozen=True, slots=True)
 class PrivateCurrentCohortArchiveSessionProjectionV1:
-    archive_object_sha256: str; request_identity_sha256: str; report_identity_sha256: str; archive_code_identity_sha256: str; invocation_cutoff: datetime; session: date; members: tuple[PrivateCurrentCohortMemberCloseProjectionV1,...]
+    archive_object_sha256: str
+    request_identity_sha256: str
+    report_identity_sha256: str
+    archive_code_identity_sha256: str
+    invocation_cutoff: datetime
+    session: date
+    members: tuple[PrivateCurrentCohortMemberCloseProjectionV1, ...]
+
     def __post_init__(self) -> None:
-        if any(_DIGEST.fullmatch(x) is None for x in (self.archive_object_sha256,self.request_identity_sha256,self.report_identity_sha256,self.archive_code_identity_sha256)) or type(self.invocation_cutoff) is not datetime or self.invocation_cutoff.tzinfo is None or type(self.session) is not date or type(self.members) is not tuple or not self.members or any(type(x) is not PrivateCurrentCohortMemberCloseProjectionV1 for x in self.members): raise ValueError
+        if (
+            any(
+                _DIGEST.fullmatch(x) is None
+                for x in (
+                    self.archive_object_sha256,
+                    self.request_identity_sha256,
+                    self.report_identity_sha256,
+                    self.archive_code_identity_sha256,
+                )
+            )
+            or type(self.invocation_cutoff) is not datetime
+            or self.invocation_cutoff.tzinfo is None
+            or type(self.session) is not date
+            or type(self.members) is not tuple
+            or not self.members
+            or any(
+                type(x) is not PrivateCurrentCohortMemberCloseProjectionV1
+                for x in self.members
+            )
+        ):
+            raise ValueError
+
+
 @dataclass(frozen=True, slots=True)
 class PrivateCurrentCohortArchiveGridProjectionV1:
-    cohort_identity_sha256: str; cohort_size: int; sessions: tuple[PrivateCurrentCohortArchiveSessionProjectionV1,...]
+    cohort_identity_sha256: str
+    cohort_size: int
+    sessions: tuple[PrivateCurrentCohortArchiveSessionProjectionV1, ...]
+
     def __post_init__(self) -> None:
-        if _DIGEST.fullmatch(self.cohort_identity_sha256) is None or type(self.cohort_size) is not int or not 1 <= self.cohort_size <= 50 or type(self.sessions) is not tuple or len(self.sessions) != 21 or any(type(x) is not PrivateCurrentCohortArchiveSessionProjectionV1 for x in self.sessions): raise ValueError
+        if (
+            _DIGEST.fullmatch(self.cohort_identity_sha256) is None
+            or type(self.cohort_size) is not int
+            or not 1 <= self.cohort_size <= 50
+            or type(self.sessions) is not tuple
+            or len(self.sessions) != 21
+            or any(
+                type(x) is not PrivateCurrentCohortArchiveSessionProjectionV1
+                for x in self.sessions
+            )
+        ):
+            raise ValueError
+
+
 @dataclass(frozen=True, slots=True)
 class PrivateRetainedScheduleSessionProjectionV1:
-    trade_date: date; close_at: datetime; kind: str
+    trade_date: date
+    close_at: datetime
+    kind: str
+
     def __post_init__(self) -> None:
-        if type(self.trade_date) is not date or type(self.close_at) is not datetime or self.close_at.tzinfo is None or type(self.kind) is not str or not self.kind or not self.kind.isascii(): raise ValueError
+        if (
+            type(self.trade_date) is not date
+            or type(self.close_at) is not datetime
+            or self.close_at.tzinfo is None
+            or type(self.kind) is not str
+            or not self.kind
+            or not self.kind.isascii()
+        ):
+            raise ValueError
+
+
 @dataclass(frozen=True, slots=True)
 class PrivateRetainedScheduleContinuityProjectionV1:
-    schedule_evidence_sha256: str; schema_version: int; source: str; source_release: str; as_of: datetime; sessions: tuple[PrivateRetainedScheduleSessionProjectionV1,...]
+    schedule_evidence_sha256: str
+    schema_version: int
+    source: str
+    source_release: str
+    as_of: datetime
+    sessions: tuple[PrivateRetainedScheduleSessionProjectionV1, ...]
+
     def __post_init__(self) -> None:
-        if _DIGEST.fullmatch(self.schedule_evidence_sha256) is None or self.schema_version not in (2,3) or self.source != "nse-authoritative-calendar" or _RELEASE.fullmatch(self.source_release) is None or type(self.as_of) is not datetime or self.as_of.tzinfo is None or type(self.sessions) is not tuple or len(self.sessions) != 21 or any(type(x) is not PrivateRetainedScheduleSessionProjectionV1 for x in self.sessions): raise ValueError
+        if (
+            _DIGEST.fullmatch(self.schedule_evidence_sha256) is None
+            or self.schema_version not in (2, 3)
+            or self.source != "nse-authoritative-calendar"
+            or _RELEASE.fullmatch(self.source_release) is None
+            or type(self.as_of) is not datetime
+            or self.as_of.tzinfo is None
+            or type(self.sessions) is not tuple
+            or len(self.sessions) != 21
+            or any(
+                type(x) is not PrivateRetainedScheduleSessionProjectionV1
+                for x in self.sessions
+            )
+        ):
+            raise ValueError
+
 
 @dataclass(frozen=True, slots=True)
 class ArchiveReadResultV1:
-    outcome: str; grid: PrivateCurrentCohortArchiveGridProjectionV1 | None; reasons: tuple[str,...]
+    outcome: str
+    grid: PrivateCurrentCohortArchiveGridProjectionV1 | None
+    reasons: tuple[str, ...]
+
     def __post_init__(self) -> None:
-        if self.outcome not in ("READY","INSUFFICIENT_EVIDENCE") or type(self.reasons) is not tuple:
+        if (
+            self.outcome not in ("READY", "INSUFFICIENT_EVIDENCE")
+            or type(self.reasons) is not tuple
+        ):
             raise ValueError
         _ordered_reasons(self.reasons)
-        if ((self.outcome == "READY") != (type(self.grid) is PrivateCurrentCohortArchiveGridProjectionV1)) or (self.outcome == "READY" and self.reasons) or (self.outcome != "READY" and (self.grid is not None or not self.reasons)):
+        if (
+            (
+                (self.outcome == "READY")
+                != (type(self.grid) is PrivateCurrentCohortArchiveGridProjectionV1)
+            )
+            or (self.outcome == "READY" and self.reasons)
+            or (self.outcome != "READY" and (self.grid is not None or not self.reasons))
+        ):
             raise ValueError
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleReadResultV1:
-    outcome: str; projection: PrivateRetainedScheduleContinuityProjectionV1 | None; reasons: tuple[str,...]
+    outcome: str
+    projection: PrivateRetainedScheduleContinuityProjectionV1 | None
+    reasons: tuple[str, ...]
+
     def __post_init__(self) -> None:
-        if self.outcome not in ("RESOLVED","INSUFFICIENT_EVIDENCE") or type(self.reasons) is not tuple:
+        if (
+            self.outcome not in ("RESOLVED", "INSUFFICIENT_EVIDENCE")
+            or type(self.reasons) is not tuple
+        ):
             raise ValueError
         _ordered_reasons(self.reasons)
-        if ((self.outcome == "RESOLVED") != (type(self.projection) is PrivateRetainedScheduleContinuityProjectionV1)) or (self.outcome == "RESOLVED" and self.reasons) or (self.outcome != "RESOLVED" and (self.projection is not None or not self.reasons)):
+        if (
+            (
+                (self.outcome == "RESOLVED")
+                != (
+                    type(self.projection)
+                    is PrivateRetainedScheduleContinuityProjectionV1
+                )
+            )
+            or (self.outcome == "RESOLVED" and self.reasons)
+            or (
+                self.outcome != "RESOLVED"
+                and (self.projection is not None or not self.reasons)
+            )
+        ):
             raise ValueError
+
+
 class PrivateCurrentCohortArchiveReaderPortV1(Protocol):
-    def read_exact(self, request: CurrentSuppliedCohortMarketRegimeRequestV1, lease: StorageRootLease | None) -> ArchiveReadResultV1: ...
+    def read_exact(
+        self,
+        request: CurrentSuppliedCohortMarketRegimeRequestV1,
+        lease: StorageRootLease | None,
+    ) -> ArchiveReadResultV1: ...
+
+
 class PrivateCurrentCohortScheduleResolverPortV1(Protocol):
-    def resolve_exact(self, schedule_evidence_sha256: str, schedule_source: str, schedule_source_release: str, decision_cutoff: datetime, lease: StorageRootLease | None) -> ScheduleReadResultV1: ...
+    def resolve_exact(
+        self,
+        schedule_evidence_sha256: str,
+        schedule_source: str,
+        schedule_source_release: str,
+        decision_cutoff: datetime,
+        lease: StorageRootLease | None,
+    ) -> ScheduleReadResultV1: ...
+
 
 def _runtime_root() -> Path:
     return Path(__file__).parents[3]
 
 
 def _read_literal_project_file(root: Path, relative: str) -> bytes:
-    if not relative.startswith("src/") or any(part in ("", ".", "..") for part in relative.split("/")):
+    if not relative.startswith("src/") or any(
+        part in ("", ".", "..") for part in relative.split("/")
+    ):
         raise ValueError("runtime identity invalid")
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     descriptor = root_fd
     try:
         parts = relative.split("/")
         for part in parts[:-1]:
-            next_descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+            next_descriptor = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=descriptor,
+            )
             os.close(descriptor)
             descriptor = next_descriptor
-        file_descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=descriptor)
+        file_descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=descriptor,
+        )
         try:
             before = os.fstat(file_descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) & 0o022 or before.st_size < 1 or before.st_size > _MAX_ARCHIVE_BYTES:
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) & 0o022
+                or before.st_size < 1
+                or before.st_size > _MAX_ARCHIVE_BYTES
+            ):
                 raise ValueError("runtime identity invalid")
             raw = os.read(file_descriptor, _MAX_ARCHIVE_BYTES + 1)
             after = os.fstat(file_descriptor)
-            if len(raw) != before.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            if len(raw) != before.st_size or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
                 raise ValueError("runtime identity invalid")
             return raw
         finally:
@@ -254,11 +616,22 @@ def _require_loaded_source(module_name: str, root: Path, relative: str) -> None:
 
 def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
     try:
-        manifest = importlib.import_module(CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1)
-        mapping = getattr(manifest, "CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1")
+        manifest = importlib.import_module(
+            CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1
+        )
+        mapping = getattr(
+            manifest, "CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1"
+        )
     except (ImportError, AttributeError, TypeError, ValueError):
         raise ValueError("runtime identity invalid") from None
-    if type(mapping) is not dict or tuple(mapping) != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1 or any(type(value) is not str or _DIGEST.fullmatch(value) is None for value in mapping.values()):
+    if (
+        type(mapping) is not dict
+        or tuple(mapping) != CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1
+        or any(
+            type(value) is not str or _DIGEST.fullmatch(value) is None
+            for value in mapping.values()
+        )
+    ):
         raise ValueError("runtime identity invalid")
     root = _runtime_root()
     loaded = {
@@ -270,52 +643,254 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
     }
     for relative in CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1:
         _require_loaded_source(loaded[relative], root, relative)
-        if hashlib.sha256(_read_literal_project_file(root, relative)).hexdigest() != mapping[relative]:
+        if (
+            hashlib.sha256(_read_literal_project_file(root, relative)).hexdigest()
+            != mapping[relative]
+        ):
             raise ValueError("runtime identity invalid")
     manifest_relative = CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_V1
-    _require_loaded_source(CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1, root, manifest_relative)
-    manifest_digest = hashlib.sha256(_read_literal_project_file(root, manifest_relative)).hexdigest()
-    composite = b"".join(relative.encode() + b"\0" + mapping[relative].encode() + b"\0" for relative in CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1) + manifest_relative.encode() + b"\0" + manifest_digest.encode() + b"\0"
+    _require_loaded_source(
+        CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1,
+        root,
+        manifest_relative,
+    )
+    manifest_digest = hashlib.sha256(
+        _read_literal_project_file(root, manifest_relative)
+    ).hexdigest()
+    composite = (
+        b"".join(
+            relative.encode() + b"\0" + mapping[relative].encode() + b"\0"
+            for relative in CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1
+        )
+        + manifest_relative.encode()
+        + b"\0"
+        + manifest_digest.encode()
+        + b"\0"
+    )
     return hashlib.sha256(composite).hexdigest()
+
 
 @dataclass(frozen=True, slots=True, init=False)
 class CurrentSuppliedCohortMarketRegimeReportV1:
-    contract_version: str; schema_identity_sha256: str; calculation_identity_sha256: str; input_identity_sha256: str; request_identity_sha256: str; cohort_identity_sha256: str; cohort_size: int; decision_cutoff: datetime; decision_session: date; comparison_session: date | None; archive_object_sha256s: tuple[str,...]; schedule_evidence_sha256: str; schedule_source: str; schedule_source_release: str; code_identity_sha256: str; evidence_state: str; regime_label: str | None; advances: int | None; declines: int | None; unchanged: int | None; member_directions: None; reasons: tuple[str,...]; report_identity_sha256: str
-    def __init__(self, request: CurrentSuppliedCohortMarketRegimeRequestV1, *, code_identity: str, comparison_session: date | None, label: str | None, advances: int | None, declines: int | None, unchanged: int | None, reasons: tuple[str,...]) -> None:
-        if type(request) is not CurrentSuppliedCohortMarketRegimeRequestV1 or _DIGEST.fullmatch(code_identity) is None: raise ValueError
-        reasons = _ordered_reasons(reasons); observed = not reasons
+    contract_version: str
+    schema_identity_sha256: str
+    calculation_identity_sha256: str
+    input_identity_sha256: str
+    request_identity_sha256: str
+    cohort_identity_sha256: str
+    cohort_size: int
+    decision_cutoff: datetime
+    decision_session: date
+    comparison_session: date | None
+    archive_object_sha256s: tuple[str, ...]
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
+    code_identity_sha256: str
+    evidence_state: str
+    regime_label: str | None
+    advances: int | None
+    declines: int | None
+    unchanged: int | None
+    member_directions: None
+    reasons: tuple[str, ...]
+    report_identity_sha256: str
+
+    def __init__(
+        self,
+        request: CurrentSuppliedCohortMarketRegimeRequestV1,
+        *,
+        code_identity: str,
+        comparison_session: date | None,
+        label: str | None,
+        advances: int | None,
+        declines: int | None,
+        unchanged: int | None,
+        reasons: tuple[str, ...],
+    ) -> None:
+        if (
+            type(request) is not CurrentSuppliedCohortMarketRegimeRequestV1
+            or _DIGEST.fullmatch(code_identity) is None
+        ):
+            raise ValueError
+        reasons = _ordered_reasons(reasons)
+        observed = not reasons
         if observed:
-            if type(comparison_session) is not date or label not in ("BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION") or any(type(x) is not int or x < 0 for x in (advances,declines,unchanged)) or advances + declines + unchanged != request.cohort_size: raise ValueError
+            if (
+                type(comparison_session) is not date
+                or label
+                not in ("BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION")
+                or any(
+                    type(x) is not int or x < 0 for x in (advances, declines, unchanged)
+                )
+                or advances + declines + unchanged != request.cohort_size
+            ):
+                raise ValueError
             state = "OBSERVED"
         else:
-            if any(x is not None for x in (comparison_session,label,advances,declines,unchanged)): raise ValueError
+            if any(
+                x is not None
+                for x in (comparison_session, label, advances, declines, unchanged)
+            ):
+                raise ValueError
             state = "INSUFFICIENT_EVIDENCE"
-        value = {"contract_version":request.contract_version,"schema_identity_sha256":request.schema_identity_sha256,"calculation_identity_sha256":request.calculation_identity_sha256,"input_identity_sha256":request.input_identity_sha256,"request_identity_sha256":request.request_identity_sha256,"cohort_identity_sha256":request.cohort_identity_sha256,"cohort_size":request.cohort_size,"decision_cutoff":_instant(request.decision_cutoff),"decision_session":request.decision_session.isoformat(),"comparison_session":None if comparison_session is None else comparison_session.isoformat(),"archive_object_sha256s":list(request.archive_object_sha256s),"schedule_evidence_sha256":request.schedule_evidence_sha256,"schedule_source":request.schedule_source,"schedule_source_release":request.schedule_source_release,"code_identity_sha256":code_identity,"evidence_state":state,"regime_label":label,"advances":advances,"declines":declines,"unchanged":unchanged,"member_directions":None,"reasons":list(reasons)}
-        for name,item in (("contract_version",request.contract_version),("schema_identity_sha256",request.schema_identity_sha256),("calculation_identity_sha256",request.calculation_identity_sha256),("input_identity_sha256",request.input_identity_sha256),("request_identity_sha256",request.request_identity_sha256),("cohort_identity_sha256",request.cohort_identity_sha256),("cohort_size",request.cohort_size),("decision_cutoff",request.decision_cutoff),("decision_session",request.decision_session),("comparison_session",comparison_session),("archive_object_sha256s",request.archive_object_sha256s),("schedule_evidence_sha256",request.schedule_evidence_sha256),("schedule_source",request.schedule_source),("schedule_source_release",request.schedule_source_release),("code_identity_sha256",code_identity),("evidence_state",state),("regime_label",label),("advances",advances),("declines",declines),("unchanged",unchanged),("member_directions",None),("reasons",reasons),("report_identity_sha256",_sha(value))): object.__setattr__(self,name,item)
+        value = {
+            "contract_version": request.contract_version,
+            "schema_identity_sha256": request.schema_identity_sha256,
+            "calculation_identity_sha256": request.calculation_identity_sha256,
+            "input_identity_sha256": request.input_identity_sha256,
+            "request_identity_sha256": request.request_identity_sha256,
+            "cohort_identity_sha256": request.cohort_identity_sha256,
+            "cohort_size": request.cohort_size,
+            "decision_cutoff": _instant(request.decision_cutoff),
+            "decision_session": request.decision_session.isoformat(),
+            "comparison_session": None
+            if comparison_session is None
+            else comparison_session.isoformat(),
+            "archive_object_sha256s": list(request.archive_object_sha256s),
+            "schedule_evidence_sha256": request.schedule_evidence_sha256,
+            "schedule_source": request.schedule_source,
+            "schedule_source_release": request.schedule_source_release,
+            "code_identity_sha256": code_identity,
+            "evidence_state": state,
+            "regime_label": label,
+            "advances": advances,
+            "declines": declines,
+            "unchanged": unchanged,
+            "member_directions": None,
+            "reasons": list(reasons),
+        }
+        for name, item in (
+            ("contract_version", request.contract_version),
+            ("schema_identity_sha256", request.schema_identity_sha256),
+            ("calculation_identity_sha256", request.calculation_identity_sha256),
+            ("input_identity_sha256", request.input_identity_sha256),
+            ("request_identity_sha256", request.request_identity_sha256),
+            ("cohort_identity_sha256", request.cohort_identity_sha256),
+            ("cohort_size", request.cohort_size),
+            ("decision_cutoff", request.decision_cutoff),
+            ("decision_session", request.decision_session),
+            ("comparison_session", comparison_session),
+            ("archive_object_sha256s", request.archive_object_sha256s),
+            ("schedule_evidence_sha256", request.schedule_evidence_sha256),
+            ("schedule_source", request.schedule_source),
+            ("schedule_source_release", request.schedule_source_release),
+            ("code_identity_sha256", code_identity),
+            ("evidence_state", state),
+            ("regime_label", label),
+            ("advances", advances),
+            ("declines", declines),
+            ("unchanged", unchanged),
+            ("member_directions", None),
+            ("reasons", reasons),
+            ("report_identity_sha256", _sha(value)),
+        ):
+            object.__setattr__(self, name, item)
+
     def value(self) -> dict[str, object]:
-        return {"contract_version":self.contract_version,"schema_identity_sha256":self.schema_identity_sha256,"calculation_identity_sha256":self.calculation_identity_sha256,"input_identity_sha256":self.input_identity_sha256,"request_identity_sha256":self.request_identity_sha256,"cohort_identity_sha256":self.cohort_identity_sha256,"cohort_size":self.cohort_size,"decision_cutoff":_instant(self.decision_cutoff),"decision_session":self.decision_session.isoformat(),"comparison_session":None if self.comparison_session is None else self.comparison_session.isoformat(),"archive_object_sha256s":list(self.archive_object_sha256s),"schedule_evidence_sha256":self.schedule_evidence_sha256,"schedule_source":self.schedule_source,"schedule_source_release":self.schedule_source_release,"code_identity_sha256":self.code_identity_sha256,"evidence_state":self.evidence_state,"regime_label":self.regime_label,"advances":self.advances,"declines":self.declines,"unchanged":self.unchanged,"member_directions":None,"reasons":list(self.reasons),"report_identity_sha256":self.report_identity_sha256}
+        return {
+            "contract_version": self.contract_version,
+            "schema_identity_sha256": self.schema_identity_sha256,
+            "calculation_identity_sha256": self.calculation_identity_sha256,
+            "input_identity_sha256": self.input_identity_sha256,
+            "request_identity_sha256": self.request_identity_sha256,
+            "cohort_identity_sha256": self.cohort_identity_sha256,
+            "cohort_size": self.cohort_size,
+            "decision_cutoff": _instant(self.decision_cutoff),
+            "decision_session": self.decision_session.isoformat(),
+            "comparison_session": None
+            if self.comparison_session is None
+            else self.comparison_session.isoformat(),
+            "archive_object_sha256s": list(self.archive_object_sha256s),
+            "schedule_evidence_sha256": self.schedule_evidence_sha256,
+            "schedule_source": self.schedule_source,
+            "schedule_source_release": self.schedule_source_release,
+            "code_identity_sha256": self.code_identity_sha256,
+            "evidence_state": self.evidence_state,
+            "regime_label": self.regime_label,
+            "advances": self.advances,
+            "declines": self.declines,
+            "unchanged": self.unchanged,
+            "member_directions": None,
+            "reasons": list(self.reasons),
+            "report_identity_sha256": self.report_identity_sha256,
+        }
+
     def canonical_json_bytes(self) -> bytes:
         raw = _canonical(self.value())
-        if len(raw) > _MAX_REPORT_BYTES: raise ValueError
+        if len(raw) > _MAX_REPORT_BYTES:
+            raise ValueError
         return raw
 
-def _report(request: CurrentSuppliedCohortMarketRegimeRequestV1, code: str, reasons: tuple[str,...]=(), *, comparison: date | None = None, label: str | None = None, advances: int | None = None, declines: int | None = None, unchanged: int | None = None) -> CurrentSuppliedCohortMarketRegimeReportV1:
-    return CurrentSuppliedCohortMarketRegimeReportV1(request, code_identity=code, comparison_session=comparison, label=label, advances=advances, declines=declines, unchanged=unchanged, reasons=reasons)
 
-def _valid_grid(grid: PrivateCurrentCohortArchiveGridProjectionV1, request: CurrentSuppliedCohortMarketRegimeRequestV1) -> bool:
-    if grid.cohort_identity_sha256 != request.cohort_identity_sha256 or grid.cohort_size != request.cohort_size:
+def _report(
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+    code: str,
+    reasons: tuple[str, ...] = (),
+    *,
+    comparison: date | None = None,
+    label: str | None = None,
+    advances: int | None = None,
+    declines: int | None = None,
+    unchanged: int | None = None,
+) -> CurrentSuppliedCohortMarketRegimeReportV1:
+    return CurrentSuppliedCohortMarketRegimeReportV1(
+        request,
+        code_identity=code,
+        comparison_session=comparison,
+        label=label,
+        advances=advances,
+        declines=declines,
+        unchanged=unchanged,
+        reasons=reasons,
+    )
+
+
+def _valid_grid(
+    grid: PrivateCurrentCohortArchiveGridProjectionV1,
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+) -> bool:
+    if (
+        grid.cohort_identity_sha256 != request.cohort_identity_sha256
+        or grid.cohort_size != request.cohort_size
+    ):
         return False
     sessions = grid.sessions
-    if tuple(x.session for x in sessions) != tuple(sorted(x.session for x in sessions)) or len({x.session for x in sessions}) != 21 or {x.archive_object_sha256 for x in sessions} != set(request.archive_object_sha256s):
+    if (
+        tuple(x.session for x in sessions) != tuple(sorted(x.session for x in sessions))
+        or len({x.session for x in sessions}) != 21
+        or {x.archive_object_sha256 for x in sessions}
+        != set(request.archive_object_sha256s)
+    ):
         return False
     first = tuple(x.member for x in sessions[0].members)
-    if len(first) != request.cohort_size or len(set(first)) != request.cohort_size or len({x.isin for x in first}) != request.cohort_size or len({x.symbol for x in first}) != request.cohort_size:
+    if (
+        len(first) != request.cohort_size
+        or len(set(first)) != request.cohort_size
+        or len({x.isin for x in first}) != request.cohort_size
+        or len({x.symbol for x in first}) != request.cohort_size
+    ):
         return False
-    return all(len(item.members) == request.cohort_size and tuple(close.member for close in item.members) == first and tuple(sorted(first, key=lambda member: (member.isin, member.symbol))) == first for item in sessions)
+    return all(
+        len(item.members) == request.cohort_size
+        and tuple(close.member for close in item.members) == first
+        and tuple(sorted(first, key=lambda member: (member.isin, member.symbol)))
+        == first
+        for item in sessions
+    )
 
 
-def _schedule_reasons(grid: PrivateCurrentCohortArchiveGridProjectionV1, projection: PrivateRetainedScheduleContinuityProjectionV1, request: CurrentSuppliedCohortMarketRegimeRequestV1) -> tuple[str, ...]:
-    if projection.schedule_evidence_sha256 != request.schedule_evidence_sha256 or projection.source != request.schedule_source or projection.source_release != request.schedule_source_release or projection.schema_version not in (2, 3):
+def _schedule_reasons(
+    grid: PrivateCurrentCohortArchiveGridProjectionV1,
+    projection: PrivateRetainedScheduleContinuityProjectionV1,
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+) -> tuple[str, ...]:
+    if (
+        projection.schedule_evidence_sha256 != request.schedule_evidence_sha256
+        or projection.source != request.schedule_source
+        or projection.source_release != request.schedule_source_release
+        or projection.schema_version not in (2, 3)
+    ):
         return ("SCHEDULE_EVIDENCE_AMBIGUOUS",)
     if projection.as_of > request.decision_cutoff:
         return ("SCHEDULE_EVIDENCE_LATE",)
@@ -335,26 +910,62 @@ def _schedule_reasons(grid: PrivateCurrentCohortArchiveGridProjectionV1, project
     if projection.sessions[-1].trade_date != request.decision_session:
         return ("DECISION_SESSION_NOT_LATEST_ADMISSIBLE",)
     return ()
-def evaluate_current_supplied_cohort_market_regime_v1(input: CurrentSuppliedCohortMarketRegimeInputV1, archive_reader: PrivateCurrentCohortArchiveReaderPortV1, schedule_resolver: PrivateCurrentCohortScheduleResolverPortV1) -> CurrentSuppliedCohortMarketRegimeReportV1:
+
+
+def evaluate_current_supplied_cohort_market_regime_v1(
+    input: CurrentSuppliedCohortMarketRegimeInputV1,
+    archive_reader: PrivateCurrentCohortArchiveReaderPortV1,
+    schedule_resolver: PrivateCurrentCohortScheduleResolverPortV1,
+) -> CurrentSuppliedCohortMarketRegimeReportV1:
     if type(input) is not CurrentSuppliedCohortMarketRegimeInputV1:
         raise ValueError
     code = current_supplied_cohort_market_regime_runtime_code_identity_v1()
     request = CurrentSuppliedCohortMarketRegimeRequestV1(input)
     archive = archive_reader.read_exact(request, None)
-    if type(archive) is not ArchiveReadResultV1: raise ValueError
-    if archive.outcome != "READY": return _report(request, code, archive.reasons)
+    if type(archive) is not ArchiveReadResultV1:
+        raise ValueError
+    if archive.outcome != "READY":
+        return _report(request, code, archive.reasons)
     assert archive.grid is not None
-    if not _valid_grid(archive.grid, request): return _report(request, code, ("COMMON_SESSION_GRID_INVALID",))
-    schedule = schedule_resolver.resolve_exact(request.schedule_evidence_sha256, request.schedule_source, request.schedule_source_release, request.decision_cutoff, None)
-    if type(schedule) is not ScheduleReadResultV1: raise ValueError
-    if schedule.outcome != "RESOLVED": return _report(request, code, schedule.reasons)
+    if not _valid_grid(archive.grid, request):
+        return _report(request, code, ("COMMON_SESSION_GRID_INVALID",))
+    schedule = schedule_resolver.resolve_exact(
+        request.schedule_evidence_sha256,
+        request.schedule_source,
+        request.schedule_source_release,
+        request.decision_cutoff,
+        None,
+    )
+    if type(schedule) is not ScheduleReadResultV1:
+        raise ValueError
+    if schedule.outcome != "RESOLVED":
+        return _report(request, code, schedule.reasons)
     assert schedule.projection is not None
     reasons = _schedule_reasons(archive.grid, schedule.projection, request)
-    if reasons: return _report(request, code, reasons)
-    prior = {x.member:x.close for x in archive.grid.sessions[0].members}; current = {x.member:x.close for x in archive.grid.sessions[-1].members}
-    advances = sum(current[x] > prior[x] for x in prior); declines = sum(current[x] < prior[x] for x in prior); unchanged = request.cohort_size - advances - declines
-    label = "BROAD_ADVANCE" if advances * 5 >= request.cohort_size * 3 else "BROAD_DECLINE" if declines * 5 >= request.cohort_size * 3 else "MIXED_PARTICIPATION"
-    return _report(request, code, comparison=archive.grid.sessions[0].session, label=label, advances=advances, declines=declines, unchanged=unchanged)
+    if reasons:
+        return _report(request, code, reasons)
+    prior = {x.member: x.close for x in archive.grid.sessions[0].members}
+    current = {x.member: x.close for x in archive.grid.sessions[-1].members}
+    advances = sum(current[x] > prior[x] for x in prior)
+    declines = sum(current[x] < prior[x] for x in prior)
+    unchanged = request.cohort_size - advances - declines
+    label = (
+        "BROAD_ADVANCE"
+        if advances * 5 >= request.cohort_size * 3
+        else "BROAD_DECLINE"
+        if declines * 5 >= request.cohort_size * 3
+        else "MIXED_PARTICIPATION"
+    )
+    return _report(
+        request,
+        code,
+        comparison=archive.grid.sessions[0].session,
+        label=label,
+        advances=advances,
+        declines=declines,
+        unchanged=unchanged,
+    )
+
 
 class DirectCurrentCohortArchiveReaderV1:
     def __init__(self, root: Path, lease: StorageRootLease | None = None) -> None:
@@ -362,7 +973,9 @@ class DirectCurrentCohortArchiveReaderV1:
         self._lease = lease
 
     def read_exact(
-        self, request: CurrentSuppliedCohortMarketRegimeRequestV1, lease: StorageRootLease | None
+        self,
+        request: CurrentSuppliedCohortMarketRegimeRequestV1,
+        lease: StorageRootLease | None,
     ) -> ArchiveReadResultV1:
         lease = self._lease if lease is None else lease
         if type(lease) is not StorageRootLease:
@@ -380,7 +993,10 @@ class DirectCurrentCohortArchiveReaderV1:
                 )
                 try:
                     directory_meta = os.fstat(directory)
-                    if not stat.S_ISDIR(directory_meta.st_mode) or stat.S_IMODE(directory_meta.st_mode) & 0o077:
+                    if (
+                        not stat.S_ISDIR(directory_meta.st_mode)
+                        or stat.S_IMODE(directory_meta.st_mode) & 0o077
+                    ):
                         raise OSError
                     for object_id in request.archive_object_sha256s:
                         parsed, reason = _read_archive_object(directory, object_id)
@@ -396,7 +1012,9 @@ class DirectCurrentCohortArchiveReaderV1:
                         if cohort is None:
                             cohort = parsed["cohort_identity_sha256"]
                             member_tuple = tuple(x.member for x in item.members)
-                        elif cohort != parsed["cohort_identity_sha256"] or member_tuple != tuple(x.member for x in item.members):
+                        elif cohort != parsed[
+                            "cohort_identity_sha256"
+                        ] or member_tuple != tuple(x.member for x in item.members):
                             reason_list.append("COHORT_BINDING_MISMATCH")
                             continue
                         sessions.append(item)
@@ -407,35 +1025,77 @@ class DirectCurrentCohortArchiveReaderV1:
         except OSError:
             reason_list.append("ARCHIVE_OBJECT_UNSAFE")
         if reason_list:
-            return ArchiveReadResultV1("INSUFFICIENT_EVIDENCE", None, _ordered_reasons(tuple(reason_list)))
-        if cohort != request.cohort_identity_sha256 or member_tuple is None or len(member_tuple) != request.cohort_size:
-            return ArchiveReadResultV1("INSUFFICIENT_EVIDENCE", None, ("COHORT_BINDING_MISMATCH",))
+            return ArchiveReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, _ordered_reasons(tuple(reason_list))
+            )
+        if (
+            cohort != request.cohort_identity_sha256
+            or member_tuple is None
+            or len(member_tuple) != request.cohort_size
+        ):
+            return ArchiveReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("COHORT_BINDING_MISMATCH",)
+            )
         if len(sessions) != 21 or len({x.session for x in sessions}) != 21:
-            return ArchiveReadResultV1("INSUFFICIENT_EVIDENCE", None, ("ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING",))
+            return ArchiveReadResultV1(
+                "INSUFFICIENT_EVIDENCE",
+                None,
+                ("ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING",),
+            )
         sessions.sort(key=lambda x: x.session)
         return ArchiveReadResultV1(
             "READY",
-            PrivateCurrentCohortArchiveGridProjectionV1(cohort, request.cohort_size, tuple(sessions)),
+            PrivateCurrentCohortArchiveGridProjectionV1(
+                cohort, request.cohort_size, tuple(sessions)
+            ),
             (),
         )
 
-def _read_archive_object(directory: int, object_id: str) -> tuple[dict[str,object]|None,str|None]:
+
+def _read_archive_object(
+    directory: int, object_id: str
+) -> tuple[dict[str, object] | None, str | None]:
     fd: int | None = None
     try:
-        fd = os.open(f"{object_id}.json",os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,dir_fd=directory)
-        before=os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or stat.S_IMODE(before.st_mode)&0o077: return None,"ARCHIVE_OBJECT_UNSAFE"
-        if before.st_size < 1 or before.st_size > _MAX_ARCHIVE_BYTES: return None,"ARCHIVE_OBJECT_INVALID"
-        raw=os.read(fd,_MAX_ARCHIVE_BYTES+1); after=os.fstat(fd)
-        if len(raw)!=before.st_size or (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns): return None,"ARCHIVE_OBJECT_UNSAFE"
-        try: value=_closed(raw)
-        except ValueError: return None,"ARCHIVE_OBJECT_INVALID"
-        if hashlib.sha256(raw).hexdigest()!=object_id: return None,"ARCHIVE_CONTENT_ID_MISMATCH"
-        return value,None
-    except FileNotFoundError: return None,"ARCHIVE_OBJECT_MISSING"
-    except OSError: return None,"ARCHIVE_OBJECT_UNSAFE"
+        fd = os.open(
+            f"{object_id}.json",
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory,
+        )
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o077
+        ):
+            return None, "ARCHIVE_OBJECT_UNSAFE"
+        if before.st_size < 1 or before.st_size > _MAX_ARCHIVE_BYTES:
+            return None, "ARCHIVE_OBJECT_INVALID"
+        raw = os.read(fd, _MAX_ARCHIVE_BYTES + 1)
+        after = os.fstat(fd)
+        if len(raw) != before.st_size or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            return None, "ARCHIVE_OBJECT_UNSAFE"
+        try:
+            value = _closed(raw)
+        except ValueError:
+            return None, "ARCHIVE_OBJECT_INVALID"
+        if hashlib.sha256(raw).hexdigest() != object_id:
+            return None, "ARCHIVE_CONTENT_ID_MISMATCH"
+        return value, None
+    except FileNotFoundError:
+        return None, "ARCHIVE_OBJECT_MISSING"
+    except OSError:
+        return None, "ARCHIVE_OBJECT_UNSAFE"
     finally:
-        if fd is not None: os.close(fd)
+        if fd is not None:
+            os.close(fd)
+
+
 def _decimal(value: object) -> Decimal:
     if (
         type(value) is not str
@@ -466,17 +1126,36 @@ def _member(value: object) -> CurrentCohortMemberV1:
 
 def _completed(value: object) -> CompletedDailyOhlcvFactV1:
     fields = {
-        "close", "data_cutoff", "freshness_state", "high", "known_at", "low",
-        "member", "open", "published_at", "session", "source_receipt_sha256",
+        "close",
+        "data_cutoff",
+        "freshness_state",
+        "high",
+        "known_at",
+        "low",
+        "member",
+        "open",
+        "published_at",
+        "session",
+        "source_receipt_sha256",
         "volume",
     }
-    if type(value) is not dict or set(value) != fields or type(value["volume"]) is not int:
+    if (
+        type(value) is not dict
+        or set(value) != fields
+        or type(value["volume"]) is not int
+    ):
         raise ValueError
     fact = CompletedDailyOhlcvFactV1(
-        _member(value["member"]), _parse_date(value["session"]), _decimal(value["open"]),
-        _decimal(value["high"]), _decimal(value["low"]), _decimal(value["close"]),
-        value["volume"], _parse_instant(value["data_cutoff"]),
-        _parse_instant(value["published_at"]), _parse_instant(value["known_at"]),
+        _member(value["member"]),
+        _parse_date(value["session"]),
+        _decimal(value["open"]),
+        _decimal(value["high"]),
+        _decimal(value["low"]),
+        _decimal(value["close"]),
+        value["volume"],
+        _parse_instant(value["data_cutoff"]),
+        _parse_instant(value["published_at"]),
+        _parse_instant(value["known_at"]),
         _digest(value["source_receipt_sha256"]),
         CurrentFreshnessStateV1(value["freshness_state"]),
     )
@@ -487,8 +1166,15 @@ def _completed(value: object) -> CompletedDailyOhlcvFactV1:
 
 def _partial(value: object) -> PartialCurrentSessionSnapshotV1:
     fields = {
-        "bar_state", "known_at", "last_bar_at", "member", "observed_price",
-        "observed_volume", "published_at", "session", "source_receipt_sha256",
+        "bar_state",
+        "known_at",
+        "last_bar_at",
+        "member",
+        "observed_price",
+        "observed_volume",
+        "published_at",
+        "session",
+        "source_receipt_sha256",
     }
     if (
         type(value) is not dict
@@ -497,10 +1183,14 @@ def _partial(value: object) -> PartialCurrentSessionSnapshotV1:
     ):
         raise ValueError
     partial = PartialCurrentSessionSnapshotV1(
-        _member(value["member"]), _parse_date(value["session"]),
-        _decimal(value["observed_price"]), value["observed_volume"],
-        _parse_instant(value["last_bar_at"]), _parse_instant(value["published_at"]),
-        _parse_instant(value["known_at"]), _digest(value["source_receipt_sha256"]),
+        _member(value["member"]),
+        _parse_date(value["session"]),
+        _decimal(value["observed_price"]),
+        value["observed_volume"],
+        _parse_instant(value["last_bar_at"]),
+        _parse_instant(value["published_at"]),
+        _parse_instant(value["known_at"]),
+        _digest(value["source_receipt_sha256"]),
         CurrentBarStateV1(value["bar_state"]),
     )
     if partial.value() != value:
@@ -514,7 +1204,8 @@ def _member_fact(value: object) -> CurrentCohortMemberFactV1:
         raise ValueError
     partial = value["partial_current_session"]
     fact = CurrentCohortMemberFactV1(
-        _member(value["member"]), _completed(value["completed_daily"]),
+        _member(value["member"]),
+        _completed(value["completed_daily"]),
         None if partial is None else _partial(partial),
     )
     if fact.value() != value:
@@ -524,20 +1215,33 @@ def _member_fact(value: object) -> CurrentCohortMemberFactV1:
 
 def _ledger_entry(value: object) -> FeatureAvailabilityLedgerEntryV1:
     fields = {
-        "affected_identity_sha256", "availability_state", "feature",
-        "instrument_identity", "interval", "known_at", "published_at",
-        "revision_identity_sha256", "source_identity", "window_from",
+        "affected_identity_sha256",
+        "availability_state",
+        "feature",
+        "instrument_identity",
+        "interval",
+        "known_at",
+        "published_at",
+        "revision_identity_sha256",
+        "source_identity",
+        "window_from",
         "window_through",
     }
     if type(value) is not dict or set(value) != fields:
         raise ValueError
     entry = FeatureAvailabilityLedgerEntryV1(
-        value["feature"], value["instrument_identity"], value["interval"],
-        _parse_instant(value["window_from"]), _parse_instant(value["window_through"]),
+        value["feature"],
+        value["instrument_identity"],
+        value["interval"],
+        _parse_instant(value["window_from"]),
+        _parse_instant(value["window_through"]),
         HistoricalAvailabilityStateV1(value["availability_state"]),
-        None if value["published_at"] is None else _parse_instant(value["published_at"]),
+        None
+        if value["published_at"] is None
+        else _parse_instant(value["published_at"]),
         None if value["known_at"] is None else _parse_instant(value["known_at"]),
-        value["source_identity"], value["revision_identity_sha256"],
+        value["source_identity"],
+        value["revision_identity_sha256"],
         _digest(value["affected_identity_sha256"]),
     )
     if entry.value() != value:
@@ -554,15 +1258,28 @@ def _archive_report(
     str,
 ]:
     fields = {
-        "code_identity", "cohort_identity_sha256", "contract_version",
-        "evidence_state", "invocation_cutoff", "members", "reasons",
-        "report_identity_sha256", "request_identity_sha256", "schema_identity_sha256",
+        "code_identity",
+        "cohort_identity_sha256",
+        "contract_version",
+        "evidence_state",
+        "invocation_cutoff",
+        "members",
+        "reasons",
+        "report_identity_sha256",
+        "request_identity_sha256",
+        "schema_identity_sha256",
     }
     if type(value) is not dict or set(value) != fields:
         raise ValueError
     report_id = _digest(value["report_identity_sha256"])
     if (
-        _sha({key: item for key, item in value.items() if key != "report_identity_sha256"})
+        _sha(
+            {
+                key: item
+                for key, item in value.items()
+                if key != "report_identity_sha256"
+            }
+        )
         != report_id
         or value["contract_version"] != CURRENT_COHORT_CONTRACT_VERSION_V1
         or value["schema_identity_sha256"] != CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1
@@ -583,7 +1300,11 @@ def _archive_report(
         if value["members"] is not None or not reasons:
             raise ValueError
         return state, cutoff, None, report_id
-    if state is not CurrentEvidenceStateV1.COMPLETE or reasons or type(value["members"]) is not list:
+    if (
+        state is not CurrentEvidenceStateV1.COMPLETE
+        or reasons
+        or type(value["members"]) is not list
+    ):
         raise ValueError
     members = value["members"]
     assert type(members) is list
@@ -607,10 +1328,20 @@ def _archive_report(
     return state, cutoff, tuple(members), report_id
 
 
-def _archive_session(value: dict[str, object], object_id: str, request: CurrentSuppliedCohortMarketRegimeRequestV1) -> tuple[PrivateCurrentCohortArchiveSessionProjectionV1 | None, str | None]:
+def _archive_session(
+    value: dict[str, object],
+    object_id: str,
+    request: CurrentSuppliedCohortMarketRegimeRequestV1,
+) -> tuple[PrivateCurrentCohortArchiveSessionProjectionV1 | None, str | None]:
     fields = {
-        "code_identity", "cohort_identity_sha256", "contract_version", "facts",
-        "ledger", "partials", "report", "request_identity_sha256",
+        "code_identity",
+        "cohort_identity_sha256",
+        "contract_version",
+        "facts",
+        "ledger",
+        "partials",
+        "report",
+        "request_identity_sha256",
     }
     if set(value) != fields:
         return None, "ARCHIVE_OBJECT_INVALID"
@@ -621,7 +1352,9 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
     except (TypeError, ValueError, RecursionError):
         return None, "ARCHIVE_OBJECT_INVALID"
     try:
-        state, invocation_cutoff, reported_members, report_id = _archive_report(value["report"])
+        state, invocation_cutoff, reported_members, report_id = _archive_report(
+            value["report"]
+        )
     except (KeyError, TypeError, ValueError, RecursionError):
         return None, "SPRINT10_REPORT_INVALID"
     if state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE:
@@ -692,7 +1425,9 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
             or any(
                 moment > invocation_cutoff
                 for moment in (
-                    partial.last_bar_at, partial.published_at, partial.known_at
+                    partial.last_bar_at,
+                    partial.published_at,
+                    partial.known_at,
                 )
             )
         ):
@@ -712,8 +1447,11 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
         for fact in facts:
             expected.append(
                 _available_ledger_entry(
-                    feature="DAILY_OHLCV", interval="1d", member=fact.member,
-                    cutoff=invocation_cutoff, fact=fact.completed_daily,
+                    feature="DAILY_OHLCV",
+                    interval="1d",
+                    member=fact.member,
+                    cutoff=invocation_cutoff,
+                    fact=fact.completed_daily,
                     state=HistoricalAvailabilityStateV1.AVAILABLE,
                 )
             )
@@ -727,9 +1465,12 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
                 )
                 expected.append(
                     _available_ledger_entry(
-                        feature="PARTIAL_CURRENT_SESSION", interval="1m",
-                        member=fact.member, cutoff=invocation_cutoff,
-                        partial=partial, state=state,
+                        feature="PARTIAL_CURRENT_SESSION",
+                        interval="1m",
+                        member=fact.member,
+                        cutoff=invocation_cutoff,
+                        partial=partial,
+                        state=state,
                     )
                 )
                 expected_states.append(state)
@@ -748,7 +1489,12 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
         return None, "ARCHIVE_SESSION_DUPLICATE_OR_CONFLICTING"
     return (
         PrivateCurrentCohortArchiveSessionProjectionV1(
-            object_id, request_id, report_id, code, invocation_cutoff, session,
+            object_id,
+            request_id,
+            report_id,
+            code,
+            invocation_cutoff,
+            session,
             tuple(
                 PrivateCurrentCohortMemberCloseProjectionV1(
                     fact.member, fact.completed_daily.close
@@ -759,23 +1505,81 @@ def _archive_session(value: dict[str, object], object_id: str, request: CurrentS
         None,
     )
 
+
 class DirectCurrentCohortScheduleResolverV1:
     def __init__(self, root: Path, lease: StorageRootLease | None = None) -> None:
         self._root = root
         self._lease = lease
-    def resolve_exact(self, digest: str, source: str, release: str, cutoff: datetime, lease: StorageRootLease | None) -> ScheduleReadResultV1:
+
+    def resolve_exact(
+        self,
+        digest: str,
+        source: str,
+        release: str,
+        cutoff: datetime,
+        lease: StorageRootLease | None,
+    ) -> ScheduleReadResultV1:
         lease = self._lease if lease is None else lease
         if type(lease) is not StorageRootLease:
             raise ValueError
         result = ScheduleEvidenceStore(self._root, lease).resolve(digest)
-        if result.outcome is not ScheduleOutcome.RESOLVED or result.schedule is None or result.canonical_bytes is None or result.digest != digest: return ScheduleReadResultV1("INSUFFICIENT_EVIDENCE",None,("SCHEDULE_EVIDENCE_MISSING",))
-        schedule=result.schedule
-        if len(result.canonical_bytes)>MAX_SCHEDULE_BYTES or schedule.schema_version not in (2,3) or schedule.source!=source or schedule.source!="nse-authoritative-calendar" or schedule.source_release!=release or _RELEASE.fullmatch(schedule.source_release) is None or schedule.timezone!="Asia/Kolkata" or len(schedule.sessions)+len(schedule.closures)>4096: return ScheduleReadResultV1("INSUFFICIENT_EVIDENCE",None,("SCHEDULE_EVIDENCE_AMBIGUOUS",))
-        if schedule.as_of>cutoff: return ScheduleReadResultV1("INSUFFICIENT_EVIDENCE",None,("SCHEDULE_EVIDENCE_LATE",))
-        cutoff_date=cutoff.astimezone(_IST).date(); classified={x.trade_date for x in schedule.sessions}|{x.trade_date for x in schedule.closures}
-        day=schedule.covered_from
-        if schedule.covered_to<cutoff_date or any((day:=schedule.covered_from+timedelta(days=i)) not in classified for i in range((cutoff_date-schedule.covered_from).days+1)):
-            return ScheduleReadResultV1("INSUFFICIENT_EVIDENCE",None,("SCHEDULE_CONTINUITY_UNPROVEN",))
-        applicable=tuple(PrivateRetainedScheduleSessionProjectionV1(x.trade_date,x.close_at,x.kind) for x in schedule.sessions if x.close_at<=cutoff)
-        if len(applicable)<21: return ScheduleReadResultV1("INSUFFICIENT_EVIDENCE",None,("SCHEDULE_CONTINUITY_UNPROVEN",))
-        return ScheduleReadResultV1("RESOLVED",PrivateRetainedScheduleContinuityProjectionV1(digest,schedule.schema_version,schedule.source,schedule.source_release,schedule.as_of,applicable[-21:]),())
+        if (
+            result.outcome is not ScheduleOutcome.RESOLVED
+            or result.schedule is None
+            or result.canonical_bytes is None
+            or result.digest != digest
+        ):
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_MISSING",)
+            )
+        schedule = result.schedule
+        if (
+            len(result.canonical_bytes) > MAX_SCHEDULE_BYTES
+            or schedule.schema_version not in (2, 3)
+            or schedule.source != source
+            or schedule.source != "nse-authoritative-calendar"
+            or schedule.source_release != release
+            or _RELEASE.fullmatch(schedule.source_release) is None
+            or schedule.timezone != "Asia/Kolkata"
+            or len(schedule.sessions) + len(schedule.closures) > 4096
+        ):
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_AMBIGUOUS",)
+            )
+        if schedule.as_of > cutoff:
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_EVIDENCE_LATE",)
+            )
+        cutoff_date = cutoff.astimezone(_IST).date()
+        classified = {x.trade_date for x in schedule.sessions} | {
+            x.trade_date for x in schedule.closures
+        }
+        day = schedule.covered_from
+        if schedule.covered_to < cutoff_date or any(
+            (day := schedule.covered_from + timedelta(days=i)) not in classified
+            for i in range((cutoff_date - schedule.covered_from).days + 1)
+        ):
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_CONTINUITY_UNPROVEN",)
+            )
+        applicable = tuple(
+            PrivateRetainedScheduleSessionProjectionV1(x.trade_date, x.close_at, x.kind)
+            for x in schedule.sessions
+            if x.close_at <= cutoff
+        )
+        if len(applicable) < 21:
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_CONTINUITY_UNPROVEN",)
+            )
+        return ScheduleReadResultV1(
+            "RESOLVED",
+            PrivateRetainedScheduleContinuityProjectionV1(
+                digest,
+                schedule.schema_version,
+                schedule.source,
+                schedule.source_release,
+                schedule.as_of,
+                applicable[-21:],
+            ),
+            (),
+        )
