@@ -11,6 +11,7 @@ dependencies = [
     "duckdb>=1.5.5,<1.6",
     "pyarrow>=25,<26",
     "python-dotenv>=1.1",
+    "yfinance==1.6.0",
 ]
 
 [project.optional-dependencies]

@@ -8,6 +8,21 @@ Risk: **R3 / High** — financial-research integrity, revised third-party data, 
 Outcome owner, acceptance authority, and residual-risk owner: **repository owner through [GitHub Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)**.
 
 Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md) and the [Plan 19](19-current-supplied-cohort-market-data-contract.md) supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merges first; Issue #127 implements and merges this capability; only then may PR #124 rebase to a separately versioned Market Regime v2. Sprint 12 remains blocked until Sprint 11 / Issue #116 closes through its own gates.
+## MVP delivery boundary
+
+The owner directed the first Issue #127 delivery to be a small working vertical
+slice. It admits only explicit `YFINANCE` / `ADJUSTED` requests with supplied
+unique ISIN, project-symbol, and provider-symbol mappings; validates the
+supplied 21-session schedule; and returns complete typed `S[0]` / `S[20]`
+adjusted-close facts through an injected adapter. It does not alter Upstox raw
+OHLCV.
+
+Deferred to later approved iterations: durable seals and stores; crash recovery
+and idempotent replay; subprocess, timeout, watchdog, and cleanup machinery;
+dependency byte attestation and lock projection; and the exhaustive temporal,
+frame, and lifecycle matrices. These safeguards are not represented as
+implemented by the MVP.
+
 
 ## Design decision: trusted pinned provider, not a security sandbox
 

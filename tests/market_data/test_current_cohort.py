@@ -1076,17 +1076,23 @@ def test_runtime_code_identity_rejects_symlinked_defining_module(
         current_cohort_runtime_code_identity_v1()
 
 
+def _copy_runtime_inventory(source_root: Path, module_root: Path) -> None:
+    for name in (
+        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
+        "runtime_identity_manifest.py",
+    ):
+        destination = module_root / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_root / name, destination)
+
+
 def test_runtime_code_identity_rejects_regular_source_decoy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_root = Path(cohort_module.__file__).parent
     module_root = tmp_path / "market_data"
     module_root.mkdir()
-    for name in (
-        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
-        "runtime_identity_manifest.py",
-    ):
-        shutil.copyfile(source_root / name, module_root / name)
+    _copy_runtime_inventory(source_root, module_root)
     (module_root / "catalog.py").write_text("decoy = True\n")
     monkeypatch.setattr(
         cohort_module, "__file__", str(module_root / "current_cohort.py")
@@ -1103,11 +1109,7 @@ def test_runtime_code_identity_rejects_import_shadow_entries(
     source_root = Path(cohort_module.__file__).parent
     module_root = tmp_path / "market_data"
     module_root.mkdir()
-    for name in (
-        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
-        "runtime_identity_manifest.py",
-    ):
-        shutil.copyfile(source_root / name, module_root / name)
+    _copy_runtime_inventory(source_root, module_root)
     unexpected = module_root / shadow
     if "." in shadow:
         unexpected.write_bytes(b"extension")
@@ -1131,11 +1133,7 @@ def test_runtime_code_identity_measures_its_source_inventory(
     source_root = Path(cohort_module.__file__).parent
     module_root = tmp_path / "market_data"
     module_root.mkdir()
-    for name in (
-        *MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
-        "runtime_identity_manifest.py",
-    ):
-        shutil.copyfile(source_root / name, module_root / name)
+    _copy_runtime_inventory(source_root, module_root)
     manifest = module_root / "runtime_identity_manifest.py"
     manifest.write_bytes(manifest.read_bytes() + b"\n")
     monkeypatch.setattr(
