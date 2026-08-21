@@ -50,13 +50,13 @@ CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1: Final = (
     "current-supplied-cohort-corporate-action-screen@v1"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "597506239022fa1b748cf610d0400221c020a553e6e0c2d7bbb526b8c899240f"
+    "1f0ab03a7ffa39ec8bfe849b6cdbfbe200e5fcb5f3e17bfaace8dc55e0d028da"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "8f32813ee010ad7e8fe74d26c6ee970241a9c810eff2c2088d4acb87308db251"
+    "fdde10e35400c3efaf114f9081b96a1ee801faa3610ab4fb1329b35eda654df2"
 )
 SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "4721fa4b2d27fa4ba62d11d265d557b088f139b13cc8990f92aebaf87f3a944b"
+    "63c4e4ea71df6a32080b82d946e5a77af87d11b6c1f1f1c005d057b58d3fb9b0"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1: Final = (
     "3853a15b853b73a945065486ca96b48d4ee3625e4ed7c6e4927579e2b0b372a2"
@@ -1873,6 +1873,8 @@ def _schedule_close(
         or end - start != 20
         or not _is_utc(close)
     ):
+        return PrivateCorporateActionScreenOutcomeV1.SCHEDULE_CONTINUITY_UNPROVEN, None
+    if schedule.as_of < close:
         return PrivateCorporateActionScreenOutcomeV1.SCHEDULE_CONTINUITY_UNPROVEN, None
     if close > request.decision_cutoff:
         return PrivateCorporateActionScreenOutcomeV1.SCHEDULE_LATE, None

@@ -641,6 +641,55 @@ def test_both_schedule_schema_versions_derive_exact_twenty_position_close(
 
 
 @pytest.mark.parametrize(
+    ("as_of", "expected"),
+    (
+        (
+            _CLOSE - timedelta(microseconds=1),
+            "SCHEDULE_CONTINUITY_UNPROVEN",
+        ),
+        (_CLOSE, "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
+        (_CUTOFF, "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
+    ),
+)
+def test_v3_schedule_requires_s20_close_before_provider_resolution(
+    tmp_path: Path, as_of: datetime, expected: str
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        retained = scenario.schedule_store.retain(
+            replace(
+                _schedule(),
+                schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+                as_of=as_of,
+            )
+        )
+        assert retained.digest is not None
+        input_value = api.CurrentSuppliedCohortCorporateActionScreenInputV1(
+            scenario.manifest,
+            _S0,
+            _S20,
+            _CUTOFF,
+            retained.digest,
+            "nse-authoritative-calendar",
+            _RELEASE,
+            "UPSTOX",
+        )
+        private = api.CurrentSuppliedCohortCorporateActionScreenResolverV1(
+            scenario.schedule_store,
+            api.UpstoxCorporateActionScreenProviderV1(scenario.store),
+        ).resolve_exact(input_value, scenario.lease)
+        assert private.outcome.value == expected
+        if expected == "SCHEDULE_CONTINUITY_UNPROVEN":
+            assert private.member_results == ()
+            assert private.to_public_report().screen_state is None
+        else:
+            assert private.to_public_report().screen_state.value == "SCREENED"
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
     ("sessions", "cutoff", "expected"),
     (
         (_schedule().sessions, _CUTOFF, None),
@@ -1009,6 +1058,44 @@ def test_concrete_upstox_retrieval_time_uses_close_inclusively(
             ).fetch(scenario.manifest.members[0].isin, "fixture-token"),
         )
         assert _resolve(api, scenario).outcome.value == expected
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
+    ("retrieved_at", "row_outcome", "aggregate_outcome"),
+    (
+        (
+            _CLOSE - timedelta(microseconds=1),
+            "STALE",
+            "STALE",
+        ),
+        (
+            _CLOSE,
+            "ACTION_OBSERVED",
+            "ACTION_OBSERVED",
+        ),
+    ),
+)
+def test_concrete_upstox_stale_snapshot_precedes_in_window_action_inspection(
+    tmp_path: Path,
+    retrieved_at: datetime,
+    row_outcome: str,
+    aggregate_outcome: str,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1, retain=False)
+    try:
+        _retain(
+            scenario,
+            UpstoxCorporateActionsClientV1(
+                _Transport(_payload("DIVIDEND", _S20)),
+                clock=lambda: retrieved_at,
+            ).fetch(scenario.manifest.members[0].isin, "fixture-token"),
+        )
+        private = _resolve(api, scenario)
+        assert private.member_results[0].row_outcome.value == row_outcome
+        assert private.outcome.value == aggregate_outcome
     finally:
         scenario.close()
 
