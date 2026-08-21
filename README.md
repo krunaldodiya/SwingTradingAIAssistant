@@ -1,10 +1,12 @@
 # Swing Trading Research Tool for AI Assistants
 
 This repository is building a trustworthy, deterministic research and analysis
-tool for point-in-time Nifty 50 equity swing trading. It supplies structured,
-traceable market facts to an external AI assistant so the assistant can explain
-research, compare setups, monitor supported holdings, and return an explicit
-`NO_TRADE` result when evidence is insufficient.
+tool for listed-equity swing trading. Product research, qualification, and
+default workflows focus on the point-in-time Nifty 50 plus Nifty Next 50 (the
+Nifty 100). It supplies structured, traceable market facts to an external AI
+assistant so the assistant can explain research, compare setups, monitor
+supported holdings, and return an explicit `NO_TRADE`, unsupported, or
+insufficient-evidence result.
 
 The objective is capital preservation, consistency, low drawdown, explainable
 high-quality setups, and repeatability—not maximum returns or frequent trades.
@@ -21,14 +23,19 @@ The product has two strict layers:
    silently recompute them from raw OHLC data.
 
 This repository is not an autonomous trading bot. It does not place broker
-orders, guarantee returns, or currently support intraday trading, futures,
-options, crypto, long-term investing, or stocks outside the point-in-time Nifty
-50 universe.
+orders, guarantee returns, or support intraday trading, futures, options,
+crypto, long-term investing, or a generic multi-asset platform. Explicitly
+supplied listed stocks outside the Nifty 100 may use a capability only when
+their canonical identity and that capability's required evidence are supported;
+they are not the primary roadmap, qualification, or default-workflow focus.
 
 ## Locked research pipeline
 
 ```text
-Nifty 50 universe
+Higher-level universe policy
+  -> default point-in-time Nifty 50 + Nifty Next 50
+     or an explicitly supplied supported listed equity
+  -> bounded canonical listed-equity cohort
   -> Market regime
   -> Sector analysis
   -> Market structure
@@ -46,51 +53,68 @@ Structured research facts
   -> Explainable recommendation or no-trade decision
 ```
 
+Universe selection and point-in-time index membership are higher-level policy.
+Reusable feature cores consume explicit bounded canonical equity identities and
+declare their required data capabilities; they return unsupported or
+insufficient evidence instead of deciding index membership.
+
 The planned product includes reproducible market-data ingestion, deterministic
 research modules, bias-aware backtesting, risk validation, structured facts,
-and read-only monitoring of supported Nifty 50 equity holdings. Each module is
-specified, implemented, and validated separately in pipeline order.
+and read-only monitoring of supported listed-equity holdings. Default discovery,
+research qualification, and validation concentrate on the point-in-time Nifty
+100. Each module is specified, implemented, and validated separately in
+pipeline order.
 
 ## Current implementation status
 
-The repository is completing the market-data foundation before research modules
-begin. The downloader-v1 candidate is symbol-agnostic for retained point-in-time
-Nifty 50 members and supports one symbol, several symbols, or the full retained
-universe. It provides:
+The repository contains the Nifty 50 market-data foundation and the first two
+provider-free research cores. Delivered behavior includes:
 
-- Upstox instrument resolution plus historical and current-session candle
-  requests behind provider-independent contracts;
-- bounded shared rate limiting, `1..8` workers, retries, output, memory, and
-  date ranges;
-- immutable monthly Parquet, provisional current-month snapshots, a
-  metadata-only DuckDB catalog, recovery, and zero-request resume;
-- provider-free coverage and bounded queries for `1m`, `3m`, `5m`, `15m`,
-  `30m`, `1h`, and `1d` data; and
-- immutable point-in-time universe, schedule, instrument, and Upstox
-  corporate-action evidence with explicit raw/adjusted/symbol-change states.
+- the persistent downloader-v1 workflow for one, several, or all retained
+  point-in-time Nifty 50 members, with Upstox raw historical/current candles,
+  bounded shared resources, immutable monthly/provisional storage, provider-free
+  coverage and `1m` through `1d` queries, and point-in-time universe, schedule,
+  instrument, and corporate-action evidence;
+- the Plan-19 current supplied-cohort path for bounded current price/volume
+  facts and immutable temporal-availability records;
+- the provider-neutral Plan-21 corporate-action screen, merged through PR #128
+  as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`,
+  with an Upstox retained-snapshot adapter and explicit nonexhaustive coverage;
+- the separate Issue-127 adjusted-daily MVP, merged through
+  [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+  as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`, using explicit
+  `YFINANCE` / `ADJUSTED` selection and supplied
+  `isin`/`project_symbol`/`provider_symbol` mappings without changing Upstox raw
+  candles;
+- implemented `nifty50-market-regime@v1` deterministic exact-50 reduction and
+  its fail-closed evidence boundary; and
+- implemented `nifty50-sector-participation@v1` provider-free exact-50
+  aggregation over the same-pass Market Regime handoff and point-in-time opaque
+  sector labels.
 
-Sprint 2 closed at **21/24 executable tasks (87.5%)** after establishing
-immutable Parquet publication. Its carried evidence is now implemented in the
-Sprint 3 release chain, but Milestone 2 remains **blocked / not accepted** until
-the exact candidates pass publication review and merge. The sprint is extended
-through that gate. Its public surface is `market-data download`, `coverage`, and
-bounded `query` commands over the same versioned application contracts.
+The Market Regime and Sector Participation implementations preserve their
+frozen Nifty 50 V1 cardinalities and contracts. They do not establish an
+observed live result, effectiveness, or instrument-agnostic support. The
+adjusted-daily MVP likewise remains a supplied Plan-19/Nifty-50-composed
+boundary with incomplete canonical listed-equity identity.
 
-Upstox is the only runtime candle and corporate-action provider.
+[Plan 23](docs/plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
+records tomorrow's separate incremental migration toward reusable
+listed-equity feature boundaries. It does not reopen or reimplement completed
+Issue #127, and Sprint 11 Market Regime v2 / PR #124 is not resumed today.
+
+Upstox remains primary for live/raw OHLCV and retained corporate-action
+screening. yfinance is a separate adjusted-daily research provider, not a
+silent fallback, live broker feed, or strict point-in-time authority.
 `NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
-integration. A caller-
-supplied canonical universe snapshot establishes historical Nifty 50 membership
-and sector provenance; it does not supply prices or make network requests.
+integration. A caller-supplied canonical universe snapshot establishes
+historical Nifty 50 membership and sector provenance; it does not supply prices
+or make network requests.
 
-The package deliberately has no built-in exchange-calendar feed. The persistent
-download service accepts authoritative, provenance-complete NSE schedule
-evidence as an injected dependency. The default CLI accepts the same canonical
-evidence through `--schedule-file` and otherwise fails closed with
-`SCHEDULE_EVIDENCE_UNAVAILABLE`. Coverage and query are provider-free and use
-only retained point-in-time evidence.
-
-Research modules, strategy rules, recommendations, and broker execution are not
-implemented.
+The package has no built-in exchange-calendar feed. Persistent market-data
+workflows require provenance-complete supplied NSE schedule evidence and fail
+closed when it is unavailable. Strategy rules, recommendations, and broker
+execution are not implemented.
 
 
 ## Sprint 4 historical evidence census
@@ -272,5 +296,7 @@ Credentials, broker sessions, generated datasets, and private market data must n
 - [Data foundation and Upstox ingestion plan](docs/plans/01-data-foundation-and-upstox-ingestion.md):
   downloader milestones and acceptance gates.
 - [Sprint records](docs/sprints/README.md): committed work and retrospectives.
+- [Plan 23 — Instrument-agnostic feature boundary and coupling audit](docs/plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md):
+  owner decision, current coupling evidence, and ordered remediation slices.
 - [Project notes](docs/notes/README.md): curated decisions, hypotheses, and
   external-reference assessments.

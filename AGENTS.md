@@ -2,14 +2,27 @@
 
 ## Mission and scope
 
-Build a trustworthy, agent-agnostic research tool for point-in-time Nifty 50 equity swing trading. This is
-not an autonomous trading bot.
+Build a trustworthy, agent-agnostic research tool for listed-equity swing
+trading. Product research, qualification, and default workflows focus on the
+point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an
+autonomous trading bot.
 
-- Cover Nifty 50 equities only, with an explicit swing horizon and bar frequency.
-- Exclude intraday trading, futures, options, crypto, penny stocks, IPOs, midcaps, smallcaps, long-term
-  investing, and generic platform features.
-- Never place broker orders or use guaranteed-return, certainty, or financial-adviser language.
-- Treat `NO_TRADE`, missing evidence, and insufficient data as first-class outcomes.
+- Reusable feature cores accept an explicit bounded list of canonical
+  listed-equity instruments independently of index membership. Point-in-time
+  index membership and universe selection are separate higher-level policies.
+- Canonical equity identity is ISIN plus exchange, effective symbol, and
+  versioned provider mappings. Each feature declares its required data
+  capabilities and returns explicit unsupported or insufficient-evidence
+  outcomes instead of embedding an index-membership check.
+- Explicitly supplied supported stocks outside the Nifty 100 may use the same
+  capabilities when canonical identity and all required evidence exist. They
+  are not the primary roadmap, qualification, or default-workflow focus.
+- Use an explicit swing horizon and bar frequency. Exclude intraday trading,
+  futures, options, crypto, long-term investing, generic multi-asset platform
+  features, unsupported evidence, and broker order placement.
+- Never use guaranteed-return, certainty, or financial-adviser language.
+- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient
+  data as first-class outcomes.
 
 ## Direction and sources of truth
 

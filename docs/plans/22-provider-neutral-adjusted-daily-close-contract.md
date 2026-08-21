@@ -1,78 +1,137 @@
 # Provider-neutral adjusted daily close contract
 
-Status: **PLANNED / NOT STARTED — GitHub Issue #127; this document specifies future work and records no implementation, provider call, acquisition, test, review, merge, or publication evidence**
+Status: **ISSUE #127 WORKING MVP IMPLEMENTED AND MERGED — [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129) merged as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; Issue #127 is closed. The larger hardening design retained below is future remediation and is not delivered MVP evidence.**
 
-Contract revision: `provider-neutral-adjusted-daily-close@v1` (planned)  
-Schema revision: `provider-neutral-adjusted-daily-close-schema@v1` (planned)  
+Delivered contract revision: `provider-neutral-adjusted-daily-close@v1-mvp`
+Deferred target contract revision: `provider-neutral-adjusted-daily-close@v1`
+Deferred target schema revision: `provider-neutral-adjusted-daily-close-schema@v1`
 Risk: **R3 / High** — financial-research integrity, revised third-party data, dependency/network behavior, identity continuity, and immutable evidence.  
-Outcome owner, acceptance authority, and residual-risk owner: **repository owner through [GitHub Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)**.
+Outcome owner, acceptance authority, and residual-risk owner: **repository owner through the completed [GitHub Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)**.
 
-Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md) and the [Plan 19](19-current-supplied-cohort-market-data-contract.md) supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merges first; Issue #127 implements and merges this capability; only then may PR #124 rebase to a separately versioned Market Regime v2. Sprint 12 remains blocked until Sprint 11 / Issue #116 closes through its own gates.
-## MVP delivery boundary
+Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md) and the [Plan 19](19-current-supplied-cohort-market-data-contract.md) supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merged through PR #128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b` before Issue #127 / Plan 22 merged through PR #129. That publication order is complete. PR #124 Market Regime v2 is intentionally not resumed today. Issue #130 / Plan 23 remediation starts separately tomorrow and does not reopen or reimplement Issue #127.
+
+## Delivered MVP boundary and evidence
 
 The owner directed the first Issue #127 delivery to be a small working vertical
-slice. It admits only explicit `YFINANCE` / `ADJUSTED` requests with supplied
-unique ISIN, project-symbol, and provider-symbol mappings; validates the
-supplied 21-session schedule; and returns complete typed `S[0]` / `S[20]`
-adjusted-close facts through an injected adapter. It does not alter Upstox raw
-OHLCV.
+slice. The merged MVP admits only explicit `YFINANCE` / `ADJUSTED` requests with
+supplied unique `isin`, `project_symbol`, and `provider_symbol` values; validates
+the supplied 21-session schedule and decision-close/cutoff relationship; and
+returns typed `S[0]` / `S[20]` adjusted-close facts through the injected
+adapter. It does not alter Upstox raw OHLCV.
 
-Deferred to later approved iterations: durable seals and stores; crash recovery
-and idempotent replay; subprocess, timeout, watchdog, and cleanup machinery;
-dependency byte attestation and lock projection; and the exhaustive temporal,
-frame, and lifecycle matrices. These safeguards are not represented as
-implemented by the MVP.
+[PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+merged reviewed head `1ca302a36cec5e52fbc5254900c4c4a439c47f83` as
+`c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`. Issue #127 is closed as
+completed. Recorded MVP evidence is 11 focused tests, 2,689 full-suite tests at
+91.21% coverage, Ruff format/check, Pyright, Vulture, build, installed boundary
+evidence, a live `RELIANCE.NS` adapter smoke, hosted Quality and build, and
+GitGuardian. This section records that completed lifecycle; it does not transfer
+those results to any future extended contract.
 
 Authoritative mapping evidence is deferred. The owner-supplied unique mapping is
-the explicit trusted MVP boundary; this slice neither verifies nor constructs
-mapping evidence.
+the explicit trusted MVP boundary; the delivered slice neither verifies nor
+constructs mapping evidence.
+
+Also deferred to separately approved iterations: durable seals and stores;
+crash recovery and idempotent replay; subprocess, timeout, watchdog, and cleanup
+machinery; dependency-byte attestation and lock projection; and the exhaustive
+temporal, frame, and lifecycle matrices. These safeguards are not represented
+as implemented by the MVP.
 
 
-## Design decision: trusted pinned provider, not a security sandbox
+## Deferred hardening design: trusted pinned provider, not a security sandbox
 
-The active local sources require explicit provider selection, pinned dependencies, private retained evidence, bounded provider/network work, cancellation, cleanup, and fail-closed market-data outcomes. They do **not** require adversarial operating-system containment of the reviewed yfinance dependency. Plan 21 explicitly adds no sandbox; Issue #127 asks for bounded and authorized work, not hostile-code execution; the architecture freeze and roadmap govern data integrity and provider separation, not malicious-process isolation.
+The retained extended design requires explicit provider selection, pinned
+dependencies, private retained evidence, bounded provider/network work,
+cancellation, cleanup, and fail-closed market-data outcomes. It does **not**
+require adversarial operating-system containment of the reviewed yfinance
+dependency. Plan 21 adds no sandbox; the architecture freeze and roadmap govern
+data integrity and provider separation, not malicious-process isolation.
 
-V1 therefore trusts the exact reviewed first-party implementation and the exact locked `yfinance==1.6.0` dependency closure as code running with the invoking non-root user's authority. Caller-controlled schemas, symbols, paths, returned frames, and retained bytes remain untrusted and fully validated. The worker is an ordinary fresh subprocess used for wall-time cancellation and failure separation. It is **not** a security boundary.
+If separately implemented, the extended target would trust the exact reviewed
+first-party implementation and locked `yfinance==1.6.0` dependency closure as
+code running with the invoking non-root user's authority. Its worker would be
+an ordinary fresh subprocess for wall-time cancellation and failure separation,
+not a security boundary. The merged MVP calls its injected adapter directly and
+does not claim this deferred subprocess lifecycle.
 
-Consequences are deliberate:
-
-- no cgroup, pidfd, seccomp, Darwin sandbox, `RLIMIT_NPROC`, kqueue, process-group kill, watchdog, descendant tracker, thread ceiling, or PID/PGID/SID identity appears in a V1 invariant, schema, event, store, projection, or test;
-- `threads=False` disables only yfinance's ticker worker pool; it is not a universal no-thread guarantee;
-- cleanup owns and reaps only the direct `Popen` child through the live child handle; no persisted process identifier is ever signalled;
-- a malicious or compromised dependency could create threads or descendants or evade ordinary cancellation. That case is outside the accepted V1 threat boundary and requires a different isolation product, not stronger wording in this contract;
-- scope/provider/dependency expansion, public service operation, hostile multi-tenant input, or a requirement to execute untrusted provider code triggers a new R3 threat decision and separately qualified isolation design.
-
-The selected design is the smallest executable contract that satisfies Issue #127. The rejected alternative is the superseded cross-platform watchdog/sandbox design: its Linux migration, Darwin thread, and Darwin process-identity guarantees were not implementable with the named primitives.
+The extended design deliberately includes no cgroup, pidfd, seccomp, Darwin
+sandbox, `RLIMIT_NPROC`, kqueue, process-group kill, watchdog, descendant
+tracker, thread ceiling, or PID/PGID/SID guarantee. `threads=False` disables
+only yfinance's ticker worker pool. A malicious dependency remains outside the
+accepted threat boundary; hostile provider code would require a different
+isolation product. The superseded cross-platform watchdog/sandbox design is
+rejected, but none of this deferred machinery is delivered MVP behavior.
 
 ## Outcome and product/data scope
 
-Issue #127 provides one deterministic provider-neutral port for explicit **adjusted daily close only** over an exact owner-supplied 1–50 member Nifty 50 cohort and 21 completed official daily sessions `S[0]..S[20]`. The sole V1 route is `provider_id=YFINANCE`, `price_basis=ADJUSTED`, adapter `yfinance-adjusted-daily-close@v1`, and package `yfinance==1.6.0`.
+The delivered Issue #127 MVP provides one deterministic provider-neutral port for explicit **adjusted daily close only** over an exact owner-supplied 1–50 mapping set and 21 completed official daily sessions `S[0]..S[20]`. Its request mirrors the supplied members against a supplied `plan19_cohort`; Sprint 11 composition obtains that cohort through Plan 19's Nifty 50 workflow. The MVP identity tuple is only `isin`, `project_symbol`, and `provider_symbol`. It contains no canonical exchange/effective-symbol identity and makes no instrument-agnostic or outside-Nifty-50 support claim. The sole delivered route is `provider_id=YFINANCE`, `price_basis=ADJUSTED`, adapter `yfinance-adjusted-daily-close@v1`, and package `yfinance==1.6.0`.
 
 Source evaluation:
 
 1. **Expected value:** one separate adjusted-close fact avoids obvious split/dividend discontinuities in the bounded comparison without building an adjustment engine.
-2. **Scope fit:** Nifty 50, daily, adjusted close, personal/internal research; no intraday, adjusted OHLC, broker/live, corporate-action authority, or redistribution capability.
+2. **Scope fit:** supplied Plan-19/Nifty-50-composed cohort research, daily adjusted close, personal/internal use; no general listed-equity admission, intraday, adjusted OHLC, broker/live, corporate-action authority, or redistribution capability.
 3. **Material risk:** yfinance is unofficial, may expose revised/non-PIT history, owns mutable dependency-internal transport, and does not establish Yahoo permission.
 4. **Smallest alternative:** retain Upstox raw facts and Plan 21, adding one optional narrow adapter rather than another market-data platform.
 5. **Decision:** **accepted** for this narrow optional adapter; **rejected** as strict PIT/as-published authority, silent fallback, or general data-distribution source.
 
 The repository owner accepts optional personal/internal research use and the unofficial, revised/non-PIT, dependency-owned transport, and terms limitations. This is not Yahoo authorization, endorsement, exchange authority, or general redistribution permission. Re-review is required before public/third-party use, provider/capability expansion, dependency upgrade, terms-snapshot change, or strict PIT claim.
 
-| Capability | V1 route | Binding |
+### Issue #130 listed-equity boundary overlay
+
+[Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+defines future remediation that will separate a reusable adjusted-close feature
+boundary from index selection. The target successor accepts explicit bounded
+canonical listed-equity identities and provider mappings; a higher-level policy
+decides whether the caller requested a point-in-time Nifty 50, Nifty Next 50,
+combined Nifty 100, or another explicitly supplied supported stock. The future
+feature must return typed unsupported or insufficient evidence for an
+unavailable provider mapping, schedule, price basis, freshness, or
+adjusted-close fact rather than perform an index check.
+
+The delivered MVP still names `plan19_cohort` and supplies only
+`isin`/`project_symbol`/`provider_symbol` mappings. It lacks the complete
+ISIN/exchange/effective-symbol identity required by Issue #130. It therefore is
+not evidence that Plan 22 is already instrument-agnostic or that stocks outside
+the Plan-19/Nifty-50 composition are supported. The first ordered
+[Plan 23](23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
+remediation slice must version that input/mapping boundary while preserving the
+delivered provider, price-basis, failure, and raw-separation behavior. That
+future work does not reopen or reimplement Issue #127 and does not silently
+reinterpret or rehash the deferred twelve-projection design below.
+
+| Capability | Delivered/current route | Binding |
 | --- | --- | --- |
 | Current/live raw OHLCV | Upstox | Existing Plan-19 facts and immutable raw objects remain unchanged. |
 | Corporate-action screen | Plan 21 / Upstox | Separate nonexhaustive screen; no adjusted-price authority. |
-| Adjusted daily close | Plan 22 / yfinance | Separate `ADJUSTED` close fact with exact identities. |
+| Adjusted daily close | Plan 22 `@v1-mvp` / yfinance | Separate `ADJUSTED` close fact with supplied MVP identities. |
 | Angel One | none | Deferred; no credential, sandbox, or call. |
 | Fallback | none | Any failure closes only this capability. |
 
 No yfinance value fills, rewrites, changes, or enters an Upstox candle or raw archive. No raw and adjusted values share one OHLC candle. Plan 22 does not calculate member direction, breadth, Market Regime, Market Structure, recommendation, or order.
 
-## Canonical profile and twelve projections
+## Deferred target canonical profile and twelve projections
 
-All external and retained metadata objects use closed canonical JSON: UTF-8, no BOM, lexicographic object keys, compact separators, `allow_nan=false`, no duplicate keys, and exactly one trailing LF. Arrays retain declared order. `UtcInstant` has six fractional UTC digits; `LocalDate` is a real ISO date; SHA-256 is 64 lowercase hexadecimal characters. Unknown/missing keys, wrong type/nullability, noncanonical bytes, invalid order/bounds, or invariant failure reject.
+Everything from this heading through the deferred evidence/design matrices
+specifies the unimplemented extended `@v1` target unless a paragraph explicitly
+identifies merged MVP behavior. It must not be read as PR #129 evidence.
 
-The compact `schema_bundle` is the sole V1 shape source. Every field triple is `[name,type,nullable]`; all fields are required and ordered; `nullable=true` means JSON null is additionally admitted. Prose cannot add another shape, enum, reason, event, or field. Every projection identity is SHA-256 of the exact displayed canonical JSON plus LF. Relative to exact repair input artifact SHA-256 `c19c4c810722d3b9689523855a8f0c4a4dbd61328b072c19ecbc7cc2badc065d`, five projections remain byte-identical and seven change.
+The target external and retained metadata objects use closed canonical JSON:
+UTF-8, no BOM, lexicographic object keys, compact separators,
+`allow_nan=false`, no duplicate keys, and exactly one trailing LF. Arrays retain
+declared order. `UtcInstant` has six fractional UTC digits; `LocalDate` is a real
+ISO date; SHA-256 is 64 lowercase hexadecimal characters. Unknown/missing keys,
+wrong type/nullability, noncanonical bytes, invalid order/bounds, or invariant
+failure reject.
+
+The compact `schema_bundle` is the sole deferred `@v1` target shape source.
+Every field triple is `[name,type,nullable]`; all fields are required and
+ordered; `nullable=true` means JSON null is additionally admitted. Prose cannot
+add another shape, enum, reason, event, or field. Every projection identity is
+SHA-256 of the exact displayed canonical JSON plus LF. Relative to exact repair
+input artifact SHA-256
+`c19c4c810722d3b9689523855a8f0c4a4dbd61328b072c19ecbc7cc2badc065d`,
+five projections remain byte-identical and seven change.
 
 | Projection | SHA-256 of displayed canonical JSON + LF | Prior projection bytes |
 | --- | --- | --- |
@@ -283,25 +342,38 @@ Mapping reasons map only to `NOT_ADMITTED / UNAVAILABLE / PROVIDER_SYMBOL_MAPPIN
 
 ## Integration and immutable raw boundary
 
-On success the authoritative internal surface is `CompletedAcquisition.adjusted_fact_handoff`. It contains exactly one canonical `AdjustedEndpointPair` for every Plan-19 member, with complete nested `Fact` values and identities for official `S[0]` and `S[20]`. It also binds the exact full cohort/schedule scope, observation, receipt/finalization, mapping, executable dependency projection, provider policy, schema, and runtime identities. It contains no Upstox value, direction, breadth, regime label, or Market Structure result. Ordinary failure has JSON null handoff.
+In the deferred target, the authoritative internal success surface would be `CompletedAcquisition.adjusted_fact_handoff`, containing one canonical `AdjustedEndpointPair` for every Plan-19 member with nested `Fact` values and identities for official `S[0]` and `S[20]`. It would bind the full cohort/schedule scope, observation, receipt/finalization, mapping, executable dependency projection, provider policy, schema, and runtime identities, with no Upstox value, direction, breadth, regime label, or Market Structure result. Ordinary failure would have a null handoff. These types are not delivered by PR #129.
 
-Public value privacy remains unchanged: `PublishedAcquisitionReport.report` exposes status, price basis, provider, temporal state, and opaque provenance identities, while the nested seal also exposes opaque receipt/finalization/private-result hashes. It exposes no adjusted close, provider symbol, or handoff identity. Issue #127 tests the real internal handoff serializer/parser and a composition fixture that pairs it with unchanged Upstox raw endpoint identities while proving the two bases and identities remain separate.
+The deferred public target would expose status, price basis, provider, temporal
+state, and opaque provenance identities while excluding adjusted closes,
+provider symbols, member failure detail, handoff identity, paths, logs, terms
+bytes, raw payloads, cookies, queries, and free-form diagnostics. Those
+`CompletedAcquisition` / `PublishedAcquisitionReport` surfaces are not merged
+MVP types.
 
-Under [Issue #127 comment 5367936629](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127#issuecomment-5367936629):
+[Issue #127 comment 5367936629](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127#issuecomment-5367936629)
+records the original responsibility split. PR #129 completed the narrower owner-
+approved MVP; the unimplemented obligations below remain future target work:
 
-| Evidence | Plan 22 obligation | Downstream owner |
+| Evidence | Deferred target obligation | Downstream owner |
 | --- | --- | --- |
 | Plan-21 corporate-action report | validate exact successful/insufficient identity-bearing report separately; no event reclassification or exhaustive no-break claim | Plan 21 |
 | Upstox raw endpoints | composition fixture retains exact existing `S[0]`/`S[20]` identities and `RAW` basis; Plan 22 never writes or adjusts them | PR #124 |
-| Plan-22 adjusted endpoints | executable handoff returns exact adjusted facts and observation/receipt/mapping/dependency/policy/schema/runtime identities | Plan 22 |
-| raw/adjusted disagreement | Issue #127 proves separation only | PR #124 exclusively computes `RAW_ADJUSTED_DIRECTION_CONFLICT` |
+| Extended Plan-22 adjusted endpoints | future handoff returns adjusted facts and observation/receipt/mapping/dependency/policy/schema/runtime identities | future versioned Plan-22 remediation |
+| raw/adjusted disagreement | adjusted/raw separation remains mandatory | PR #124 exclusively computes `RAW_ADJUSTED_DIRECTION_CONFLICT` when resumed |
 | Market Structure | no field, import, calculation, or test | future post-Sprint-16 approved contract |
 
-Only after Plans 21 and 22 merge may PR #124 rebase to Market Regime v2. It consumes successful Plan-21 evidence, a `CURRENT_PROSPECTIVE` Plan-22 handoff, and unchanged Upstox raw evidence for the same full cohort/schedule/cutoff. It alone computes raw and adjusted directions and whole-result disagreement. Adjusted close cannot supply Market Structure; raw highs/lows and adjusted closes may not be mixed.
+Plans 21 and the Issue #127 MVP are merged. PR #124 may rebase to Market Regime
+v2 only when that work is explicitly resumed and its then-applicable contracts
+are accepted. It is intentionally not resumed today. Tomorrow's Issue #130 /
+Plan 23 remediation is a separate versioned boundary migration, not a retry or
+reimplementation of Issue #127.
 
-## Executable implementation evidence matrix
+## Deferred extended-contract implementation evidence matrix
 
-Issue #127 adds these checks only with implementation and exercises the installed exact locked wheel, not a mock substituted for the provider boundary. No sandbox/descendant/thread/PID test remains.
+The following matrix belongs only to a future extended hardening contract. It
+is not the evidence matrix for the merged `@v1-mvp` and none of its unimplemented
+stores, subprocess controls, seals, or exhaustive matrices is claimed delivered.
 
 | Area | Required evidence |
 | --- | --- |
@@ -321,11 +393,15 @@ Issue #127 adds these checks only with implementation and exercises the installe
 | Handoff and immutable boundaries | Exact success handoff for S0/S20 all members, null on failure, retained/returned identity equality, public adjusted-value/provider-symbol/handoff-identity exclusion while receipt/finalization/private-result hashes remain honestly public through the seal, unchanged raw bytes/identities, zero Market Regime/Market Structure/fallback/Angel/intraday/adjusted-OHLC path. |
 | Capacity | Exact 544-byte maximum `ObjectRef`, 140,912-byte maximum 256-row selected set, 208-ref success, 208-ref temporal failure, 101,683-byte maximum handoff; 961,777-byte maximum-width private-result and 1,662-byte maximum-width public-report constructions within enforced 2 MiB/64 KiB stores, plus 64 KiB seal/locator stores; runtime-derived dependency rows; 64 MiB quota boundaries. |
 
-Completion additionally requires exact-candidate focused/full gates, installed-wheel smoke, independent exact-revision functional/security/provenance/temporal review, hosted CI/security, merge, and Issue #127 closeout. This plan records none as complete.
+PR #129 completed the narrower MVP gates recorded in the delivered-evidence
+section above. The deferred matrix requires its own future implementation,
+focused/full gates, installed-wheel smoke, independent exact-revision reviews,
+hosted CI/security, merge, and lifecycle closeout. Issue #127's completed MVP
+evidence cannot be reused as proof of that future contract.
 
-## Review-blocker closure and artifact self-check
+## Deferred extended-contract design record and artifact self-check
 
-| Exact blocker | Closure in this revision |
+| Exact blocker | Specified closure in the deferred design |
 | --- | --- |
 | No executable adjusted-fact return | `AdjustedFactHandoff` + `AdjustedEndpointPair` are retained and returned inside authoritative `CompletedAcquisition`; public serialization remains the nested value-free report/seal. |
 | Marker-aware executable dependency closure | Admission evaluates all and only the frozen exact CPython marker-active yfinance rows: 22 common plus one Python-version-selected NumPy row on all platforms, plus tzdata only on win32/emscripten; therefore 23 rows on Darwin/Linux and 24 on win32/emscripten. Runtime evidence binds marker inputs and exact derived rows; unrelated installed distributions remain allowed but worker imports are closed. Selected-artifact, installed-RECORD/file evidence and its non-attestation limit remain explicit; no venv is added. |
@@ -358,16 +434,30 @@ The documentation self-check for these exact candidate bytes must establish:
 - the public report/seal closure contains no adjusted value, provider symbol, or handoff identity; its receipt/finalization/private-result hashes are honestly public, while the internal completed surface binds and returns the retained handoff;
 - recovery has exactly one stable Input-keyed completion authority; identical calls serialize and are idempotent, seal-only retry is locator-only, incomplete reservation never reruns a worker, and no scan or reconstructed timestamp path exists.
 
-The exact plan-file SHA-256 is reported externally after the file is written because embedding it would be self-referential. No project test, build, lint, format, provider call, commit, push, or publication is evidence for this documentation-only rewrite.
+For any future extended-contract revision, the exact plan-file SHA-256 must be
+reported externally after the file is written because embedding it would be
+self-referential. No documentation self-check substitutes for implementation,
+tests, review, merge, or publication.
 
 ```text
-Issue #125 / Plan 21 merged
-  -> Issue #127 / Plan 22 implemented, reviewed, and merged
-  -> PR #124 rebased to Market Regime v2 consuming both contracts
-  -> Issue #116 / Sprint 11 reviewed, merged, and closed
-  -> Sprint 12 may start
+COMPLETED: Issue #125 / Plan 21 merged through PR #128 at cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b
+  -> COMPLETED: Issue #127 MVP / Plan 22 merged through PR #129 at c530ae3
+  -> TOMORROW: Issue #130 / Plan 23 versioned remediation; Issue #127 stays closed
+  -> PAUSED TODAY: PR #124 Market Regime v2 / Sprint 11
+  -> FUTURE: Issue #116 / Sprint 11 closes only after its own gates
+  -> FUTURE: Sprint 12 may start only after Sprint 11 closes
 ```
 
 ## Explicit non-goals
 
-Plan 22 does not implement code, tests, dependencies, provider calls, or data; change Plan 21; rewrite raw OHLCV; build an adjustment engine or adjusted OHLC store; support intraday; implement Market Regime v2 or Market Structure; implement Angel One; create a general provider framework or hostile-code execution service; place broker orders; issue trade recommendations; silently fall back; claim strict PIT Yahoo history, Yahoo permission/endorsement, or general redistribution; start Sprint 12; or publish Issue #126 packaging.
+The delivered MVP does not provide authoritative mapping evidence, canonical
+exchange/effective-symbol identity, general listed-equity admission, durable
+stores/seals, replay/crash recovery, subprocess lifecycle controls,
+dependency-byte attestation, exhaustive temporal/frame hardening, adjusted OHLC,
+intraday support, Market Regime v2, Market Structure, Angel One, a general
+provider framework, broker orders, recommendations, silent fallback, strict PIT
+Yahoo history, Yahoo authorization/endorsement, or general redistribution.
+This documentation repair implements no code, test, dependency, provider call,
+or data change; does not change Plan 21 or reimplement Issue #127; does not
+resume PR #124 / Sprint 11 v2 today; does not start Sprint 12; and does not
+publish Issue #126 packaging.

@@ -16,6 +16,17 @@ increment and future process decisions.
 The owner-level minimum dependencies for Sprint 10 through the boundary before
 Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview.md).
 
+[Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+now separates reusable listed-equity feature cores from higher-level universe
+policy. Product qualification and default workflows focus on the point-in-time
+Nifty 50 plus Nifty Next 50; explicitly supplied supported stocks outside that
+default may use a capability only with canonical identity and all required
+evidence. Historical sprint files retain their original names, cardinalities,
+scope, and evidence and must not be rewritten as if delivered features were
+already generic. The evidence-based coupling audit and ordered incremental
+remediation are in
+[Plan 23](../plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md).
+
 ## Index
 
 - [Sprint 0 — Foundation](sprint-0.md) — closed by [PR #1](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/1), merged to `main` as `0a518813ec26d32945ce49d1f27999e8618f64cc`.
@@ -113,30 +124,35 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   Sprint 10 specification.
 
 - Sprint 11 — Current supplied-cohort Market Regime remains **Open / Todo /
-  blocked** under
+  paused today** under
   [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116).
-  Its current publication sequence is exact and fail-closed:
+  Its first two publication dependencies are complete:
   1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
-     merges the standalone provider-neutral, Upstox-first corporate-action
-     screen specified by
-     [Plan 21](../plans/21-current-supplied-cohort-corporate-action-screen-contract.md);
-  2. then [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
-     implements, reviews, and merges the provider-neutral, yfinance-first
-     adjusted-daily-close capability specified by
-     [Plan 22](../plans/22-provider-neutral-adjusted-daily-close-contract.md);
-  3. then [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
-     rebases and replaces its proposed current-regime v1 with a separately
-     versioned v2 that consumes both successful reports, preserves raw and
-     adjusted evidence separately, and has no unscreened or silent fallback; and
-  4. Sprint 11 closes only after that exact candidate passes its own review,
-     repository, hosted, merge, and closeout gates.
+     and the provider-neutral Plan-21 corporate-action screen merged through
+     [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
+     as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
+  2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+     closed after the narrower `provider-neutral-adjusted-daily-close@v1-mvp`
+     merged through
+     [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+     as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
+  3. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+     Market Regime v2 remains intentionally not resumed today. When explicitly
+     resumed, it must consume the then-applicable accepted contracts and pass
+     its own review, repository, hosted, merge, and closeout gates before Sprint
+     11 closes.
+
+  Issue #130 / Plan 23 remediation begins separately tomorrow. It versions the
+  listed-equity feature boundary; it does not reopen or reimplement completed
+  Issue #127 and does not itself close Sprint 11.
 
   Upstox remains primary for live/raw OHLCV and corporate-action screening.
-  yfinance supplies only a separate adjusted daily fact; it never changes an
-  Upstox raw candle and is not strict point-in-time historical authority,
-  long-range intraday data, or a live broker feed. Angel One is deferred as a
-  future adapter only. Sprint 12 / Issue #117 cannot start until Sprint 11
-  closes.
+  The delivered yfinance MVP supplies only a separate adjusted-daily fact for a
+  supplied Plan-19/Nifty-50-composed input with
+  `isin`/`project_symbol`/`provider_symbol` mappings. It never changes an Upstox
+  raw candle and is not strict point-in-time authority, a complete canonical
+  exchange/effective-symbol boundary, long-range intraday data, or a live broker
+  feed. Sprint 12 / Issue #117 cannot start until Sprint 11 closes.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
@@ -165,5 +181,6 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
   is open, low priority, and standalone. It may later publish one authoritative
   market-data codebase as `swing-trading-market-data` while the full application
-  remains installable. It must not duplicate implementation or interrupt Issues
-  #125/#127, PR #124, Sprint 11, or Sprint 12's dependency gate.
+  remains installable. It must not duplicate implementation, reopen completed
+  Issues #125/#127, or interrupt Issue #130 remediation, PR #124, Sprint 11, or
+  Sprint 12's dependency gate.

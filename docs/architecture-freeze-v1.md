@@ -4,7 +4,38 @@
 
 Build an agent-agnostic Swing Trading Research Tool that supplies trustworthy,
 structured evidence to AI assistants researching safe, consistent, and
-explainable swing-trading opportunities in Nifty 50 equity stocks.
+explainable listed-equity swing-trading opportunities. Product research,
+qualification, and default workflows focus on the point-in-time Nifty 50 plus
+Nifty Next 50 (the Nifty 100).
+
+## Owner decision: listed-equity feature boundary
+
+[GitHub Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+establishes the following architecture decision:
+
+1. A reusable feature core accepts an explicit bounded list of canonical
+   listed-equity instruments. It does not decide whether an instrument belongs
+   to an index.
+2. Point-in-time index membership, universe discovery, and default cohort
+   selection belong to a separate higher-level policy. The product-default
+   policy selects the point-in-time Nifty 50 plus Nifty Next 50.
+3. Canonical identity is ISIN and exchange, with effective symbol history and
+   versioned provider mappings. A symbol or provider token alone is not durable
+   identity.
+4. Every feature contract declares its required data capabilities, bounds,
+   freshness, and evidence. A missing or unqualified capability returns a typed
+   unsupported or insufficient-evidence outcome; an index check is not a
+   substitute for capability admission.
+5. An explicitly supplied listed stock outside the Nifty 100 may use a reusable
+   capability when canonical identity and all capability-specific evidence
+   exist. Such stocks are not the primary roadmap, research-qualification, or
+   default-workflow focus.
+
+Existing Nifty 50 V1 contract names and exact historical rules remain valid
+records. They are not evidence that current implementations already satisfy
+this boundary. Migration is incremental and versioned under
+[Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md);
+there is no big-bang rename or reinterpretation of frozen evidence.
 
 ## Delivery priority overlay
 
@@ -25,12 +56,17 @@ current Sprint 10–16 dependency sequence; it does not change the module order
 or authorize autonomous signals, recommendations, or broker execution.
 For current/live Market Regime, raw completed-close comparison is allowed only
 when its versioned comparability contract states the evidence basis and limits.
-[Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md) defines
-the standalone provider-neutral screen, with an Upstox first adapter, that must
-merge before the later current-regime v2 cutover. It reports generic screened or
-generic insufficiency states; the consuming current-regime contract applies the
-whole-result gate and never represents an empty provider result as authoritative
-no-break proof.
+[Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md)
+is the standalone provider-neutral Upstox-first screen and merged through PR
+#128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`.
+The narrower Issue #127 adjusted-daily MVP then merged through PR #129 as
+`c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; it remains separate from Upstox
+raw facts and is not the complete Issue #130 canonical listed-equity boundary.
+Those two publication dependencies are complete. PR #124 Market Regime v2 is
+intentionally not resumed today; tomorrow's Plan-23 remediation is separate and
+does not reopen Issue #127. The future consuming current-regime contract still
+owns the whole-result gate and must never represent an empty provider screen as
+authoritative no-break proof.
 
 
 ## Repository identity
@@ -58,31 +94,41 @@ conflicting, stale, or fails risk validation.
 - Futures and options
 - Forex and crypto
 - Long-term investing or portfolio advisory
-- Generic equity research
-- Stocks outside the Nifty 50 universe
+- A generic multi-asset or generic trading platform
+- Any fact, feature, or instrument whose required identity, data capability, or
+  point-in-time evidence is unsupported or insufficient
+- Automatic product qualification of every listed equity merely because a
+  reusable core can accept its canonical identity
 
-These are v1 implementation and research exclusions. They do not require shared
-infrastructure to encode equity assumptions unnecessarily.
+These are product and research exclusions. They do not require reusable
+listed-equity feature cores to encode Nifty index membership.
 
 ## Instrument extensibility boundary
 
-The architecture is extensible, while the product implementation is narrow.
-Shared point-in-time data, provenance, validation, orchestration, backtesting,
-risk-evidence, and application-contract primitives should avoid unnecessary
-coupling to one broker, AI harness, or equity symbol convention when a current
-equity requirement demonstrates the abstraction.
+The architecture is listed-equity reusable while the product focus remains
+narrow. Shared point-in-time data, provenance, validation, orchestration,
+backtesting, risk-evidence, and application-contract primitives should avoid
+unnecessary coupling to an index, broker, provider, AI harness, or symbol
+convention when a current listed-equity requirement demonstrates the
+abstraction.
 
-All v1 provider adapters, persisted datasets, market facts, validation,
-research modules, backtests, and decision support remain limited to point-in-time
-Nifty 50 equities. Equity fundamentals, corporate actions, promoter/shareholding
-evidence, and exchange disclosures stay in explicit equity modules rather than
-being presented as universal research concepts.
+Index-universe snapshots remain explicit policy evidence. They select or prove
+a point-in-time cohort for workflows that make an index-scope claim; they do
+not authorize a provider adapter, alter a market fact, or gate an explicitly
+supplied stock whose workflow makes no index-membership claim.
 
-Supporting another instrument is a future architecture extension, not an
-existing capability. It requires a separately approved scope decision,
-instrument-specific data and risk contracts, point-in-time validation, and
-separately authorized implementation. Do not build speculative adapters or
-abstractions for futures, options, forex, crypto, or other instruments in v1.
+Equity fundamentals, corporate actions, promoter/shareholding evidence, and
+exchange disclosures stay in explicit equity capabilities. A feature advertises
+which of those capabilities it requires. Unsupported identity mappings,
+price basis, schedule, sector, corporate-action, news, event, or freshness
+evidence remains typed unsupported or insufficient evidence, never an inferred
+value or silent neutral.
+
+This decision does not imply futures, options, forex, crypto, another asset
+family, or a generic platform. A future non-equity instrument family still
+requires a separately approved scope, data model, market-microstructure and
+risk contract, point-in-time validation, and implementation. Do not build
+speculative non-equity adapters or abstractions.
 
 ## External consumer: AI agent harness
 
@@ -90,9 +136,10 @@ Responsibilities:
 
 - research and contextual reasoning;
 - explainable recommendations;
-- researching any requested security inside the supported point-in-time Nifty
-  50 universe;
-- reviewing supported Nifty 50 holdings through a read-only portfolio snapshot;
+- researching the default point-in-time Nifty 100 cohort or an explicitly
+  supplied supported listed equity;
+- reviewing supported listed-equity holdings through a read-only portfolio
+  snapshot;
 - monitoring existing swing trades; and
 - reviewing completed swing trades.
 
@@ -135,7 +182,10 @@ It must never:
 ## Locked pipeline
 
 ```text
-Nifty 50 universe
+Higher-level universe policy
+  -> default point-in-time Nifty 50 + Nifty Next 50
+     or an explicitly supplied supported listed equity
+  -> bounded canonical listed-equity cohort
   -> Market regime
   -> Sector analysis
   -> Market structure
@@ -178,10 +228,13 @@ failure or manufacture a position size. Exact risk limits, holding horizon, and
 bar frequency must be approved in the relevant module specification rather than
 being inferred from conversation.
 
-Portfolio analysis is read-only and limited to supported Nifty 50 equity
-holdings in v1. It may assess evidence, concentration, risk, performance, and
-candidate hold/exit conditions, but it does not place or manage broker orders
-and is not long-term portfolio advisory.
+Portfolio analysis is read-only and limited to supported listed-equity holdings.
+The point-in-time Nifty 100 is the default product focus; an explicitly supplied
+stock outside it requires the same canonical identity and capability-specific
+evidence as every other supported instrument. Portfolio analysis may assess
+evidence, concentration, risk, performance, and candidate hold/exit conditions,
+but it does not place or manage broker orders and is not long-term portfolio
+advisory.
 
 ## Indicator minimization policy
 
@@ -229,6 +282,14 @@ Before a module is implemented or activated, its approved contract must define:
 7. validation approach;
 8. acceptance criteria; and
 9. integration boundary.
+
+For a reusable listed-equity feature, the input contract must also state the
+maximum cohort bound, canonical ISIN/exchange/effective-symbol identity,
+required provider mappings, and required data-capability profile. Index
+membership may appear only in the composing universe policy or in a
+deliberately index-specific versioned contract. Unsupported capability and
+insufficient evidence must remain distinct from malformed input and from a
+successful fact.
 
 A module advances only after its requirements and validation are complete.
 
