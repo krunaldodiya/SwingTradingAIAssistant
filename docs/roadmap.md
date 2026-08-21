@@ -17,26 +17,58 @@ project current knowledge backward.
 the current sprint dependency sequence. It preserves the locked module order,
 historical work, release gates, `NO_TRADE`, and all explicit exclusions.
 
-Sprint 11 / [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
-remains open and has this exact fail-closed order:
+## Listed-equity feature boundary and Nifty 100 focus
 
-1. merge [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
-   and its standalone provider-neutral Upstox-first corporate-action screen in
-   [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md);
-2. then implement, review, and merge
-   [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
-   and the yfinance-first provider-neutral adjusted-daily-close contract in
-   [Plan 22](plans/22-provider-neutral-adjusted-daily-close-contract.md);
-3. then rebase [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
-   and replace its proposed current-regime v1 with a separately versioned v2
-   that consumes successful reports from both capabilities; and
-4. close Sprint 11 only after that exact candidate passes its own review,
-   repository, hosted, merge, and closeout gates.
+[Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+sets the owner-approved direction. Reusable feature cores consume an explicit
+bounded list of canonical listed-equity instruments independently of index
+membership. Point-in-time membership, discovery, and universe selection are a
+separate policy layer. Product research, source qualification, validation, and
+default workflows prioritize the point-in-time Nifty 50 plus Nifty Next 50.
+
+Canonical identity is ISIN and exchange with effective symbol history and
+versioned provider mappings. Each feature declares its data-capability profile
+and fails with typed unsupported or insufficient evidence when identity,
+mapping, schedule, price basis, freshness, corporate-action, sector, news, or
+event evidence required by that feature is absent. An explicitly supplied
+supported stock outside the Nifty 100 may use the same capability when all of
+its required identity and evidence exist, but it is not the primary roadmap or
+qualification focus.
+
+Existing `Nifty50*` names, exact-50 contracts, and historical sprint evidence
+remain truthful V1 records. They are not described as already generic.
+[Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
+owns tomorrow's incremental Issue #130 working-slice remediation; there is no
+big-bang refactor and completed Issue #127 is not reopened or reimplemented.
+
+Sprint 11 / [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+remains open. Its first two publication dependencies are complete:
+
+1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+   and the standalone provider-neutral Upstox-first screen in
+   [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md)
+   merged through [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
+   as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
+2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+   closed after its owner-approved adjusted-daily working MVP merged through
+   [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+   as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`;
+3. Issue #130 is documentation/audit only today. Its Plan-23 versioned
+   instrument-boundary remediation starts tomorrow and is separate from the
+   completed Issue #127 MVP; and
+4. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+   Market Regime v2 remains intentionally paused today. When explicitly
+   resumed, it must use the then-applicable accepted contracts and pass its own
+   review, repository, hosted, merge, and closeout gates before Sprint 11 may
+   close.
 
 Sprint 12 / Issue #117 cannot start before Sprint 11 closes. Plan 21 remains a
 nonexhaustive provider screen, not authoritative no-break proof or an adjustment
-engine. Plan 22 remains a separate adjusted-daily fact, not a rewrite of raw
-OHLCV or an authoritative point-in-time history.
+engine. The delivered Plan 22 MVP remains a supplied
+Plan-19/Nifty-50-composed adjusted-daily fact with
+`isin`/`project_symbol`/`provider_symbol` mappings. It is not a rewrite of raw
+OHLCV, authoritative point-in-time history, or the complete Issue #130 canonical
+listed-equity boundary.
 
 ## Provider and price-basis overlay
 
@@ -82,9 +114,9 @@ prioritized.
 - Freeze product scope and terminology.
 - Define measurable success and risk criteria.
 - Decide supported trading horizon and data frequency.
-- Evaluate market-data sources for adjusted equity OHLCV, corporate actions,
-  Nifty 50 membership history, and sector classification.
-- Define point-in-time data rules to prevent look-ahead and survivorship bias.
+- Evaluate market-data sources for adjusted listed-equity OHLCV, corporate
+  actions, point-in-time Nifty 50 and Nifty Next 50 membership, and sector
+  classification.
 - Select the implementation stack only after the data and research requirements
   are clear.
 
@@ -95,9 +127,10 @@ Detailed execution plan:
 
 - Define versioned schemas for market data, module facts, validation errors,
   evidence, confidence, freshness, and provenance.
-- Separate genuinely reusable point-in-time, validation, backtesting, risk, and
-  application-contract primitives from explicit Nifty 50 equity modules. Do not
-  implement another instrument or speculative generic abstractions.
+- Separate reusable listed-equity data capabilities, point-in-time validation,
+  backtesting, risk, and application contracts from higher-level universe
+  selection. A feature core accepts bounded canonical instruments; the default
+  product policy selects the point-in-time Nifty 100.
 - Build reproducible data ingestion and quality checks.
 - Create a backtesting boundary that includes costs, slippage, liquidity,
   corporate actions, and point-in-time universes.
@@ -276,7 +309,8 @@ provider-neutral market-data API without research/AI modules. It must preserve
 capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
-not interrupt Issue #125, Issue #127, Sprint 11, or WIP-one.
+not reopen completed Issues #125/#127 or interrupt Issue #130 remediation,
+PR #124, Sprint 11, or WIP-one.
 
 ## Release gates
 
