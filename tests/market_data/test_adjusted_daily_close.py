@@ -27,6 +27,8 @@ _CUTOFF = datetime(2026, 8, 4, 12, tzinfo=UTC)
 
 _RETRIEVED_AT = datetime(2026, 8, 4, 12, 1, tzinfo=UTC)
 
+_DECISION_SESSION_CLOSE = datetime(2026, 8, 3, 15, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+
 
 @dataclass
 class _Provider:
@@ -76,7 +78,10 @@ def _request(*, members: tuple[dict[str, str], ...] | None = None) -> dict[str, 
                 for member in mapped_members
             ]
         },
-        "plan21_schedule": {"sessions": _sessions()},
+        "plan21_schedule": {
+            "sessions": _sessions(),
+            "decision_session_official_close_at": _DECISION_SESSION_CLOSE,
+        },
         "mapped_members": list(mapped_members),
     }
 
@@ -163,6 +168,24 @@ def test_rejects_missing_or_nonunique_supplied_member_mapping_before_fetch() -> 
         "INVALID_REQUEST", "MEMBER_MAPPING_INVALID"
     )
     assert provider.calls == []
+
+
+def test_requires_aware_decision_session_close_before_fetch() -> None:
+    for close in (None, datetime(2026, 8, 3, 15, 30)):
+        provider = _Provider(_frame())
+        request = _request()
+        schedule = cast(dict[str, object], request["plan21_schedule"])
+        if close is None:
+            schedule.pop("decision_session_official_close_at")
+        else:
+            schedule["decision_session_official_close_at"] = close
+
+        result = _acquire(request, provider)
+
+        assert result == AdjustedDailyCloseFailure(
+            "INVALID_REQUEST", "SCHEDULE_INVALID"
+        )
+        assert provider.calls == []
 
 
 def test_rejects_decision_session_close_after_cutoff_before_fetch() -> None:

@@ -157,15 +157,13 @@ def _parse_request(request: object) -> _Request | AdjustedDailyCloseFailure:
         return _invalid("SCHEDULE_INVALID")
 
     schedule_mapping = _mapping(request_mapping.get("plan21_schedule"))
-    if (
-        schedule_mapping is not None
-        and "decision_session_official_close_at" in schedule_mapping
-    ):
-        official_close = schedule_mapping["decision_session_official_close_at"]
-        if type(official_close) is not datetime or not _is_aware(official_close):
-            return _invalid("SCHEDULE_INVALID")
-        if official_close > decision_cutoff:
-            return _invalid("DECISION_SESSION_AFTER_CUTOFF")
+    if schedule_mapping is None:
+        return _invalid("SCHEDULE_INVALID")
+    official_close = schedule_mapping.get("decision_session_official_close_at")
+    if type(official_close) is not datetime or not _is_aware(official_close):
+        return _invalid("SCHEDULE_INVALID")
+    if official_close > decision_cutoff:
+        return _invalid("DECISION_SESSION_AFTER_CUTOFF")
 
     members = _parse_members(
         request_mapping.get("mapped_members"),
