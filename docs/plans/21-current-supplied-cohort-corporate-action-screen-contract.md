@@ -1,11 +1,9 @@
 # Current supplied-cohort corporate-action screen contract
 
-Status: **TEMPORAL REPAIR CANDIDATE — the exact temporal source repair is in the
-working tree. Focused verification is 333 passed. Local gates and independent
-reviews for prior candidate `5e6477c2fd774a9f796fceb1a089a0168faf00eb` are
-superseded. Final-candidate local/full/installed/hosted gates and functional,
-security/provenance, and temporal reviews remain pending. No commit, CI, release,
-or merge is claimed.**
+Status: **ACTIVE DELIVERY CONTRACT — exact implementation, test, review, CI,
+merge, and publication evidence is recorded only in GitHub Issue #125 and its
+pull request. This document defines stable contract semantics and intentionally
+does not duplicate mutable branch or revision lifecycle state.**
 
 Contract revision: `current-supplied-cohort-corporate-action-screen@v1`
 
@@ -438,7 +436,7 @@ revision R3 functional, security/provenance, and temporal review.
 
 ## Non-goals
 
-Plan 21 does not implement source/tests; alter PR #124; create Market Regime v2;
+Plan 21 does not alter PR #124; create Market Regime v2;
 create an Angel One adapter or general all-capability framework; call
 Upstox/Angel One/NSE/SEBI; use credentials; use a sandbox; acquire/retain
 evidence; add dependencies; automate NSE UI; adjust/reconstruct prices; infer
