@@ -394,6 +394,23 @@ class DuckDBCatalog:
         return self._storage_root / "catalog.duckdb"
 
     @property
+    def storage_root(self) -> Path:
+        """Return the exact root capability admitted at construction."""
+        if not isinstance(self._storage_root, Path):
+            raise CatalogStorageError("invalid storage root")
+        return self._storage_root
+
+    @property
+    def lease(self) -> StorageRootLease | None:
+        """Return the exact lease capability admitted at construction."""
+        return self._lease
+
+    @property
+    def read_only(self) -> bool:
+        """Return the catalog mode admitted at construction."""
+        return self._read_only
+
+    @property
     def connection(self) -> Any:
         """Expose the owned connection for bounded catalog queries and tests."""
         if self._connection is None:

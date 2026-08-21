@@ -331,6 +331,21 @@ class CorporateActionSnapshotStoreV1:
     ) -> None:
         self._root, self._lease, self._catalog = root, lease, catalog
 
+    @property
+    def storage_root(self) -> Path:
+        """Return the exact root capability admitted at construction."""
+        return self._root
+
+    @property
+    def lease(self) -> StorageRootLease:
+        """Return the exact lease capability admitted at construction."""
+        return self._lease
+
+    @property
+    def catalog(self) -> CorporateActionCatalogV1:
+        """Return the exact catalog capability admitted at construction."""
+        return self._catalog
+
     def retain(
         self, snapshot: CorporateActionSnapshotV1
     ) -> CorporateActionSnapshotMetadataV1:

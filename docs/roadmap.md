@@ -14,8 +14,68 @@ tool continues to retain point-in-time provenance from now so later work cannot
 project current knowledge backward.
 
 [Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
-Sprints 10–16. It preserves the locked module order, historical work, release
-gates, `NO_TRADE`, and all explicit exclusions.
+the current sprint dependency sequence. It preserves the locked module order,
+historical work, release gates, `NO_TRADE`, and all explicit exclusions.
+
+Sprint 11 / [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+remains open and has this exact fail-closed order:
+
+1. merge [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+   and its standalone provider-neutral Upstox-first corporate-action screen in
+   [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md);
+2. then implement, review, and merge
+   [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+   and the yfinance-first provider-neutral adjusted-daily-close contract in
+   [Plan 22](plans/22-provider-neutral-adjusted-daily-close-contract.md);
+3. then rebase [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+   and replace its proposed current-regime v1 with a separately versioned v2
+   that consumes successful reports from both capabilities; and
+4. close Sprint 11 only after that exact candidate passes its own review,
+   repository, hosted, merge, and closeout gates.
+
+Sprint 12 / Issue #117 cannot start before Sprint 11 closes. Plan 21 remains a
+nonexhaustive provider screen, not authoritative no-break proof or an adjustment
+engine. Plan 22 remains a separate adjusted-daily fact, not a rewrite of raw
+OHLCV or an authoritative point-in-time history.
+
+## Provider and price-basis overlay
+
+Provider routing is by narrow capability, selected explicitly before use, and
+bound into fact provenance. Upstox is primary for live/current raw OHLCV and its
+retained corporate-action screen. yfinance is accepted only for adjusted daily
+research, with explicit provider and adjusted price basis; it is never a silent
+fallback or a live broker feed. Angel One is not implemented now and remains a
+future adapter candidate requiring separate qualification.
+
+yfinance supplies long daily history, but its intraday history is limited to the
+latest 60 days. It is an unofficial Yahoo client for personal/research use, and
+retrospectively retrieved adjusted series can be revised; they are not
+as-published point-in-time authority. Every admitted fact must bind provider,
+price basis, source/schema/policy identity, timestamps, and retained
+receipt/object identity. No generic silent fallback is permitted.
+
+Existing Upstox raw OHLCV remains unchanged. A yfinance adjusted close must never
+be inserted into or used to populate an Upstox raw candle. A future Market
+Structure contract must use one complete, consistent raw-OHLC basis or one
+complete, consistent adjusted-OHLC basis and remains separate from Sprint 11.
+Historical/backtest studies use only evidence available by the declared cutoff;
+unavailable features are explicitly omitted/not applied, never later-backfilled,
+and do not block unrelated research whose declared profile does not require
+them.
+
+Current/live-first is sequencing only, never scope removal. Sprint 15 retains
+the deferred historical store; Sprint 16 retains the capability-aware historical
+validation and pre-Market-Structure gate. Together they must preserve
+point-in-time historical evidence and availability ledgers; historical
+backtests; look-ahead, survivorship, selection, and data-snooping controls;
+separate in-sample, walk-forward, out-of-sample, and untouched-test regions;
+forward/paper testing; realistic costs and slippage; and point-in-time
+membership, sector, corporate-action, and source provenance. Unavailable
+features remain explicit by cutoff without fabrication, later backfill, silent
+neutralization, or dropped dates. Market Structure remains after the Sprint 16
+gate. No initially planned feature is discarded merely because current/live was
+prioritized.
+
 
 ## Phase 0: Foundation
 
@@ -200,6 +260,23 @@ result, ranking, or effectiveness claim.
 Proceed in locked pipeline order, integrating and validating one module at a
 time. Do not build an LLM implementation in this repository. External AI agents
 will consume the deterministic fact contracts after they are dependable.
+
+## Future packaging
+
+[Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
+is a future **low-priority** standalone packaging outcome. The working PyPI
+distribution name is `swing-trading-market-data`, subject to name, licence,
+support, release-ownership, and publication review. One authoritative
+market-data codebase must produce the standalone wheel/sdist and remain
+consumable by the installable full `swing-trading-ai-assistant` distribution;
+there is no copied implementation or duplicated provider logic.
+
+The standalone distribution may expose the existing `market-data` CLI and
+provider-neutral market-data API without research/AI modules. It must preserve
+capability-specific adapters, environment-owned credentials, explicit optional
+provider dependencies, isolated wheel/sdist verification, and publication
+provenance. It does not add a provider or change a market calculation. It does
+not interrupt Issue #125, Issue #127, Sprint 11, or WIP-one.
 
 ## Release gates
 

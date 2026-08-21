@@ -101,26 +101,69 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   not the current Sprint 10 record and does not link to `sprint-10.md`.
 - [Sprint 10 — Current supplied-cohort market data](sprint-10.md) —
   [GitHub Issue #121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121)
-  is the current foundation. It makes existing `market-data` usable for a
-  supplied 1–50 Nifty 50 equity cohort, returning bounded current price/volume facts:
-  latest completed daily OHLCV and only explicit/available
-  `PARTIAL_CURRENT_SESSION` context. Every admitted fact is immutably archived
-  with temporal availability metadata; invalid identity or incomplete required
-  evidence fails closed, and a partial session is never a completed daily bar or
-  historical close. It does not calculate Market Regime, sector, news/events,
-  signals, recommendations, or orders.
-  [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is
-  the current Sprint 10 specification.
+  is **closed/completed** and supplies the current foundation. It makes existing
+  `market-data` usable for a supplied 1–50 Nifty 50 equity cohort, returning
+  bounded current price/volume facts: latest completed daily OHLCV and only
+  explicit/available `PARTIAL_CURRENT_SESSION` context. Every admitted fact is
+  immutably archived with temporal availability metadata; invalid identity or
+  incomplete required evidence fails closed, and a partial session is never a
+  completed daily bar or historical close. It does not calculate Market Regime,
+  sector, news/events, signals, recommendations, or orders.
+  [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is the
+  Sprint 10 specification.
+
+- Sprint 11 — Current supplied-cohort Market Regime remains **Open / Todo /
+  blocked** under
+  [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116).
+  Its current publication sequence is exact and fail-closed:
+  1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+     merges the standalone provider-neutral, Upstox-first corporate-action
+     screen specified by
+     [Plan 21](../plans/21-current-supplied-cohort-corporate-action-screen-contract.md);
+  2. then [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+     implements, reviews, and merges the provider-neutral, yfinance-first
+     adjusted-daily-close capability specified by
+     [Plan 22](../plans/22-provider-neutral-adjusted-daily-close-contract.md);
+  3. then [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+     rebases and replaces its proposed current-regime v1 with a separately
+     versioned v2 that consumes both successful reports, preserves raw and
+     adjusted evidence separately, and has no unscreened or silent fallback; and
+  4. Sprint 11 closes only after that exact candidate passes its own review,
+     repository, hosted, merge, and closeout gates.
+
+  Upstox remains primary for live/raw OHLCV and corporate-action screening.
+  yfinance supplies only a separate adjusted daily fact; it never changes an
+  Upstox raw candle and is not strict point-in-time historical authority,
+  long-range intraday data, or a live broker feed. Angel One is deferred as a
+  future adapter only. Sprint 12 / Issue #117 cannot start until Sprint 11
+  closes.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
   removed. Issues #111 and #115 are **closed / not planned** with no published
   implementation. Plans 12 and 17 and their exact evidence remain preserved
-  historical records without a claim they were wrong when made. The
-  contemplated official-inquiry content SHA-256
+  historical records without a claim they were wrong when made.
+  Current/live-first is sequencing only. Sprint 15 preserves the historical
+  store and point-in-time evidence/availability ledgers; Sprint 16 preserves the
+  validation and pre-Market-Structure gate. Their scope still includes
+  historical backtests; look-ahead, survivorship, selection, and data-snooping
+  controls; separate in-sample, walk-forward, out-of-sample, and untouched-test
+  regions; forward/paper testing; realistic costs/slippage; and point-in-time
+  membership, sector, corporate-action, and source provenance. Unavailable
+  features remain explicit at each cutoff without fabrication or later
+  backfill, and do not block unrelated declared study profiles. No initially
+  planned feature is removed.
+  The contemplated official-inquiry content SHA-256
   `a2d762cd93dfca56d5623e260816c1aee0a6ae2a9a400097cc6f2d51c77f6412` and
   authorization-payload SHA-256
   `84797b9c424aa6da36d46b1b516f3cbe08d8205801d296953a5edf474d2ffe85` were
   revoked before send. No inquiry email, provider contact, provider call,
   credential use, or acquisition occurred. They are distinct from Plan 11's
   historical public-page research receipts.
+
+- Future packaging outside the sprint/WIP-one sequence —
+  [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
+  is open, low priority, and standalone. It may later publish one authoritative
+  market-data codebase as `swing-trading-market-data` while the full application
+  remains installable. It must not duplicate implementation or interrupt Issues
+  #125/#127, PR #124, Sprint 11, or Sprint 12's dependency gate.
