@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import shutil
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -165,8 +168,8 @@ def _scenario(tmp_path: Path, count: int = 2, *, retain: bool = True) -> _Scenar
         acquisition.outcome is LeaseOutcome.ACQUIRED and acquisition.lease is not None
     )
     lease = acquisition.lease
-    catalog = DuckDBCatalog(root, lease=lease)
-    catalog.__enter__()
+    writer = DuckDBCatalog(root, lease=lease)
+    writer.__enter__()
     schedule_store = ScheduleEvidenceStore(root, lease)
     schedule = _schedule()
     digest = schedule_digest(schedule)
@@ -178,7 +181,18 @@ def _scenario(tmp_path: Path, count: int = 2, *, retain: bool = True) -> _Scenar
             for index in range(1, count + 1)
         ),
     )
-    scenario = _Scenario(
+    writer_store = CorporateActionSnapshotStoreV1(root, lease, writer)
+    if retain:
+        for member in manifest.members:
+            writer_store.retain(
+                UpstoxCorporateActionsClientV1(
+                    _Transport(_payload()), clock=lambda: _CUTOFF
+                ).fetch(member.isin, "fixture-token")
+            )
+    writer.__exit__(None, None, None)
+    catalog = DuckDBCatalog(root, read_only=True, lease=lease)
+    catalog.__enter__()
+    return _Scenario(
         root,
         lease,
         catalog,
@@ -187,14 +201,25 @@ def _scenario(tmp_path: Path, count: int = 2, *, retain: bool = True) -> _Scenar
         manifest,
         digest,
     )
-    if retain:
-        for member in manifest.members:
-            scenario.store.retain(
-                UpstoxCorporateActionsClientV1(
-                    _Transport(_payload()), clock=lambda: _CUTOFF
-                ).fetch(member.isin, "fixture-token")
-            )
-    return scenario
+
+
+def _retain(scenario: _Scenario, snapshot: object) -> None:
+    scenario.catalog.__exit__(None, None, None)
+    writer = DuckDBCatalog(scenario.root, lease=scenario.lease)
+    writer.__enter__()
+    try:
+        CorporateActionSnapshotStoreV1(scenario.root, scenario.lease, writer).retain(
+            snapshot
+        )
+    finally:
+        writer.__exit__(None, None, None)
+    scenario.catalog = DuckDBCatalog(
+        scenario.root, read_only=True, lease=scenario.lease
+    )
+    scenario.catalog.__enter__()
+    scenario.store = CorporateActionSnapshotStoreV1(
+        scenario.root, scenario.lease, scenario.catalog
+    )
 
 
 def _api() -> Any:
@@ -355,10 +380,11 @@ def test_upstox_adapter_maps_all_supported_non_dividend_kinds(
     scenario = _scenario(tmp_path, count=1, retain=False)
     try:
         isin = scenario.manifest.members[0].isin
-        scenario.store.retain(
+        _retain(
+            scenario,
             UpstoxCorporateActionsClientV1(
                 _Transport(_payload(kind)), clock=lambda: _CUTOFF
-            ).fetch(isin, "fixture-token")
+            ).fetch(isin, "fixture-token"),
         )
         result = _resolve(api, scenario)
         assert (
@@ -456,10 +482,11 @@ def test_all_supported_kinds_use_only_inclusive_effective_date_window(
     scenario = _scenario(tmp_path, 1, retain=False)
     try:
         isin = scenario.manifest.members[0].isin
-        scenario.store.retain(
+        _retain(
+            scenario,
             UpstoxCorporateActionsClientV1(
                 _Transport(_payload(kind, effective)), clock=lambda: _CUTOFF
-            ).fetch(isin, "fixture-token")
+            ).fetch(isin, "fixture-token"),
         )
         assert _resolve(api, scenario).outcome.value == expected
     finally:
@@ -563,13 +590,19 @@ def test_upstox_adapter_rejects_exact_metadata_tuple_substitutions(
         scenario.close()
 
 
-def test_stores_expose_only_read_only_root_and_lease_bindings(tmp_path: Path) -> None:
+def test_stores_bind_one_concrete_read_only_catalog_root_and_lease(
+    tmp_path: Path,
+) -> None:
     scenario = _scenario(tmp_path, 1)
     try:
         assert scenario.schedule_store.storage_root == scenario.root
         assert scenario.store.storage_root == scenario.root
         assert scenario.schedule_store.lease is scenario.lease
         assert scenario.store.lease is scenario.lease
+        assert type(scenario.store.catalog) is DuckDBCatalog
+        assert scenario.store.catalog.storage_root == scenario.root
+        assert scenario.store.catalog.lease is scenario.lease
+        assert scenario.store.catalog.read_only is True
     finally:
         scenario.close()
 
@@ -836,6 +869,26 @@ def test_provider_result_event_and_aggregate_event_budgets_are_private_corrupt(
         event = api.NormalizedSupportedCorporateActionEventV1(
             api.SupportedCorporateActionKindV1.DIVIDEND, _S0
         )
+        accepted = api.PrivateCorporateActionScreenProviderResultV1(
+            scenario.manifest.members[0].isin,
+            descriptor.provider_id,
+            descriptor.capability_identity_sha256,
+            descriptor.source_identity_sha256,
+            descriptor.snapshot_schema_identity_sha256,
+            descriptor.policy_identity_sha256,
+            "5" * 64,
+            1,
+            _CUTOFF,
+            request.decision_cutoff,
+            (event,) * 1000,
+            api.ProviderObservationOutcomeV1.AVAILABLE,
+        )
+        assert (
+            api.PrivateCorporateActionScreenProviderResultV1.from_canonical_json_bytes(
+                accepted.canonical_json_bytes()
+            )
+            == accepted
+        )
         with pytest.raises(ValueError):
             api.PrivateCorporateActionScreenProviderResultV1(
                 scenario.manifest.members[0].isin,
@@ -882,5 +935,519 @@ def test_provider_result_event_and_aggregate_event_budgets_are_private_corrupt(
         )
         assert private.outcome is api.PrivateCorporateActionScreenOutcomeV1.CORRUPT
         assert private.to_public_report().screen_state is None
+    finally:
+        scenario.close()
+
+
+def test_runtime_manifest_rejects_universe_snapshot_source_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    source_root = Path(api.__file__).parent
+    module_root = tmp_path / "market_data"
+    module_root.mkdir()
+    assert (
+        "universe_snapshot.py" in api.CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1
+    )
+    for name in (
+        *api.CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1,
+        "current_corporate_action_screen_runtime_identity_manifest.py",
+    ):
+        shutil.copyfile(source_root / name, module_root / name)
+    universe_snapshot = module_root / "universe_snapshot.py"
+    universe_snapshot.write_bytes(universe_snapshot.read_bytes() + b"\n")
+    monkeypatch.setattr(api, "_verify_runtime_module_loader", lambda *_: None)
+    monkeypatch.setattr(
+        api, "__file__", str(module_root / "current_corporate_action_screen.py")
+    )
+
+    with pytest.raises(ValueError, match="runtime code identity unavailable"):
+        api.current_corporate_action_screen_runtime_code_identity_v1()
+
+
+def test_resolver_calls_concrete_upstox_once_per_member_in_ascending_isin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 5)
+    calls: list[str] = []
+    original = api.UpstoxCorporateActionScreenProviderV1.resolve_exact
+
+    def record(provider: Any, request: Any, isin: str, lease: Any) -> Any:
+        calls.append(isin)
+        return original(provider, request, isin, lease)
+
+    try:
+        monkeypatch.setattr(
+            api.UpstoxCorporateActionScreenProviderV1, "resolve_exact", record
+        )
+        assert _resolve(api, scenario).outcome.value == (
+            "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"
+        )
+        assert calls == sorted(member.isin for member in scenario.manifest.members)
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
+    ("retrieved_at", "expected"),
+    (
+        (_CLOSE - timedelta(microseconds=1), "STALE"),
+        (_CLOSE, "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"),
+    ),
+)
+def test_concrete_upstox_retrieval_time_uses_close_inclusively(
+    tmp_path: Path, retrieved_at: datetime, expected: str
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1, retain=False)
+    try:
+        _retain(
+            scenario,
+            UpstoxCorporateActionsClientV1(
+                _Transport(_payload()), clock=lambda: retrieved_at
+            ).fetch(scenario.manifest.members[0].isin, "fixture-token"),
+        )
+        assert _resolve(api, scenario).outcome.value == expected
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "expected"),
+    (
+        (("MISSING", "STALE"), "MISSING"),
+        (("STALE", "AMBIGUOUS"), "STALE"),
+        (("AMBIGUOUS", "CORRUPT"), "AMBIGUOUS"),
+        (("CORRUPT", "ACTION"), "CORRUPT"),
+        (("ACTION", "SCREENED"), "ACTION_OBSERVED"),
+    ),
+)
+def test_concrete_upstox_mixed_member_outcome_precedence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: tuple[str, str],
+    expected: str,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 2)
+
+    def result_for(provider: Any, request: Any, isin: str, lease: Any) -> Any:
+        index = [member.isin for member in scenario.manifest.members].index(isin)
+        semantic_outcome = outcomes[index]
+        descriptor = provider.descriptor
+        if semantic_outcome in {"MISSING", "STALE", "AMBIGUOUS", "CORRUPT"}:
+            return api._provider_failure(
+                descriptor,
+                isin,
+                request.decision_cutoff,
+                api.ProviderObservationOutcomeV1(semantic_outcome),
+            )
+        events = (
+            (
+                api.NormalizedSupportedCorporateActionEventV1(
+                    api.SupportedCorporateActionKindV1.DIVIDEND, _S0
+                ),
+            )
+            if semantic_outcome == "ACTION"
+            else ()
+        )
+        return api.PrivateCorporateActionScreenProviderResultV1(
+            isin,
+            descriptor.provider_id,
+            descriptor.capability_identity_sha256,
+            descriptor.source_identity_sha256,
+            descriptor.snapshot_schema_identity_sha256,
+            descriptor.policy_identity_sha256,
+            "4" * 64,
+            1,
+            _CUTOFF,
+            request.decision_cutoff,
+            events,
+            api.ProviderObservationOutcomeV1.AVAILABLE,
+        )
+
+    try:
+        monkeypatch.setattr(
+            api.UpstoxCorporateActionScreenProviderV1, "resolve_exact", result_for
+        )
+        assert _resolve(api, scenario).outcome.value == expected
+    finally:
+        scenario.close()
+
+
+def test_corrupt_returned_provider_result_becomes_private_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    original = api.UpstoxCorporateActionScreenProviderV1.resolve_exact
+
+    def corrupt(provider: Any, request: Any, isin: str, lease: Any) -> Any:
+        result = original(provider, request, isin, lease)
+        object.__setattr__(result, "snapshot_byte_count", 0)
+        return result
+
+    try:
+        monkeypatch.setattr(
+            api.UpstoxCorporateActionScreenProviderV1, "resolve_exact", corrupt
+        )
+        private = _resolve(api, scenario)
+        assert private.outcome is api.PrivateCorporateActionScreenOutcomeV1.CORRUPT
+        assert private.to_public_report().screen_state is None
+    finally:
+        scenario.close()
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        + b"\n"
+    ).hexdigest()
+
+
+def _selected_snapshot_set_oracle(
+    request: Any, descriptor: Any, runtime: str, members: tuple[Any, ...]
+) -> str:
+    snapshots = []
+    for member in sorted(members, key=lambda item: item.provider_result.isin):
+        result = member.provider_result
+        snapshots.append(
+            {
+                "isin": result.isin,
+                "provider_id": result.provider_id,
+                "provider_capability_identity_sha256": (
+                    result.provider_capability_identity_sha256
+                ),
+                "provider_source_identity_sha256": result.provider_source_identity_sha256,
+                "provider_snapshot_schema_identity_sha256": (
+                    result.provider_snapshot_schema_identity_sha256
+                ),
+                "provider_policy_identity_sha256": result.provider_policy_identity_sha256,
+                "snapshot_identity_sha256": result.snapshot_identity_sha256,
+                "snapshot_byte_count": result.snapshot_byte_count,
+                "retrieved_at": result.retrieved_at.astimezone(UTC).strftime(
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
+                ),
+                "knowledge_cutoff": result.knowledge_cutoff.astimezone(UTC).strftime(
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
+                ),
+                "normalized_supported_events": [
+                    {
+                        "kind": event.kind.value,
+                        "effective_date": event.effective_date.isoformat(),
+                    }
+                    for event in result.normalized_supported_events
+                ],
+            }
+        )
+    return _canonical_sha256(
+        {
+            "contract_version": request.contract_version,
+            "input_identity_sha256": request.input_identity_sha256,
+            "request_identity_sha256": request.request_identity_sha256,
+            "runtime_code_identity_sha256": runtime,
+            "cohort_identity_sha256": request.cohort_manifest.cohort_identity_sha256,
+            "comparison_session": request.comparison_session.isoformat(),
+            "decision_cutoff": request.decision_cutoff.astimezone(UTC).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+            "decision_session": request.decision_session.isoformat(),
+            "schedule_evidence_sha256": request.schedule_evidence_sha256,
+            "schedule_source": request.schedule_source,
+            "schedule_source_release": request.schedule_source_release,
+            "provider_id": descriptor.provider_id,
+            "provider_capability_identity_sha256": (
+                descriptor.capability_identity_sha256
+            ),
+            "provider_source_identity_sha256": descriptor.source_identity_sha256,
+            "provider_snapshot_schema_identity_sha256": (
+                descriptor.snapshot_schema_identity_sha256
+            ),
+            "provider_policy_identity_sha256": descriptor.policy_identity_sha256,
+            "screen_schema_identity_sha256": request.screen_schema_identity_sha256,
+            "screen_policy_identity_sha256": request.screen_policy_identity_sha256,
+            "snapshots": snapshots,
+        }
+    )
+
+
+def test_selected_snapshot_set_hash_binds_known_retained_metadata_and_byte_count(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 2)
+    try:
+        private = _resolve(api, scenario)
+        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
+            _input(api, scenario)
+        )
+        descriptor = api.UpstoxCorporateActionScreenProviderV1(
+            scenario.store
+        ).descriptor
+        assert (
+            _selected_snapshot_set_oracle(
+                request,
+                descriptor,
+                private.runtime_code_identity_sha256,
+                private.member_results,
+            )
+            == private.selected_snapshot_set_identity_sha256
+        )
+        first = private.member_results[0]
+        changed = replace(
+            first,
+            provider_result=replace(
+                first.provider_result,
+                snapshot_byte_count=first.provider_result.snapshot_byte_count + 1,
+            ),
+        )
+        assert (
+            _selected_snapshot_set_oracle(
+                request,
+                descriptor,
+                private.runtime_code_identity_sha256,
+                (changed, *private.member_results[1:]),
+            )
+            != private.selected_snapshot_set_identity_sha256
+        )
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize("origin", ("fake", "foreign", "writable", "suppressed"))
+def test_catalog_origin_rejections_happen_before_schedule_or_store_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    calls: list[str] = []
+
+    class SuppressingCatalog(DuckDBCatalog):
+        def latest_corporate_action_snapshots(
+            self, *, isin: str, knowledge_cutoff: datetime
+        ) -> tuple[Any, ...]:
+            calls.append("suppressed-latest")
+            raise AssertionError
+
+    catalog: object
+    if origin == "fake":
+        catalog = object()
+    elif origin == "foreign":
+        catalog = DuckDBCatalog(
+            scenario.root / "foreign", read_only=True, lease=scenario.lease
+        )
+    elif origin == "writable":
+        catalog = DuckDBCatalog(scenario.root, lease=scenario.lease)
+    else:
+        catalog = SuppressingCatalog(
+            scenario.root, read_only=True, lease=scenario.lease
+        )
+
+    def fail_schedule(_digest: str) -> Any:
+        calls.append("schedule")
+        raise AssertionError
+
+    def fail_store(**kwargs: object) -> Any:
+        calls.append("store")
+        raise AssertionError
+
+    try:
+        object.__setattr__(scenario.store, "_catalog", catalog)
+        monkeypatch.setattr(scenario.schedule_store, "resolve", fail_schedule)
+        monkeypatch.setattr(scenario.store, "resolve", fail_store)
+        with pytest.raises(ValueError, match="invalid Plan-21 resolution"):
+            _resolve(api, scenario)
+        assert calls == []
+    finally:
+        scenario.close()
+
+
+@pytest.mark.parametrize(
+    "mutation", ("type", "digest", "canonical", "sha", "source", "as_of")
+)
+def test_resolver_rejects_corrupt_schedule_results_before_provider_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    calls: list[str] = []
+    original = scenario.schedule_store.resolve
+    result = original(scenario.schedule_sha256)
+    assert result.schedule is not None and result.canonical_bytes is not None
+    corrupted: object
+    if mutation == "type":
+        corrupted = object()
+    elif mutation == "digest":
+        corrupted = replace(result, digest="0" * 64)
+    elif mutation == "canonical":
+        corrupted = replace(result, canonical_bytes=result.canonical_bytes + b" ")
+    elif mutation == "sha":
+        corrupted = replace(
+            result,
+            canonical_bytes=api.canonical_schedule_bytes(result.schedule),
+            digest="f" * 64,
+        )
+    elif mutation == "source":
+        corrupted = replace(result, schedule=replace(result.schedule, source="other"))
+    else:
+        corrupted = replace(
+            result,
+            schedule=replace(
+                result.schedule, as_of=_CUTOFF + timedelta(microseconds=1)
+            ),
+        )
+
+    def corrupt_schedule(_digest: str) -> object:
+        return corrupted
+
+    def fail_provider(provider: Any, request: Any, isin: str, lease: Any) -> Any:
+        calls.append(isin)
+        raise AssertionError
+
+    try:
+        monkeypatch.setattr(scenario.schedule_store, "resolve", corrupt_schedule)
+        monkeypatch.setattr(
+            api.UpstoxCorporateActionScreenProviderV1,
+            "resolve_exact",
+            fail_provider,
+        )
+        private = _resolve(api, scenario)
+        assert (
+            private.outcome
+            is api.PrivateCorporateActionScreenOutcomeV1.SCHEDULE_UNAVAILABLE
+        )
+        assert calls == []
+    finally:
+        scenario.close()
+
+
+def test_frozen_plan21_identity_projections_match_independent_json_oracles() -> None:
+    api = _api()
+    plan = (
+        Path(__file__).parents[2]
+        / "docs/plans/21-current-supplied-cohort-corporate-action-screen-contract.md"
+    )
+    blocks = re.findall(r"```json\n(.*?)\n```", plan.read_text(encoding="utf-8"), re.S)
+    assert len(blocks) == 6
+    oracles = {
+        name: _canonical_sha256(json.loads(block))
+        for name, block in zip(
+            (
+                "upstox_source",
+                "upstox_policy",
+                "upstox_capability",
+                "screen_schema",
+                "screen_policy",
+                "selected_snapshot_set",
+            ),
+            blocks,
+            strict=True,
+        )
+    }
+    assert oracles == {
+        "upstox_source": api.UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1,
+        "upstox_policy": api.UPSTOX_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1,
+        "upstox_capability": (
+            api.UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1
+        ),
+        "screen_schema": api.CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1,
+        "screen_policy": api.CURRENT_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1,
+        "selected_snapshot_set": api.SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1,
+    }
+    assert len(set(oracles.values())) == len(oracles)
+
+
+@pytest.mark.parametrize(
+    ("label", "limit_name", "expected_limit"),
+    (
+        ("input", "_MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES", 16 * 1024),
+        ("request", "_MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES", 16 * 1024),
+        ("report", "_MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES", 16 * 1024),
+        ("provider", "_MAX_PROVIDER_RESULT_DTO_BYTES", 128 * 1024),
+        ("private", "_MAX_PRIVATE_AGGREGATE_DTO_BYTES", 256 * 1024),
+    ),
+)
+def test_dto_serializers_and_parsers_enforce_symmetric_byte_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    limit_name: str,
+    expected_limit: int,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    try:
+        input_value = _input(api, scenario)
+        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(input_value)
+        private = _resolve(api, scenario)
+        report = private.to_public_report()
+        provider = private.member_results[0].provider_result
+        value = {
+            "input": input_value,
+            "request": request,
+            "report": report,
+            "provider": provider,
+            "private": private,
+        }[label]
+        parser = {
+            "input": api.CurrentSuppliedCohortCorporateActionScreenInputV1,
+            "request": api.CurrentSuppliedCohortCorporateActionScreenRequestV1,
+            "report": api.CurrentSuppliedCohortCorporateActionScreenReportV1,
+            "provider": api.PrivateCorporateActionScreenProviderResultV1,
+            "private": api.PrivateCorporateActionScreenResultV1,
+        }[label]
+        raw = value.canonical_json_bytes()
+        assert getattr(api, limit_name) == expected_limit
+        monkeypatch.setattr(api, limit_name, len(raw))
+        assert value.canonical_json_bytes() == raw
+        assert parser.from_canonical_json_bytes(raw).canonical_json_bytes() == raw
+        monkeypatch.setattr(api, limit_name, len(raw) - 1)
+        with pytest.raises(ValueError):
+            value.canonical_json_bytes()
+        with pytest.raises(ValueError):
+            parser.from_canonical_json_bytes(raw)
+    finally:
+        scenario.close()
+
+
+def test_fifty_member_private_round_trip_is_unsealed_and_nonpublishing(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 50)
+    try:
+        private = _resolve(api, scenario)
+        raw = private.canonical_json_bytes()
+        assert len(raw) <= 256 * 1024
+        replay = api.PrivateCorporateActionScreenResultV1.from_canonical_json_bytes(raw)
+        assert replay.canonical_json_bytes() == raw
+        assert replay._publication_seal is None
+        with pytest.raises(ValueError, match="unsealed private Plan-21 result"):
+            replay.to_public_report()
+    finally:
+        scenario.close()
+
+
+def test_resolution_has_zero_network_write_or_scan_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise AssertionError
+
+    try:
+        monkeypatch.setattr(UpstoxCorporateActionsClientV1, "fetch", fail)
+        monkeypatch.setattr(CorporateActionSnapshotStoreV1, "retain", fail)
+        monkeypatch.setattr(Path, "glob", fail)
+        monkeypatch.setattr(Path, "iterdir", fail)
+        monkeypatch.setattr(Path, "rglob", fail)
+        assert _resolve(api, scenario).outcome.value == (
+            "SCREENED_NO_SUPPORTED_ACTION_OBSERVED"
+        )
     finally:
         scenario.close()

@@ -15,6 +15,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Final, Protocol, cast
 
+from .catalog import DuckDBCatalog
 from .corporate_actions import (
     UPSTOX_CORPORATE_ACTIONS_ADAPTER_RELEASE_V1,
     UPSTOX_CORPORATE_ACTIONS_SOURCE_V1,
@@ -49,13 +50,13 @@ CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1: Final = (
     "current-supplied-cohort-corporate-action-screen@v1"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "aa85801e5f425213d4b4fd7b1e990f2302fa331a291ed4a3bf68439b45cd5023"
+    "597506239022fa1b748cf610d0400221c020a553e6e0c2d7bbb526b8c899240f"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "addf3ea9b575dd9e1c959861316b670f5b5b1f485b3b3843bae0631ae652a12f"
+    "8f32813ee010ad7e8fe74d26c6ee970241a9c810eff2c2088d4acb87308db251"
 )
 SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "1944347eb87b7faeff309581b11fd1a9e02dcba8423b718e97eceb496ebd8f1e"
+    "4721fa4b2d27fa4ba62d11d265d557b088f139b13cc8990f92aebaf87f3a944b"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1: Final = (
     "3853a15b853b73a945065486ca96b48d4ee3625e4ed7c6e4927579e2b0b372a2"
@@ -64,10 +65,10 @@ UPSTOX_CORPORATE_ACTION_SCREEN_SNAPSHOT_SCHEMA_IDENTITY_SHA256_V1: Final = (
     "de03833b00d0d286fc3d0116f7ce81b8694547d43b13250f7415d6c95fdbbf8a"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "e5f9503077f3f16498a222c4c93f6532e60d2514ac6ebf9a42c0666879c28e41"
+    "212fabde8d603af1c28b69de18a483c75ab8a0ca2e6c5bb125ca4d61074ae32b"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1: Final = (
-    "6c74354a6cb3e8b8d272d18296c4fa64cae2709677b963f53091cfa7ca7c03fe"
+    "24893177d0e0c733f92dfa92cb7216c2516f15dc5c71841f85e09101b8cffa0b"
 )
 
 _SCHEDULE_SOURCE: Final = "nse-authoritative-calendar"
@@ -481,12 +482,9 @@ class CurrentSuppliedCohortCorporateActionScreenInputV1:
             ("screen_policy_identity_sha256", screen_policy_identity_sha256),
         ):
             object.__setattr__(self, name, value)
-        if (
-            len(self.canonical_json_bytes(include_identity=False))
-            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
-        ):
-            raise ValueError("invalid Plan-21 input")
         object.__setattr__(self, "input_identity_sha256", _sha256(self.value(False)))
+        if len(self.canonical_json_bytes()) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid Plan-21 input")
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
@@ -507,7 +505,10 @@ class CurrentSuppliedCohortCorporateActionScreenInputV1:
         return result
 
     def canonical_json_bytes(self, include_identity: bool = True) -> bytes:
-        return _canonical(self.value(include_identity))
+        raw = _canonical(self.value(include_identity))
+        if len(raw) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid Plan-21 input")
+        return raw
 
     @classmethod
     def from_canonical_json_bytes(
@@ -602,12 +603,9 @@ class CurrentSuppliedCohortCorporateActionScreenRequestV1:
             "screen_policy_identity_sha256",
         ):
             object.__setattr__(self, name, getattr(input_value, name))
-        if (
-            len(self.canonical_json_bytes(include_identity=False))
-            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
-        ):
-            raise ValueError("invalid Plan-21 request")
         object.__setattr__(self, "request_identity_sha256", _sha256(self.value(False)))
+        if len(self.canonical_json_bytes()) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid Plan-21 request")
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
@@ -629,7 +627,10 @@ class CurrentSuppliedCohortCorporateActionScreenRequestV1:
         return result
 
     def canonical_json_bytes(self, include_identity: bool = True) -> bytes:
-        return _canonical(self.value(include_identity))
+        raw = _canonical(self.value(include_identity))
+        if len(raw) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid Plan-21 request")
+        return raw
 
     @classmethod
     def from_canonical_json_bytes(
@@ -860,6 +861,25 @@ class PrivateCorporateActionScreenMemberResultV1:
         }
 
 
+def _has_qualified_catalog_origin(
+    store: object, lease: object, expected_root: object
+) -> bool:
+    """Require one exact, read-only catalog bound to the admitted capabilities."""
+    try:
+        return (
+            type(store) is CorporateActionSnapshotStoreV1
+            and type(lease) is StorageRootLease
+            and type(store.catalog) is DuckDBCatalog
+            and store.storage_root == expected_root
+            and store.lease is lease
+            and store.catalog.storage_root == expected_root
+            and store.catalog.lease is lease
+            and store.catalog.read_only is True
+        )
+    except Exception:
+        return False
+
+
 class CorporateActionScreenProviderPortV1(Protocol):
     @property
     def descriptor(self) -> CorporateActionScreenProviderDescriptorV1: ...
@@ -894,8 +914,9 @@ class UpstoxCorporateActionScreenProviderV1:
         if (
             type(request) is not CurrentSuppliedCohortCorporateActionScreenRequestV1
             or not _valid_isin(isin)
-            or type(lease) is not StorageRootLease
-            or lease is not self.store.lease
+            or not _has_qualified_catalog_origin(
+                self.store, lease, self.store.storage_root
+            )
         ):
             raise ValueError("invalid Plan-21 provider resolution")
         descriptor = self.descriptor
@@ -1344,8 +1365,7 @@ def _private_result_budget_exceeded(
             for member in result.member_results
         )
         > _MAX_NORMALIZED_EVENTS
-        or len(_canonical(result.value(include_identity=False)))
-        > _MAX_PRIVATE_AGGREGATE_DTO_BYTES
+        or len(_canonical(result.value())) > _MAX_PRIVATE_AGGREGATE_DTO_BYTES
     )
 
 
@@ -1549,12 +1569,9 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
             ("reason", reason),
         ):
             object.__setattr__(self, name, value)
-        if (
-            len(_canonical(self.value(include_identity=False)))
-            > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES
-        ):
-            raise ValueError("invalid public Plan-21 report")
         object.__setattr__(self, "report_identity_sha256", _sha256(self.value(False)))
+        if len(self.canonical_json_bytes()) > _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES:
+            raise ValueError("invalid public Plan-21 report")
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
@@ -1671,6 +1688,32 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
         return result
 
 
+def _admitted_provider_result(
+    result: object,
+    isin: str,
+    descriptor: CorporateActionScreenProviderDescriptorV1,
+    knowledge_cutoff: datetime,
+) -> PrivateCorporateActionScreenProviderResultV1 | None:
+    if type(result) is not PrivateCorporateActionScreenProviderResultV1:
+        return None
+    try:
+        admitted = (
+            PrivateCorporateActionScreenProviderResultV1.from_canonical_json_bytes(
+                result.canonical_json_bytes()
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if (
+        admitted != result
+        or admitted.isin != isin
+        or admitted.descriptor != descriptor
+        or admitted.knowledge_cutoff != knowledge_cutoff
+    ):
+        return None
+    return admitted
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentSuppliedCohortCorporateActionScreenResolverV1:
     schedule_store: ScheduleEvidenceStore
@@ -1686,9 +1729,10 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
             or type(lease) is not StorageRootLease
             or type(self.schedule_store) is not ScheduleEvidenceStore
             or type(self.provider) is not UpstoxCorporateActionScreenProviderV1
-            or type(self.provider.store) is not CorporateActionSnapshotStoreV1
+            or not _has_qualified_catalog_origin(
+                self.provider.store, lease, self.schedule_store.storage_root
+            )
             or lease is not self.schedule_store.lease
-            or lease is not self.provider.store.lease
             or self.schedule_store.storage_root != self.provider.store.storage_root
         ):
             raise ValueError("invalid Plan-21 resolution")
@@ -1722,20 +1766,11 @@ class CurrentSuppliedCohortCorporateActionScreenResolverV1:
         for member in sorted(
             request.cohort_manifest.members, key=lambda member: member.isin
         ):
-            result = self.provider.resolve_exact(request, member.isin, lease)
-            if (
-                type(result) is not PrivateCorporateActionScreenProviderResultV1
-                or result.isin != member.isin
-                or result.descriptor != descriptor
-                or result.knowledge_cutoff != request.decision_cutoff
-                or (
-                    result.outcome is ProviderObservationOutcomeV1.AVAILABLE
-                    and (
-                        result.retrieved_at is None
-                        or result.retrieved_at > request.decision_cutoff
-                    )
-                )
-            ):
+            returned = self.provider.resolve_exact(request, member.isin, lease)
+            result = _admitted_provider_result(
+                returned, member.isin, descriptor, request.decision_cutoff
+            )
+            if result is None:
                 result = _provider_failure(
                     descriptor,
                     member.isin,
@@ -1790,6 +1825,8 @@ def _admitted_schedule_result(
         return None
     if (
         canonical != result.canonical_bytes
+        or hashlib.sha256(result.canonical_bytes).hexdigest()
+        != request.schedule_evidence_sha256
         or schedule_digest(result.schedule) != request.schedule_evidence_sha256
     ):
         return None

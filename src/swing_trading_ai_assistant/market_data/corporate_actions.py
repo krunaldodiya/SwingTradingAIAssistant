@@ -341,6 +341,11 @@ class CorporateActionSnapshotStoreV1:
         """Return the exact lease capability admitted at construction."""
         return self._lease
 
+    @property
+    def catalog(self) -> CorporateActionCatalogV1:
+        """Return the exact catalog capability admitted at construction."""
+        return self._catalog
+
     def retain(
         self, snapshot: CorporateActionSnapshotV1
     ) -> CorporateActionSnapshotMetadataV1:
