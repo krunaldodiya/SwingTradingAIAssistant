@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance
@@ -23,6 +24,8 @@ from swing_trading_ai_assistant.market_data.adjusted_daily import (
 _S0 = date(2026, 7, 6)
 _S20 = date(2026, 8, 3)
 _CUTOFF = datetime(2026, 8, 4, 12, tzinfo=UTC)
+
+_RETRIEVED_AT = datetime(2026, 8, 4, 12, 1, tzinfo=UTC)
 
 
 @dataclass
@@ -91,6 +94,9 @@ def _frame(
             "RELIANCE.NS": tuple(100 + offset for offset in range(21)),
             "SBIN.NS": tuple(200 + offset for offset in range(21)),
         },
+        "retrieved_at": _RETRIEVED_AT,
+        "provider_source": "yfinance==1.6.0",
+        "temporal_label": "REVISED_NON_PIT",
     }
 
 
@@ -159,6 +165,25 @@ def test_rejects_missing_or_nonunique_supplied_member_mapping_before_fetch() -> 
     assert provider.calls == []
 
 
+def test_rejects_decision_session_close_after_cutoff_before_fetch() -> None:
+    provider = _Provider(_frame())
+    request = _request()
+    request["decision_cutoff"] = datetime(2026, 8, 3, 9, 59, tzinfo=UTC)
+    request["plan21_schedule"] = {
+        "sessions": _sessions(),
+        "decision_session_official_close_at": datetime(
+            2026, 8, 3, 15, 30, tzinfo=ZoneInfo("Asia/Kolkata")
+        ),
+    }
+
+    result = _acquire(request, provider)
+
+    assert result == AdjustedDailyCloseFailure(
+        "INVALID_REQUEST", "DECISION_SESSION_AFTER_CUTOFF"
+    )
+    assert provider.calls == []
+
+
 def test_normalizes_exact_s0_and_s20_adjusted_close_facts() -> None:
     provider = _Provider(
         _frame(
@@ -185,6 +210,13 @@ def test_normalizes_exact_s0_and_s20_adjusted_close_facts() -> None:
         ("RELIANCE", Decimal("100"), Decimal("120")),
         ("SBIN", Decimal("200"), Decimal("220")),
     ]
+    assert handoff.retrieved_at == _RETRIEVED_AT
+    assert handoff.provider_source == "yfinance==1.6.0"
+    assert handoff.temporal_label == "REVISED_NON_PIT"
+    assert [fact.provider_symbol for fact in handoff.members] == [
+        "RELIANCE.NS",
+        "SBIN.NS",
+    ]
 
 
 def test_rejects_invalid_schedule_before_fetch_and_incomplete_frame_after_fetch() -> (
@@ -207,6 +239,20 @@ def test_rejects_invalid_schedule_before_fetch_and_incomplete_frame_after_fetch(
     assert incomplete == AdjustedDailyCloseFailure(
         "INSUFFICIENT_DATA", "FRAME_SCHEMA_INVALID"
     )
+
+
+def test_rejects_nonpositive_and_nonfinite_adjusted_closes() -> None:
+    for value in (0, float("nan"), float("inf")):
+        result = _acquire(
+            _request(),
+            _Provider(
+                _frame(closes={"RELIANCE.NS": (value,) * 21, "SBIN.NS": (1,) * 21})
+            ),
+        )
+
+        assert result == AdjustedDailyCloseFailure(
+            "INSUFFICIENT_DATA", "FRAME_SCHEMA_INVALID"
+        )
 
 
 def test_classifies_empty_and_failing_provider_responses_without_facts() -> None:
@@ -251,7 +297,9 @@ def test_yfinance_adapter_calls_public_download_and_normalizes_close(
             ("Close", "RELIANCE.NS"): [100.5, 101.25],
             ("Open", "RELIANCE.NS"): [99.0, 100.0],
         },
-        index=pd.DatetimeIndex(("2024-01-02", "2024-01-03")),
+        index=pd.DatetimeIndex(
+            ("2024-01-02", "2024-01-03"), tz=ZoneInfo("Asia/Kolkata")
+        ),
     )
     frame.columns = pd.MultiIndex.from_tuples(frame.columns, names=("Price", "Ticker"))
 
@@ -269,9 +317,36 @@ def test_yfinance_adapter_calls_public_download_and_normalizes_close(
         "auto_adjust": True,
     }
 
-    assert adapter.download(**call) == {
-        "timezone": "Asia/Kolkata",
-        "index": (date(2024, 1, 2), date(2024, 1, 3)),
-        "close": {"RELIANCE.NS": (100.5, 101.25)},
-    }
+    result = adapter.download(**call)
+
+    assert result["timezone"] == "Asia/Kolkata"
+    assert result["index"] == (date(2024, 1, 2), date(2024, 1, 3))
+    assert result["close"] == {"RELIANCE.NS": (100.5, 101.25)}
+    assert result["provider_source"] == f"yfinance=={yfinance.__version__}"
+    assert result["temporal_label"] == "REVISED_NON_PIT"
+    assert isinstance(result["retrieved_at"], datetime)
+    assert cast(datetime, result["retrieved_at"]).tzinfo is UTC
     assert calls == [call]
+
+
+def test_yfinance_adapter_rejects_naive_and_wrong_timezone_indexes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    adapter = YfinanceAdjustedDailyDownloadAdapter()
+    for timezone in (None, ZoneInfo("UTC")):
+        frame = pd.DataFrame(
+            {("Close", "RELIANCE.NS"): [100.5, 101.25]},
+            index=pd.DatetimeIndex(("2024-01-02", "2024-01-03"), tz=timezone),
+        )
+        frame.columns = pd.MultiIndex.from_tuples(
+            frame.columns, names=("Price", "Ticker")
+        )
+        monkeypatch.setattr(
+            yfinance, "download", lambda _frame=frame, **_kwargs: _frame
+        )
+
+        assert adapter.download(tickers=("RELIANCE.NS",)) == {
+            "timezone": None,
+            "index": (),
+            "close": {},
+        }

@@ -40,6 +40,7 @@ class AdjustedDailyMemberFacts:
 
     isin: str
     project_symbol: str
+    provider_symbol: str
     s0: AdjustedCloseFact
     s20: AdjustedCloseFact
 
@@ -51,6 +52,9 @@ class AdjustedDailyCloseHandoff:
     contract_version: str
     provider_id: Literal["YFINANCE"]
     price_basis: Literal["ADJUSTED"]
+    provider_source: str
+    retrieved_at: datetime
+    temporal_label: Literal["REVISED_NON_PIT"]
     decision_cutoff: datetime
     comparison_session: date
     decision_session: date
@@ -152,6 +156,17 @@ def _parse_request(request: object) -> _Request | AdjustedDailyCloseFailure:
     if sessions is None:
         return _invalid("SCHEDULE_INVALID")
 
+    schedule_mapping = _mapping(request_mapping.get("plan21_schedule"))
+    if (
+        schedule_mapping is not None
+        and "decision_session_official_close_at" in schedule_mapping
+    ):
+        official_close = schedule_mapping["decision_session_official_close_at"]
+        if type(official_close) is not datetime or not _is_aware(official_close):
+            return _invalid("SCHEDULE_INVALID")
+        if official_close > decision_cutoff:
+            return _invalid("DECISION_SESSION_AFTER_CUTOFF")
+
     members = _parse_members(
         request_mapping.get("mapped_members"),
         request_mapping.get("plan19_cohort"),
@@ -251,6 +266,16 @@ def _normalize_frame(request: _Request, frame: object) -> AdjustedDailyCloseResu
     if close is None:
         return AdjustedDailyCloseFailure("INSUFFICIENT_DATA", "FRAME_SCHEMA_INVALID")
 
+    retrieved_at = frame_mapping.get("retrieved_at")
+    provider_source = frame_mapping.get("provider_source")
+    if (
+        type(retrieved_at) is not datetime
+        or not _is_aware(retrieved_at)
+        or provider_source != "yfinance==1.6.0"
+        or frame_mapping.get("temporal_label") != "REVISED_NON_PIT"
+    ):
+        return AdjustedDailyCloseFailure("INSUFFICIENT_DATA", "FRAME_SCHEMA_INVALID")
+
     facts: list[AdjustedDailyMemberFacts] = []
     for isin, project_symbol, provider_symbol in request.members:
         values = _sequence(close.get(provider_symbol))
@@ -271,6 +296,7 @@ def _normalize_frame(request: _Request, frame: object) -> AdjustedDailyCloseResu
             AdjustedDailyMemberFacts(
                 isin=isin,
                 project_symbol=project_symbol,
+                provider_symbol=provider_symbol,
                 s0=AdjustedCloseFact(request.sessions[0], cast(Decimal, normalized[0])),
                 s20=AdjustedCloseFact(
                     request.sessions[-1], cast(Decimal, normalized[-1])
@@ -284,6 +310,9 @@ def _normalize_frame(request: _Request, frame: object) -> AdjustedDailyCloseResu
             contract_version=CONTRACT_VERSION,
             provider_id=PROVIDER_ID,
             price_basis=PRICE_BASIS,
+            provider_source=cast(str, provider_source),
+            retrieved_at=retrieved_at,
+            temporal_label="REVISED_NON_PIT",
             decision_cutoff=request.decision_cutoff,
             comparison_session=request.sessions[0],
             decision_session=request.sessions[-1],
@@ -311,7 +340,7 @@ def _decimal(value: object) -> Decimal | None:
         number = Decimal(str(value))
     except Exception:
         return None
-    return number if number.is_finite() and number >= 0 else None
+    return number if number.is_finite() and number > 0 else None
 
 
 def _invalid(reason: str) -> AdjustedDailyCloseFailure:

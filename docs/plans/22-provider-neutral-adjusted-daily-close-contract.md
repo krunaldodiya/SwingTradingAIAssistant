@@ -23,6 +23,10 @@ dependency byte attestation and lock projection; and the exhaustive temporal,
 frame, and lifecycle matrices. These safeguards are not represented as
 implemented by the MVP.
 
+Authoritative mapping evidence is deferred. The owner-supplied unique mapping is
+the explicit trusted MVP boundary; this slice neither verifies nor constructs
+mapping evidence.
+
 
 ## Design decision: trusted pinned provider, not a security sandbox
 

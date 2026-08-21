@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from types import ModuleType
 from typing import Final, Protocol, cast
 
@@ -52,9 +52,15 @@ class YfinanceAdjustedDailyDownloadAdapter:
             return {}
         tickers = _tickers(kwargs.get("tickers"))
         sessions = _session_dates(frame.index)
-        if tickers is None or sessions is None:
+        timezone = _index_timezone(frame.index)
+        provider_source = _provider_source()
+        if (
+            tickers is None
+            or sessions is None
+            or timezone is None
+            or provider_source is None
+        ):
             return _invalid_frame()
-
         close: dict[str, tuple[object, ...]] = {}
         for ticker in tickers:
             values = _close_values(frame, ticker)
@@ -63,9 +69,12 @@ class YfinanceAdjustedDailyDownloadAdapter:
             close[ticker] = values
 
         return {
-            "timezone": "Asia/Kolkata",
+            "timezone": timezone,
             "index": sessions,
             "close": close,
+            "retrieved_at": datetime.now(UTC),
+            "provider_source": provider_source,
+            "temporal_label": "REVISED_NON_PIT",
         }
 
 
@@ -88,6 +97,19 @@ def _tickers(value: object) -> tuple[str, ...] | None:
             return None
         tickers.append(ticker)
     return tuple(tickers) if tickers else None
+
+
+def _index_timezone(index: object) -> str | None:
+    if not isinstance(index, pd.DatetimeIndex) or index.tz is None:
+        return None
+    timezone = index.tz
+    zone_name = getattr(timezone, "key", None) or getattr(timezone, "zone", None)
+    return "Asia/Kolkata" if zone_name == "Asia/Kolkata" else None
+
+
+def _provider_source() -> str | None:
+    version = _YFINANCE_MODULE.__dict__.get("__version__")
+    return f"yfinance=={version}" if type(version) is str and version else None
 
 
 def _session_dates(index: Iterable[object]) -> tuple[date, ...] | None:
@@ -124,4 +146,4 @@ def _close_values(frame: _PandasFrame, ticker: str) -> tuple[object, ...] | None
 
 
 def _invalid_frame() -> Mapping[str, object]:
-    return {"timezone": "Asia/Kolkata", "index": (), "close": {}}
+    return {"timezone": None, "index": (), "close": {}}
