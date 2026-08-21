@@ -1,7 +1,7 @@
 # Instrument-agnostic feature boundary and coupling audit
 
-Status: **OWNER DECISION RECORDED / FUTURE REMEDIATION NOT STARTED**  
-Tracking: [GitHub Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)  
+Status: **OWNER DECISION RECORDED / FUTURE REMEDIATION NOT STARTED**
+Tracking: [GitHub Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
 Risk: **R2 documentation decision; later financial-research contract migrations retain their applicable R3 controls**
 
 ## Owner decision
