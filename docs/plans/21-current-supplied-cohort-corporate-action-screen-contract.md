@@ -19,7 +19,10 @@ Depends on: [Plan 19](19-current-supplied-cohort-market-data-contract.md),
 retained provider snapshots under [Plan 09](09-corporate-action-provenance-contract.md),
 and retained official schedule evidence. Preserves: frozen
 [Plan 12](12-market-regime-contract.md), Plan 09 raw-candle immutability, and
-deferred Plans 18/Sprints 15–16.
+deferred Plans 18/Sprints 15–16. After this standalone capability merges,
+[Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+and [Plan 22](22-provider-neutral-adjusted-daily-close-contract.md) are the next
+dependency; neither is implemented or authorized by Plan 21.
 
 ## Outcome, authority, and lifecycle
 
@@ -100,6 +103,14 @@ Accordingly it is a future raw-OHLCV qualification candidate; it is
 screening provider under the inspected contract. This specification authorizes
 no Angel One credential, sandbox, or production call.
 
+**yfinance adjusted daily is accepted only under the later Issue #127 /
+Plan-22 contract.** It supplies a separate explicit adjusted-close fact and
+never changes this screen, replaces Upstox as the live/raw or screen provider,
+or writes an adjusted value into an Upstox candle. Its unofficial
+personal/research-use boundary, retrospective revision risk, non-PIT history,
+and latest-60-day intraday limitation remain explicit. Plan 21 adds no yfinance
+dependency, call, adapter, fact, or fallback.
+
 A future provider may be added only after a separately reviewed qualification
 record supplies: official capability documentation; raw versus adjusted price
 basis; event and timestamp semantics; retrieval and knowledge-time behavior;
@@ -136,13 +147,17 @@ supported in-window event makes this screen generically insufficient, so its
 consumer must not compare across that event under this report. It neither
 reconstructs nor labels adjusted, total-return, or economic-return prices.
 
-Sprint 11 remains the later direct raw `S[0]`/`S[20]` close cohort-breadth
-comparison. After this screen independently merges, rebased PR #124 may add a
-separate Market Regime v2 that consumes only a successful screen report; its
-unscreened v1 must never merge, select, or fall back. Market Structure remains
-separate higher-high/higher-low work. A later approved Market Structure contract
-may reuse this screen and define its own event-window skip/reset policy; Plan 21
-neither starts nor specifies it.
+Sprint 11 remains a later current supplied-cohort breadth calculation. After
+this screen independently merges, Issue #127 / Plan 22 must implement, review,
+and merge the separate provider-neutral adjusted-daily-close capability with
+yfinance first. Only then may PR #124 rebase and replace its proposed
+current-regime v1 with a separately versioned v2 that consumes successful
+reports from both Plan 21 and Plan 22 while retaining the existing Upstox raw
+close evidence separately. It must surface raw/adjusted direction disagreement
+and never use an unscreened, raw, adjusted, or provider fallback path. Market
+Structure remains separate higher-high/higher-low work; a later approved
+contract must choose a complete raw-OHLC basis or a complete adjusted-OHLC
+basis and define its own event-window policy.
 
 ## Canonical profile and re-frozen identities
 
@@ -404,15 +419,18 @@ the old representation must not coexist. The exact Upstox adapter remains
 private behind the generic port, except for `provider_id` and opaque identities
 required for provenance.
 
-Plan 21 merges as the standalone screen before PR #124. It accepts/inherits no
-`CurrentSuppliedCohortMarketRegime` input/request/report, archive, breadth, or
-market label, and changes none of Plans 09, 11, 12, or 19. Then PR #124 rebases
-and adds the separate Market Regime v2 cutover that accepts only a successful
-screen report. Unscreened v1 cannot merge, select, or fall back. V2 preserves
-Plan 20/v1 replay history without claiming historical v1 reports were screened.
+Plan 21 merges as the standalone screen before Issue #127 and PR #124. It
+accepts/inherits no `CurrentSuppliedCohortMarketRegime` input/request/report,
+archive, breadth, market label, or adjusted-close fact, and changes none of
+Plans 09, 11, 12, or 19. Issue #127 / Plan 22 then separately implements and
+merges adjusted daily close. Only after both dependencies merge may PR #124
+rebase and add a separate Market Regime v2 cutover that consumes both
+successful reports. Unscreened v1 and raw/adjusted/provider fallback cannot
+merge or select. V2 preserves the proposed Plan-20/v1 record without claiming
+historical v1 reports were screened or adjusted.
 
-Sprints 15/16, not Plan 21, later govern historical no-backfill availability.
-This plan has no historical output, test, or gate.
+Sprints 15/16, not Plan 21, govern historical no-backfill availability. This
+plan has no historical output, test, or gate.
 
 A future candidate must verify N=1/5/50; exact Luhn ISIN admission and an
 inclusive 64-calendar-date pre-materialization bound; exact `ScheduleEvidenceStore`
@@ -436,10 +454,11 @@ revision R3 functional, security/provenance, and temporal review.
 
 ## Non-goals
 
-Plan 21 does not alter PR #124; create Market Regime v2;
-create an Angel One adapter or general all-capability framework; call
-Upstox/Angel One/NSE/SEBI; use credentials; use a sandbox; acquire/retain
-evidence; add dependencies; automate NSE UI; adjust/reconstruct prices; infer
-events from gaps; prove no action; create a historical evaluator; start Sprint
-12; recommend; or trade. Issue #116 and PR #124 remain blocked until this
-standalone capability merges and later v2 integration passes its own gates.
+Plan 21 does not alter PR #124; implement Issue #127/Plan 22; create Market
+Regime v2; create an Angel One adapter or general all-capability framework; call
+Upstox/Angel One/yfinance/NSE/SEBI; use credentials; use a sandbox;
+acquire/retain evidence; add dependencies; automate NSE UI; adjust/reconstruct
+prices; infer events from gaps; prove no action; create a historical evaluator;
+start Sprint 12; recommend; or trade. Issue #116 and PR #124 remain blocked
+until this standalone capability merges, Issue #127 then merges, and the later
+v2 integration passes its own gates.

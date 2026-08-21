@@ -33,27 +33,66 @@ it is never fabricated or backfilled from later evidence, and it does not block
 unrelated available-feature research. The current/live contract may instead
 require a factor as a whole-result gate for the specific claim it makes.
 
+This is sequencing only. Sprint 15 remains the historical store and Sprint 16
+remains the historical validation/pre-structure gate. Their retained scope
+includes point-in-time membership, sector, corporate-action, and source
+provenance plus point-in-time availability ledgers; historical backtests with
+look-ahead, survivorship, selection, and data-snooping controls; separated
+in-sample, walk-forward, out-of-sample, and untouched-test regions;
+forward/paper testing; and realistic costs and slippage. Missing historical
+evidence remains an explicit unavailable
+state at the cutoff and is neither fabricated nor treated as neutral. No
+initially planned capability is removed by the current/live-first order.
+
+Provider routing is capability-based, explicit, and provenance-bound. Upstox is
+primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
+yfinance is first only for the separate Plan-22 adjusted daily close; every fact
+records provider and price basis, and no provider is a generic silent fallback.
+Angel One is deferred as a future qualified adapter and is not implemented now.
+yfinance offers long daily history but only the latest 60 days of intraday data;
+it is an unofficial personal/research-use Yahoo client whose retrospective
+adjustments may be revised and are not strict point-in-time authority.
+
+Raw Upstox OHLCV remains unchanged. A yfinance adjusted close never fills an
+Upstox candle. Any later Market Structure calculation must use a complete raw
+OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
+
 
 | Sprint | Tracker and lifecycle | Atomic outcome | Minimum dependency and gate | Explicit non-goals |
 | --- | --- | --- | --- | --- |
-| 10 | [#121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121) — current; High priority/risk | Current supplied-cohort `market-data` foundation: bounded current price/volume facts for 1–50 Nifty 50 identities and immutable archive records. | Canonical cohort identity/selection SHA; retained instrument resolution; latest completed daily OHLCV and optional `PARTIAL_CURRENT_SESSION`; provenance/availability ledger; whole-cohort insufficiency; no effect before admission. | Historical/backtest implementation, Market Regime, sectors, news/events, signals, recommendations, entries/exits, position sizing, orders. |
-| 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Todo; High priority/risk; blocked by [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125) | Current Market Regime over admitted archived current facts, after a provider-neutral raw-close corporate-action screen. | First merge standalone [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md): its exact retained schedule binding must derive S0/S20 as 20 completed positions and each member's snapshot must be retained from the derived S20 close through cutoff with no supported in-window action. Then rebase to a current-regime v2 cutover that accepts only its successful report before direct S0/S20 breadth. The screen state remains nonexhaustive provider-screened evidence, not authoritative no-break proof. | Historical/backtest implementation, adjustment engine, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
-| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Todo; High priority/risk | Current Sector Analysis and Sector Participation with immutable current sector snapshots. | Sprints 10–11 current facts; approved current sector evidence/identity bindings; sector availability-ledger entries. | Historical taxonomy reconstruction/backfill, historical validation, recommendation, order. |
+| 10 | [#121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121) — Closed/completed; High priority/risk | Current supplied-cohort `market-data` foundation: bounded current price/volume facts for 1–50 Nifty 50 identities and immutable archive records. | Canonical cohort identity/selection SHA; retained instrument resolution; latest completed daily OHLCV and optional `PARTIAL_CURRENT_SESSION`; provenance/availability ledger; whole-cohort insufficiency; no effect before admission. | Historical/backtest implementation, Market Regime, sectors, news/events, signals, recommendations, entries/exits, position sizing, orders. |
+| 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Open/Todo; High priority/risk; blocked by ordered dependencies [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125) then [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127) | Current Market Regime v2 over admitted archived current facts, a successful provider-neutral corporate-action screen, and separate adjusted daily close facts. | First merge standalone [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md). Then implement and merge yfinance-first [Plan 22](plans/22-provider-neutral-adjusted-daily-close-contract.md). Then rebase PR #124 to a separately versioned v2 that consumes both reports, retains the Upstox raw evidence separately, exposes raw/adjusted disagreement, and has no unscreened/raw/silent fallback. | Historical/backtest implementation, generic adjustment engine, mixed-basis OHLC, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
+| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Open/Todo; High priority/risk; not authorized to start before Sprint 11 closes | Current Sector Analysis and Sector Participation with immutable current sector snapshots. | Sprint 10 complete and Sprint 11 closed; approved current sector evidence/identity bindings; sector availability-ledger entries. | Historical taxonomy reconstruction/backfill, historical validation, recommendation, order. |
 | 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Todo; High priority/risk | Current news and event evidence with bounded fresh-input integration and immutable archive. | Current freshness/provenance/availability rules; no silent neutralization of absence. | Historical news/event backfill, historical validation, forecast, recommendation, order. |
 | 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — Todo; High priority/risk | Integrated current packet binding price/volume, Market Regime, sector, news, events, and their archive identities for external-AI explainable research or `NO_TRADE`. | Exact Sprint 10–13 gates and current contracts. | Autonomous tool signal/recommendation, broker order, execution, historical-context substitution, claim of effectiveness. |
 | 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Deferred fixed-cohort historical OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort, versioned OHLCV revision, and predeclared coverage/windows. | Inferred index membership, historical news/event/sector neutralization, Market Structure, recommendation, order. |
 | 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate. | Sprint 15 store; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; identities and independent review. | Market Structure implementation, Price Action, Liquidity/SMC, recommendation, broker execution, guaranteed outcomes. |
+
+Sprint 12 cannot start merely because either dependency merges. It starts only
+after Issue #125 is merged, Issue #127 is merged, the rebased PR #124 Market
+Regime v2 passes its gates, and Sprint 11 / Issue #116 is closed.
 
 ## Market Structure boundary
 
 Market Structure is **earliest Sprint 17** and is not specified or started by
 this overview. Sprint 16 returns only `APPROVED_TO_START_MARKET_STRUCTURE` or
 `BLOCKED` with exact reasons; failure adds a replacement sprint. This is a gate,
-not a promise.
+not a promise. Any later Market Structure contract must choose one complete raw
+OHLC basis or one complete adjusted OHLC basis for its whole window; a yfinance
+adjusted close cannot be mixed with Upstox raw open/high/low values.
+
+## Future packaging outside current WIP
+
+[Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
+is future low-priority work for a standalone `swing-trading-market-data` PyPI
+distribution while the full application remains installable. Both distributions
+must consume one authoritative market-data codebase with no copied provider
+logic. This packaging outcome is not part of Sprints 11–16 and cannot interrupt
+Issue #125, Issue #127, PR #124, or WIP-one.
 
 ## Deferred and superseded historical records
 
-Issue #121 is the active current foundation. Issues #111 and #115 are **closed /
+Issue #121 is closed/completed and supplies the current foundation. Issues #111 and #115 are **closed /
 not planned** with no published implementation. Plans 12 and 17 retain their
 original evidence and conclusions as historical records; deferred Plan 18 is
 linked to #120/#122. None are declared wrong at the time.
