@@ -15,6 +15,7 @@ from .service import (
     acquire_adjusted_daily_close_v1,
     acquire_adjusted_daily_close_v2,
     serialize_public_result_v1,
+    serialize_public_result_v2,
 )
 from .yfinance_adapter import YfinanceAdjustedDailyDownloadAdapter
 
@@ -34,4 +35,5 @@ __all__ = [
     "acquire_adjusted_daily_close_v1",
     "acquire_adjusted_daily_close_v2",
     "serialize_public_result_v1",
+    "serialize_public_result_v2",
 ]

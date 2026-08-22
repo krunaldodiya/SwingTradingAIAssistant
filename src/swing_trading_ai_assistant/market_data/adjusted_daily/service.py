@@ -58,7 +58,11 @@ class AdjustedDailyMemberFactsV2:
 
     isin: str
     exchange: Literal["NSE", "BSE"]
+    instrument_type: Literal["EQUITY"]
+    segment: Literal["EQ"]
     effective_symbol: str
+    valid_from: date
+    valid_through: date | None
     provider_symbol: str
     mapping_version: Literal["yfinance-symbol-mapping@v1"]
     mapping_valid_from: date
@@ -148,6 +152,8 @@ class _V1Request:
 class _V2Member:
     isin: str
     exchange: Literal["NSE", "BSE"]
+    instrument_type: Literal["EQUITY"]
+    segment: Literal["EQ"]
     effective_symbol: str
     provider_symbol: str
     valid_from: date
@@ -217,7 +223,11 @@ def acquire_adjusted_daily_close_v2(
                 AdjustedDailyMemberFactsV2(
                     isin=member.isin,
                     exchange=member.exchange,
+                    instrument_type=member.instrument_type,
+                    segment=member.segment,
                     effective_symbol=member.effective_symbol,
+                    valid_from=member.valid_from,
+                    valid_through=member.valid_through,
                     provider_symbol=member.provider_symbol,
                     mapping_version=member.mapping_version,
                     mapping_valid_from=member.mapping_valid_from,
@@ -275,6 +285,18 @@ def serialize_public_result_v1(result: AdjustedDailyCloseResult) -> dict[str, st
     }
 
 
+def serialize_public_result_v2(result: AdjustedDailyCloseResultV2) -> dict[str, str]:
+    """Return an intentionally redacted V2 summary safe for external consumers."""
+    if isinstance(result, AdjustedDailyCloseFailure):
+        return {"code": result.code, "reason": result.reason}
+    return {
+        "code": result.code,
+        "provider_id": result.handoff.provider_id,
+        "price_basis": result.handoff.price_basis,
+        "contract_version": result.handoff.contract_version,
+    }
+
+
 def _parse_request(request: object) -> _V1Request | AdjustedDailyCloseFailure:
     parsed = _parse_common_request(request)
     if isinstance(parsed, AdjustedDailyCloseFailure):
@@ -294,7 +316,9 @@ def _parse_request_v2(request: object) -> _V2Request | AdjustedDailyCloseFailure
     if isinstance(parsed, AdjustedDailyCloseFailure):
         return parsed
     request_mapping, decision_cutoff, sessions = parsed
-    members = _parse_v2_members(request_mapping.get("instruments"), sessions[-1])
+    members = _parse_v2_members(
+        request_mapping.get("instruments"), sessions[0], sessions[-1]
+    )
     if isinstance(members, AdjustedDailyCloseFailure):
         return members
     return _V2Request(decision_cutoff, sessions, members)
@@ -386,7 +410,7 @@ def _parse_members(
 
 
 def _parse_v2_members(
-    raw_members: object, decision_session: date
+    raw_members: object, comparison_session: date, decision_session: date
 ) -> tuple[_V2Member, ...] | AdjustedDailyCloseFailure:
     member_rows = _sequence(raw_members)
     if member_rows is None or not 1 <= len(member_rows) <= 100:
@@ -394,15 +418,71 @@ def _parse_v2_members(
 
     members: list[_V2Member] = []
     for raw_member in member_rows:
-        member = _parse_v2_member(raw_member, decision_session)
+        member = _parse_v2_member(raw_member, comparison_session, decision_session)
         if isinstance(member, AdjustedDailyCloseFailure):
             return member
         members.append(member)
     return _validate_v2_member_overlaps(members)
 
 
+def _parse_v2_equity_classification(
+    member: Mapping[str, object],
+) -> tuple[Literal["EQUITY"], Literal["EQ"]] | AdjustedDailyCloseFailure:
+    instrument_type = member.get("instrument_type")
+    segment = member.get("segment")
+    if any(
+        type(value) is not str or not value.strip()
+        for value in (instrument_type, segment)
+    ):
+        return _invalid("INSTRUMENT_IDENTITY_INVALID")
+    if instrument_type != "EQUITY":
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "INSTRUMENT_TYPE_UNSUPPORTED"
+        )
+    if segment != "EQ":
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "SEGMENT_UNSUPPORTED"
+        )
+    return "EQUITY", "EQ"
+
+
+def _parse_v2_mapping(
+    member: Mapping[str, object],
+) -> (
+    tuple[Literal["yfinance-symbol-mapping@v1"], date, date | None, str]
+    | AdjustedDailyCloseFailure
+):
+    mapping_version = member.get("mapping_version")
+    mapping_valid_from = member.get("mapping_valid_from")
+    mapping_valid_through = member.get("mapping_valid_through")
+    mapping_identity = member.get("mapping_identity")
+    if (
+        type(mapping_version) is not str
+        or type(mapping_valid_from) is not date
+        or (
+            mapping_valid_through is not None
+            and type(mapping_valid_through) is not date
+        )
+        or type(mapping_identity) is not str
+        or _SHA256.fullmatch(mapping_identity) is None
+        or mapping_valid_through is not None
+        and mapping_valid_from > mapping_valid_through
+    ):
+        return _invalid("MAPPING_IDENTITY_INVALID")
+    if mapping_version != MAPPING_VERSION_V2:
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "MAPPING_VERSION_UNSUPPORTED"
+        )
+    return (
+        MAPPING_VERSION_V2,
+        mapping_valid_from,
+        mapping_valid_through,
+        mapping_identity,
+    )
+
+
 def _parse_v2_member(
-    raw_member: object, decision_session: date
+    raw_member: object, comparison_session: date, decision_session: date
 ) -> _V2Member | AdjustedDailyCloseFailure:
     member = _mapping(raw_member)
     if member is None:
@@ -434,6 +514,10 @@ def _parse_v2_member(
         return AdjustedDailyCloseFailure(
             "UNSUPPORTED_CAPABILITY", "EXCHANGE_UNSUPPORTED"
         )
+    classification = _parse_v2_equity_classification(member)
+    if isinstance(classification, AdjustedDailyCloseFailure):
+        return classification
+    instrument_type_value, segment_value = classification
     expected_suffix = ".NS" if exchange_value == "NSE" else ".BO"
     provider_base = provider_symbol_value.removesuffix(expected_suffix)
     if (
@@ -445,43 +529,33 @@ def _parse_v2_member(
             "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"
         )
     if (
-        valid_from > decision_session
+        valid_from > comparison_session
         or valid_through is not None
         and valid_through < decision_session
     ):
-        return _invalid("SYMBOL_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
+        return _invalid("SYMBOL_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED")
 
-    mapping_version = member.get("mapping_version")
-    mapping_valid_from = member.get("mapping_valid_from")
-    mapping_valid_through = member.get("mapping_valid_through")
-    mapping_identity = member.get("mapping_identity")
+    mapping = _parse_v2_mapping(member)
+    if isinstance(mapping, AdjustedDailyCloseFailure):
+        return mapping
+    (
+        mapping_version,
+        mapping_valid_from,
+        mapping_valid_through,
+        mapping_identity,
+    ) = mapping
     if (
-        type(mapping_version) is not str
-        or type(mapping_valid_from) is not date
-        or (
-            mapping_valid_through is not None
-            and type(mapping_valid_through) is not date
-        )
-        or type(mapping_identity) is not str
-        or _SHA256.fullmatch(mapping_identity) is None
-        or mapping_valid_through is not None
-        and mapping_valid_from > mapping_valid_through
-    ):
-        return _invalid("MAPPING_IDENTITY_INVALID")
-    if mapping_version != MAPPING_VERSION_V2:
-        return AdjustedDailyCloseFailure(
-            "UNSUPPORTED_CAPABILITY", "MAPPING_VERSION_UNSUPPORTED"
-        )
-    if (
-        mapping_valid_from > decision_session
+        mapping_valid_from > comparison_session
         or mapping_valid_through is not None
         and mapping_valid_through < decision_session
     ):
-        return _invalid("MAPPING_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
+        return _invalid("MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED")
 
     expected_identity = _mapping_identity_v2(
         isin=isin,
         exchange=exchange_value,
+        instrument_type=instrument_type_value,
+        segment=segment_value,
         effective_symbol=effective_symbol_value,
         provider_symbol=provider_symbol_value,
         mapping_valid_from=mapping_valid_from,
@@ -492,6 +566,8 @@ def _parse_v2_member(
     return _V2Member(
         isin,
         exchange_value,
+        instrument_type_value,
+        segment_value,
         effective_symbol_value,
         provider_symbol_value,
         valid_from,
@@ -531,7 +607,7 @@ def _validate_v2_member_overlaps(
                 or left.provider_symbol == right.provider_symbol
             ):
                 return _invalid("PROVIDER_MAPPING_OVERLAP")
-    return tuple(members)
+    return tuple(sorted(members, key=_v2_member_canonical_key))
 
 
 def _intervals_overlap(
@@ -543,6 +619,10 @@ def _intervals_overlap(
     return (left_through is None or right_from <= left_through) and (
         right_through is None or left_from <= right_through
     )
+
+
+def _v2_member_canonical_key(member: _V2Member) -> tuple[str, str, str]:
+    return member.isin, member.exchange, member.effective_symbol
 
 
 def _valid_isin(isin: str) -> bool:
@@ -566,6 +646,8 @@ def _mapping_identity_v2(
     *,
     isin: str,
     exchange: Literal["NSE", "BSE"],
+    instrument_type: Literal["EQUITY"],
+    segment: Literal["EQ"],
     effective_symbol: str,
     provider_symbol: str,
     mapping_valid_from: date,
@@ -576,6 +658,7 @@ def _mapping_identity_v2(
             {
                 "effective_symbol": effective_symbol,
                 "exchange": exchange,
+                "instrument_type": instrument_type,
                 "isin": isin,
                 "mapping_valid_from": mapping_valid_from.isoformat(),
                 "mapping_valid_through": (
@@ -586,6 +669,7 @@ def _mapping_identity_v2(
                 "mapping_version": MAPPING_VERSION_V2,
                 "provider_id": PROVIDER_ID,
                 "provider_symbol": provider_symbol,
+                "segment": segment,
             },
             sort_keys=True,
             separators=(",", ":"),

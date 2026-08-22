@@ -12,7 +12,10 @@ from typing import cast
 from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.market_data.adjusted_daily import (
+    AdjustedDailyCloseFailure,
+    AdjustedDailyCloseSuccessV2,
     acquire_adjusted_daily_close_v2,
+    serialize_public_result_v2,
 )
 
 _S0 = date(2026, 7, 6)
@@ -30,12 +33,15 @@ def _mapping_identity(
     exchange: str,
     effective_symbol: str,
     provider_symbol: str,
+    instrument_type: str,
+    segment: str,
     mapping_valid_from: date,
     mapping_valid_through: date | None,
 ) -> str:
     value = {
         "effective_symbol": effective_symbol,
         "exchange": exchange,
+        "instrument_type": instrument_type,
         "isin": isin,
         "mapping_valid_from": mapping_valid_from.isoformat(),
         "mapping_valid_through": (
@@ -44,6 +50,7 @@ def _mapping_identity(
         "mapping_version": _MAPPING_VERSION,
         "provider_id": "YFINANCE",
         "provider_symbol": provider_symbol,
+        "segment": segment,
     }
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -99,6 +106,8 @@ def _instrument(
     effective_symbol: str,
     provider_symbol: str,
     exchange: str = "NSE",
+    instrument_type: str = "EQUITY",
+    segment: str = "EQ",
     valid_from: date = date(2026, 1, 1),
     valid_through: date | None = date(2026, 12, 31),
     mapping_valid_from: date = date(2026, 1, 1),
@@ -108,6 +117,8 @@ def _instrument(
     return {
         "isin": isin,
         "exchange": exchange,
+        "instrument_type": instrument_type,
+        "segment": segment,
         "effective_symbol": effective_symbol,
         "provider_symbol": provider_symbol,
         "valid_from": valid_from,
@@ -121,6 +132,8 @@ def _instrument(
             exchange=exchange,
             effective_symbol=effective_symbol,
             provider_symbol=provider_symbol,
+            instrument_type=instrument_type,
+            segment=segment,
             mapping_valid_from=mapping_valid_from,
             mapping_valid_through=mapping_valid_through,
         ),
@@ -183,7 +196,7 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
     assert result.code == "SUCCESS"
     assert "plan19_cohort" not in request
     assert not any(key.startswith("nifty") for key in request)
-    assert provider.calls[0]["tickers"] == ("ADANIPOWER.NS", "RELIANCE.NS")
+    assert provider.calls[0]["tickers"] == ("RELIANCE.NS", "ADANIPOWER.NS")
     assert [
         (
             fact.isin,
@@ -198,16 +211,6 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
         for fact in result.handoff.members
     ] == [
         (
-            "INE814H01011",
-            "NSE",
-            "ADANIPOWER",
-            "ADANIPOWER.NS",
-            _S0,
-            Decimal("200"),
-            _S20,
-            Decimal("220"),
-        ),
-        (
             "INE002A01018",
             "NSE",
             "RELIANCE",
@@ -217,6 +220,16 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
             _S20,
             Decimal("120"),
         ),
+        (
+            "INE814H01011",
+            "NSE",
+            "ADANIPOWER",
+            "ADANIPOWER.NS",
+            _S0,
+            Decimal("200"),
+            _S20,
+            Decimal("220"),
+        ),
     ]
     assert [
         (fact.mapping_version, fact.mapping_identity) for fact in result.handoff.members
@@ -224,10 +237,12 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
         (
             _MAPPING_VERSION,
             _mapping_identity(
-                isin="INE814H01011",
+                isin="INE002A01018",
                 exchange="NSE",
-                effective_symbol="ADANIPOWER",
-                provider_symbol="ADANIPOWER.NS",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                instrument_type="EQUITY",
+                segment="EQ",
                 mapping_valid_from=date(2026, 1, 1),
                 mapping_valid_through=date(2026, 12, 31),
             ),
@@ -235,10 +250,12 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
         (
             _MAPPING_VERSION,
             _mapping_identity(
-                isin="INE002A01018",
+                isin="INE814H01011",
                 exchange="NSE",
-                effective_symbol="RELIANCE",
-                provider_symbol="RELIANCE.NS",
+                effective_symbol="ADANIPOWER",
+                provider_symbol="ADANIPOWER.NS",
+                instrument_type="EQUITY",
+                segment="EQ",
                 mapping_valid_from=date(2026, 1, 1),
                 mapping_valid_through=date(2026, 12, 31),
             ),
@@ -303,7 +320,7 @@ def test_accepts_one_isin_listed_on_both_supported_exchanges() -> None:
     result = _acquire(request, provider)
 
     assert result.code == "SUCCESS"
-    assert provider.calls[0]["tickers"] == ("RELIANCE.NS", "RELIANCE.BO")
+    assert provider.calls[0]["tickers"] == ("RELIANCE.BO", "RELIANCE.NS")
 
 
 def test_rejects_overlapping_composite_canonical_identities_before_fetch() -> None:
@@ -410,7 +427,7 @@ def test_rejects_missing_or_out_of_effective_period_identity_before_fetch() -> N
 
     for request, reason in (
         (missing_exchange, "INSTRUMENT_IDENTITY_INVALID"),
-        (expired_symbol, "SYMBOL_EFFECTIVE_AT_DECISION_SESSION_REQUIRED"),
+        (expired_symbol, "SYMBOL_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED"),
     ):
         provider = _Provider(_frame())
 
@@ -471,7 +488,7 @@ def test_rejects_invalid_and_unverifiable_owner_supplied_mappings_before_fetch()
         (
             expired_mapping,
             "INVALID_REQUEST",
-            "MAPPING_EFFECTIVE_AT_DECISION_SESSION_REQUIRED",
+            "MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
         ),
         (inconsistent_base, "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"),
     ):
@@ -559,4 +576,150 @@ def test_retains_schedule_cutoff_provenance_and_raw_separation() -> None:
         "price_basis": "RAW",
         "s0_identity": "raw-s0-identity",
         "s20_identity": "raw-s20-identity",
+    }
+
+
+def test_requires_effective_symbol_and_mapping_intervals_to_cover_fact_window() -> None:
+    cases = (
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                valid_from=_S0 + timedelta(days=1),
+            ),
+            "SYMBOL_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
+        ),
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                valid_through=_S20 - timedelta(days=1),
+            ),
+            "SYMBOL_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
+        ),
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                mapping_valid_from=_S0 + timedelta(days=1),
+            ),
+            "MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
+        ),
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                mapping_valid_through=_S20 - timedelta(days=1),
+            ),
+            "MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
+        ),
+    )
+
+    for instrument, reason in cases:
+        provider = _Provider(_frame())
+
+        result = _acquire(_request(instruments=(instrument,)), provider)
+
+        assert result == AdjustedDailyCloseFailure("INVALID_REQUEST", reason)
+        assert provider.calls == []
+
+
+def test_rejects_non_equity_instrument_classification_before_fetch() -> None:
+    cases = (
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                instrument_type="DEBT",
+            ),
+            "INSTRUMENT_TYPE_UNSUPPORTED",
+        ),
+        (
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                segment="FO",
+            ),
+            "SEGMENT_UNSUPPORTED",
+        ),
+    )
+
+    for instrument, reason in cases:
+        provider = _Provider(_frame())
+
+        result = _acquire(_request(instruments=(instrument,)), provider)
+
+        assert result == AdjustedDailyCloseFailure("UNSUPPORTED_CAPABILITY", reason)
+        assert provider.calls == []
+
+
+def test_retains_classification_and_effective_symbol_interval_in_v2_handoff() -> None:
+    instrument = _instrument(
+        isin="INE002A01018",
+        effective_symbol="RELIANCE",
+        provider_symbol="RELIANCE.NS",
+        valid_from=date(2026, 7, 1),
+        valid_through=date(2026, 8, 10),
+    )
+
+    result = _acquire(_request(instruments=(instrument,)), _Provider(_frame()))
+
+    assert isinstance(result, AdjustedDailyCloseSuccessV2)
+    assert result.handoff.members[0].instrument_type == "EQUITY"
+    assert result.handoff.members[0].segment == "EQ"
+    assert result.handoff.members[0].valid_from == date(2026, 7, 1)
+    assert result.handoff.members[0].valid_through == date(2026, 8, 10)
+
+
+def test_canonicalizes_equivalent_instrument_permutations_before_fetch() -> None:
+    reliance = _instrument(
+        isin="INE002A01018",
+        effective_symbol="RELIANCE",
+        provider_symbol="RELIANCE.NS",
+    )
+    adani_power = _instrument(
+        isin="INE814H01011",
+        effective_symbol="ADANIPOWER",
+        provider_symbol="ADANIPOWER.NS",
+    )
+    first_provider = _Provider(_frame())
+    second_provider = _Provider(_frame())
+
+    first_result = _acquire(
+        _request(instruments=(adani_power, reliance)), first_provider
+    )
+    second_result = _acquire(
+        _request(instruments=(reliance, adani_power)), second_provider
+    )
+
+    assert isinstance(first_result, AdjustedDailyCloseSuccessV2)
+    assert first_result == second_result
+    assert first_provider.calls[0]["tickers"] == ("RELIANCE.NS", "ADANIPOWER.NS")
+    assert second_provider.calls == first_provider.calls
+    assert [member.isin for member in first_result.handoff.members] == [
+        "INE002A01018",
+        "INE814H01011",
+    ]
+
+
+def test_v2_public_result_is_typed_and_redacted_for_success_and_failure() -> None:
+    success = _acquire(_request(), _Provider(_frame()))
+    failure = AdjustedDailyCloseFailure("UNSUPPORTED_CAPABILITY", "SEGMENT_UNSUPPORTED")
+
+    assert isinstance(success, AdjustedDailyCloseSuccessV2)
+    assert serialize_public_result_v2(success) == {
+        "code": "SUCCESS",
+        "provider_id": "YFINANCE",
+        "price_basis": "ADJUSTED",
+        "contract_version": "provider-neutral-adjusted-daily-close@v2",
+    }
+    assert serialize_public_result_v2(failure) == {
+        "code": "UNSUPPORTED_CAPABILITY",
+        "reason": "SEGMENT_UNSUPPORTED",
     }
