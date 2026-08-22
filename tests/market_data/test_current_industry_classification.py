@@ -624,6 +624,55 @@ def test_archive_rejects_missing_corrupt_or_late_completion_marker(
     _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
 
 
+def test_late_first_completion_never_publishes_marker_and_retry_fails_missing_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    sampled_at = datetime.now(UTC)
+    late = (
+        sampled_at + api._RETENTION_COMPLETION_SAFETY_MARGIN + timedelta(microseconds=1)
+    )
+    clock_values = iter((sampled_at, late))
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: next(clock_values))
+    first_lease = _private_lease(tmp_path)
+    try:
+        first = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    _assert_failure(first, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+    archive_directory = tmp_path / ".current-industry-classification-v1"
+    receipt_path = (
+        archive_directory / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    marker_path = (
+        archive_directory / f"completion-{snapshot.snapshot_identity_sha256}.json"
+    )
+    assert receipt_path.is_file()
+    assert not marker_path.exists()
+
+    monkeypatch.setattr(
+        api,
+        "_trusted_utc_now",
+        lambda: (_ for _ in ()).throw(AssertionError("retry sampled a clock")),
+    )
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        retry = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(retry, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+    assert not marker_path.exists()
+
+
 def test_archive_rejects_corrupt_deterministic_retained_receipt(tmp_path: Path) -> None:
     api = _api()
     artifact = _artifact()

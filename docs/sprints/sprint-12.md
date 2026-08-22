@@ -1,6 +1,6 @@
 # Sprint 12 — Current supplied-cohort Industry Analysis
 
-Status: **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
+Status: **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
 
 Tracking: [GitHub Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
@@ -124,28 +124,23 @@ uses exactly `MALFORMED_EVIDENCE`, `UNSUPPORTED_CAPABILITY`, or
 No CLI, API, MCP, network acquisition, provider adapter, source registry, or
 public member transport is part of the first implementation.
 
-## Eighth repair and current exact-review-ready evidence
+## Ninth repair and current seal-closed evidence
 
-The exact-SHA quality/security review of `3286764` returned `REQUEST_CHANGES` /
-`FAIL` because the retained-receipt bound was not frozen, receipt
-parsing/reconstruction remained publicly reachable, and cutoff completion was
-not closed by a deterministic marker and final deadline checks. All earlier
-repair-round reviews and gate evidence are superseded trace.
+The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
+and post-marker retry gap. All prior repair rounds and their review/gate evidence
+are superseded trace.
 
-The eighth repair freezes the retained-receipt bound at 262,144 bytes, makes
-receipt reconstruction private, archive-owned, and capability-gated, and
-persists a deterministic completion marker binding the receipt, snapshot, and
-`known_at`. It selects `known_at = trusted_utc_now + 30 seconds` only after raw
-and snapshot verification, then requires marker filesystem time and final
-clock, lease, and name checks to remain at or before that deadline. A retry
-returns only the original marked receipt; missing, corrupt, unbound, oversized,
-forged, or late receipt/marker evidence fails closed.
+The ninth repair removes every module-level retained-evidence mint and
+capability function. Receipt parsing returns only an unsealed candidate; archive
+alone seals retained evidence inside a verified active root operation. The
+archive verifies all prior named objects, directory, lease, and its internal
+clock before publishing the final receipt-, snapshot-, and `known_at`-bound
+marker. A retry requires and revalidates the original marked receipt.
 
-Regression repairs, including maximum-size, replay, forgery, and late-marker
-cases, then passed all four focused files: 284 tests. Full local gates passed
-2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
-build. The unchanged official parser smoke admitted the exact current 100-row,
-6,610-byte artifact with SHA-256
+Focused evidence passed: 112 archive/participation tests. Full local gates
+passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+and build. The unchanged official parser smoke admitted the exact current
+100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
 `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`.
@@ -154,12 +149,13 @@ evidence.
 
 ## Current lifecycle truth
 
-Issue #117 remains open and Sprint 12 is **IN PROGRESS — RECEIPT-CLOSED
-CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**.
-Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
-remain pending. The exact reviewed SHA will be recorded externally after review;
-this document intentionally contains no self-referential candidate SHA. Pull
-request, hosted CI/GitGuardian, merge, and Issue closure remain pending.
+Issue #117 remains open and Sprint 12 is **IN PROGRESS — SEAL-CLOSED CANDIDATE
+LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The current
+branch candidate is committed. Fresh exact-SHA independent quality `APPROVE`,
+security `PASS`, and delivery remain pending. The exact reviewed SHA will be
+recorded externally after review; this document intentionally contains no
+self-referential candidate SHA. Pull request, hosted CI/GitGuardian, merge, and
+Issue closure remain pending.
 Owner-private source/licence limits, null publisher fields, raw-row
 non-disclosure, same-session use, frozen V1 preservation, and every explicit
 deferral remain in force.

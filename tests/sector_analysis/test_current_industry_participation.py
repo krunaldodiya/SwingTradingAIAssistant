@@ -568,27 +568,32 @@ def test_canonical_receipt_bytes_cannot_mint_retained_evidence_or_observed_outpu
     raw_v1_report, raw_private_grid, screen, adjusted_handoff, retained = (
         _retained_classification(tmp_path)
     )
-    assert not hasattr(classification_api, "parse_retained_current_industry_receipt_v1")
+    for symbol in (
+        "parse_retained_current_industry_receipt_v1",
+        "_archive_read_capability",
+        "_retained_for_snapshot",
+        "_archive_mint_retained",
+        "_retained_with_identity",
+        "_retained",
+    ):
+        assert not hasattr(classification_api, symbol)
     receipt_path = (
         tmp_path
         / ".current-industry-classification-v1"
         / f"retained-{retained.snapshot_identity_sha256}.json"
     )
-    receipt_raw = receipt_path.read_bytes()
-    with pytest.raises(ValueError):
-        classification_api._retained_candidate_from_receipt(receipt_raw, object())
     candidate = classification_api._retained_candidate_from_receipt(
-        receipt_raw,
-        classification_api._archive_read_capability(
-            SimpleNamespace(snapshot_identity_sha256=retained.snapshot_identity_sha256)
-        ),
+        receipt_path.read_bytes()
     )
-    assert not classification_api._archive_minted_retained(candidate)
+    assert type(candidate) is classification_api._RetainedCurrentIndustryCandidateV1
+    assert not isinstance(
+        candidate, classification_api.RetainedCurrentIndustrySnapshotV1
+    )
 
-    result = _api().reduce_current_industry_participation_v1(
-        raw_v1_report, raw_private_grid, screen, adjusted_handoff, candidate
-    )
-    _assert_non_observed(result, "MALFORMED_EVIDENCE", ("COHORT_BINDING_MISMATCH",))
+    with pytest.raises(TypeError, match="industry participation input invalid"):
+        _api().reduce_current_industry_participation_v1(
+            raw_v1_report, raw_private_grid, screen, adjusted_handoff, candidate
+        )
 
 
 def test_reducer_uses_precomputed_runtime_identity(

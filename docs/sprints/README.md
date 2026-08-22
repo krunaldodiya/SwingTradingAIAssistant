@@ -166,30 +166,30 @@ remediation are in
   historical public-page research receipts.
 
 - [Sprint 12 — Current supplied-cohort Industry Analysis](sprint-12.md) is
-  **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA
-  REVIEW AND DELIVERY PENDING** under
+  **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW
+  AND DELIVERY PENDING** under
   [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117).
   [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md)
-  owns the exact contract. All earlier repair-round reviews and gate evidence
-  are superseded trace. The exact-SHA quality/security review of `3286764` found
-  retained-receipt-bound, public receipt-parser/reconstruction, and
-  cutoff-completion defects. The eighth repair freezes the 262,144-byte receipt
-  bound, makes reconstruction private, archive-owned, and capability-gated, and
-  closes retention with a deterministic completion marker and a conservative
-  `known_at` deadline 30 seconds after the trusted retention clock. Regression
-  repairs, including maximum-size, replay, forgery, and late-marker cases, then
-  passed all four focused files: 284 tests. Full local gates passed 2,989 tests
-  at 90.80% coverage plus Ruff format/check, Pyright, Vulture 80, and build. The
-  unchanged official parser smoke admitted the exact current 100-row,
+  owns the exact contract. The exact-SHA quality/security reviews of `40a8e23`
+  found a module-mint bypass and post-marker retry gap. All prior repair rounds
+  and their review/gate evidence are superseded trace. The ninth repair removes
+  module-level retained-evidence mint and capability functions; receipt parsing
+  yields only an unsealed candidate, and archive alone seals retained evidence.
+  The archive publishes the final marker only after all prior object, lease, and
+  clock checks pass; retries require the original marked receipt. Focused
+  evidence passed 112 archive/participation tests. Full local gates passed 2,990
+  tests at 90.82% coverage plus Ruff format/check, Pyright, Vulture 80, and
+  build. The unchanged official parser smoke admitted the exact current 100-row,
   6,610-byte artifact with SHA-256
   `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
   under classification schema
   `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-  it is parser provenance only. Fresh exact-SHA review and delivery remain
-  pending. The exact reviewed SHA will be recorded externally after review, not
-  in this self-referential lifecycle record. Pull request, hosted
-  CI/GitGuardian, merge, and Issue closure remain pending. All source/licence
-  limits, frozen V1 preservation, and explicit deferrals remain in force.
+  it is parser provenance only. The current branch candidate is committed.
+  Fresh exact-SHA review and delivery remain pending. The exact reviewed SHA
+  will be recorded externally after review, not in this self-referential
+  lifecycle record. Pull request, hosted CI/GitGuardian, merge, and Issue
+  closure remain pending. All source/licence limits, frozen V1 preservation,
+  and explicit deferrals remain in force.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)

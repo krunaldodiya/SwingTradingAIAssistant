@@ -1,6 +1,6 @@
 # Current supplied-cohort Industry Analysis contract
 
-Status: **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+Status: **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
 Contract revisions:
 
@@ -31,30 +31,30 @@ module remains Sector Analysis because that is the locked pipeline module; the
 new data and result contracts are named **Industry classification** and
 **Industry participation** so their evidence claim remains truthful.
 
-Sprint 12 and Issue #117 are **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY
+Sprint 12 and Issue #117 are **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY
 VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The exact-SHA
-quality/security review of `3286764` returned `REQUEST_CHANGES` / `FAIL` for
-retained-receipt-bound, public receipt-parser/reconstruction, and
-cutoff-completion defects. All earlier repair-round reviews and gate evidence
-are superseded trace. The eighth repair freezes a 262,144-byte retained-receipt
-bound over the admitted 50-row, 512-Unicode-character field maximum, makes
-reconstruction private, archive-owned, and capability-gated, and mints the
-reducer-accepted retained seal only inside a verified
-`FileCurrentIndustryArchiveV1` operation. It persists a deterministic receipt-,
-snapshot-, and `known_at`-bound completion marker. `known_at` is a conservative
-deadline 30 seconds after the trusted retention clock; marker filesystem time
-and final clock, lease, and name checks must finish by that deadline. Missing,
-corrupt, unbound, forged, oversized, or late receipt/marker evidence fails
-closed, and replay returns only the original marked receipt.
+quality/security reviews of `40a8e23` found a module-mint bypass and post-marker
+retry gap. All prior repair rounds and their review/gate evidence are superseded
+trace. The ninth repair removes every module-level retained-evidence mint and
+capability function: receipt parsing returns only an unsealed candidate DTO,
+and only `FileCurrentIndustryArchiveV1` seals retained evidence inside a
+verified active root operation. It verifies all prior named objects, directory,
+lease, and its internal clock before publishing the final marker. A retry
+requires and revalidates the original marked receipt.
 
-Regression repairs, including maximum-size, replay, forgery, and late-marker
-cases, then passed all four focused files: 284 tests. Full local gates passed
-2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
-build. Fresh exact-SHA independent quality `APPROVE` and security `PASS` and
-delivery remain pending. The exact reviewed SHA will be recorded externally
-after review; this contract intentionally contains no self-referential candidate
-SHA. Pull request, hosted CI/GitGuardian, merge, live participation result, and
-Issue closure remain pending.
+Focused evidence passed: 112 archive/participation tests. Full local gates
+passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+and build. The unchanged official parser smoke admitted the exact current
+100-row, 6,610-byte artifact with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+under classification schema
+`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
+it is parser provenance only, not live participation or effectiveness evidence.
+The current branch candidate is committed. Fresh exact-SHA independent
+quality/security review, pull request, hosted CI/GitGuardian, merge, live
+participation result, and Issue closure remain pending. The exact reviewed SHA
+will be recorded externally after review; this contract intentionally contains
+no self-referential candidate SHA.
 
 ## Accepted source evaluation
 
@@ -301,23 +301,26 @@ The archive is content-addressed and immutable:
   receipt under the frozen 262,144-byte bound. That bound is proven against 50
   admitted 512-character Unicode Industry labels; canonical receipt JSON is
   UTF-8 rather than ASCII-escaped expansion;
-- receipt reconstruction is module-private and archive-owned. It returns only an
-  unsealed candidate until a verified `FileCurrentIndustryArchiveV1` operation
-  mints its private archive-read capability; the reducer accepts only that
-  archive-minted retained seal;
+- receipt reconstruction is module-private and returns only an unsealed
+  candidate DTO. No module-level callable mints retained evidence or a
+  capability. Only `FileCurrentIndustryArchiveV1`, inside an active verified
+  `StorageRootLease.root_operation(root)`, constructs and seals the
+  reducer-accepted retained snapshot after validating the actual named raw,
+  snapshot, receipt, and marker objects plus the live lease;
 - it publishes the deterministic no-replace
   `retained-<snapshot_identity_sha256>.json` receipt plus
   `completion-<snapshot_identity_sha256>.json`, whose canonical marker binds
   receipt SHA-256, snapshot identity, and `known_at`;
+- first completion publishes the receipt, verifies raw/snapshot/receipt named
+  bindings and the live lease, checks its internal clock is `<= known_at`, and
+  only then publishes the final-success marker. The marker filesystem time must
+  be `<= known_at`; retries require and revalidate it without sampling a clock;
 - writes use private temporary objects, flush data, fsync newly accepted
   directories and their owner-private root binding, publish without replacement,
   then stable-read and revalidate raw, snapshot, receipt, marker, named
-  bindings, the directory binding, and live lease before success;
-- first success additionally requires marker filesystem time and final internal
-  clock, lease, and name checks to be `<= known_at`; a retry requires the valid
-  marker and returns only its original receipt without sampling a clock. Missing,
-  corrupt, unbound, oversized, spliced, or late receipt/marker evidence is
-  `CLASSIFICATION_ARCHIVE_FAILED`; and
+  bindings, the directory binding, and live lease before success. Missing,
+  corrupt, unbound, forged, oversized, or late receipt/marker evidence is
+  `CLASSIFICATION_ARCHIVE_FAILED`;
 - publishing identical bytes is idempotent, including concurrent acceptance;
 - an existing different object, unsafe link/type/mode, path replacement,
   unstable read, size violation, failed flush, or failed final verification is
@@ -611,40 +614,35 @@ source-at-rest drift evidence only; it is not publisher authenticity, executed-b
 attestation, licence authority, or protection against an actor able to replace
 code before verification.
 
-## Eighth repair and current exact-review-ready state
+## Ninth repair and current seal-closed candidate state
 
-The first through seventh review/repair rounds and their gate evidence are
-superseded trace. The exact-SHA quality/security review of `3286764` found that
-the retained-receipt bound was not frozen, receipt parsing/reconstruction
-remained publicly reachable, and cutoff completion was not closed by a
-deterministic marker and final deadline checks.
+The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
+and post-marker retry gap. All prior repair rounds and their review/gate evidence
+are superseded trace.
 
-The eighth repair freezes the retained-receipt bound at 262,144 bytes for the
-admitted 50-row, 512-Unicode-character field maximum. Receipt reconstruction is
-private, archive-owned, and capability-gated; the reducer accepts only the
-retained seal minted by a verified private archive operation. The archive
-persists a deterministic completion marker binding the receipt SHA-256,
-snapshot identity, and `known_at`. It selects
-`known_at = trusted_utc_now + 30 seconds` only after raw and snapshot
-verification, then requires marker filesystem time and final clock, lease, and
-name checks to remain at or before that deadline. A retry returns only the
-original marked receipt; missing, corrupt, unbound, oversized, forged, or late
-receipt/marker evidence fails closed.
+The ninth repair removes every module-level retained-evidence mint and
+capability function. Receipt parsing returns only an unsealed candidate DTO;
+only `FileCurrentIndustryArchiveV1` seals retained evidence inside a verified
+active root operation. The archive verifies all prior named raw, snapshot, and
+receipt objects, the directory and lease, and its internal clock before
+publishing the final receipt-, snapshot-, and `known_at`-bound marker. A retry
+requires and revalidates the original marked receipt rather than minting or
+accepting unmarked retained evidence.
 
-Regression repairs, including maximum-size, replay, forgery, and late-marker
-cases, then passed all four focused files: 284 tests. Full local gates passed
-2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
-build. The unchanged official parser smoke admitted the exact current 100-row,
-6,610-byte artifact with SHA-256
+Focused evidence passed: 112 archive/participation tests. Full local gates
+passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+and build. The unchanged official parser smoke admitted the exact current
+100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
 `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
 it is parser provenance only, not live participation or effectiveness evidence.
 
-Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
-remain pending. The exact reviewed SHA will be recorded externally after review;
-this contract contains no self-referential candidate SHA. Pull request, hosted
-CI/GitGuardian, merge, and Issue closure remain pending.
+The current branch candidate is committed. Fresh exact-SHA independent quality
+`APPROVE`, security `PASS`, and delivery remain pending. The exact reviewed SHA
+will be recorded externally after review; this contract contains no
+self-referential candidate SHA. Pull request, hosted CI/GitGuardian, merge, and
+Issue closure remain pending.
 
 ## Licence, privacy, and provenance limits
 
