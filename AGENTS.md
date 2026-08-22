@@ -51,6 +51,32 @@ architecture, abstractions, or process only for a concrete requirement or demons
 links to a GitHub Issue, closes through a pull request, passes the repository and hosted gates, and records
 the exact reviewed revision.
 
+Working-feature-first is a mandatory sequencing control. Before implementation,
+partition the work into:
+
+- **first working slice** — only behavior and controls needed now for safety,
+  stated-scope correctness, usability, authorization, evidence integrity,
+  explicit acceptance criteria, and the applicable risk tier; and
+- **later improvements** — additional completeness, generalized replay,
+  attestation, abstraction, optimization, resilience, providers, delivery
+  surfaces, and future threat models.
+
+Starting a sprint or broad Issue does not authorize implementing both sets in
+one expanding change. Split an oversized Issue into ordered vertical slices
+before ordinary implementation. After each review, classify every finding
+against the current slice before editing: a blocker must cite a violated current
+acceptance condition or concrete current safety/correctness/usability/evidence
+failure. Otherwise record it separately and defer it.
+
+Stop for a scope-expansion circuit breaker before adding an unplanned subsystem,
+persistence or replay model, attestation mechanism, provider, generalized
+abstraction, delivery surface, or threat model. Resume only when it is the least
+costly adequate correction for a current blocker or the owner explicitly changes
+scope. The agent owns this enforcement proactively; the owner must not need to
+monitor implementation or repeatedly remind the agent to preserve MVP-first
+sequencing. Keep verified useful work when it cleanly supports the bounded slice;
+do not retain harmful complexity merely because effort was spent.
+
 ## Tool and AI boundary
 
 The deterministic tool owns data access, calculations, validation, backtests, market facts, timestamps, and

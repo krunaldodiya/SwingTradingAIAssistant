@@ -787,7 +787,10 @@ Structure, or Sprints 12–16 refinement. It does not change Plan 12, Plan 18,
 Plan 19, the Sprint 10 stale-lifecycle line, or any historical record.
 Historical `nifty50-market-regime@v1` exact-50 semantics remain frozen; future
 Plan-23 feature migrations remain separate from the delivered V2 comparability
-semantics. Sprint 12 is unblocked but **NOT STARTED**.
+semantics. Sprint 12 is active with its receipt-persisted candidate locally
+verified, but Plan 20 remains delivered and is not reopened by that repair.
+Fresh exact-SHA review and delivery remain pending; the exact reviewed SHA will
+be recorded externally after review.
 
 ## Residual risks and review trigger
 
