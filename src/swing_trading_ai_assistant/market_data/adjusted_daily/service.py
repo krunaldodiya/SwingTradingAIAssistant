@@ -17,6 +17,7 @@ CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v1-mvp"
 PROVIDER_ID = "YFINANCE"
 PRICE_BASIS = "ADJUSTED"
 _SESSION_COUNT = 21
+V2_CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v2"
 
 
 class AdjustedDailyDownloadAdapter(Protocol):
@@ -46,6 +47,18 @@ class AdjustedDailyMemberFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class AdjustedDailyMemberFactsV2:
+    """The two bounded comparison facts for one canonical listed equity."""
+
+    isin: str
+    exchange: Literal["NSE", "BSE"]
+    effective_symbol: str
+    provider_symbol: str
+    s0: AdjustedCloseFact
+    s20: AdjustedCloseFact
+
+
+@dataclass(frozen=True, slots=True)
 class AdjustedDailyCloseHandoff:
     """Private adjusted-close handoff; it is separate from raw OHLCV values."""
 
@@ -62,6 +75,22 @@ class AdjustedDailyCloseHandoff:
 
 
 @dataclass(frozen=True, slots=True)
+class AdjustedDailyCloseHandoffV2:
+    """V2 private handoff retaining canonical listed-equity identity."""
+
+    contract_version: Literal["provider-neutral-adjusted-daily-close@v2"]
+    provider_id: Literal["YFINANCE"]
+    price_basis: Literal["ADJUSTED"]
+    provider_source: str
+    retrieved_at: datetime
+    temporal_label: Literal["REVISED_NON_PIT"]
+    decision_cutoff: datetime
+    comparison_session: date
+    decision_session: date
+    members: tuple[AdjustedDailyMemberFactsV2, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AdjustedDailyCloseSuccess:
     """Successful acquisition with complete, normalized facts for every member."""
 
@@ -70,23 +99,54 @@ class AdjustedDailyCloseSuccess:
 
 
 @dataclass(frozen=True, slots=True)
+class AdjustedDailyCloseSuccessV2:
+    """Successful V2 acquisition with complete canonical member facts."""
+
+    code: Literal["SUCCESS"]
+    handoff: AdjustedDailyCloseHandoffV2
+
+
+@dataclass(frozen=True, slots=True)
 class AdjustedDailyCloseFailure:
     """A safe, classified outcome that never contains partial adjusted facts."""
 
-    code: Literal["INVALID_REQUEST", "INSUFFICIENT_DATA", "PROVIDER_FAILURE"]
+    code: Literal[
+        "INVALID_REQUEST",
+        "UNSUPPORTED_CAPABILITY",
+        "INSUFFICIENT_DATA",
+        "PROVIDER_FAILURE",
+    ]
     reason: str
 
 
 AdjustedDailyCloseResult: TypeAlias = (
     AdjustedDailyCloseSuccess | AdjustedDailyCloseFailure
 )
+AdjustedDailyCloseResultV2: TypeAlias = (
+    AdjustedDailyCloseSuccessV2 | AdjustedDailyCloseFailure
+)
 
 
 @dataclass(frozen=True, slots=True)
-class _Request:
+class _V1Request:
     decision_cutoff: datetime
     sessions: tuple[date, ...]
     members: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _V2Member:
+    isin: str
+    exchange: Literal["NSE", "BSE"]
+    effective_symbol: str
+    provider_symbol: str
+
+
+@dataclass(frozen=True, slots=True)
+class _V2Request:
+    decision_cutoff: datetime
+    sessions: tuple[date, ...]
+    members: tuple[_V2Member, ...]
 
 
 def acquire_adjusted_daily_close_v1(
@@ -94,18 +154,74 @@ def acquire_adjusted_daily_close_v1(
 ) -> AdjustedDailyCloseResult:
     """Fetch complete adjusted closes for the caller's exact S0 and S20 sessions.
 
-    Invalid supplied inputs fail before the adapter call.  Provider and frame
+    Invalid supplied inputs fail before the adapter call. Provider and frame
     failures return classified results rather than partial member facts.
     """
     parsed = _parse_request(request)
     if isinstance(parsed, AdjustedDailyCloseFailure):
         return parsed
+    return _acquire_parsed_v1(parsed, provider)
 
+
+def acquire_adjusted_daily_close_v2(
+    request: object, *, provider: AdjustedDailyDownloadAdapter
+) -> AdjustedDailyCloseResultV2:
+    """Fetch V2 adjusted closes for explicit canonical listed-equity rows."""
+    parsed = _parse_request_v2(request)
+    if isinstance(parsed, AdjustedDailyCloseFailure):
+        return parsed
+
+    v1_result = _acquire_parsed_v1(
+        _V1Request(
+            parsed.decision_cutoff,
+            parsed.sessions,
+            tuple(
+                (member.isin, member.effective_symbol, member.provider_symbol)
+                for member in parsed.members
+            ),
+        ),
+        provider,
+    )
+    if isinstance(v1_result, AdjustedDailyCloseFailure):
+        return v1_result
+
+    return AdjustedDailyCloseSuccessV2(
+        "SUCCESS",
+        AdjustedDailyCloseHandoffV2(
+            contract_version=V2_CONTRACT_VERSION,
+            provider_id=v1_result.handoff.provider_id,
+            price_basis=v1_result.handoff.price_basis,
+            provider_source=v1_result.handoff.provider_source,
+            retrieved_at=v1_result.handoff.retrieved_at,
+            temporal_label=v1_result.handoff.temporal_label,
+            decision_cutoff=v1_result.handoff.decision_cutoff,
+            comparison_session=v1_result.handoff.comparison_session,
+            decision_session=v1_result.handoff.decision_session,
+            members=tuple(
+                AdjustedDailyMemberFactsV2(
+                    isin=member.isin,
+                    exchange=member.exchange,
+                    effective_symbol=member.effective_symbol,
+                    provider_symbol=member.provider_symbol,
+                    s0=fact.s0,
+                    s20=fact.s20,
+                )
+                for member, fact in zip(
+                    parsed.members, v1_result.handoff.members, strict=True
+                )
+            ),
+        ),
+    )
+
+
+def _acquire_parsed_v1(
+    request: _V1Request, provider: AdjustedDailyDownloadAdapter
+) -> AdjustedDailyCloseResult:
     try:
         frame = provider.download(
-            tickers=tuple(member[2] for member in parsed.members),
-            start=parsed.sessions[0].isoformat(),
-            end=(parsed.sessions[-1] + timedelta(days=1)).isoformat(),
+            tickers=tuple(member[2] for member in request.members),
+            start=request.sessions[0].isoformat(),
+            end=(request.sessions[-1] + timedelta(days=1)).isoformat(),
             interval="1d",
             actions=False,
             threads=False,
@@ -124,7 +240,7 @@ def acquire_adjusted_daily_close_v1(
     except Exception:
         return AdjustedDailyCloseFailure("PROVIDER_FAILURE", "PROVIDER_CALL_FAILED")
 
-    return _normalize_frame(parsed, frame)
+    return _normalize_frame(request, frame)
 
 
 def serialize_public_result_v1(result: AdjustedDailyCloseResult) -> dict[str, str]:
@@ -139,7 +255,36 @@ def serialize_public_result_v1(result: AdjustedDailyCloseResult) -> dict[str, st
     }
 
 
-def _parse_request(request: object) -> _Request | AdjustedDailyCloseFailure:
+def _parse_request(request: object) -> _V1Request | AdjustedDailyCloseFailure:
+    parsed = _parse_common_request(request)
+    if isinstance(parsed, AdjustedDailyCloseFailure):
+        return parsed
+    request_mapping, decision_cutoff, sessions = parsed
+    members = _parse_members(
+        request_mapping.get("mapped_members"),
+        request_mapping.get("plan19_cohort"),
+    )
+    if members is None:
+        return _invalid("MEMBER_MAPPING_INVALID")
+    return _V1Request(decision_cutoff, sessions, members)
+
+
+def _parse_request_v2(request: object) -> _V2Request | AdjustedDailyCloseFailure:
+    parsed = _parse_common_request(request)
+    if isinstance(parsed, AdjustedDailyCloseFailure):
+        return parsed
+    request_mapping, decision_cutoff, sessions = parsed
+    members = _parse_v2_members(request_mapping.get("instruments"), sessions[-1])
+    if isinstance(members, AdjustedDailyCloseFailure):
+        return members
+    return _V2Request(decision_cutoff, sessions, members)
+
+
+def _parse_common_request(
+    request: object,
+) -> (
+    tuple[Mapping[str, object], datetime, tuple[date, ...]] | AdjustedDailyCloseFailure
+):
     request_mapping = _mapping(request)
     if request_mapping is None:
         return _invalid("REQUEST_SHAPE_INVALID")
@@ -152,11 +297,12 @@ def _parse_request(request: object) -> _Request | AdjustedDailyCloseFailure:
     if type(decision_cutoff) is not datetime or not _is_aware(decision_cutoff):
         return _invalid("DECISION_CUTOFF_INVALID")
 
-    sessions = _parse_sessions(request_mapping.get("plan21_schedule"))
+    schedule = request_mapping.get("plan21_schedule")
+    sessions = _parse_sessions(schedule)
     if sessions is None:
         return _invalid("SCHEDULE_INVALID")
 
-    schedule_mapping = _mapping(request_mapping.get("plan21_schedule"))
+    schedule_mapping = _mapping(schedule)
     if schedule_mapping is None:
         return _invalid("SCHEDULE_INVALID")
     official_close = schedule_mapping.get("decision_session_official_close_at")
@@ -164,15 +310,7 @@ def _parse_request(request: object) -> _Request | AdjustedDailyCloseFailure:
         return _invalid("SCHEDULE_INVALID")
     if official_close > decision_cutoff:
         return _invalid("DECISION_SESSION_AFTER_CUTOFF")
-
-    members = _parse_members(
-        request_mapping.get("mapped_members"),
-        request_mapping.get("plan19_cohort"),
-    )
-    if members is None:
-        return _invalid("MEMBER_MAPPING_INVALID")
-
-    return _Request(decision_cutoff, sessions, members)
+    return request_mapping, decision_cutoff, sessions
 
 
 def _parse_sessions(schedule: object) -> tuple[date, ...] | None:
@@ -227,6 +365,73 @@ def _parse_members(
     return tuple(members)
 
 
+def _parse_v2_members(
+    raw_members: object, decision_session: date
+) -> tuple[_V2Member, ...] | AdjustedDailyCloseFailure:
+    member_rows = _sequence(raw_members)
+    if member_rows is None or not 1 <= len(member_rows) <= 100:
+        return _invalid("INSTRUMENT_COUNT_INVALID")
+
+    members: list[_V2Member] = []
+    for raw_member in member_rows:
+        member = _mapping(raw_member)
+        if member is None:
+            return _invalid("INSTRUMENT_IDENTITY_INVALID")
+        isin = member.get("isin")
+        exchange = member.get("exchange")
+        effective_symbol = member.get("effective_symbol")
+        provider_symbol = member.get("provider_symbol")
+        valid_from = member.get("valid_from")
+        valid_through = member.get("valid_through")
+        if (
+            not all(
+                type(value) is str and value.strip()
+                for value in (isin, exchange, effective_symbol, provider_symbol)
+            )
+            or type(valid_from) is not date
+            or (valid_through is not None and type(valid_through) is not date)
+        ):
+            return _invalid("INSTRUMENT_IDENTITY_INVALID")
+        isin_value = cast(str, isin)
+        exchange_value = cast(Literal["NSE", "BSE"], exchange)
+        effective_symbol_value = cast(str, effective_symbol)
+        provider_symbol_value = cast(str, provider_symbol)
+        valid_from_value = valid_from
+        valid_through_value = valid_through
+        if exchange_value not in {"NSE", "BSE"}:
+            return AdjustedDailyCloseFailure(
+                "UNSUPPORTED_CAPABILITY", "EXCHANGE_UNSUPPORTED"
+            )
+        expected_suffix = ".NS" if exchange_value == "NSE" else ".BO"
+        if len(provider_symbol_value) == len(
+            expected_suffix
+        ) or not provider_symbol_value.endswith(expected_suffix):
+            return AdjustedDailyCloseFailure(
+                "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"
+            )
+        if (
+            valid_from_value > decision_session
+            or valid_through_value is not None
+            and valid_through_value < decision_session
+        ):
+            return _invalid("SYMBOL_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
+        members.append(
+            _V2Member(
+                isin_value,
+                exchange_value,
+                effective_symbol_value,
+                provider_symbol_value,
+            )
+        )
+
+    if any(
+        len({getattr(member, field) for member in members}) != len(members)
+        for field in ("isin", "effective_symbol", "provider_symbol")
+    ):
+        return _invalid("INSTRUMENT_IDENTITY_DUPLICATE")
+    return tuple(members)
+
+
 def _cohort_matches(members: Sequence[tuple[str, str, str]], cohort: object) -> bool:
     cohort_mapping = _mapping(cohort)
     if cohort_mapping is None:
@@ -247,7 +452,7 @@ def _cohort_matches(members: Sequence[tuple[str, str, str]], cohort: object) -> 
     return pairs == [(isin, symbol) for isin, symbol, _ in members]
 
 
-def _normalize_frame(request: _Request, frame: object) -> AdjustedDailyCloseResult:
+def _normalize_frame(request: _V1Request, frame: object) -> AdjustedDailyCloseResult:
     frame_mapping = _mapping(frame)
     if frame_mapping is None or not frame_mapping:
         return AdjustedDailyCloseFailure("INSUFFICIENT_DATA", "PROVIDER_EMPTY")

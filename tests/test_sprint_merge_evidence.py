@@ -6,6 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 SPRINT_ZERO = ROOT / "docs" / "sprints" / "sprint-0.md"
 SPRINT_ONE = ROOT / "docs" / "sprints" / "sprint-1.md"
+SPRINT_TWO_CLOSEOUT = ROOT / "docs" / "sprints" / "sprint-2-closeout.md"
+SPRINT_THREE = ROOT / "docs" / "sprints" / "sprint-3.md"
 
 
 def _read(path: Path) -> str:
@@ -16,16 +18,19 @@ def _normalized(path: Path) -> str:
     return " ".join(_read(path).split())
 
 
-def test_readme_connects_sprint_two_to_the_current_storage_increment() -> None:
-    readme = _normalized(README)
+def test_retained_sprint_two_and_three_evidence_preserves_delivery_limits() -> None:
+    sprint_two = _normalized(SPRINT_TWO_CLOSEOUT)
+    sprint_three = _normalized(SPRINT_THREE)
 
-    assert "Sprint 2 closed at **21/24 executable tasks (87.5%)**" in readme
-    assert "immutable Parquet publication" in readme
-    assert "Milestone 2 remains **blocked / not accepted**" in readme
-    assert "`market-data download`, `coverage`, and bounded `query` commands" in readme
-    assert "fails closed with `SCHEDULE_EVIDENCE_UNAVAILABLE`" in readme
-    assert "`--schedule-file`" in readme
-    assert "sprint is extended" in readme.lower()
+    assert "Final delivery result: **21/24 (87.5%)**" in sprint_two
+    assert "immutable Parquet storage" in sprint_two
+    assert "Milestone 2 disposition: **BLOCKED / NOT ACCEPTED**" in sprint_two
+    assert "`market-data download` CLI" in sprint_three
+    assert "`market-data coverage` CLI" in sprint_three
+    assert "`1m` CLI adapter" in sprint_three
+    assert "fail closed without approved evidence" in sprint_three
+    assert "`--schedule-file`" in sprint_three
+    assert "Sprint 3 is extended" in sprint_three
 
 
 def test_sprint_zero_records_its_merged_baseline_and_time_bounded_carryover() -> None:
