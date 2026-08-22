@@ -139,8 +139,8 @@ remediation are in
   current-prospective smokes. Hosted Quality/build and GitGuardian passed.
   Frozen exact-50 V1 records remain historical; future
   [Plan 23](../plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
-  migrations remain separate. Sprint 12 is now active under Issue #117; the
-  Sprint 11 closeout grants no Sprint 12 implementation or completion evidence.
+  migrations remain separate. Sprint 12 subsequently closed under Issue #117;
+  the Sprint 11 closeout itself granted no Sprint 12 completion evidence.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
@@ -166,35 +166,32 @@ remediation are in
   historical public-page research receipts.
 
 - [Sprint 12 — Current supplied-cohort Industry Analysis](sprint-12.md) is
-  **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW
-  AND DELIVERY PENDING** under
-  [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117).
-  [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md)
-  owns the exact contract. The exact-SHA quality/security reviews of `40a8e23`
-  found a module-mint bypass and post-marker retry gap. All prior repair rounds
-  and their review/gate evidence are superseded trace. The ninth repair removes
-  module-level retained-evidence mint and capability functions; receipt parsing
-  yields only an unsealed candidate, and archive alone seals retained evidence.
-  The archive publishes the final marker only after all prior object, lease, and
-  clock checks pass; retries require the original marked receipt. Focused
-  evidence passed 149 marker/classification/current-cohort/participation tests. Full local gates passed 2,991
-  tests at 90.82% coverage plus Ruff format/check, Pyright, Vulture 80, and
-  build. The unchanged official parser smoke admitted the exact current 100-row,
-  6,610-byte artifact with SHA-256
-  `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-  under classification schema
-  `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-  it is parser provenance only. The current branch candidate is committed.
-  Fresh exact-SHA review and delivery remain pending. The exact reviewed SHA
-  will be recorded externally after review, not in this self-referential
-  lifecycle record. Pull request, hosted CI/GitGuardian, merge, and Issue
-  closure remain pending. All source/licence limits, frozen V1 preservation,
-  and explicit deferrals remain in force.
+  **closed/completed** under
+  [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+  and [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md).
+  [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135)
+  merged exact reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8`
+  as merge commit `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`.
+  Independent quality review returned **APPROVE** and security review returned
+  **PASS**. Local gates passed 2,991 tests at 90.82% coverage, Ruff
+  format/check, Pyright, Vulture 80, and build; hosted Quality/build and
+  GitGuardian passed. Issue #117 is closed and its Project item is **Done**.
+  The exact 100-row, 6,610-byte official parser smoke has SHA-256
+  `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`;
+  it is parser provenance only, not live participation or effectiveness
+  evidence. The delivered contracts use literal `Industry`, not official
+  Sector taxonomy, and all source/licence limits, nonclaims, frozen V1
+  preservation, and explicit deferrals remain in force.
+
+- Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+  is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
+  on 2026-08-23; this closeout records no Sprint 13 planning, implementation, or
+  source decision.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
   is open, low priority, and standalone. It may later publish one authoritative
   market-data codebase as `swing-trading-market-data` while the full application
   remains installable. It must not duplicate implementation, reopen completed
-  Issues #125/#127/#132 or Sprint 11, alter future Plan-23 migrations, or alter
-  active Sprint 12 scope.
+  Issues #125/#127/#132, Sprint 11, or completed Sprint 12, alter future
+  Plan-23 migrations, or pre-empt the not-started Sprint 13 scope.

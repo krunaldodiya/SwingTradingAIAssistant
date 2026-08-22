@@ -91,39 +91,36 @@ OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 | --- | --- | --- | --- | --- |
 | 10 | [#121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121) — Closed/completed; High priority/risk | Current supplied-cohort `market-data` foundation: bounded current price/volume facts for 1–50 Nifty 50 identities and immutable archive records. | Canonical cohort identity/selection SHA; retained instrument resolution; latest completed daily OHLCV and optional `PARTIAL_CURRENT_SESSION`; provenance/availability ledger; whole-cohort insufficiency; no effect before admission. | Historical/backtest implementation, Market Regime, sectors, news/events, signals, recommendations, entries/exits, position sizing, orders. |
 | 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Closed/completed; High priority/risk | Current Market Regime V2 comparability over admitted archived current facts, a successful provider-neutral corporate-action screen, and separate adjusted daily close facts. | Issues [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125), [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and [#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132) merged. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124) merged reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b` as `f03edf3690e34e25a57b58a15450129e3bf9a5e9`; 296 focused / 2,867 full / 91.03%, Ruff/Pyright/Vulture/build, sealed no-network and live current-prospective smokes, hosted Quality/build, and GitGuardian passed. | Historical/backtest implementation, generic adjustment engine, mixed-basis OHLC, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
-| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Open/**IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | Sprint 10 complete and Sprint 11 closed; [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md) owns the exact contract. Exact-SHA reviews of `40a8e23` found a module-mint bypass and post-marker retry gap. All prior rounds are superseded trace. The ninth repair removes module-level mint/capability functions; archive alone seals retained evidence, publishes the final marker only after prior checks and its clock, and requires the original marked receipt for retry. Focused evidence passed 112 tests; full local gates passed 2,991 tests at 90.82% coverage plus Ruff format/check, Pyright, Vulture 80, and build. The unchanged 100-row / 6,610-byte official parser smoke has artifact SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85` and schema SHA-256 `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`; it is provenance only. The current branch candidate is committed. Fresh exact-SHA review and delivery remain pending; the exact reviewed SHA will be recorded externally after review. | Automated acquisition, alternate sources, official Sector taxonomy, historical classification, and broker order placement. |
-| 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Todo; High priority/risk | Current news and event evidence with bounded fresh-input integration and immutable archive. | Current freshness/provenance/availability rules; no silent neutralization of absence. | Historical news/event backfill, historical validation, forecast, recommendation, order. |
+| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Closed/completed; Project **Done**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md); [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135) merged reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`; quality **APPROVE**, security **PASS**; 2,991 tests / 90.82%, Ruff/Pyright/Vulture/build, hosted Quality/build, and GitGuardian passed. The 100-row / 6,610-byte parser smoke at SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85` is provenance only. | Automated acquisition, alternate sources, official Sector taxonomy or mapping, historical classification, index-membership claim, live participation/effectiveness claim, recommendation, raw/member publication, or broker order placement. |
+| 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Unblocked/**NOT STARTED**; High priority/risk; owner permits start on 2026-08-23 only | Current news and event evidence with bounded fresh-input integration and immutable archive. | No planning, implementation, or source decision is authorized or recorded by the Sprint 12 closeout; current freshness/provenance/availability rules and no silent neutralization of absence remain future gates. | Historical news/event backfill, historical validation, forecast, recommendation, order. |
 | 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — Todo; High priority/risk | Integrated current packet binding price/volume, Market Regime, sector, news, events, and their archive identities for external-AI explainable research or `NO_TRADE`. | Exact Sprint 10–13 gates and current contracts. | Autonomous tool signal/recommendation, broker order, execution, historical-context substitution, claim of effectiveness. |
 | 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Deferred fixed-cohort historical OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort, versioned OHLCV revision, and predeclared coverage/windows. | Inferred index membership, historical news/event/sector neutralization, Market Structure, recommendation, order. |
 | 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate. | Sprint 15 store; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; identities and independent review. | Market Structure implementation, Price Action, Liquidity/SMC, recommendation, broker execution, guaranteed outcomes. |
 
 Sprint 11 is closed after all three dependencies and PR #124 merged. Sprint 12 /
-Issue #117 is **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH
-EXACT-SHA REVIEW AND DELIVERY PENDING** under Plan 24.
+Issue #117 is **closed/completed** under Plan 24 after PR #135 merged exact
+reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as
+`4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`. Independent quality review
+returned **APPROVE** and security review returned **PASS**. Local gates passed
+2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80, and
+build; hosted Quality/build and GitGuardian passed. Issue #117 is closed and
+its Project item is **Done**.
 
-The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
-and post-marker retry gap. All prior repair rounds and their review/gate evidence
-are superseded trace. The ninth repair removes module-level retained-evidence
-mint and capability functions: receipt parsing yields only an unsealed
-candidate, and archive alone seals retained evidence. The archive publishes the
-final marker only after all prior object, lease, and clock checks pass; retries
-require the original marked receipt.
-
-Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
-passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
-and build.
-
-The unchanged official parser smoke admitted the exact current 100-row,
+The delivered source tier is literal `Industry`, not an official NSE Indices
+Sector taxonomy or Industry-to-Sector mapping. Historical classification,
+supplied-cohort index membership, live participation, effectiveness,
+recommendation, raw/member publication, and order placement remain nonclaims
+or deferrals. The official parser smoke admitted the exact current 100-row,
 6,610-byte artifact with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-it is parser provenance only, not live participation or effectiveness evidence.
-The current branch candidate is committed. Fresh exact-SHA independent quality
-`APPROVE`, security `PASS`, and delivery remain pending. The exact reviewed SHA
-will be recorded externally after review; this lifecycle record contains no
-self-referential candidate SHA. Pull request, hosted CI/GitGuardian, merge, and
-Issue closure remain pending.
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`;
+it is parser provenance only.
+
+The Sprint 12 closeout records the MVP/working-feature-first process correction
+and handbook revision `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`:
+separate the first working slice from later improvements and stop before
+unplanned scope expansion. Sprint 13 / Issue #118 is unblocked but explicitly
+**NOT STARTED**. Owner direction permits starting on 2026-08-23; this closeout
+records no Sprint 13 planning, implementation, or source decision.
 
 ## Market Structure boundary
 
@@ -141,8 +138,8 @@ is future low-priority work for a standalone `swing-trading-market-data` PyPI
 distribution while the full application remains installable. Both distributions
 must consume one authoritative market-data codebase with no copied provider
 logic. This packaging outcome is not part of Sprints 11–16 and must not reopen
-completed Issues #125/#127/#132 or Sprint 11, alter future Plan-23 migrations,
-or alter active Sprint 12 scope.
+completed Issues #125/#127/#132, Sprint 11, or Sprint 12, alter future Plan-23
+migrations, or pre-empt the not-started Sprint 13 scope.
 
 ## Deferred and superseded historical records
 

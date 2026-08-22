@@ -68,29 +68,33 @@ tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright, Vulture
 Quality/build and GitGuardian passed.
 
 Sprint 12 / [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
-is **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA
-REVIEW AND DELIVERY PENDING** under
-[Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md). The
-exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass and
-post-marker retry gap. All prior repair rounds and their review/gate evidence
-are superseded trace. The ninth repair removes every module-level
-retained-evidence mint and capability function; receipt parsing produces an
-unsealed candidate, and only the verified archive operation seals retained
-evidence. It publishes the final marker only after all prior object, lease, and
-clock checks pass; retries require the original marked receipt.
+is **closed/completed** under
+[Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md).
+[PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135)
+merged exact reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8`
+as merge commit `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`.
+Independent exact-revision quality review returned **APPROVE** and security
+review returned **PASS**. Local gates passed 2,991 tests at 90.82% coverage,
+Ruff format/check, Pyright, Vulture 80, and build; hosted Quality/build and
+GitGuardian passed. Issue #117 is closed and its Project item is **Done**.
 
-Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
-passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
-and build. The unchanged official parser smoke admitted the exact current
-100-row, 6,610-byte artifact with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-it is parser provenance only, not live participation or effectiveness evidence.
-The current branch candidate is committed. Fresh exact-SHA review and delivery
-remain pending. The exact reviewed SHA will be recorded externally after
-review; this lifecycle record contains no self-referential candidate SHA. Pull
-request, hosted CI/GitGuardian, merge, and Issue closure remain pending.
+The slice delivers current exact supplied-cohort Industry classification and
+aggregate Industry Participation. `Industry` is the literal source field, not
+an official `Sector` claim or Industry-to-Sector mapping. Historical
+classification, supplied-cohort index membership, live participation,
+effectiveness, recommendation, order placement, and raw/member publication
+remain explicit nonclaims or deferrals. The official parser smoke admitted the
+exact current 100-row, 6,610-byte artifact with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`;
+it is parser provenance only.
+
+The closeout records the working-feature-first MVP correction and its handbook
+revision `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`: separate the first
+working slice from later improvements and stop before unplanned scope expansion.
+Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
+on 2026-08-23; no Sprint 13 planning, implementation, or source decision is
+recorded in this closeout.
 
 Plan 21 remains a nonexhaustive provider screen, not authoritative no-break
 proof or an adjustment engine. The adjusted-close successor remains separate
@@ -316,27 +320,24 @@ taxonomy work and Layer B are deferred. This slice adds no provider, acquisition
 or retained-data workflow, delivery transport, recommendation, live observed
 result, ranking, or effectiveness claim.
 
-Sprint 12 remains active under Issue #117 with its **IN PROGRESS — SEAL-CLOSED
-CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
-status. The exact-SHA quality/security reviews of `40a8e23` found a module-mint
-bypass and post-marker retry gap. All prior repair rounds and their review/gate
-evidence are superseded trace. The ninth repair removes module-level
-retained-evidence mint and capability functions; receipt parsing produces an
-unsealed candidate, and the archive alone seals retained evidence. It publishes
-the final marker only after all prior object, lease, and clock checks pass;
-retries require the original marked receipt.
+Sprint 12 / Issue #117 is closed/completed after PR #135 merged exact reviewed
+head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as
+`4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`. Quality review returned
+**APPROVE**, security review returned **PASS**, local gates passed 2,991 tests
+at 90.82% coverage plus Ruff/Pyright/Vulture/build, and hosted Quality/build
+and GitGuardian passed.
 
-Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
-passed 2,991 tests at 90.82% coverage plus Ruff format/check, Pyright, Vulture
-80, and build. The unchanged official parser smoke admitted the exact current
-100-row, 6,610-byte artifact with SHA-256
+This delivered current-only slice preserves literal `Industry` semantics and
+does not claim official Sector taxonomy, historical classification, supplied
+cohort membership, live participation, effectiveness, recommendation, order
+placement, or raw/member publication. The 100-row, 6,610-byte official parser
+smoke with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-it remains parser provenance only. The current branch candidate is committed.
-Fresh exact-SHA review and delivery remain pending. The exact reviewed SHA will
-be recorded externally after review, not in this self-referential lifecycle
-record.
+is parser provenance only.
+
+Sprint 13 / Issue #118 is unblocked but explicitly not started; owner direction
+permits starting on 2026-08-23, and this closeout makes no Sprint 13 plan,
+implementation, or source decision.
 
 ## Later modules
 
@@ -359,8 +360,8 @@ provider-neutral market-data API without research/AI modules. It must preserve
 capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
-not reopen completed Issues #125/#127/#132 or Sprint 11, alter future Plan-23
-migrations, or alter active Sprint 12 scope.
+not reopen completed Issues #125/#127/#132, Sprint 11, or Sprint 12, alter
+future Plan-23 migrations, or pre-empt the not-started Sprint 13 scope.
 
 ## Release gates
 

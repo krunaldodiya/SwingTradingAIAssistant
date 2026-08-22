@@ -1,6 +1,6 @@
 # Sprint 12 — Current supplied-cohort Industry Analysis
 
-Status: **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
+Status: **CLOSED / COMPLETED**
 
 Tracking: [GitHub Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
@@ -93,7 +93,7 @@ Industry rows.
 
 ## Implemented public and private boundaries
 
-The implementation candidate's authoritative classification module is:
+The delivered implementation's authoritative classification module is:
 
 ```text
 swing_trading_ai_assistant.market_data.current_industry_classification
@@ -103,7 +103,7 @@ It owns the strict owner input, exact artifact parser, supplied-cohort
 projection, private snapshot, typed classification failures, immutable archive
 port/implementation, canonical identities, and classification runtime identity.
 
-The implementation candidate's authoritative aggregate module is:
+The delivered implementation's authoritative aggregate module is:
 
 ```text
 swing_trading_ai_assistant.sector_analysis.current_industry_participation
@@ -124,47 +124,50 @@ uses exactly `MALFORMED_EVIDENCE`, `UNSUPPORTED_CAPABILITY`, or
 No CLI, API, MCP, network acquisition, provider adapter, source registry, or
 public member transport is part of the first implementation.
 
-## Final marker-time correction and current seal-closed evidence
+## Final correction and delivery evidence
 
-The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
-and post-marker retry gap. All prior repair rounds and their review/gate evidence
-are superseded trace.
+Earlier exact-SHA review rounds found a module-mint bypass, a post-marker retry
+gap, and marker timing bound to temporary-inode write time rather than later
+link-publication metadata. The delivered correction keeps receipt parsing
+unsealed, permits only the archive to seal retained evidence inside a verified
+active root operation, requires the original marked receipt for retry, and
+validates the later of `st_mtime_ns` and `st_ctime_ns`. Those candidate repair
+rounds are superseded by the reviewed delivery head and retained here only as a
+concise repair trace.
 
-The ninth repair removes every module-level retained-evidence mint and
-capability function. Receipt parsing returns only an unsealed candidate; archive
-alone seals retained evidence inside a verified active root operation. The
-archive verifies all prior named objects, directory, lease, and its internal
-clock before publishing the final receipt-, snapshot-, and `known_at`-bound
-marker. A retry requires and revalidates the original marked receipt.
-
-The final exact review found that marker admission used the temporary inode's
-write time rather than its later link metadata. The bounded correction validates
-the later of `st_mtime_ns` and `st_ctime_ns`; a marker linked after `known_at`
-therefore fails closed. No product scope was added.
-
-Focused evidence passed: 149
-marker/classification/current-cohort/participation tests. Full local gates
+Exact reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8`
+received independent quality **APPROVE** and security **PASS**. Local gates
 passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
-and build. The unchanged official parser smoke admitted the exact current
-100-row, 6,610-byte artifact with SHA-256
+and build. Hosted Quality/build and GitGuardian passed.
+[PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135)
+merged that head as `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`.
+Issue #117 is closed and its Project item is **Done**.
+
+The official parser smoke admitted the exact current 100-row, 6,610-byte
+artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
 `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`.
 That smoke is parser provenance only, not live participation or effectiveness
 evidence.
 
-## Current lifecycle truth
+Sprint 12 and Issue #117 are **closed/completed**. Owner-private source/licence
+limits, null publisher fields, raw-row non-disclosure, same-session use, frozen
+V1 preservation, literal `Industry` semantics, and every explicit deferral
+remain in force. This delivery does not claim official Sector taxonomy or
+mapping, historical classification, supplied-cohort index membership, live
+participation, effectiveness, recommendation, order placement, or raw/member
+publication.
 
-Issue #117 remains open and Sprint 12 is **IN PROGRESS — SEAL-CLOSED CANDIDATE
-LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The current
-branch candidate is committed. Fresh exact-SHA independent quality `APPROVE`,
-security `PASS`, and delivery remain pending. The exact reviewed SHA will be
-recorded externally after review; this document intentionally contains no
-self-referential candidate SHA. Pull request, hosted CI/GitGuardian, merge, and
-Issue closure remain pending.
-Owner-private source/licence limits, null publisher fields, raw-row
-non-disclosure, same-session use, frozen V1 preservation, and every explicit
-deferral remain in force.
+The closeout records the MVP/working-feature-first process correction: separate
+the first working slice from later improvements, classify only current
+acceptance failures as blockers, and stop before unplanned hardening,
+abstractions, or subsystems. The corresponding handbook revision is
+`93210ed3c28df90fdb971f6b8fd7c96ce71cd240`.
+
+Sprint 13 / Issue #118 is unblocked but explicitly **NOT STARTED**. Owner
+direction permits starting on 2026-08-23; this closeout records no Sprint 13
+planning, implementation, or source decision.
 
 ## Explicit deferrals
 

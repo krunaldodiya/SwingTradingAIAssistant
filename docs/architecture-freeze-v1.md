@@ -77,29 +77,35 @@ no-network and live current-prospective smokes, hosted Quality/build, and
 GitGuardian. Historical exact-50 V1 semantics remain frozen; future Plan-23
 migrations remain separate.
 
-Sprint 12 is **IN PROGRESS — SEAL-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH
-EXACT-SHA REVIEW AND DELIVERY PENDING**. The exact-SHA quality/security reviews
-of `40a8e23` found a module-mint bypass and post-marker retry gap. All prior
-repair rounds and their review/gate evidence are superseded trace. The ninth
-repair removes module-level retained-evidence mint and capability functions:
-receipt parsing yields only an unsealed candidate, and the archive alone seals
-retained evidence. The archive publishes the final marker only after all prior
-named-object, directory, lease, and clock checks pass; retries require the
-original marked receipt.
+Sprint 12 / [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+is **closed/completed**. [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135)
+merged exact reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8`
+as merge commit `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`.
+Independent exact-revision quality review returned **APPROVE** and security
+review returned **PASS**. Local gates passed 2,991 tests at 90.82% coverage,
+Ruff format/check, Pyright, Vulture 80, and build; hosted Quality/build and
+GitGuardian passed. Issue #117 is closed and its Project item is **Done**.
 
-Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
-passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
-and build. The unchanged official parser smoke admitted the exact current
-100-row, 6,610-byte artifact with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
-it is parser provenance only, not live participation or effectiveness evidence.
-The current branch candidate is committed. Fresh exact-SHA review and delivery
-remain pending. The exact reviewed SHA will be recorded externally after
-review; this lifecycle record intentionally contains no self-referential
-candidate SHA. Pull request, hosted CI/GitGuardian, merge, and Issue closure
-remain pending.
+The delivered current-only contract uses the source's literal NSE Indices
+`Industry` field inside the architecture-locked Sector Analysis module. It
+does not claim official `Sector` taxonomy or mapping, historical
+classification, index membership for the supplied cohort, live participation,
+effectiveness, recommendation, order placement, or raw/member publication.
+The official parser smoke admitted the exact current 100-row, 6,610-byte
+artifact with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`;
+it is parser provenance only.
+
+Sprint 12 also records an MVP/working-feature-first process correction: keep
+the first working slice limited to current acceptance blockers, separate later
+improvements, and apply the scope-expansion circuit breaker before adding
+unplanned hardening or subsystems. The corresponding handbook revision is
+`93210ed3c28df90fdb971f6b8fd7c96ce71cd240`.
+
+Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
+on 2026-08-23; this closeout records no Sprint 13 planning, implementation, or
+source decision.
 
 ## Repository identity
 
