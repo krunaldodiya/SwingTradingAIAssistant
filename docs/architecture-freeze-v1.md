@@ -56,18 +56,26 @@ current Sprint 10–16 dependency sequence; it does not change the module order
 or authorize autonomous signals, recommendations, or broker execution.
 For current/live Market Regime, raw completed-close comparison is allowed only
 when its versioned comparability contract states the evidence basis and limits.
-[Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md)
-is the standalone provider-neutral Upstox-first screen and merged through PR
-#128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`.
-The narrower Issue #127 adjusted-daily MVP then merged through PR #129 as
-`c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; it remains separate from Upstox
-raw facts and is not the complete Issue #130 canonical listed-equity boundary.
-Those two publication dependencies are complete. PR #124 Market Regime v2 is
-resumed. Its exact candidate passed 296 focused tests, 2,867 full tests, 91.03%
-coverage, Ruff format/check, Pyright, Vulture 80, build, and sealed no-network
-and live current-prospective adjusted smokes. Exact final review repair, hosted
-checks, merge, and publication remain pending; Sprint 12 remains blocked.
+[Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+and [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md)
+merged through PR #128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
+the narrower Issue #127 adjusted-daily MVP merged through PR #129 as
+`c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
+[Issue #132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132)
+merged its canonical explicit-stock adjusted-close input through PR #133 as
+`847dfbdf7b6114cb736e00abf9126c995d30e828`.
 
+Those dependencies are complete. Sprint 11
+[Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+is closed/completed after
+[PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+merged exact reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b`
+as merge commit `f03edf3690e34e25a57b58a15450129e3bf9a5e9`.
+The delivered V2 comparability semantics passed 296 focused tests, 2,867 full
+tests, 91.03% coverage, Ruff format/check, Pyright, Vulture 80, build, sealed
+no-network and live current-prospective smokes, hosted Quality/build, and
+GitGuardian. Historical exact-50 V1 semantics remain frozen; future Plan-23
+migrations remain separate. Sprint 12 is unblocked but **NOT STARTED**.
 
 ## Repository identity
 

@@ -123,36 +123,23 @@ remediation are in
   [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is the
   Sprint 10 specification.
 
-- Sprint 11 — Current supplied-cohort Market Regime remains **Open / Todo /
-  paused today** under
+- [Sprint 11 — Current supplied-cohort Market Regime](sprint-11.md) is
+  **closed/completed** under
   [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116).
-  Its first two publication dependencies are complete:
-  1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
-     and the provider-neutral Plan-21 corporate-action screen merged through
-     [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
-     as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
-  2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
-     closed after the narrower `provider-neutral-adjusted-daily-close@v1-mvp`
-     merged through
-     [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
-     as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
-  3. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
-     Market Regime v2 remains intentionally not resumed today. When explicitly
-     resumed, it must consume the then-applicable accepted contracts and pass
-     its own review, repository, hosted, merge, and closeout gates before Sprint
-     11 closes.
-
-  Issue #130 / Plan 23 remediation begins separately tomorrow. It versions the
-  listed-equity feature boundary; it does not reopen or reimplement completed
-  Issue #127 and does not itself close Sprint 11.
-
-  Upstox remains primary for live/raw OHLCV and corporate-action screening.
-  The delivered yfinance MVP supplies only a separate adjusted-daily fact for a
-  supplied Plan-19/Nifty-50-composed input with
-  `isin`/`project_symbol`/`provider_symbol` mappings. It never changes an Upstox
-  raw candle and is not strict point-in-time authority, a complete canonical
-  exchange/effective-symbol boundary, long-range intraday data, or a live broker
-  feed. Sprint 12 / Issue #117 cannot start until Sprint 11 closes.
+  Its dependencies [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125),
+  [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and
+  [#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132)
+  merged before
+  [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+  delivered V2 comparability semantics and merged reviewed head
+  `d56120fb5966dffea32207b59f1edf0673b2e51b` as merge commit
+  `f03edf3690e34e25a57b58a15450129e3bf9a5e9`.
+  Local evidence was 296 focused tests, 2,867 full tests, 91.03% coverage, Ruff
+  format/check, Pyright, Vulture 80, build, and sealed no-network and live
+  current-prospective smokes. Hosted Quality/build and GitGuardian passed.
+  Frozen exact-50 V1 records remain historical; future
+  [Plan 23](../plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
+  migrations remain separate. Sprint 12 is unblocked but **NOT STARTED**.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
@@ -176,22 +163,11 @@ remediation are in
   revoked before send. No inquiry email, provider contact, provider call,
   credential use, or acquisition occurred. They are distinct from Plan 11's
   historical public-page research receipts.
-- [Sprint 11 — Current supplied-cohort Market Regime](sprint-11.md) —
-  [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
-  has a temporal-review repair implementation and a current focused two-file
-  result of **172 passed**. [Plan
-  20](../plans/20-current-supplied-cohort-market-regime-contract.md) defines a
-  separate current supplied-cohort archive/schedule contract; it does not alter
-  frozen Plan 12 or deferred Plan 18. The prior full-local gate on
-  `d364bf11fac632b4d03b6c179b4519d3ca71f1bb` is superseded by this code change.
-  Final full local gates, independent exact-revision quality/security re-review,
-  hosted CI/security, merge, and publication remain pending; this index makes no
-  current approval claim.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
   is open, low priority, and standalone. It may later publish one authoritative
   market-data codebase as `swing-trading-market-data` while the full application
   remains installable. It must not duplicate implementation, reopen completed
-  Issues #125/#127, or interrupt Issue #130 remediation, PR #124, Sprint 11, or
-  Sprint 12's dependency gate.
+  Issues #125/#127/#132 or Sprint 11, alter future Plan-23 migrations, or start
+  Sprint 12.

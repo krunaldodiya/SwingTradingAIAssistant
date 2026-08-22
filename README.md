@@ -86,8 +86,19 @@ provider-free research cores. Delivered behavior includes:
   `YFINANCE` / `ADJUSTED` selection and supplied
   `isin`/`project_symbol`/`provider_symbol` mappings without changing Upstox raw
   candles;
+- the Issue-132 canonical explicit-stock adjusted-close input, merged through
+  [PR #133](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/133)
+  as `847dfbdf7b6114cb736e00abf9126c995d30e828`;
 - implemented `nifty50-market-regime@v1` deterministic exact-50 reduction and
-  its fail-closed evidence boundary; and
+  its fail-closed evidence boundary;
+- Sprint 11 current Market Regime V2 comparability, with
+  [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+  closed/completed after [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+  merged reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b` as
+  `f03edf3690e34e25a57b58a15450129e3bf9a5e9`, with 296 focused tests,
+  2,867 full tests, 91.03% coverage, Ruff, Pyright, Vulture, build, sealed
+  no-network and live current-prospective smokes, hosted Quality/build, and
+  GitGuardian passed; and
 - implemented `nifty50-sector-participation@v1` provider-free exact-50
   aggregation over the same-pass Market Regime handoff and point-in-time opaque
   sector labels.
@@ -99,9 +110,11 @@ adjusted-daily MVP likewise remains a supplied Plan-19/Nifty-50-composed
 boundary with incomplete canonical listed-equity identity.
 
 [Plan 23](docs/plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
-records tomorrow's separate incremental migration toward reusable
-listed-equity feature boundaries. It does not reopen or reimplement completed
-Issue #127, and Sprint 11 Market Regime v2 / PR #124 is not resumed today.
+owns separate future migrations toward reusable listed-equity feature
+boundaries. It does not reinterpret historical exact-50 V1 evidence, reopen
+completed Issues #125/#127/#132, or extend the delivered Sprint 11 V2
+comparability semantics.
+Sprint 12 is unblocked but **NOT STARTED**.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
 screening. yfinance is a separate adjusted-daily research provider, not a
