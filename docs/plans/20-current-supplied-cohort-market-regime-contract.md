@@ -1,14 +1,14 @@
 # Current supplied-cohort Market Regime contract
 
-Status: **PR #124 RESUMED — exact-candidate local evidence passed: 296 focused
-tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright,
-Vulture 80, build, and required no-network/live adjusted smokes. Exact final
-review repair, hosted CI/security, merge, and publication remain pending.**
+Status: **CLOSED / COMPLETED** — [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+closed after [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+merged exact reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b`
+as merge commit `f03edf3690e34e25a57b58a15450129e3bf9a5e9`.
 Contract revision: `current-supplied-cohort-market-regime@v1` (frozen);
 `current-supplied-cohort-market-regime@v2` (current comparability cutover)
 Schema revision: `current-supplied-cohort-market-regime-schema@v1` (V1 only)
 Risk: **R3 / High** — financial-research integrity, immutable evidence, private current-data provenance, and a new cross-boundary public fact contract
-Outcome owner and acceptance authority: **repository owner through GitHub Issue #116**; residual-risk acceptance remains with that owner.
+Outcome owner and acceptance authority: **repository owner through [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)**; residual-risk acceptance remains with that owner.
 Depends on: [Plan 19](19-current-supplied-cohort-market-data-contract.md), the current/live sequence in [Upcoming Sprints Overview](../upcoming_sprints_overview.md), and retained official NSE Capital Market schedule evidence.
 Preserves: frozen [Plan 12](12-market-regime-contract.md), deferred [Plan 18](18-provided-cohort-historical-ohlcv-contract.md), and Sprint 10's current-fact archive contract.
 
@@ -25,11 +25,11 @@ work.
 This is R3 because an erroneous current regime can cross the deterministic-tool
 boundary into financial research, immutable evidence and private owner data are
 consumed, and recovery cannot make a previously emitted fact trustworthy. Issue
-#116 and the owner direction authorize implementation within this approved epic;
-before implementation can be accepted, it must have focused evidence, an
-independent exact-revision review, applicable full repository/hosted security and
-CI gates, and an owner lifecycle decision. This plan is a durable specification,
-not evidence that those later acceptance activities occurred.
+#116 and the owner direction authorized implementation within this approved
+epic. Dependencies #125, #127, and #132 merged first; exact-revision local
+evidence, independent review, hosted Quality/build, GitGuardian, PR #124 merge,
+and the owner lifecycle decision then completed the acceptance gate. The exact
+closeout evidence is recorded below and in the Sprint 11 record.
 
 | Lifecycle area | Impact | disposition in this plan |
 | --- | --- | --- |
@@ -711,10 +711,10 @@ directory API nor a raw-candle/provider API. No alternate parser name, package
 root re-export, or co-authoritative surface is permitted. The evaluator must not
 alter request IDs, select objects, or recompute a decision.
 
-## Acceptance and evidence plan
+## Acceptance and evidence
 
-Focused exact-revision evidence is 172 passing cases for the command below.
-Applicable full/release gates remain required before it can claim completion.
+The final exact-candidate portfolio passed 296 focused tests. The acceptance
+cases below describe the delivered V1 and V2 boundaries.
 
 | Category | Required acceptance cases |
 | --- | --- |
@@ -731,14 +731,7 @@ position, and S20. Each proves the single
 counts; canonical facts with both instants exactly at each official close remain
 observed.
 
-Focused gate — 172 passed:
-
-```text
-uv run --no-sync --extra dev pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
-```
-
-Full candidate-revision gate (not run by this planning change) first performs
-`uv sync --extra dev --frozen`, then the CI quality chain:
+The exact reviewed candidate used the repository quality and build chain:
 
 ```text
 uv run --no-sync --extra dev ruff format --check .
@@ -749,12 +742,12 @@ uv run --no-sync --extra dev pytest
 uv build --no-build-isolation --python .venv/bin/python
 ```
 
-Release evidence additionally requires the exact candidate revision, independent
-exact-revision quality/security review, the corresponding hosted CI/security
-result, pull-request merge, and publication/closure evidence accepted by the
-Issue #116 owner. Evidence must record command/method, exact revision, result,
-scope, and limits; a focused pass does not substitute for independent review,
-full gate, merge, or publication.
+Exact reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b`
+passed 296 focused tests, 2,867 full tests at 91.03% coverage, Ruff
+format/check, Pyright, Vulture 80, build, sealed no-network and live
+current-prospective smokes, independent exact-revision review, hosted
+Quality/build, and GitGuardian. PR #124 merged it as
+`f03edf3690e34e25a57b58a15450129e3bf9a5e9`; Issue #116 closed/completed.
 
 ## V2 comparability cutover
 
@@ -783,7 +776,7 @@ mapping evidence.
 
 ## Explicit non-goals
 
-Issue #116 and the owner direction authorize implementation of this contract
+Issue #116 and the owner direction authorized implementation of this contract
 within the current-supplied-cohort Market Regime epic. This plan adds no provider,
 source, network, acquisition, or raw-OHLC authority; any such addition or a
 material scope change requires its own approved decision. It does not add a
@@ -791,9 +784,10 @@ factor, data source, indicator, corporate-action adjustment, raw OHLC query,
 historical reconstruction/backtest, current partial-session substitution,
 sector/news/event work, recommendation, financial advice, broker order, Market
 Structure, or Sprints 12–16 refinement. It does not change Plan 12, Plan 18,
-Plan 19, the Sprint 10 stale-lifecycle line, or any historical record. It creates
-no claim that Issue #116 has been implemented, tested, reviewed, merged,
-released, or published.
+Plan 19, the Sprint 10 stale-lifecycle line, or any historical record.
+Historical `nifty50-market-regime@v1` exact-50 semantics remain frozen; future
+Plan-23 feature migrations remain separate from the delivered V2 comparability
+semantics. Sprint 12 is unblocked but **NOT STARTED**.
 
 ## Residual risks and review trigger
 
@@ -810,7 +804,7 @@ source-at-rest identity check does not attest the executed bytes or defend
 against pre-verification execution or actors who can replace package source or
 import-cache state; this external runtime-root threat boundary remains
 adjudicated but unresolved without a trusted launcher/custom import system.
-Implementation of the narrow archive reader and schedule projection proceeds
-under Issue #116; a change to schedule authority, privacy boundary,
-provider/source, or Issue #116 acceptance criteria reopens this R3 decision and
-requires the applicable owner review and updated exact-revision evidence plan.
+The delivered narrow archive reader and schedule projection remain bounded by
+Issue #116. A future change to schedule authority, privacy boundary,
+provider/source, or the accepted Issue #116 contract requires a separate owner
+decision and updated exact-revision evidence.

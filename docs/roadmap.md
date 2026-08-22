@@ -38,11 +38,12 @@ qualification focus.
 Existing `Nifty50*` names, exact-50 contracts, and historical sprint evidence
 remain truthful V1 records. They are not described as already generic.
 [Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
-owns tomorrow's incremental Issue #130 working-slice remediation; there is no
-big-bang refactor and completed Issue #127 is not reopened or reimplemented.
+owns separate future incremental migrations; there is no big-bang refactor,
+reinterpretation of historical exact-50 V1 evidence, or reopening of completed
+Issues #125/#127/#132.
 
 Sprint 11 / [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
-remains open. Its first two publication dependencies are complete:
+is closed/completed. Its publication dependencies merged first:
 
 1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
    and the standalone provider-neutral Upstox-first screen in
@@ -50,26 +51,28 @@ remains open. Its first two publication dependencies are complete:
    merged through [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
    as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
 2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
-   closed after its owner-approved adjusted-daily working MVP merged through
+   and its adjusted-daily MVP merged through
    [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
-   as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`;
-3. Issue #130 is documentation/audit only today. Its Plan-23 versioned
-   instrument-boundary remediation starts tomorrow and is separate from the
-   completed Issue #127 MVP; and
-4. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
-   Market Regime v2 is resumed. Its exact candidate passed 296 focused tests,
-   2,867 full tests, 91.03% coverage, Ruff format/check, Pyright, Vulture 80,
-   build, and sealed no-network/live current-prospective adjusted smokes.
-   Exact final review repair, hosted checks, merge, and publication remain
-   pending; Sprint 12 stays blocked until Sprint 11 closes.
+   as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
+3. [Issue #132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132)
+   and its canonical explicit-stock adjusted-close input merged through
+   [PR #133](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/133)
+   as `847dfbdf7b6114cb736e00abf9126c995d30e828`.
 
-Sprint 12 / Issue #117 cannot start before Sprint 11 closes. Plan 21 remains a
+[PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+then delivered Market Regime V2 comparability and merged exact reviewed head
+`d56120fb5966dffea32207b59f1edf0673b2e51b` as merge commit
+`f03edf3690e34e25a57b58a15450129e3bf9a5e9`. Local evidence was 296 focused
+tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright, Vulture
+80, build, and sealed no-network and live current-prospective smokes. Hosted
+Quality/build and GitGuardian passed.
+
+Sprint 12 / Issue #117 is now unblocked but **NOT STARTED**. Plan 21 remains a
 nonexhaustive provider screen, not authoritative no-break proof or an adjustment
-engine. The delivered Plan 22 MVP remains a supplied
-Plan-19/Nifty-50-composed adjusted-daily fact with
-`isin`/`project_symbol`/`provider_symbol` mappings. It is not a rewrite of raw
-OHLCV, authoritative point-in-time history, or the complete Issue #130 canonical
-listed-equity boundary.
+engine. The delivered adjusted-close successor remains separate from Upstox raw
+OHLCV and does not make yfinance strict point-in-time authority. Historical
+exact-50 V1 evidence remains frozen, and future Plan-23 migrations remain
+separate from the delivered V2 comparability semantics.
 
 ## Provider and price-basis overlay
 
@@ -310,8 +313,8 @@ provider-neutral market-data API without research/AI modules. It must preserve
 capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
-not reopen completed Issues #125/#127 or interrupt Issue #130 remediation,
-PR #124, Sprint 11, or WIP-one.
+not reopen completed Issues #125/#127/#132 or Sprint 11, alter future Plan-23
+migrations, or start Sprint 12.
 
 ## Release gates
 

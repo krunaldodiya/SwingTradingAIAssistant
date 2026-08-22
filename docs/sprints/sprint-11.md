@@ -1,9 +1,9 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **PR #124 RESUMED — exact-candidate local evidence passed: 296 focused
-tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright,
-Vulture 80, build, and required no-network/live adjusted smokes. Exact final
-review repair, hosted CI/security, merge, and publication remain pending.**
+Status: **CLOSED / COMPLETED** — [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+closed after [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+merged exact reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b`
+as merge commit `f03edf3690e34e25a57b58a15450129e3bf9a5e9`.
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
 Milestone: **Sprint 11**
 Plan: [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
@@ -11,13 +11,13 @@ Risk: **R3 / High** — current financial-research fact integrity, immutable evi
 
 ## Goal
 
-Specify the next current/live deterministic Market Regime fact for the exact
-owner-supplied Sprint-10 cohort of 1–50 members. The planned contract consumes
+The delivered current/live deterministic Market Regime fact consumes the exact
+owner-supplied Sprint-10 cohort of 1–50 members. Its V1 contract consumes
 exactly 21 explicitly named immutable current-fact archive objects, validates
-one common sequence of completed official exchange sessions ending at the latest
-admissible decision session, compares each completed decision close with the
-close exactly 20 schedule positions earlier using Decimal, and returns only an
-aggregate breadth label or one whole-result insufficiency.
+one common sequence of completed official exchange sessions ending at the
+latest admissible decision session, compares each completed decision close with
+the close exactly 20 schedule positions earlier using Decimal, and returns only
+an aggregate breadth label or one whole-result insufficiency.
 
 `BROAD_ADVANCE` and `BROAD_DECLINE` use inclusive integer 60% tests; otherwise
 the fact is `MIXED_PARTICIPATION`. Any incomplete, unsafe, stale, future-known,
@@ -84,55 +84,60 @@ boundary.
 ## Acceptance and lifecycle conditions
 
 Issue #116 is the governing record; the **repository owner** is the outcome and
-acceptance authority, and the Issue #116/owner direction authorizes
-implementation within this epic. Before an ordinary
-completion decision, implementation must demonstrate exact
+acceptance authority. Completion demonstrated exact
 archive/cohort/opaque-request-identity/report/ledger bindings; valid archive
 partial snapshots may be present but never supply a decision/comparison close;
 owner-bound schedule source/release/digest, complete classified calendar-date
 coverage through cutoff-local date, and latest session with
 `close_at <= decision_cutoff` (`as_of` is timely only); Decimal directions;
 inclusive 60% boundaries; deterministic reason order; aggregate redaction; and
-whole-result insufficiency for every evidence failure. The current temporal
-repair additionally requires every member fact at S0 through S20 to have
+whole-result insufficiency for every evidence failure. The temporal repair
+requires every member fact at S0 through S20 to have
 `published_at >= close_at` and `known_at >= close_at`; facts at equality are
 accepted, while `data_cutoff` remains the last-bar time and may precede close.
-Exact-candidate local evidence passed:
+
+Dependencies [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125),
+[#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and
+[#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132)
+merged before PR #124. Exact reviewed head
+`d56120fb5966dffea32207b59f1edf0673b2e51b` passed:
 
 ```text
 296 focused tests; 2,867 full tests; 91.03% coverage
 Ruff format/check; Pyright; Vulture 80; build
 sealed no-network evaluator smoke; live current-prospective adjusted smoke
+independent exact-revision review; hosted Quality/build; GitGuardian
 ```
 
-This repairs and supersedes the earlier local-gate record for
-`d364bf11fac632b4d03b6c179b4519d3ca71f1bb`. Exact final review repair,
-hosted CI/security, merge, and publication evidence remain pending and are not
-asserted by this record.
+PR #124 merged that head as
+`f03edf3690e34e25a57b58a15450129e3bf9a5e9`, and Issue #116 closed/completed.
+This final evidence supersedes the earlier local-gate record for
+`d364bf11fac632b4d03b6c179b4519d3ca71f1bb`.
 
-The main unresolved implementation risks are that the Sprint-10 archive is
-write-only/unindexed and persists only an opaque request identity—not the full
-request or cohort manifest—and that retained official schedule evidence may not
-yet provide a canonical decoder with complete `ExpectedSessionSchedule` v2/v3
-classified cutoff-date coverage, admissible `as_of`, authoritative
-source/release binding, closure, and special-session proof. The v1 envelope
-remains admissible through persisted envelope/report/facts/ledger/partials
-consistency plus the owner-supplied cohort hash; neither risk permits a fallback
-or archive scan. `code_identity_sha256` is source-at-rest inventory/drift
-evidence only: it neither attests executed bytes nor protects against actors
-that replace package source, alter `__pycache__`/import state, or execute before
-verification. No external trusted launcher or custom import system is added in
-Sprint 11; that adjudicated external runtime-root threat boundary remains
-unresolved. Implementation of the narrow reader/projection proceeds under Issue
-#116, while any provider, source, or material scope change needs its own
-approved decision.
+The Sprint-10 archive remains write-only/unindexed and persists only an opaque
+request identity—not the full request or cohort manifest. Retained official
+schedule evidence may not provide a canonical decoder with complete
+`ExpectedSessionSchedule` v2/v3 classified cutoff-date coverage, admissible
+`as_of`, authoritative source/release binding, closure, and special-session
+proof; such evidence fails closed. The v1 envelope remains admissible through
+persisted envelope/report/facts/ledger/partials consistency plus the
+owner-supplied cohort hash; neither risk permits a fallback or archive scan.
+`code_identity_sha256` is source-at-rest inventory/drift evidence only: it
+neither attests executed bytes nor protects against actors that replace package
+source, alter `__pycache__`/import state, or execute before verification. Sprint
+11 added no external trusted launcher or custom import system; that external
+runtime-root threat boundary remains unresolved. The delivered narrow
+reader/projection remains bounded by Issue #116. Any provider, source,
+schedule-authority, privacy-boundary, or material scope change requires its own
+approved decision and fresh exact-revision evidence.
 
 ## Boundaries preserved
 
-Sprint 11 is the current-path successor to Sprint 10 and remains before current
-Sector Analysis in the locked pipeline. It does not alter frozen
-`nifty50-market-regime@v1` semantics in Plan 12, deferred Plan 18 historical
-work, Sprint-10's recorded stale lifecycle wording, or Sprints 12–16 scope. It
-makes no historical membership reconstruction/backtest claim and starts no
-sector, news/event, recommendation, order, Market Structure, provider, source,
-or raw-OHLC work.
+Sprint 11 is the completed current-path successor to Sprint 10. It delivered
+V2 comparability semantics without altering frozen historical
+`nifty50-market-regime@v1` exact-50 semantics in Plan 12, deferred Plan 18
+historical work, Sprint-10's recorded stale lifecycle wording, or Sprints 12–16
+scope. Future Plan-23 migrations remain separate. Sprint 12 is unblocked but
+**NOT STARTED**. This closeout makes no historical membership
+reconstruction/backtest claim and starts no sector, news/event, recommendation,
+order, Market Structure, provider, source, or raw-OHLC work.
