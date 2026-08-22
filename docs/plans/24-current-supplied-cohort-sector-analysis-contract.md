@@ -1,6 +1,6 @@
 # Current supplied-cohort Industry Analysis contract
 
-Status: **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY VERIFIED; EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+Status: **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
 Contract revisions:
 
@@ -31,23 +31,28 @@ module remains Sector Analysis because that is the locked pipeline module; the
 new data and result contracts are named **Industry classification** and
 **Industry participation** so their evidence claim remains truthful.
 
-Sprint 12 and Issue #117 are **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY
-VERIFIED; EXACT-SHA REVIEW AND DELIVERY PENDING**. The sixth independent R3
-quality/security review returned `REQUEST_CHANGES` / `FAIL` and drove
-NFKC(casefold) boundary-free Company Name privacy, exact top-level structural
-guards, conservative archive-completion `known_at` clarification, and the Plan
-20 lifecycle correction. The repaired candidate passed 331 focused tests plus
-34 documentation checks and all full local gates: 2,978 tests at 90.88%
-coverage, Ruff format/check, Pyright, Vulture 80, and build. The saved official
-artifact admitted exactly 100 rows and 6,610 bytes with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
-classification schema identity
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
-null publisher fields, and a redacted repr; it is parser-provenance evidence
-only. All prior rounds are superseded trace. Commit the exact candidate next,
-then obtain fresh independent quality `APPROVE` and security `PASS` against
-that exact SHA. Pull request, hosted CI/GitGuardian, merge, live participation
-result, and Issue closure remain pending.
+Sprint 12 and Issue #117 are **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE
+LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The prior
+exact-SHA R3 review returned `REQUEST_CHANGES` / `FAIL` for missing deterministic
+receipt persistence/recovery and stale lifecycle records. All earlier
+repair-round reviews and gate evidence are superseded trace. The seventh repair
+persists one deterministic canonical retained receipt binding `known_at`, all
+required identities, and the exact private rows; a retry in a new process
+reconstructs the original retained evidence and rejects a missing, corrupt, or
+spliced receipt.
+
+Focused verification passed 105 tests. Full local gates passed 2,982 tests at
+90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
+official parser smoke admitted the exact current 100-row, 6,610-byte artifact
+with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+under classification schema
+`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+it is parser provenance only, not live participation or effectiveness evidence.
+Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
+remain pending. The exact reviewed SHA will be recorded externally after review;
+this contract intentionally contains no self-referential candidate SHA. Pull
+request, hosted CI/GitGuardian, merge, live participation result, and Issue
+closure remain pending.
 
 ## Accepted source evaluation
 
@@ -286,10 +291,19 @@ The archive is content-addressed and immutable:
 - the admitted storage root and archive directory are owner-private, files are
   private regular single-link objects, and all opens are no-follow through
   `StorageRootLease.root_operation(root)`;
+- the first archive verifies raw and snapshot bindings, samples trusted UTC
+  completion time, seals a retained result, and publishes under the deterministic
+  no-replace name `retained-<snapshot_identity_sha256>.json` a private canonical
+  receipt binding `known_at`, archive-receipt, retained, schema, runtime, input,
+  artifact, snapshot, and archive identities plus every exact private cohort row
+  required for reconstruction;
 - writes use private temporary objects, flush data, fsync newly accepted
   directories and their owner-private root binding, publish without replacement,
-  and double-read/revalidate final named objects, directory binding, and the live
-  lease before success;
+  then stable-read and revalidate raw, snapshot, and receipt named bindings, the
+  directory binding, and live lease before success;
+- a retry or new archive process reads and deeply validates that exact receipt
+  before returning its original `known_at` and identities; a missing, corrupt,
+  or spliced deterministic receipt is `CLASSIFICATION_ARCHIVE_FAILED`; and
 - publishing identical bytes is idempotent, including concurrent acceptance;
 - an existing different object, unsafe link/type/mode, path replacement,
   unstable read, size violation, failed flush, or failed final verification is
@@ -583,31 +597,35 @@ source-at-rest drift evidence only; it is not publisher authenticity, executed-b
 attestation, licence authority, or protection against an actor able to replace
 code before verification.
 
-## R3 hardening and current review state
+## R3 hardening and current review-ready state
 
-The first through fifth independent `REQUEST_CHANGES` / `FAIL` rounds drove
+The first through sixth independent `REQUEST_CHANGES` / `FAIL` rounds drove
 test-first hardening of trusted retention-time ownership, deep sealed-evidence
 validation, causal closed reasons, strict Unicode admission, immutable archive
 publication, complete canonical identities, deterministic fault merging,
-complete runtime inventories, sanitized runtime-verifier failures, and related
-lifecycle corrections. Their reviews and local verification remain superseded
-trace.
+complete runtime inventories, sanitized runtime-verifier failures, deterministic
+receipt persistence/recovery, and related lifecycle corrections. All earlier
+repair-round reviews and gate evidence remain superseded trace.
 
-The sixth independent R3 quality/security review also returned
-`REQUEST_CHANGES` / `FAIL` and drove NFKC(casefold) boundary-free Company Name
-privacy, exact top-level structural guards, conservative archive-completion
-`known_at` clarification, and the Plan 20 lifecycle correction. The repaired
-candidate passed 331 focused tests plus 34 documentation checks and all full
-local gates: 2,978 tests at 90.88% coverage, Ruff format/check, Pyright, Vulture
-80, and build. The saved official artifact admitted exactly 100 rows and 6,610
-bytes with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
-classification schema identity
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
-null publisher fields, and a redacted repr as parser provenance only.
+The prior exact-SHA review found that the candidate did not persist the receipt
+needed to recover original evidence across a new-process retry and that lifecycle
+records were stale. The seventh repair persists one deterministic canonical
+retained receipt binding `known_at`, all required identities, and every exact
+private cohort row required for reconstruction. A retry or new archive process
+deeply validates that receipt, reconstructs the original retained evidence, and
+rejects a missing, corrupt, or spliced receipt.
 
-Commit the exact candidate next, then obtain fresh independent quality
-`APPROVE` and security `PASS` against that exact SHA. Pull request, hosted
+Focused verification passed 105 tests. Full local gates passed 2,982 tests at
+90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
+official parser smoke admitted the exact current 100-row, 6,610-byte artifact
+with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+under classification schema
+`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+it is parser provenance only, not live participation or effectiveness evidence.
+
+Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
+remain pending. The exact reviewed SHA will be recorded externally after review;
+this contract contains no self-referential candidate SHA. Pull request, hosted
 CI/GitGuardian, merge, and Issue closure remain pending.
 
 ## Licence, privacy, and provenance limits

@@ -77,24 +77,27 @@ no-network and live current-prospective smokes, hosted Quality/build, and
 GitGuardian. Historical exact-50 V1 semantics remain frozen; future Plan-23
 migrations remain separate.
 
-Sprint 12 is **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY VERIFIED;
-EXACT-SHA REVIEW AND DELIVERY PENDING**. The sixth independent R3
-quality/security review returned `REQUEST_CHANGES` / `FAIL` and drove
-NFKC(casefold) boundary-free Company Name privacy, exact top-level structural
-guards, conservative archive-completion `known_at` clarification, and the Plan
-20 lifecycle correction. The repaired candidate passed 331 focused tests plus
-34 documentation checks and all full local gates: 2,978 tests at 90.88%
-coverage, Ruff format/check, Pyright, Vulture 80, and build. The saved official
-artifact admitted exactly 100 rows and 6,610 bytes with SHA-256
-`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
-schema identity
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
-null publisher fields, and a redacted repr as parser provenance only. Trusted
-`known_at` is final archive-completion time, so retention completed after a
-decision cutoff remains future-known even when acquisition preceded the cutoff.
-All prior rounds are superseded trace. Commit the exact candidate next, then
-obtain fresh independent `APPROVE` / `PASS` against that exact SHA. Pull
-request, hosted CI/GitGuardian, merge, and Issue closure remain pending.
+Sprint 12 is **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED;
+FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The prior exact-SHA R3 review
+returned `REQUEST_CHANGES` / `FAIL` for missing deterministic receipt
+persistence/recovery and stale lifecycle records. All earlier repair-round
+reviews and gate evidence are superseded trace. The seventh repair persists one
+deterministic canonical retained receipt binding `known_at`, all required
+identities, and the exact private rows; a retry in a new process reconstructs
+the original retained evidence and rejects a missing, corrupt, or spliced
+receipt.
+
+Focused verification passed 105 tests. Full local gates passed 2,982 tests at
+90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
+official parser smoke admitted the exact current 100-row, 6,610-byte artifact
+with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+under classification schema
+`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+it is parser provenance only, not live participation or effectiveness evidence.
+Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
+remain pending. The exact reviewed SHA will be recorded externally after review;
+this lifecycle record intentionally contains no self-referential candidate SHA.
+Pull request, hosted CI/GitGuardian, merge, and Issue closure remain pending.
 
 ## Repository identity
 

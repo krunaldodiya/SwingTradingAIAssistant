@@ -428,6 +428,163 @@ def test_archive_is_immutable_content_addressed_and_idempotent(tmp_path: Path) -
         assert secret not in public
 
 
+def test_archive_reconstructs_a_complete_deterministic_receipt_after_process_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    known_at = datetime(2026, 8, 21, 10, 2, tzinfo=UTC)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: known_at)
+    first_lease = _private_lease(tmp_path)
+    try:
+        first = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    reconstructed = api.parse_retained_current_industry_receipt_v1(
+        receipt_path.read_bytes()
+    )
+    assert reconstructed.known_at == first.known_at
+    assert reconstructed.retained_identity_sha256 == first.retained_identity_sha256
+    assert reconstructed._private_rows == first._private_rows
+
+    monkeypatch.setattr(
+        api,
+        "_trusted_utc_now",
+        lambda: (_ for _ in ()).throw(AssertionError("duplicate timestamp")),
+    )
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        second = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    assert second.known_at == first.known_at
+    assert (
+        second.archive_receipt_identity_sha256 == first.archive_receipt_identity_sha256
+    )
+    assert second.retained_identity_sha256 == first.retained_identity_sha256
+
+
+def test_archive_rejects_corrupt_deterministic_retained_receipt(tmp_path: Path) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    first_lease = _private_lease(tmp_path)
+    try:
+        api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    receipt_path.chmod(0o600)
+    receipt_path.write_bytes(receipt_path.read_bytes().replace(b"Banking", b"Bunking"))
+    receipt_path.chmod(0o400)
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        result = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+
+
+def test_archive_rejects_missing_deterministic_retained_receipt_after_snapshot(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    first_lease = _private_lease(tmp_path)
+    try:
+        api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    receipt_path.chmod(0o600)
+    receipt_path.unlink()
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        result = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+
+
+def test_archive_rejects_spliced_deterministic_retained_receipt(tmp_path: Path) -> None:
+    api = _api()
+    artifact = _artifact()
+    first_snapshot = _parse_and_project(api, 1)
+    second_snapshot = _parse_and_project(api, 2)
+    first_lease = _private_lease(tmp_path)
+    try:
+        api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, first_snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, second_snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    archive_directory = tmp_path / ".current-industry-classification-v1"
+    first_receipt = (
+        archive_directory / f"retained-{first_snapshot.snapshot_identity_sha256}.json"
+    )
+    second_receipt = (
+        archive_directory / f"retained-{second_snapshot.snapshot_identity_sha256}.json"
+    )
+    first_receipt.chmod(0o600)
+    first_receipt.write_bytes(second_receipt.read_bytes())
+    first_receipt.chmod(0o400)
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        result = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, first_snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+
+
 @pytest.mark.parametrize(
     "publish_error",
     (FileExistsError("private collision"), OSError("unsafe private link")),

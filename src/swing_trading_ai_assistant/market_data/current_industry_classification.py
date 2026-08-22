@@ -36,6 +36,8 @@ _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _NSE_SYMBOL: Final = re.compile(r"[A-Z0-9](?:[A-Z0-9.&_-]{0,30}[A-Z0-9])?\Z")
 _ISIN: Final = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _ARCHIVE_DIRECTORY: Final = ".current-industry-classification-v1"
+_RETENTION_RECEIPT_VERSION: Final = "retained-current-industry-receipt@v1"
+_MAX_RETENTION_RECEIPT_BYTES: Final = 65_536
 _RUNTIME_MANIFEST_MODULE: Final = "swing_trading_ai_assistant.market_data.current_industry_classification_runtime_identity_manifest"
 _RUNTIME_MANIFEST: Final = "src/swing_trading_ai_assistant/market_data/current_industry_classification_runtime_identity_manifest.py"
 _RUNTIME_SOURCES: Final = (
@@ -830,14 +832,16 @@ class FileCurrentIndustryArchiveV1:
             snapshot_raw = snapshot.canonical_json_bytes()
             raw_name = f"raw-{snapshot.artifact_sha256}.csv"
             snapshot_name = f"snapshot-{snapshot.snapshot_identity_sha256}.json"
+            receipt_name = f"retained-{snapshot.snapshot_identity_sha256}.json"
             with _ARCHIVE_LOCK, lease.root_operation(self._root) as operation:
                 root = operation.descriptor
                 _validate_archive_root(root)
                 directory = _open_archive_directory(root)
                 try:
                     _publish_object(directory, raw_name, artifact)
-                    _publish_object(directory, snapshot_name, snapshot_raw)
-                    os.fsync(directory)
+                    snapshot_published = _publish_object(
+                        directory, snapshot_name, snapshot_raw
+                    )
                     _verify_archive_binding(
                         operation,
                         root,
@@ -847,47 +851,41 @@ class FileCurrentIndustryArchiveV1:
                         snapshot_name,
                         snapshot_raw,
                     )
-                    known_at = _trusted_utc_now()
-                    if not _trusted_utc(known_at):
-                        raise ValueError
+                    existing = _read_stable_private_object(
+                        directory, receipt_name, _MAX_RETENTION_RECEIPT_BYTES
+                    )
+                    if existing is None:
+                        if not snapshot_published:
+                            raise ValueError
+                        known_at = _trusted_utc_now()
+                        if not _trusted_utc(known_at):
+                            raise ValueError
+                        retained = _retained_for_snapshot(snapshot, known_at)
+                        receipt_raw = _retention_receipt_bytes(retained)
+                        _publish_object(directory, receipt_name, receipt_raw)
+                    else:
+                        receipt_raw, _ = existing
+                        retained = parse_retained_current_industry_receipt_v1(
+                            receipt_raw
+                        )
+                        if not _retained_matches_snapshot(retained, snapshot):
+                            raise ValueError
+                    _verify_retention_binding(
+                        operation,
+                        root,
+                        directory,
+                        raw_name,
+                        artifact,
+                        snapshot_name,
+                        snapshot_raw,
+                        receipt_name,
+                        receipt_raw,
+                    )
+                    return retained
                 finally:
                     os.close(directory)
         except Exception:
             return _failure(("CLASSIFICATION_ARCHIVE_FAILED",), snapshot.cohort_size)
-        archive_identity = _identity(
-            {
-                "raw_artifact_sha256": snapshot.artifact_sha256,
-                "snapshot_identity_sha256": snapshot.snapshot_identity_sha256,
-            }
-        )
-        receipt = _identity(
-            {
-                "archive_identity_sha256": archive_identity,
-                "artifact_sha256": snapshot.artifact_sha256,
-                "input_identity_sha256": input.input_identity_sha256,
-                "known_at": _instant(known_at),
-                "snapshot_identity_sha256": snapshot.snapshot_identity_sha256,
-            }
-        )
-        return _retained_with_identity(
-            evidence_state="RETAINED",
-            schema_identity_sha256=snapshot.schema_identity_sha256,
-            input_identity_sha256=input.input_identity_sha256,
-            artifact_sha256=snapshot.artifact_sha256,
-            artifact_revision=snapshot.artifact_revision,
-            snapshot_identity_sha256=snapshot.snapshot_identity_sha256,
-            archive_identity_sha256=archive_identity,
-            archive_receipt_identity_sha256=receipt,
-            snapshot_runtime_code_identity_sha256=snapshot.runtime_code_identity_sha256,
-            cohort_identity_sha256=snapshot.cohort_identity_sha256,
-            cohort_size=snapshot.cohort_size,
-            known_at=known_at,
-            publisher_published_at=None,
-            publisher_effective_from=None,
-            publisher_effective_through=None,
-            publisher_revision=None,
-            _private_rows=snapshot.private_rows,
-        )
 
 
 def _retained_with_identity(**values: object) -> RetainedCurrentIndustrySnapshotV1:
@@ -897,6 +895,279 @@ def _retained_with_identity(**values: object) -> RetainedCurrentIndustrySnapshot
             provisional.canonical_json_bytes(include_identity=False)
         ),
         **values,
+    )
+
+
+def _archive_identity(snapshot: PrivateCurrentIndustrySnapshotV1) -> str:
+    return _identity(
+        {
+            "raw_artifact_sha256": snapshot.artifact_sha256,
+            "snapshot_identity_sha256": snapshot.snapshot_identity_sha256,
+        }
+    )
+
+
+def _archive_receipt_identity(
+    archive_identity: str,
+    artifact_sha256: str,
+    input_identity_sha256: str,
+    known_at: datetime,
+    snapshot_identity_sha256: str,
+) -> str:
+    return _identity(
+        {
+            "archive_identity_sha256": archive_identity,
+            "artifact_sha256": artifact_sha256,
+            "input_identity_sha256": input_identity_sha256,
+            "known_at": _instant(known_at),
+            "snapshot_identity_sha256": snapshot_identity_sha256,
+        }
+    )
+
+
+def _retained_for_snapshot(
+    snapshot: PrivateCurrentIndustrySnapshotV1, known_at: datetime
+) -> RetainedCurrentIndustrySnapshotV1:
+    archive_identity = _archive_identity(snapshot)
+    return _retained_with_identity(
+        evidence_state="RETAINED",
+        schema_identity_sha256=snapshot.schema_identity_sha256,
+        input_identity_sha256=snapshot.input_identity_sha256,
+        artifact_sha256=snapshot.artifact_sha256,
+        artifact_revision=snapshot.artifact_revision,
+        snapshot_identity_sha256=snapshot.snapshot_identity_sha256,
+        archive_identity_sha256=archive_identity,
+        archive_receipt_identity_sha256=_archive_receipt_identity(
+            archive_identity,
+            snapshot.artifact_sha256,
+            snapshot.input_identity_sha256,
+            known_at,
+            snapshot.snapshot_identity_sha256,
+        ),
+        snapshot_runtime_code_identity_sha256=snapshot.runtime_code_identity_sha256,
+        cohort_identity_sha256=snapshot.cohort_identity_sha256,
+        cohort_size=snapshot.cohort_size,
+        known_at=known_at,
+        publisher_published_at=None,
+        publisher_effective_from=None,
+        publisher_effective_through=None,
+        publisher_revision=None,
+        _private_rows=snapshot.private_rows,
+    )
+
+
+def _retention_receipt_bytes(retained: RetainedCurrentIndustrySnapshotV1) -> bytes:
+    return _canonical(
+        {
+            "archive_identity_sha256": retained.archive_identity_sha256,
+            "archive_receipt_identity_sha256": (
+                retained.archive_receipt_identity_sha256
+            ),
+            "artifact_revision": retained.artifact_revision,
+            "artifact_sha256": retained.artifact_sha256,
+            "cohort_identity_sha256": retained.cohort_identity_sha256,
+            "cohort_size": retained.cohort_size,
+            "evidence_state": retained.evidence_state,
+            "input_identity_sha256": retained.input_identity_sha256,
+            "known_at": _instant(retained.known_at),
+            "private_rows": [
+                {
+                    "effective_symbol": row.effective_symbol,
+                    "exchange": row.exchange,
+                    "industry": row.industry,
+                    "isin": row.isin,
+                    "symbol": row.symbol,
+                }
+                for row in retained._private_rows  # pyright: ignore[reportPrivateUsage]
+            ],
+            "publisher_effective_from": None,
+            "publisher_effective_through": None,
+            "publisher_published_at": None,
+            "publisher_revision": None,
+            "receipt_version": _RETENTION_RECEIPT_VERSION,
+            "retained_identity_sha256": retained.retained_identity_sha256,
+            "schema_identity_sha256": retained.schema_identity_sha256,
+            "snapshot_identity_sha256": retained.snapshot_identity_sha256,
+            "snapshot_runtime_code_identity_sha256": (
+                retained.snapshot_runtime_code_identity_sha256
+            ),
+        }
+    )
+
+
+def parse_retained_current_industry_receipt_v1(
+    raw: bytes,
+) -> RetainedCurrentIndustrySnapshotV1:
+    value = _retention_receipt_value(raw)
+    artifact_revision = value["artifact_revision"]
+    artifact_sha256 = cast(str, value["artifact_sha256"])
+    archive_identity = cast(str, value["archive_identity_sha256"])
+    archive_receipt_identity = cast(str, value["archive_receipt_identity_sha256"])
+    cohort_identity = cast(str, value["cohort_identity_sha256"])
+    cohort_size = value["cohort_size"]
+    input_identity = cast(str, value["input_identity_sha256"])
+    known_at = _retention_receipt_known_at(value["known_at"])
+    retained_identity = cast(str, value["retained_identity_sha256"])
+    schema_identity = cast(str, value["schema_identity_sha256"])
+    snapshot_identity = cast(str, value["snapshot_identity_sha256"])
+    runtime_identity = cast(str, value["snapshot_runtime_code_identity_sha256"])
+    private_rows = _retention_receipt_private_rows(value["private_rows"])
+    snapshot = _snapshot_with_identity(
+        _snapshot(
+            evidence_state="PROJECTED",
+            schema_identity_sha256=schema_identity,
+            runtime_code_identity_sha256=runtime_identity,
+            input_identity_sha256=input_identity,
+            artifact_sha256=artifact_sha256,
+            artifact_revision=artifact_revision,
+            cohort_identity_sha256=cohort_identity,
+            cohort_size=cohort_size,
+            private_rows=private_rows,
+            snapshot_identity_sha256="",
+        )
+    )
+    retained = _retained_for_snapshot(snapshot, known_at)
+    if (
+        not _valid_snapshot(snapshot)
+        or snapshot.snapshot_identity_sha256 != snapshot_identity
+        or retained.archive_identity_sha256 != archive_identity
+        or retained.archive_receipt_identity_sha256 != archive_receipt_identity
+        or retained.retained_identity_sha256 != retained_identity
+    ):
+        raise ValueError("classification retained receipt invalid")
+    return retained
+
+
+def _retention_receipt_value(raw: bytes) -> dict[str, object]:
+    if type(raw) is not bytes or len(raw) > _MAX_RETENTION_RECEIPT_BYTES:
+        raise ValueError("classification retained receipt invalid")
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError("classification retained receipt invalid") from None
+    if type(decoded) is not dict:
+        raise ValueError("classification retained receipt invalid")
+    value = cast(dict[str, object], decoded)
+    expected = {
+        "archive_identity_sha256",
+        "archive_receipt_identity_sha256",
+        "artifact_revision",
+        "artifact_sha256",
+        "cohort_identity_sha256",
+        "cohort_size",
+        "evidence_state",
+        "input_identity_sha256",
+        "known_at",
+        "private_rows",
+        "publisher_effective_from",
+        "publisher_effective_through",
+        "publisher_published_at",
+        "publisher_revision",
+        "receipt_version",
+        "retained_identity_sha256",
+        "schema_identity_sha256",
+        "snapshot_identity_sha256",
+        "snapshot_runtime_code_identity_sha256",
+    }
+    if (
+        set(value) != expected
+        or _canonical(value) != raw
+        or value["receipt_version"] != _RETENTION_RECEIPT_VERSION
+        or value["evidence_state"] != "RETAINED"
+        or value["schema_identity_sha256"] != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        or any(
+            value[field] is not None
+            for field in (
+                "publisher_effective_from",
+                "publisher_effective_through",
+                "publisher_published_at",
+                "publisher_revision",
+            )
+        )
+        or any(
+            not _valid_digest(value[field])
+            for field in (
+                "archive_identity_sha256",
+                "archive_receipt_identity_sha256",
+                "artifact_sha256",
+                "cohort_identity_sha256",
+                "input_identity_sha256",
+                "retained_identity_sha256",
+                "schema_identity_sha256",
+                "snapshot_identity_sha256",
+                "snapshot_runtime_code_identity_sha256",
+            )
+        )
+        or type(value["artifact_revision"]) is not str
+        or value["artifact_revision"] != f"sha256:{value['artifact_sha256']}"
+        or type(value["cohort_size"]) is not int
+        or type(value["known_at"]) is not str
+        or type(value["private_rows"]) is not list
+    ):
+        raise ValueError("classification retained receipt invalid")
+    return value
+
+
+def _retention_receipt_known_at(value: object) -> datetime:
+    if type(value) is not str:
+        raise ValueError("classification retained receipt invalid")
+    try:
+        known_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("classification retained receipt invalid") from None
+    if not _trusted_utc(known_at) or _instant(known_at) != value:
+        raise ValueError("classification retained receipt invalid")
+    return known_at
+
+
+def _retention_receipt_private_rows(value: object) -> tuple[_PrivateIndustryRow, ...]:
+    if type(value) is not list:
+        raise ValueError("classification retained receipt invalid")
+    rows: list[_PrivateIndustryRow] = []
+    try:
+        for private_row_value in cast(list[object], value):
+            if type(private_row_value) is not dict:
+                raise ValueError
+            row = cast(dict[str, object], private_row_value)
+            if set(row) != {
+                "effective_symbol",
+                "exchange",
+                "industry",
+                "isin",
+                "symbol",
+            } or any(type(row[field]) is not str for field in row):
+                raise ValueError
+            rows.append(
+                _private_row(
+                    cast(str, row["isin"]),
+                    cast(str, row["industry"]),
+                    cast(str, row["symbol"]),
+                    cast(str, row["exchange"]),
+                    cast(str, row["effective_symbol"]),
+                )
+            )
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("classification retained receipt invalid") from None
+    return tuple(rows)
+
+
+def _retained_matches_snapshot(
+    retained: RetainedCurrentIndustrySnapshotV1,
+    snapshot: PrivateCurrentIndustrySnapshotV1,
+) -> bool:
+    return (
+        _seal_is(retained, _RETAINED_SEAL)
+        and retained.schema_identity_sha256 == snapshot.schema_identity_sha256
+        and retained.input_identity_sha256 == snapshot.input_identity_sha256
+        and retained.artifact_sha256 == snapshot.artifact_sha256
+        and retained.artifact_revision == snapshot.artifact_revision
+        and retained.snapshot_identity_sha256 == snapshot.snapshot_identity_sha256
+        and retained.snapshot_runtime_code_identity_sha256
+        == snapshot.runtime_code_identity_sha256
+        and retained.cohort_identity_sha256 == snapshot.cohort_identity_sha256
+        and retained.cohort_size == snapshot.cohort_size
+        and retained._private_rows  # pyright: ignore[reportPrivateUsage]
+        == snapshot.private_rows
     )
 
 
@@ -1032,6 +1303,92 @@ def _verify_archive_binding(
     ensure_live()
 
 
+def _verify_retention_binding(
+    operation: object,
+    root: int,
+    directory: int,
+    raw_name: str,
+    raw: bytes,
+    snapshot_name: str,
+    snapshot_raw: bytes,
+    receipt_name: str,
+    receipt_raw: bytes,
+) -> None:
+    _verify_archive_binding(
+        operation,
+        root,
+        directory,
+        raw_name,
+        raw,
+        snapshot_name,
+        snapshot_raw,
+    )
+    receipt_info = _stable_object(directory, receipt_name, receipt_raw)
+    if receipt_info is None or not _named_binding_matches(
+        directory, receipt_name, receipt_info
+    ):
+        raise ValueError
+    os.fsync(directory)
+    _verify_archive_binding(
+        operation,
+        root,
+        directory,
+        raw_name,
+        raw,
+        snapshot_name,
+        snapshot_raw,
+    )
+    receipt_info = _stable_object(directory, receipt_name, receipt_raw)
+    if receipt_info is None or not _named_binding_matches(
+        directory, receipt_name, receipt_info
+    ):
+        raise ValueError
+
+
+def _read_stable_private_object(
+    parent: int, name: str, maximum_size: int
+) -> tuple[bytes, os.stat_result] | None:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+    except FileNotFoundError:
+        return None
+    try:
+        named_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        opened_before = os.fstat(descriptor)
+        if (
+            maximum_size < 0
+            or opened_before.st_size > maximum_size
+            or not _private_regular_object(opened_before, opened_before.st_size)
+            or not _same_metadata(named_before, opened_before)
+        ):
+            raise ValueError
+        chunks: list[bytes] = []
+        remaining = opened_before.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                raise ValueError
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        opened_after = os.fstat(descriptor)
+        named_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        raw = b"".join(chunks)
+        if (
+            not _same_metadata(opened_before, opened_after)
+            or not _same_metadata(named_before, named_after)
+            or not _same_metadata(opened_after, named_after)
+            or not _private_regular_object(named_after, len(raw))
+        ):
+            raise ValueError
+        return raw, named_after
+    finally:
+        os.close(descriptor)
+
+
 def _open_archive_directory(root: int) -> int:
     with contextlib.suppress(FileExistsError):
         os.mkdir(_ARCHIVE_DIRECTORY, 0o700, dir_fd=root)
@@ -1049,11 +1406,11 @@ def _open_archive_directory(root: int) -> int:
         raise
 
 
-def _publish_object(parent: int, name: str, raw: bytes) -> None:
+def _publish_object(parent: int, name: str, raw: bytes) -> bool:
     try:
         if _object_matches(parent, name, raw):
             os.fsync(parent)
-            return
+            return False
     except FileNotFoundError:
         pass
     temporary = f".{name}.{uuid4().hex}.tmp"
@@ -1090,6 +1447,7 @@ def _publish_object(parent: int, name: str, raw: bytes) -> None:
         os.fsync(parent)
         if not _object_matches(parent, name, raw):
             raise ValueError
+        return True
     finally:
         if descriptor is not None:
             os.close(descriptor)

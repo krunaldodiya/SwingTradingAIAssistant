@@ -166,29 +166,25 @@ remediation are in
   historical public-page research receipts.
 
 - [Sprint 12 — Current supplied-cohort Industry Analysis](sprint-12.md) is
-  **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY VERIFIED; EXACT-SHA REVIEW
-  AND DELIVERY PENDING** under
+  **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA
+  REVIEW AND DELIVERY PENDING** under
   [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117).
   [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md)
-  owns the exact contract. The sixth independent R3 quality/security review
-  returned `REQUEST_CHANGES` / `FAIL` and drove NFKC(casefold) boundary-free
-  Company Name privacy, exact top-level structural guards, conservative
-  archive-completion `known_at` clarification, and the Plan 20 lifecycle
-  correction. The repaired candidate passed 331 focused tests plus 34
-  documentation checks and all full local gates: 2,978 tests at 90.88%
-  coverage, Ruff format/check, Pyright, Vulture 80, and build. The saved
-  official artifact admitted exactly 100 rows and 6,610 bytes with SHA-256
-  `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
-  schema identity
-  `7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
-  null publisher fields, and a redacted repr as parser provenance only. Trusted
-  `known_at` is final archive-completion time, so retention completed after the
-  decision cutoff remains future-known even if acquisition preceded it. All
-  prior rounds are superseded trace. Commit the exact candidate next, then
-  obtain fresh independent `APPROVE` / `PASS` against that exact SHA. Pull
-  request, hosted CI/GitGuardian, merge, and Issue closure remain pending. All
-  source/licence limits, frozen V1 preservation, and explicit deferrals remain
-  in force.
+  owns the exact contract. All earlier repair-round reviews and gate evidence
+  are superseded trace. The seventh repair persists and reconstructs the
+  deterministic canonical retained receipt across a process retry and rejects
+  missing, corrupt, or spliced receipts. Focused verification passed 105 tests;
+  full local gates passed 2,982 tests at 90.82% coverage plus Ruff format/check,
+  Pyright, Vulture 80, and build. The unchanged official parser smoke admitted
+  the exact current 100-row, 6,610-byte artifact with SHA-256
+  `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+  under classification schema
+  `7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+  it is parser provenance only. Fresh exact-SHA review and delivery remain
+  pending. The exact reviewed SHA will be recorded externally after review, not
+  in this self-referential lifecycle record. Pull request, hosted
+  CI/GitGuardian, merge, and Issue closure remain pending. All source/licence
+  limits, frozen V1 preservation, and explicit deferrals remain in force.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
