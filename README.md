@@ -126,8 +126,8 @@ unsealed candidate, and the archive alone seals retained evidence. The archive
 publishes the final marker only after all prior object, lease, and clock checks
 pass; retries require the original marked receipt.
 
-Focused evidence passed: 112 archive/participation tests. Full local gates
-passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
+passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
 and build. The unchanged official parser smoke admitted the exact current
 100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`

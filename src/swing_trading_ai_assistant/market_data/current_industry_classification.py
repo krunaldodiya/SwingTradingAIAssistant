@@ -1620,8 +1620,8 @@ def _verify_completion_marker(
 
 
 def _marker_filesystem_mtime_ns(info: os.stat_result) -> int:
-    """Return the completion marker's filesystem time for deadline proof."""
-    return info.st_mtime_ns
+    """Return the marker's latest write-or-link metadata time."""
+    return max(info.st_mtime_ns, info.st_ctime_ns)
 
 
 def _marker_mtime_at_or_before(info: os.stat_result, known_at: datetime) -> bool:

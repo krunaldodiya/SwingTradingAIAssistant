@@ -124,7 +124,7 @@ uses exactly `MALFORMED_EVIDENCE`, `UNSUPPORTED_CAPABILITY`, or
 No CLI, API, MCP, network acquisition, provider adapter, source registry, or
 public member transport is part of the first implementation.
 
-## Ninth repair and current seal-closed evidence
+## Final marker-time correction and current seal-closed evidence
 
 The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
 and post-marker retry gap. All prior repair rounds and their review/gate evidence
@@ -137,8 +137,14 @@ archive verifies all prior named objects, directory, lease, and its internal
 clock before publishing the final receipt-, snapshot-, and `known_at`-bound
 marker. A retry requires and revalidates the original marked receipt.
 
-Focused evidence passed: 112 archive/participation tests. Full local gates
-passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+The final exact review found that marker admission used the temporary inode's
+write time rather than its later link metadata. The bounded correction validates
+the later of `st_mtime_ns` and `st_ctime_ns`; a marker linked after `known_at`
+therefore fails closed. No product scope was added.
+
+Focused evidence passed: 149
+marker/classification/current-cohort/participation tests. Full local gates
+passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
 and build. The unchanged official parser smoke admitted the exact current
 100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`

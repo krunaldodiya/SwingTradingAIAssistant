@@ -42,8 +42,8 @@ verified active root operation. It verifies all prior named objects, directory,
 lease, and its internal clock before publishing the final marker. A retry
 requires and revalidates the original marked receipt.
 
-Focused evidence passed: 112 archive/participation tests. Full local gates
-passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+Focused evidence passed: 149 marker/classification/current-cohort/participation tests. Full local gates
+passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
 and build. The unchanged official parser smoke admitted the exact current
 100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
@@ -614,7 +614,7 @@ source-at-rest drift evidence only; it is not publisher authenticity, executed-b
 attestation, licence authority, or protection against an actor able to replace
 code before verification.
 
-## Ninth repair and current seal-closed candidate state
+## Final marker-time correction and current seal-closed candidate state
 
 The exact-SHA quality/security reviews of `40a8e23` found a module-mint bypass
 and post-marker retry gap. All prior repair rounds and their review/gate evidence
@@ -629,8 +629,15 @@ publishing the final receipt-, snapshot-, and `known_at`-bound marker. A retry
 requires and revalidates the original marked receipt rather than minting or
 accepting unmarked retained evidence.
 
-Focused evidence passed: 112 archive/participation tests. Full local gates
-passed 2,990 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
+Exact review of the ninth repair found one remaining storage-proof defect: the
+marker deadline used the temporary inode's write time rather than its later link
+publication metadata. The final bounded correction validates the later of
+`st_mtime_ns` and `st_ctime_ns`, so a marker linked after `known_at` fails closed.
+No feature, provider, abstraction, or delivery surface was added.
+
+Focused evidence passed: 149
+marker/classification/current-cohort/participation tests. Full local gates
+passed 2,991 tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80,
 and build. The unchanged official parser smoke admitted the exact current
 100-row, 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`

@@ -11,6 +11,7 @@ import socket
 from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -622,6 +623,13 @@ def test_archive_rejects_missing_corrupt_or_late_completion_marker(
         acquired.lease.close()
 
     _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+
+
+def test_marker_deadline_uses_link_metadata_not_only_temp_write_time() -> None:
+    api = _api()
+    info = SimpleNamespace(st_mtime_ns=10, st_ctime_ns=20)
+
+    assert api._marker_filesystem_mtime_ns(info) == 20
 
 
 def test_late_first_completion_never_publishes_marker_and_retry_fails_missing_marker(
