@@ -1176,7 +1176,7 @@ def _archive_ledger_matches_request(
         daily_entry = ledger[ledger_index]
         ledger_index += 1
         daily_fact = fact_by_member.get(member)
-        if daily_entry != _available_ledger_entry(
+        if daily_entry != available_ledger_entry_v1(
             feature="DAILY_OHLCV",
             interval="1d",
             member=member,
@@ -1204,7 +1204,7 @@ def _archive_ledger_matches_request(
                 if daily_fact is not None
                 else reported_unavailable_states
             )
-            if partial_entry != _available_ledger_entry(
+            if partial_entry != available_ledger_entry_v1(
                 feature="PARTIAL_CURRENT_SESSION",
                 interval="1m",
                 member=member,
@@ -1280,12 +1280,14 @@ class ImmutableCurrentFactArchiveV1:
                     dir_fd=operation.descriptor,
                 )
                 try:
-                    if not _archive_directory_matches(operation.descriptor, directory):
+                    if not current_fact_archive_directory_matches_v1(
+                        operation.descriptor, directory
+                    ):
                         return False
                     published = _publish_archive_object(
                         directory, f"{digest}.json", raw
                     )
-                    return published and _archive_directory_matches(
+                    return published and current_fact_archive_directory_matches_v1(
                         operation.descriptor, directory
                     )
                 finally:
@@ -1294,7 +1296,7 @@ class ImmutableCurrentFactArchiveV1:
             return False
 
 
-def _available_ledger_entry(
+def available_ledger_entry_v1(
     *,
     feature: str,
     interval: str,
@@ -1332,13 +1334,16 @@ def _available_ledger_entry(
     )
 
 
-def _archive_directory_matches(parent: int, descriptor: int) -> bool:
-    opened = os.fstat(descriptor)
-    named = os.stat(
-        ".current-fact-archive-v1",
-        dir_fd=parent,
-        follow_symlinks=False,
-    )
+def current_fact_archive_directory_matches_v1(parent: int, descriptor: int) -> bool:
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(
+            ".current-fact-archive-v1",
+            dir_fd=parent,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return False
     return (
         stat.S_ISDIR(opened.st_mode)
         and opened.st_uid == os.geteuid()
@@ -1683,7 +1688,7 @@ class CurrentCohortMarketDataServiceV1:
         for member in request.cohort.members:
             reason = reasons.get(member)
             entries.append(
-                _available_ledger_entry(
+                available_ledger_entry_v1(
                     feature="DAILY_OHLCV",
                     interval="1d",
                     member=member,
@@ -1698,7 +1703,7 @@ class CurrentCohortMarketDataServiceV1:
             )
             if request.include_partial_current_session:
                 entries.append(
-                    _available_ledger_entry(
+                    available_ledger_entry_v1(
                         feature="PARTIAL_CURRENT_SESSION",
                         interval="1m",
                         member=member,

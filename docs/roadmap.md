@@ -57,10 +57,11 @@ remains open. Its first two publication dependencies are complete:
    instrument-boundary remediation starts tomorrow and is separate from the
    completed Issue #127 MVP; and
 4. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
-   Market Regime v2 remains intentionally paused today. When explicitly
-   resumed, it must use the then-applicable accepted contracts and pass its own
-   review, repository, hosted, merge, and closeout gates before Sprint 11 may
-   close.
+   Market Regime v2 is resumed. Its exact candidate passed 296 focused tests,
+   2,867 full tests, 91.03% coverage, Ruff format/check, Pyright, Vulture 80,
+   build, and sealed no-network/live current-prospective adjusted smokes.
+   Exact final review repair, hosted checks, merge, and publication remain
+   pending; Sprint 12 stays blocked until Sprint 11 closes.
 
 Sprint 12 / Issue #117 cannot start before Sprint 11 closes. Plan 21 remains a
 nonexhaustive provider screen, not authoritative no-break proof or an adjustment

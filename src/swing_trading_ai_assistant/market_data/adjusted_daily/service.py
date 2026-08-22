@@ -11,8 +11,8 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
@@ -24,6 +24,7 @@ V2_CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v2"
 MAPPING_VERSION_V2: Final = "yfinance-symbol-mapping@v1"
 _ISIN = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_SOURCE_RELEASE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class AdjustedDailyDownloadAdapter(Protocol):
@@ -90,18 +91,27 @@ class AdjustedDailyCloseHandoff:
 
 @dataclass(frozen=True, slots=True)
 class AdjustedDailyCloseHandoffV2:
-    """V2 private handoff retaining canonical listed-equity identity."""
+    """Private V2 handoff bound to one admitted cohort and Plan-21 schedule."""
 
     contract_version: Literal["provider-neutral-adjusted-daily-close@v2"]
     provider_id: Literal["YFINANCE"]
     price_basis: Literal["ADJUSTED"]
     provider_source: str
     retrieved_at: datetime
-    temporal_label: Literal["REVISED_NON_PIT"]
+    temporal_label: Literal["CURRENT_PROSPECTIVE", "REVISED_NON_PIT"]
+    cohort_identity_sha256: str
+    request_identity_sha256: str
     decision_cutoff: datetime
+    schedule_evidence_sha256: str
+    schedule_source: Literal["nse-authoritative-calendar"]
+    schedule_source_release: str
+    decision_session_official_close_at: datetime
+    schedule_sessions: tuple[date, ...]
+    schedule_identity_sha256: str
     comparison_session: date
     decision_session: date
     members: tuple[AdjustedDailyMemberFactsV2, ...]
+    handoff_identity_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +177,14 @@ class _V2Member:
 @dataclass(frozen=True, slots=True)
 class _V2Request:
     decision_cutoff: datetime
+    cohort_identity_sha256: str
+    request_identity_sha256: str
+    schedule_evidence_sha256: str
+    schedule_source: Literal["nse-authoritative-calendar"]
+    schedule_source_release: str
+    decision_session_official_close_at: datetime
     sessions: tuple[date, ...]
+    schedule_identity_sha256: str
     members: tuple[_V2Member, ...]
 
 
@@ -207,41 +224,58 @@ def acquire_adjusted_daily_close_v2(
     if isinstance(v1_result, AdjustedDailyCloseFailure):
         return v1_result
 
-    return AdjustedDailyCloseSuccessV2(
-        "SUCCESS",
-        AdjustedDailyCloseHandoffV2(
-            contract_version=V2_CONTRACT_VERSION,
-            provider_id=v1_result.handoff.provider_id,
-            price_basis=v1_result.handoff.price_basis,
-            provider_source=v1_result.handoff.provider_source,
-            retrieved_at=v1_result.handoff.retrieved_at,
-            temporal_label=v1_result.handoff.temporal_label,
-            decision_cutoff=v1_result.handoff.decision_cutoff,
-            comparison_session=v1_result.handoff.comparison_session,
-            decision_session=v1_result.handoff.decision_session,
-            members=tuple(
-                AdjustedDailyMemberFactsV2(
-                    isin=member.isin,
-                    exchange=member.exchange,
-                    instrument_type=member.instrument_type,
-                    segment=member.segment,
-                    effective_symbol=member.effective_symbol,
-                    valid_from=member.valid_from,
-                    valid_through=member.valid_through,
-                    provider_symbol=member.provider_symbol,
-                    mapping_version=member.mapping_version,
-                    mapping_valid_from=member.mapping_valid_from,
-                    mapping_valid_through=member.mapping_valid_through,
-                    mapping_identity=member.mapping_identity,
-                    s0=fact.s0,
-                    s20=fact.s20,
-                )
-                for member, fact in zip(
-                    parsed.members, v1_result.handoff.members, strict=True
-                )
-            ),
+    handoff_without_identity = AdjustedDailyCloseHandoffV2(
+        contract_version=V2_CONTRACT_VERSION,
+        provider_id=v1_result.handoff.provider_id,
+        price_basis=v1_result.handoff.price_basis,
+        provider_source=v1_result.handoff.provider_source,
+        retrieved_at=v1_result.handoff.retrieved_at,
+        temporal_label=(
+            "CURRENT_PROSPECTIVE"
+            if v1_result.handoff.retrieved_at <= parsed.decision_cutoff
+            else "REVISED_NON_PIT"
+        ),
+        cohort_identity_sha256=parsed.cohort_identity_sha256,
+        request_identity_sha256=parsed.request_identity_sha256,
+        decision_cutoff=v1_result.handoff.decision_cutoff,
+        schedule_evidence_sha256=parsed.schedule_evidence_sha256,
+        schedule_source=parsed.schedule_source,
+        schedule_source_release=parsed.schedule_source_release,
+        decision_session_official_close_at=parsed.decision_session_official_close_at,
+        schedule_sessions=parsed.sessions,
+        schedule_identity_sha256=parsed.schedule_identity_sha256,
+        comparison_session=v1_result.handoff.comparison_session,
+        decision_session=v1_result.handoff.decision_session,
+        members=tuple(
+            AdjustedDailyMemberFactsV2(
+                isin=member.isin,
+                exchange=member.exchange,
+                instrument_type=member.instrument_type,
+                segment=member.segment,
+                effective_symbol=member.effective_symbol,
+                valid_from=member.valid_from,
+                valid_through=member.valid_through,
+                provider_symbol=member.provider_symbol,
+                mapping_version=member.mapping_version,
+                mapping_valid_from=member.mapping_valid_from,
+                mapping_valid_through=member.mapping_valid_through,
+                mapping_identity=member.mapping_identity,
+                s0=fact.s0,
+                s20=fact.s20,
+            )
+            for member, fact in zip(
+                parsed.members, v1_result.handoff.members, strict=True
+            )
+        ),
+        handoff_identity_sha256="",
+    )
+    handoff = replace(
+        handoff_without_identity,
+        handoff_identity_sha256=adjusted_daily_close_handoff_identity_v2(
+            handoff_without_identity
         ),
     )
+    return AdjustedDailyCloseSuccessV2("SUCCESS", handoff)
 
 
 def _acquire_parsed_v1(
@@ -316,12 +350,50 @@ def _parse_request_v2(request: object) -> _V2Request | AdjustedDailyCloseFailure
     if isinstance(parsed, AdjustedDailyCloseFailure):
         return parsed
     request_mapping, decision_cutoff, sessions = parsed
+    schedule = _parse_v2_schedule(request_mapping.get("plan21_schedule"), sessions)
+    if isinstance(schedule, AdjustedDailyCloseFailure):
+        return schedule
     members = _parse_v2_members(
         request_mapping.get("instruments"), sessions[0], sessions[-1]
     )
     if isinstance(members, AdjustedDailyCloseFailure):
         return members
-    return _V2Request(decision_cutoff, sessions, members)
+    cohort_identity = request_mapping.get("cohort_identity_sha256")
+    request_identity = request_mapping.get("request_identity_sha256")
+    if (
+        type(cohort_identity) is not str
+        or _SHA256.fullmatch(cohort_identity) is None
+        or type(request_identity) is not str
+        or _SHA256.fullmatch(request_identity) is None
+    ):
+        return _invalid("REQUEST_IDENTITY_INVALID")
+    (
+        schedule_evidence,
+        schedule_source,
+        schedule_source_release,
+        official_close,
+        schedule_identity,
+    ) = schedule
+    expected_request_identity = adjusted_daily_request_identity_v2(
+        cohort_identity_sha256=cohort_identity,
+        decision_cutoff=decision_cutoff,
+        schedule_identity_sha256=schedule_identity,
+        members=members,
+    )
+    if request_identity != expected_request_identity:
+        return _invalid("REQUEST_IDENTITY_INVALID")
+    return _V2Request(
+        decision_cutoff,
+        cohort_identity,
+        request_identity,
+        schedule_evidence,
+        schedule_source,
+        schedule_source_release,
+        official_close,
+        sessions,
+        schedule_identity,
+        members,
+    )
 
 
 def _parse_common_request(
@@ -370,6 +442,44 @@ def _parse_sessions(schedule: object) -> tuple[date, ...] | None:
     if any(left >= right for left, right in zip(sessions, sessions[1:], strict=False)):
         return None
     return sessions
+
+
+def _parse_v2_schedule(
+    schedule: object, sessions: tuple[date, ...]
+) -> (
+    tuple[str, Literal["nse-authoritative-calendar"], str, datetime, str]
+    | AdjustedDailyCloseFailure
+):
+    schedule_mapping = _mapping(schedule)
+    if schedule_mapping is None:
+        return _invalid("SCHEDULE_INVALID")
+    evidence = schedule_mapping.get("schedule_evidence_sha256")
+    source = schedule_mapping.get("schedule_source")
+    release = schedule_mapping.get("schedule_source_release")
+    official_close = schedule_mapping.get("decision_session_official_close_at")
+    identity = schedule_mapping.get("schedule_identity_sha256")
+    if (
+        type(evidence) is not str
+        or _SHA256.fullmatch(evidence) is None
+        or source != "nse-authoritative-calendar"
+        or type(release) is not str
+        or _SOURCE_RELEASE.fullmatch(release) is None
+        or type(official_close) is not datetime
+        or not _is_aware(official_close)
+        or type(identity) is not str
+        or _SHA256.fullmatch(identity) is None
+    ):
+        return _invalid("SCHEDULE_IDENTITY_INVALID")
+    expected = adjusted_daily_schedule_identity_v2(
+        sessions=sessions,
+        decision_session_official_close_at=official_close,
+        schedule_evidence_sha256=evidence,
+        schedule_source="nse-authoritative-calendar",
+        schedule_source_release=release,
+    )
+    if identity != expected:
+        return _invalid("SCHEDULE_IDENTITY_INVALID")
+    return evidence, "nse-authoritative-calendar", release, official_close, identity
 
 
 def _parse_members(
@@ -551,7 +661,7 @@ def _parse_v2_member(
     ):
         return _invalid("MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED")
 
-    expected_identity = _mapping_identity_v2(
+    expected_identity = mapping_identity_v2(
         isin=isin,
         exchange=exchange_value,
         instrument_type=instrument_type_value,
@@ -642,7 +752,7 @@ def _valid_isin(isin: str) -> bool:
     return total % 10 == 0
 
 
-def _mapping_identity_v2(
+def mapping_identity_v2(
     *,
     isin: str,
     exchange: Literal["NSE", "BSE"],
@@ -675,6 +785,129 @@ def _mapping_identity_v2(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def adjusted_daily_schedule_identity_v2(
+    *,
+    sessions: Sequence[date],
+    decision_session_official_close_at: datetime,
+    schedule_evidence_sha256: str,
+    schedule_source: Literal["nse-authoritative-calendar"],
+    schedule_source_release: str,
+) -> str:
+    return _identity(
+        {
+            "decision_session_official_close_at": _instant(
+                decision_session_official_close_at
+            ),
+            "schedule_evidence_sha256": schedule_evidence_sha256,
+            "schedule_source": schedule_source,
+            "schedule_source_release": schedule_source_release,
+            "sessions": [session.isoformat() for session in sessions],
+        }
+    )
+
+
+def adjusted_daily_request_identity_v2(
+    *,
+    cohort_identity_sha256: str,
+    decision_cutoff: datetime,
+    schedule_identity_sha256: str,
+    members: Sequence[_V2Member | AdjustedDailyMemberFactsV2],
+) -> str:
+    return _identity(
+        {
+            "cohort_identity_sha256": cohort_identity_sha256,
+            "contract_version": V2_CONTRACT_VERSION,
+            "decision_cutoff": _instant(decision_cutoff),
+            "instruments": [_v2_member_identity_value(member) for member in members],
+            "price_basis": PRICE_BASIS,
+            "provider_id": PROVIDER_ID,
+            "schedule_identity_sha256": schedule_identity_sha256,
+        }
+    )
+
+
+def adjusted_daily_close_handoff_identity_v2(
+    handoff: AdjustedDailyCloseHandoffV2,
+) -> str:
+    return _identity(
+        {
+            "cohort_identity_sha256": handoff.cohort_identity_sha256,
+            "comparison_session": handoff.comparison_session.isoformat(),
+            "contract_version": handoff.contract_version,
+            "decision_cutoff": _instant(handoff.decision_cutoff),
+            "decision_session": handoff.decision_session.isoformat(),
+            "decision_session_official_close_at": _instant(
+                handoff.decision_session_official_close_at
+            ),
+            "members": [
+                {
+                    **_v2_member_identity_value(member),
+                    "s0": {
+                        "adjusted_close": str(member.s0.adjusted_close),
+                        "session": member.s0.session.isoformat(),
+                    },
+                    "s20": {
+                        "adjusted_close": str(member.s20.adjusted_close),
+                        "session": member.s20.session.isoformat(),
+                    },
+                }
+                for member in handoff.members
+            ],
+            "price_basis": handoff.price_basis,
+            "provider_id": handoff.provider_id,
+            "provider_source": handoff.provider_source,
+            "request_identity_sha256": handoff.request_identity_sha256,
+            "retrieved_at": _instant(handoff.retrieved_at),
+            "schedule_evidence_sha256": handoff.schedule_evidence_sha256,
+            "schedule_identity_sha256": handoff.schedule_identity_sha256,
+            "schedule_sessions": [
+                session.isoformat() for session in handoff.schedule_sessions
+            ],
+            "schedule_source": handoff.schedule_source,
+            "schedule_source_release": handoff.schedule_source_release,
+            "temporal_label": handoff.temporal_label,
+        }
+    )
+
+
+def _v2_member_identity_value(
+    member: _V2Member | AdjustedDailyMemberFactsV2,
+) -> dict[str, object]:
+    return {
+        "effective_symbol": member.effective_symbol,
+        "exchange": member.exchange,
+        "instrument_type": member.instrument_type,
+        "isin": member.isin,
+        "mapping_identity": member.mapping_identity,
+        "mapping_valid_from": member.mapping_valid_from.isoformat(),
+        "mapping_valid_through": (
+            None
+            if member.mapping_valid_through is None
+            else member.mapping_valid_through.isoformat()
+        ),
+        "mapping_version": member.mapping_version,
+        "provider_symbol": member.provider_symbol,
+        "segment": member.segment,
+        "valid_from": member.valid_from.isoformat(),
+        "valid_through": (
+            None if member.valid_through is None else member.valid_through.isoformat()
+        ),
+    }
+
+
+def _identity(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        + b"\n"
+    ).hexdigest()
+
+
+def _instant(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _cohort_matches(members: Sequence[tuple[str, str, str]], cohort: object) -> bool:

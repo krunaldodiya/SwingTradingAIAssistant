@@ -14,6 +14,10 @@ from .service import (
     AdjustedDailyMemberFactsV2,
     acquire_adjusted_daily_close_v1,
     acquire_adjusted_daily_close_v2,
+    adjusted_daily_close_handoff_identity_v2,
+    adjusted_daily_request_identity_v2,
+    adjusted_daily_schedule_identity_v2,
+    mapping_identity_v2,
     serialize_public_result_v1,
     serialize_public_result_v2,
 )
@@ -34,6 +38,10 @@ __all__ = [
     "YfinanceAdjustedDailyDownloadAdapter",
     "acquire_adjusted_daily_close_v1",
     "acquire_adjusted_daily_close_v2",
+    "adjusted_daily_close_handoff_identity_v2",
+    "adjusted_daily_request_identity_v2",
+    "adjusted_daily_schedule_identity_v2",
+    "mapping_identity_v2",
     "serialize_public_result_v1",
     "serialize_public_result_v2",
 ]

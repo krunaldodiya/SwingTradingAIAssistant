@@ -131,7 +131,7 @@ class StorageRootLease:
     def try_acquire_existing_identity(
         cls, root: object, root_identity: tuple[int, int]
     ) -> LeaseResult:
-        """Acquire an existing root only when it still has the admitted identity."""
+        """Acquire an identity-pinned pre-existing safe lock without creation."""
         if (
             type(root_identity) is not tuple
             or len(root_identity) != 2
@@ -140,7 +140,7 @@ class StorageRootLease:
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
         return cls._try_acquire(
             root,
-            create_lock=True,
+            create_lock=False,
             expected_root_identity=root_identity,
         )
 

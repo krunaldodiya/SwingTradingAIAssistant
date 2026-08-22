@@ -5,7 +5,7 @@ Status: **ISSUE #127 WORKING MVP IMPLEMENTED AND MERGED — [PR #129](https://gi
 Delivered contract revision: `provider-neutral-adjusted-daily-close@v1-mvp`
 Deferred target contract revision: `provider-neutral-adjusted-daily-close@v1`
 Deferred target schema revision: `provider-neutral-adjusted-daily-close-schema@v1`
-Risk: **R3 / High** — financial-research integrity, revised third-party data, dependency/network behavior, identity continuity, and immutable evidence.  
+Risk: **R3 / High** — financial-research integrity, revised third-party data, dependency/network behavior, identity continuity, and immutable evidence.
 Outcome owner, acceptance authority, and residual-risk owner: **repository owner through the completed [GitHub Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)**.
 
 Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md) and the [Plan 19](19-current-supplied-cohort-market-data-contract.md) supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merged through PR #128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b` before Issue #127 / Plan 22 merged through PR #129. That publication order is complete. PR #124 Market Regime v2 is intentionally not resumed today. Issue #130 / Plan 23 remediation starts separately tomorrow and does not reopen or reimplement Issue #127.

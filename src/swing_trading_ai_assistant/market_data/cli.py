@@ -15,6 +15,14 @@ from typing import Any, Literal, Protocol
 
 from dotenv import load_dotenv
 
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
+    CurrentSuppliedCohortMarketRegimeInputV1,
+    DirectCurrentCohortArchiveReaderV1,
+    DirectCurrentCohortScheduleResolverV1,
+    current_supplied_cohort_market_regime_runtime_code_identity_v1,
+    evaluate_current_supplied_cohort_market_regime_v1,
+)
+
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
@@ -342,6 +350,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-partial-current-session", action="store_true"
     )
     cohort_current.add_argument("--output", choices=("json",), required=True)
+    regime_current = commands.add_parser(
+        "regime-current",
+        help="return one aggregate market-regime fact from immutable supplied-cohort evidence",
+    )
+    regime_current.add_argument(
+        "--input-file", type=Path, required=True, metavar="ABSOLUTE_OWNER_PRIVATE_JSON"
+    )
+    regime_current.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    regime_current.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -384,6 +406,9 @@ def main(
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
+    if not _admit_regime_current_argv(argv):
+        sys.stderr.write("invalid regime-current request\n")
+        return 2
     args = build_parser().parse_args(argv)
     if args.command == "probe-upstox":
         return _run_probe(args)
@@ -391,6 +416,42 @@ def main(
         return _run_current_cohort_command(
             args, current_cohort_service, trusted_clock or _SystemClock()
         )
+    if args.command == "regime-current":
+        return _run_current_regime_command(args)
+    return _run_public_command(args, download_service, coverage_service, query_service)
+
+
+def _admit_regime_current_argv(argv: list[str] | None) -> bool:
+    raw = sys.argv[1:] if argv is None else argv
+    if not raw or raw[0] != "regime-current":
+        return True
+    if not all(type(value) is str for value in raw) or len(raw) != 7:
+        return False
+    values: dict[str, str] = {}
+    for flag, value in zip(raw[1::2], raw[2::2], strict=True):
+        if flag not in {"--input-file", "--storage-root", "--output"} or flag in values:
+            return False
+        values[flag] = value
+    input_file = values.get("--input-file")
+    root = values.get("--storage-root")
+    if (
+        input_file is None
+        or root is None
+        or any(
+            "\x00" in value or not Path(value).is_absolute()
+            for value in (input_file, root)
+        )
+    ):
+        return False
+    return values.get("--output") == "json"
+
+
+def _run_public_command(
+    args: argparse.Namespace,
+    download_service: PublicDownloadPortV1 | None,
+    coverage_service: PublicCoveragePortV1 | None,
+    query_service: PublicQueryPortV1 | None,
+) -> int:
     injected = {
         "download": download_service,
         "coverage": coverage_service,
@@ -429,6 +490,107 @@ def main(
     batch = _default_bounded_read_service().execute(request)
     sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
     return bounded_nifty50_exit_code(batch.outcome)
+
+
+def _run_current_regime_command(args: argparse.Namespace) -> int:
+    lease: StorageRootLease | None = None
+    report_bytes: bytes | None = None
+    exit_code = 2
+    failed = False
+    try:
+        input_file = args.input_file
+        root = args.storage_root
+        if (
+            type(input_file) is not type(Path())
+            or not input_file.is_absolute()
+            or type(root) is not type(Path())
+            or not root.is_absolute()
+        ):
+            raise ValueError
+        # Runtime source verification is a pre-report structural boundary.
+        current_supplied_cohort_market_regime_runtime_code_identity_v1()
+        admitted_root, identity = _admit_existing_storage_root(root)
+        acquired = StorageRootLease.try_acquire_existing_identity(
+            admitted_root, identity
+        )
+        if acquired.lease is None:
+            raise ValueError
+        lease = acquired.lease
+        admitted_input = (
+            CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes(
+                _read_current_regime_input(input_file)
+            )
+        )
+        report = evaluate_current_supplied_cohort_market_regime_v1(
+            admitted_input,
+            DirectCurrentCohortArchiveReaderV1(admitted_root, lease),
+            DirectCurrentCohortScheduleResolverV1(admitted_root, lease),
+        )
+        report_bytes = report.canonical_json_bytes()
+        exit_code = 0 if report.evidence_state == "OBSERVED" else 1
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        failed = True
+    finally:
+        if lease is not None:
+            try:
+                lease.close()
+            except RuntimeError:
+                failed = True
+    if failed or report_bytes is None:
+        sys.stderr.write("invalid regime-current request\n")
+        return 2
+    sys.stdout.write(report_bytes.decode("utf-8"))
+    return exit_code
+
+
+def _read_current_regime_input(path: Path) -> bytes:
+    if not path.is_absolute():
+        raise ValueError
+    parts = path.parts[1:]
+    if not parts:
+        raise ValueError
+    descriptor = os.open(
+        "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    try:
+        for part in parts[:-1]:
+            next_descriptor = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        file_descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=descriptor,
+        )
+        try:
+            before = os.fstat(file_descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) & 0o077
+                or before.st_size < 1
+                or before.st_size > 16 * 1024
+            ):
+                raise ValueError
+            raw = os.read(file_descriptor, 16 * 1024 + 1)
+            after = os.fstat(file_descriptor)
+            if len(raw) != before.st_size or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise ValueError
+            return raw
+        finally:
+            os.close(file_descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _run_current_cohort_command(
