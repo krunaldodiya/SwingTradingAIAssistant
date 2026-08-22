@@ -6,9 +6,10 @@ import hashlib
 import importlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Final, Literal, cast
 
 from swing_trading_ai_assistant.market_data.adjusted_daily import (
@@ -24,13 +25,15 @@ from swing_trading_ai_assistant.market_data.current_corporate_action_screen impo
     PublishedCurrentCorporateActionScreenV1,
     published_current_corporate_action_screen_is_exact_valid_v1,
 )
+from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
+    runtime_source_sha256,
+)
 
 from .current_supplied_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortMarketRegimeReportV1,
     PrivateCurrentCohortArchiveGridProjectionV1,
     PrivateCurrentCohortMemberCloseProjectionV1,
-    current_supplied_cohort_market_regime_runtime_source_sha256_v1,
 )
 
 CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime@v2"
@@ -48,9 +51,13 @@ _RUNTIME_SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py",
     "src/swing_trading_ai_assistant/market_data/current_cohort.py",
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py",
+    "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v2.py",
 )
+
+_DIRECTION_SEAL: Final = object()
+_HANDOFF_SEAL: Final = object()
 
 
 def _canonical(value: object) -> bytes:
@@ -105,6 +112,21 @@ CALCULATION_IDENTITY_SHA256: Final = _identity(
 )
 
 
+def _runtime_root() -> Path:
+    source = Path(__file__)
+    root = source.parent.parent
+    if not source.is_absolute() or root.name != "swing_trading_ai_assistant":
+        raise ValueError("V2 runtime identity invalid")
+    return root
+
+
+def _runtime_source_sha256(module_name: str, relative: str) -> str:
+    try:
+        return runtime_source_sha256(module_name, _runtime_root(), relative)
+    except ValueError:
+        raise ValueError("V2 runtime identity invalid") from None
+
+
 def current_supplied_cohort_market_regime_runtime_code_identity_v2() -> str:
     """Verify reviewed source-at-rest identities; this is not byte attestation."""
     try:
@@ -136,6 +158,9 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v2() -> str:
         "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": (
             "swing_trading_ai_assistant.market_data.current_corporate_action_screen"
         ),
+        "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": (
+            "swing_trading_ai_assistant.market_data.runtime_source_verifier"
+        ),
         "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": (
             "swing_trading_ai_assistant.market_regime.current_supplied_cohort"
         ),
@@ -144,14 +169,9 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v2() -> str:
         ),
     }
     for relative in _RUNTIME_SOURCES:
-        if (
-            current_supplied_cohort_market_regime_runtime_source_sha256_v1(
-                loaded[relative], relative
-            )
-            != digests[relative]
-        ):
+        if _runtime_source_sha256(loaded[relative], relative) != digests[relative]:
             raise ValueError("V2 runtime identity invalid")
-    manifest_digest = current_supplied_cohort_market_regime_runtime_source_sha256_v1(
+    manifest_digest = _runtime_source_sha256(
         _RUNTIME_MANIFEST_MODULE, _RUNTIME_MANIFEST
     )
     composite = b"".join(
@@ -165,6 +185,11 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v2() -> str:
         + manifest_digest.encode()
         + b"\0"
     ).hexdigest()
+
+
+_V2_RUNTIME_IDENTITY: Final = (
+    current_supplied_cohort_market_regime_runtime_code_identity_v2()
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -217,7 +242,7 @@ class CurrentSuppliedCohortMarketRegimeReportV2:
         object.__setattr__(
             self,
             "runtime_code_identity_sha256",
-            current_supplied_cohort_market_regime_runtime_code_identity_v2(),
+            _V2_RUNTIME_IDENTITY,
         )
         object.__setattr__(
             self, "raw_report_identity_sha256", raw_report_identity_sha256
@@ -280,13 +305,139 @@ class CurrentSuppliedCohortMarketRegimeReportV2:
         return result
 
 
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _CurrentSuppliedCohortMemberDirectionV2:
+    isin: str
+    exchange: str
+    effective_symbol: str
+    direction: Literal["ADVANCE", "DECLINE", "UNCHANGED"]
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("private direction constructor unavailable")
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _CurrentSuppliedCohortMemberDirectionHandoffV2:
+    paired_report_identity_sha256: str
+    raw_report_identity_sha256: str
+    corporate_action_screen_identity_sha256: str
+    adjusted_handoff_identity_sha256: str
+    cohort_identity_sha256: str
+    cohort_size: int
+    decision_cutoff: datetime
+    decision_session: date
+    comparison_session: date
+    members: tuple[_CurrentSuppliedCohortMemberDirectionV2, ...]
+    handoff_identity_sha256: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("private direction handoff constructor unavailable")
+
+
+def _direction(**values: object) -> _CurrentSuppliedCohortMemberDirectionV2:
+    result = object.__new__(_CurrentSuppliedCohortMemberDirectionV2)
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
+    object.__setattr__(result, "_seal", _DIRECTION_SEAL)
+    return result
+
+
+def _handoff(**values: object) -> _CurrentSuppliedCohortMemberDirectionHandoffV2:
+    result = object.__new__(_CurrentSuppliedCohortMemberDirectionHandoffV2)
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
+    object.__setattr__(result, "_seal", _HANDOFF_SEAL)
+    return result
+
+
+def _member_direction_handoff(
+    report: CurrentSuppliedCohortMarketRegimeReportV2,
+    grid: PrivateCurrentCohortArchiveGridProjectionV1,
+    adjusted_handoff: AdjustedDailyCloseHandoffV2,
+) -> _CurrentSuppliedCohortMemberDirectionHandoffV2:
+    if report.comparison_session is None:
+        raise ValueError("V2 handoff invalid")
+    adjusted_members = {member.isin: member for member in adjusted_handoff.members}
+    members = tuple(
+        _direction(
+            isin=prior.member.isin,
+            exchange=adjusted_members[prior.member.isin].exchange,
+            effective_symbol=adjusted_members[prior.member.isin].effective_symbol,
+            direction=(
+                "ADVANCE"
+                if current.close > prior.close
+                else "DECLINE"
+                if current.close < prior.close
+                else "UNCHANGED"
+            ),
+        )
+        for prior, current in sorted(
+            zip(grid.sessions[0].members, grid.sessions[-1].members, strict=True),
+            key=lambda pair: pair[0].member.isin,
+        )
+    )
+    provisional = {
+        "adjusted_handoff_identity_sha256": report.adjusted_handoff_identity_sha256,
+        "cohort_identity_sha256": report.cohort_identity_sha256,
+        "cohort_size": report.cohort_size,
+        "comparison_session": report.comparison_session.isoformat(),
+        "corporate_action_screen_identity_sha256": report.corporate_action_screen_identity_sha256,
+        "decision_cutoff": report.decision_cutoff.isoformat(),
+        "decision_session": report.decision_session.isoformat(),
+        "members": [
+            {
+                "direction": member.direction,
+                "effective_symbol": member.effective_symbol,
+                "exchange": member.exchange,
+                "isin": member.isin,
+            }
+            for member in members
+        ],
+        "paired_report_identity_sha256": report.report_identity_sha256,
+        "raw_report_identity_sha256": report.raw_report_identity_sha256,
+    }
+    return _handoff(
+        paired_report_identity_sha256=report.report_identity_sha256,
+        raw_report_identity_sha256=report.raw_report_identity_sha256,
+        corporate_action_screen_identity_sha256=report.corporate_action_screen_identity_sha256,
+        adjusted_handoff_identity_sha256=report.adjusted_handoff_identity_sha256,
+        cohort_identity_sha256=report.cohort_identity_sha256,
+        cohort_size=report.cohort_size,
+        decision_cutoff=report.decision_cutoff,
+        decision_session=report.decision_session,
+        comparison_session=report.comparison_session,
+        members=members,
+        handoff_identity_sha256=_identity(provisional),
+    )
+
+
 def evaluate_current_supplied_cohort_market_regime_v2(
     raw_v1_report: CurrentSuppliedCohortMarketRegimeReportV1,
     raw_private_grid: PrivateCurrentCohortArchiveGridProjectionV1,
     retained_screen: PublishedCurrentCorporateActionScreenV1,
     adjusted_handoff: AdjustedDailyCloseHandoffV2,
 ) -> CurrentSuppliedCohortMarketRegimeReportV2:
-    """Preserve V1 breadth only when every exact, sealed source agrees."""
+    """Return the Plan-20 aggregate report without exposing member directions."""
+    return _evaluate_current_supplied_cohort_market_regime_with_handoff_v2(
+        raw_v1_report,
+        raw_private_grid,
+        retained_screen,
+        adjusted_handoff,
+    )[0]
+
+
+def _evaluate_current_supplied_cohort_market_regime_with_handoff_v2(
+    raw_v1_report: CurrentSuppliedCohortMarketRegimeReportV1,
+    raw_private_grid: PrivateCurrentCohortArchiveGridProjectionV1,
+    retained_screen: PublishedCurrentCorporateActionScreenV1,
+    adjusted_handoff: AdjustedDailyCloseHandoffV2,
+) -> tuple[
+    CurrentSuppliedCohortMarketRegimeReportV2,
+    _CurrentSuppliedCohortMemberDirectionHandoffV2 | None,
+]:
+    """Evaluate V2 once and retain its directions only for same-pass consumers."""
     raw_identity = (
         raw_v1_report.report_identity_sha256
         if type(raw_v1_report) is CurrentSuppliedCohortMarketRegimeReportV1
@@ -303,45 +454,55 @@ def evaluate_current_supplied_cohort_market_regime_v2(
         else ""
     )
     if not _valid_raw_report_and_grid(raw_v1_report, raw_private_grid):
-        return _insufficient(
-            raw_v1_report,
-            raw_identity,
-            screen_identity,
-            handoff_identity,
-            "RAW_V1_CLOSURE_INVALID",
+        return (
+            _insufficient(
+                raw_v1_report,
+                raw_identity,
+                screen_identity,
+                handoff_identity,
+                "RAW_V1_CLOSURE_INVALID",
+            ),
+            None,
         )
     if not _valid_screen(raw_v1_report, raw_private_grid, retained_screen):
-        return _insufficient(
-            raw_v1_report,
-            raw_identity,
-            screen_identity,
-            handoff_identity,
-            "CORPORATE_ACTION_SCREEN_INSUFFICIENT",
+        return (
+            _insufficient(
+                raw_v1_report,
+                raw_identity,
+                screen_identity,
+                handoff_identity,
+                "CORPORATE_ACTION_SCREEN_INSUFFICIENT",
+            ),
+            None,
         )
     if not _valid_adjusted_handoff(raw_v1_report, raw_private_grid, adjusted_handoff):
-        return _insufficient(
-            raw_v1_report,
-            raw_identity,
-            screen_identity,
-            handoff_identity,
-            "ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID",
+        return (
+            _insufficient(
+                raw_v1_report,
+                raw_identity,
+                screen_identity,
+                handoff_identity,
+                "ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID",
+            ),
+            None,
         )
-
     raw_directions = _directions(
         raw_private_grid.sessions[0].members,
         raw_private_grid.sessions[-1].members,
     )
     adjusted_directions = _adjusted_directions(adjusted_handoff.members)
     if raw_directions != adjusted_directions:
-        return _insufficient(
-            raw_v1_report,
-            raw_identity,
-            screen_identity,
-            handoff_identity,
-            "RAW_ADJUSTED_DIRECTION_CONFLICT",
+        return (
+            _insufficient(
+                raw_v1_report,
+                raw_identity,
+                screen_identity,
+                handoff_identity,
+                "RAW_ADJUSTED_DIRECTION_CONFLICT",
+            ),
+            None,
         )
-
-    return CurrentSuppliedCohortMarketRegimeReportV2(
+    report = CurrentSuppliedCohortMarketRegimeReportV2(
         raw_report_identity_sha256=raw_identity,
         corporate_action_screen_identity_sha256=screen_identity,
         adjusted_handoff_identity_sha256=handoff_identity,
@@ -357,6 +518,7 @@ def evaluate_current_supplied_cohort_market_regime_v2(
         unchanged=raw_v1_report.unchanged,
         reasons=(),
     )
+    return report, _member_direction_handoff(report, raw_private_grid, adjusted_handoff)
 
 
 def _insufficient(

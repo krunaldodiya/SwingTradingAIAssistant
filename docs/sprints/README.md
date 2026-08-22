@@ -139,7 +139,8 @@ remediation are in
   current-prospective smokes. Hosted Quality/build and GitGuardian passed.
   Frozen exact-50 V1 records remain historical; future
   [Plan 23](../plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
-  migrations remain separate. Sprint 12 is unblocked but **NOT STARTED**.
+  migrations remain separate. Sprint 12 is now active under Issue #117; the
+  Sprint 11 closeout grants no Sprint 12 implementation or completion evidence.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
@@ -164,10 +165,35 @@ remediation are in
   credential use, or acquisition occurred. They are distinct from Plan 11's
   historical public-page research receipts.
 
+- [Sprint 12 — Current supplied-cohort Industry Analysis](sprint-12.md) is
+  **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY VERIFIED; EXACT-SHA REVIEW
+  AND DELIVERY PENDING** under
+  [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117).
+  [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md)
+  owns the exact contract. The sixth independent R3 quality/security review
+  returned `REQUEST_CHANGES` / `FAIL` and drove NFKC(casefold) boundary-free
+  Company Name privacy, exact top-level structural guards, conservative
+  archive-completion `known_at` clarification, and the Plan 20 lifecycle
+  correction. The repaired candidate passed 331 focused tests plus 34
+  documentation checks and all full local gates: 2,978 tests at 90.88%
+  coverage, Ruff format/check, Pyright, Vulture 80, and build. The saved
+  official artifact admitted exactly 100 rows and 6,610 bytes with SHA-256
+  `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
+  schema identity
+  `7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
+  null publisher fields, and a redacted repr as parser provenance only. Trusted
+  `known_at` is final archive-completion time, so retention completed after the
+  decision cutoff remains future-known even if acquisition preceded it. All
+  prior rounds are superseded trace. Commit the exact candidate next, then
+  obtain fresh independent `APPROVE` / `PASS` against that exact SHA. Pull
+  request, hosted CI/GitGuardian, merge, and Issue closure remain pending. All
+  source/licence limits, frozen V1 preservation, and explicit deferrals remain
+  in force.
+
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
   is open, low priority, and standalone. It may later publish one authoritative
   market-data codebase as `swing-trading-market-data` while the full application
   remains installable. It must not duplicate implementation, reopen completed
-  Issues #125/#127/#132 or Sprint 11, alter future Plan-23 migrations, or start
-  Sprint 12.
+  Issues #125/#127/#132 or Sprint 11, alter future Plan-23 migrations, or alter
+  active Sprint 12 scope.

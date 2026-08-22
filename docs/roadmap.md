@@ -67,12 +67,33 @@ tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright, Vulture
 80, build, and sealed no-network and live current-prospective smokes. Hosted
 Quality/build and GitGuardian passed.
 
-Sprint 12 / Issue #117 is now unblocked but **NOT STARTED**. Plan 21 remains a
-nonexhaustive provider screen, not authoritative no-break proof or an adjustment
-engine. The delivered adjusted-close successor remains separate from Upstox raw
-OHLCV and does not make yfinance strict point-in-time authority. Historical
-exact-50 V1 evidence remains frozen, and future Plan-23 migrations remain
-separate from the delivered V2 comparability semantics.
+Sprint 12 / [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+is **IN PROGRESS — NFKC-PRIVATE CANDIDATE LOCALLY VERIFIED; EXACT-SHA REVIEW
+AND DELIVERY PENDING** under
+[Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md).
+The sixth independent R3 quality/security review returned `REQUEST_CHANGES` /
+`FAIL` and drove NFKC(casefold) boundary-free Company Name privacy, exact
+top-level structural guards, conservative archive-completion `known_at`
+clarification, and the Plan 20 lifecycle correction. The repaired candidate
+passed 331 focused tests plus 34 documentation checks and all full local gates:
+2,978 tests at 90.88% coverage, Ruff format/check, Pyright, Vulture 80, and
+build. The saved official artifact admitted exactly 100 rows and 6,610 bytes
+with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
+schema identity
+`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
+null publisher fields, and a redacted repr as parser provenance only. Trusted
+`known_at` is final archive-completion time, so retention completed after the
+decision cutoff is future-known even if acquisition preceded it. All prior
+rounds are superseded trace. Commit the exact candidate next, then obtain fresh
+independent `APPROVE` / `PASS` against that exact SHA. Pull request, hosted
+CI/GitGuardian, merge, and Issue closure remain pending.
+
+Plan 21 remains a nonexhaustive provider screen, not authoritative no-break
+proof or an adjustment engine. The adjusted-close successor remains separate
+from Upstox raw OHLCV and does not make yfinance strict point-in-time authority.
+Historical exact-50 V1 evidence remains frozen, and future Plan-23 migrations
+remain separate from the delivered V2 comparability semantics.
 
 ## Provider and price-basis overlay
 
@@ -292,6 +313,23 @@ taxonomy work and Layer B are deferred. This slice adds no provider, acquisition
 or retained-data workflow, delivery transport, recommendation, live observed
 result, ranking, or effectiveness claim.
 
+Sprint 12 remains active under Issue #117 with its **NFKC-PRIVATE CANDIDATE
+LOCALLY VERIFIED; EXACT-SHA REVIEW AND DELIVERY PENDING**. The sixth independent
+R3 quality/security `REQUEST_CHANGES` / `FAIL` drove NFKC(casefold)
+boundary-free Company Name privacy, exact top-level structural guards,
+conservative archive-completion `known_at` clarification, and the Plan 20
+lifecycle correction. The candidate passed 331 focused tests plus 34
+documentation checks and all full local gates: 2,978 tests at 90.88% coverage,
+Ruff format/check, Pyright, Vulture 80, and build. The saved official artifact
+admitted exactly 100 rows and 6,610 bytes with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`,
+schema identity
+`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`,
+null publisher fields, and a redacted repr as parser provenance only. Retention
+completed after the decision cutoff remains future-known regardless of an
+earlier acquisition. All prior rounds are superseded trace. Exact candidate
+commit/SHA, fresh exact-SHA independent review, and delivery remain pending.
+
 ## Later modules
 
 Proceed in locked pipeline order, integrating and validating one module at a
@@ -314,7 +352,7 @@ capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
 not reopen completed Issues #125/#127/#132 or Sprint 11, alter future Plan-23
-migrations, or start Sprint 12.
+migrations, or alter active Sprint 12 scope.
 
 ## Release gates
 

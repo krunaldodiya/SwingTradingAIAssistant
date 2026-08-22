@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import socket
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -36,6 +38,9 @@ from swing_trading_ai_assistant.market_data.current_corporate_action_screen impo
     PublishedCurrentCorporateActionScreenV1,
     SupportedCorporateActionKindV1,
     publish_current_corporate_action_screen_v1,
+)
+from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
+    read_runtime_source,
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     CurrentSuppliedCohortMarketRegimeInputV1,
@@ -518,6 +523,51 @@ def test_v2_rejects_unsealed_or_forged_published_screen(sealed: bool) -> None:
     _assert_insufficient(result, reason="CORPORATE_ACTION_SCREEN_INSUFFICIENT")
 
 
+def test_private_handoff_preserves_validated_adjusted_exchange_and_symbol() -> None:
+    raw, grid = _raw_evidence()
+    adjusted = _handoff(raw, grid)
+    first = adjusted.members[0]
+    bse_first = replace(
+        first,
+        exchange="BSE",
+        mapping_identity=mapping_identity_v2(
+            isin=first.isin,
+            exchange="BSE",
+            instrument_type=first.instrument_type,
+            segment=first.segment,
+            effective_symbol=first.effective_symbol,
+            provider_symbol=first.provider_symbol,
+            mapping_valid_from=first.mapping_valid_from,
+            mapping_valid_through=first.mapping_valid_through,
+        ),
+    )
+    adjusted = replace(adjusted, members=(bse_first, *adjusted.members[1:]))
+    adjusted = replace(
+        adjusted,
+        request_identity_sha256=adjusted_daily_request_identity_v2(
+            cohort_identity_sha256=adjusted.cohort_identity_sha256,
+            decision_cutoff=adjusted.decision_cutoff,
+            schedule_identity_sha256=adjusted.schedule_identity_sha256,
+            members=adjusted.members,
+        ),
+    )
+    adjusted = _with_handoff_identity(adjusted)
+    module = importlib.import_module(
+        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2"
+    )
+
+    report, handoff = (
+        module._evaluate_current_supplied_cohort_market_regime_with_handoff_v2(
+            raw, grid, _screen(raw, grid), adjusted
+        )
+    )
+
+    assert report.evidence_state == "OBSERVED"
+    assert handoff is not None
+    assert handoff.members[0].exchange == "BSE"
+    assert handoff.members[0].effective_symbol == bse_first.effective_symbol
+
+
 @pytest.mark.parametrize(
     "fault",
     (
@@ -562,3 +612,233 @@ def test_v2_rejects_spliced_adjusted_handoff_identities(fault: str) -> None:
         handoff = replace(handoff, handoff_identity_sha256="0" * 64)
     result = _api()(raw, grid, _screen(raw, grid), handoff)
     _assert_insufficient(result, reason="ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID")
+
+
+def _paired_api() -> Callable[..., tuple[Any, Any | None]]:
+    module = importlib.import_module(
+        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2"
+    )
+    evaluate = getattr(
+        module,
+        "_evaluate_current_supplied_cohort_market_regime_with_handoff_v2",
+        None,
+    )
+    assert callable(evaluate), "missing Market Regime V2 private paired evaluator"
+    return evaluate
+
+
+def test_private_paired_evaluator_preserves_the_exact_public_v2_report() -> None:
+    raw, grid = _raw_evidence()
+
+    public = _api()(raw, grid, _screen(raw, grid), _handoff(raw, grid))
+    paired, handoff = _paired_api()(raw, grid, _screen(raw, grid), _handoff(raw, grid))
+
+    assert paired == public
+    assert handoff is not None
+    assert handoff.cohort_identity_sha256 == public.cohort_identity_sha256
+    assert handoff.cohort_size == public.cohort_size
+    assert tuple(member.isin for member in handoff.members) == tuple(
+        sorted(member.isin for member in handoff.members)
+    )
+    assert len({member.isin for member in handoff.members}) == handoff.cohort_size
+    assert {member.direction for member in handoff.members} <= {
+        "ADVANCE",
+        "DECLINE",
+        "UNCHANGED",
+    }
+    assert (
+        sum(member.direction == "ADVANCE" for member in handoff.members),
+        sum(member.direction == "DECLINE" for member in handoff.members),
+        sum(member.direction == "UNCHANGED" for member in handoff.members),
+    ) == (public.advances, public.declines, public.unchanged)
+    assert handoff.handoff_identity_sha256
+    assert not hasattr(handoff, "canonical_json_bytes")
+
+
+def test_private_paired_evaluator_returns_no_handoff_for_v2_insufficiency() -> None:
+    raw, grid = _raw_evidence()
+    invalid_adjusted = replace(_handoff(raw, grid), temporal_label="HISTORICAL")
+
+    report, handoff = _paired_api()(raw, grid, _screen(raw, grid), invalid_adjusted)
+
+    _assert_insufficient(report)
+    assert handoff is None
+
+
+def test_v2_insufficiency_retains_only_the_validated_common_envelope() -> None:
+    raw, grid = _raw_evidence()
+
+    report, handoff = _paired_api()(
+        raw, grid, _screen(raw, grid, state="action"), _handoff(raw, grid)
+    )
+
+    _assert_insufficient(report, reason="CORPORATE_ACTION_SCREEN_INSUFFICIENT")
+    assert handoff is None
+    assert (
+        report.raw_report_identity_sha256,
+        report.cohort_identity_sha256,
+        report.cohort_size,
+        report.decision_cutoff,
+        report.decision_session,
+    ) == (
+        raw.report_identity_sha256,
+        raw.cohort_identity_sha256,
+        raw.cohort_size,
+        raw.decision_cutoff,
+        raw.decision_session,
+    )
+
+
+def test_private_handoff_has_no_public_constructor_or_package_root_export() -> None:
+    module = importlib.import_module(
+        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2"
+    )
+    package = importlib.import_module("swing_trading_ai_assistant.market_regime")
+
+    assert not hasattr(package, "_CurrentSuppliedCohortMemberDirectionHandoffV2")
+    assert not hasattr(package, "CurrentSuppliedCohortMemberDirectionHandoffV2")
+    assert not hasattr(
+        module, "parse_current_supplied_cohort_member_direction_handoff_v2"
+    )
+
+
+def test_v2_runtime_reader_rejects_leaf_replacement_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    replaced = False
+
+    def replace_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced:
+            replacement = directory / "replacement.py"
+            replacement.write_bytes(b"replaced")
+            os.replace(replacement, source)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", replace_after_read)
+    with pytest.raises(ValueError, match="runtime source identity invalid"):
+        read_runtime_source(tmp_path, relative)
+
+
+def test_v2_runtime_reader_rejects_intermediate_directory_replacement_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    replaced = False
+
+    def replace_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced:
+            directory.rename(tmp_path / "market_regime-original")
+            directory.mkdir()
+            (directory / "sample.py").write_bytes(b"replacement")
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", replace_after_read)
+
+    with pytest.raises(ValueError, match="runtime source identity invalid"):
+        read_runtime_source(tmp_path, relative)
+
+
+def test_v2_runtime_reader_rejects_package_root_replacement_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_root = tmp_path / "swing_trading_ai_assistant"
+    directory = package_root / "market_regime"
+    directory.mkdir(parents=True)
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    replaced = False
+
+    def replace_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced:
+            package_root.rename(tmp_path / "package-original")
+            directory.mkdir(parents=True)
+            (directory / "sample.py").write_bytes(b"replacement")
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", replace_after_read)
+
+    with pytest.raises(ValueError, match="runtime source identity invalid"):
+        read_runtime_source(package_root, relative)
+
+
+def test_v2_runtime_reader_sanitizes_missing_source(
+    tmp_path: Path,
+) -> None:
+    relative = "src/swing_trading_ai_assistant/market_regime/missing.py"
+
+    with pytest.raises(ValueError, match="runtime source identity invalid") as error:
+        read_runtime_source(tmp_path, relative)
+
+    assert error.value.__cause__ is None
+
+
+def test_v2_runtime_reader_sanitizes_inaccessible_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_open = os.open
+
+    def reject_source_open(
+        name: str | Path, flags: int, *args: object, **kwargs: object
+    ) -> int:
+        if name == "sample.py":
+            raise PermissionError("private path")
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", reject_source_open)
+    with pytest.raises(ValueError, match="runtime source identity invalid") as error:
+        read_runtime_source(tmp_path, relative)
+
+    assert error.value.__cause__ is None
+
+
+def test_v2_runtime_reader_sanitizes_concurrent_source_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    removed = False
+
+    def remove_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal removed
+        chunk = original_read(descriptor, size)
+        if not removed:
+            source.unlink()
+            removed = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", remove_after_read)
+    with pytest.raises(ValueError, match="runtime source identity invalid") as error:
+        read_runtime_source(tmp_path, relative)
+
+    assert error.value.__cause__ is None
