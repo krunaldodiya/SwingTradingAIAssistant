@@ -97,7 +97,7 @@ class AdjustedDailyCloseHandoffV2:
     price_basis: Literal["ADJUSTED"]
     provider_source: str
     retrieved_at: datetime
-    temporal_label: Literal["REVISED_NON_PIT"]
+    temporal_label: Literal["CURRENT_PROSPECTIVE", "REVISED_NON_PIT"]
     decision_cutoff: datetime
     comparison_session: date
     decision_session: date
@@ -215,7 +215,11 @@ def acquire_adjusted_daily_close_v2(
             price_basis=v1_result.handoff.price_basis,
             provider_source=v1_result.handoff.provider_source,
             retrieved_at=v1_result.handoff.retrieved_at,
-            temporal_label=v1_result.handoff.temporal_label,
+            temporal_label=(
+                "CURRENT_PROSPECTIVE"
+                if v1_result.handoff.retrieved_at <= parsed.decision_cutoff
+                else "REVISED_NON_PIT"
+            ),
             decision_cutoff=v1_result.handoff.decision_cutoff,
             comparison_session=v1_result.handoff.comparison_session,
             decision_session=v1_result.handoff.decision_session,

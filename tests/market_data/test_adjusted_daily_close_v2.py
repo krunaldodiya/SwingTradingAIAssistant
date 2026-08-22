@@ -579,6 +579,16 @@ def test_retains_schedule_cutoff_provenance_and_raw_separation() -> None:
     }
 
 
+def test_emits_current_prospective_only_for_timely_admitted_v2_evidence() -> None:
+    frame = _frame()
+    frame["retrieved_at"] = _CUTOFF
+
+    result = _acquire(_request(), _Provider(frame))
+
+    assert result.code == "SUCCESS"
+    assert result.handoff.temporal_label == "CURRENT_PROSPECTIVE"
+
+
 def test_requires_effective_symbol_and_mapping_intervals_to_cover_fact_window() -> None:
     cases = (
         (

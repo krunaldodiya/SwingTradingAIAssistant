@@ -1,6 +1,8 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **TEMPORAL REVIEW REPAIR IMPLEMENTED — focused contract suite GREEN; the prior full-local gate on `d364bf11fac632b4d03b6c179b4519d3ca71f1bb` is superseded by this code change; final full gates, exact re-review, hosted CI/security, merge, and publication are pending**
+Status: **V2 COMPARABILITY IMPLEMENTED — focused behavioral checks are recorded
+below; final full-local gates, exact re-review, hosted CI/security, merge, and
+publication remain pending**
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
 Milestone: **Sprint 11**
 Plan: [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
@@ -60,6 +62,23 @@ semantics are `0` for an observed report, `1` for canonical whole-result
 insufficiency, and `2` for runtime-code-identity or other pre-report structural
 rejection; public output and diagnostics redact private paths and member/raw
 facts.
+
+### V2 comparability cutover
+
+The current V2 module is a pure input-only evaluator. It receives the observed
+V1 report/private grid, retained Plan-21 screen, and Plan-22 adjusted-close V2
+handoff; it performs no provider, network, storage, or clock operation. It
+requires exact cohort/member/session/request/report/schedule provenance closure,
+screened no-action evidence, and equal per-member raw/adjusted
+`UP`/`DOWN`/`FLAT` Decimal directions. Otherwise it returns aggregate-only
+`INSUFFICIENT_EVIDENCE` with the exact V1 denominator, null comparison
+session/label/counts, and no member leakage or denominator reduction.
+
+The adjusted handoff labels a result `CURRENT_PROSPECTIVE` only when valid V2
+schedule/mapping admission completes and retrieval is no later than the decision
+cutoff. Later retrieval remains `REVISED_NON_PIT`; V2 rejects it. This is not a
+strict historical PIT claim and does not modify the owner-supplied mapping trust
+boundary.
 
 ## Acceptance and lifecycle conditions
 

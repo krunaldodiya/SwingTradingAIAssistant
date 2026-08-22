@@ -1,8 +1,11 @@
 # Current supplied-cohort Market Regime contract
 
-Status: **REPAIR IMPLEMENTED — current two-file focused evidence is recorded below; final full local gates, independent exact-revision re-review, hosted CI/security, merge, and publication remain pending**
-Contract revision: `current-supplied-cohort-market-regime@v1`
-Schema revision: `current-supplied-cohort-market-regime-schema@v1`
+Status: **V2 COMPARABILITY IMPLEMENTED — focused behavioral checks are recorded
+below; final full local gates, independent exact-revision re-review, hosted
+CI/security, merge, and publication remain pending**
+Contract revision: `current-supplied-cohort-market-regime@v1` (frozen);
+`current-supplied-cohort-market-regime@v2` (current comparability cutover)
+Schema revision: `current-supplied-cohort-market-regime-schema@v1` (V1 only)
 Risk: **R3 / High** — financial-research integrity, immutable evidence, private current-data provenance, and a new cross-boundary public fact contract
 Outcome owner and acceptance authority: **repository owner through GitHub Issue #116**; residual-risk acceptance remains with that owner.
 Depends on: [Plan 19](19-current-supplied-cohort-market-data-contract.md), the current/live sequence in [Upcoming Sprints Overview](../upcoming_sprints_overview.md), and retained official NSE Capital Market schedule evidence.
@@ -751,6 +754,31 @@ result, pull-request merge, and publication/closure evidence accepted by the
 Issue #116 owner. Evidence must record command/method, exact revision, result,
 scope, and limits; a focused pass does not substitute for independent review,
 full gate, merge, or publication.
+
+## V2 comparability cutover
+
+`current-supplied-cohort-market-regime@v2` is a pure, provider-free evaluator
+over an already-observed V1 aggregate report and private 21-session grid, one
+retained Plan-21 corporate-action screen result, and one Plan-22 adjusted-close
+V2 handoff. It performs no network, provider, storage, clock, or mutation work.
+
+It admits an observed aggregate only when all four inputs close over the exact
+cohort, every raw archive/report/request identity, `S[0]`/`S[20]` session,
+cutoff, schedule provenance, screened no-action result, every member, and each
+member's raw versus adjusted `UP`/`DOWN`/`FLAT` Decimal direction. A missing,
+duplicate, cross-cohort, unsealed, non-screened, revised/non-PIT, late, or
+direction-conflicting input produces one aggregate-only
+`INSUFFICIENT_EVIDENCE` result: comparison session, label, and counts are null;
+the V1 exact cohort size remains the denominator; members and directions never
+cross the public boundary.
+
+The adjusted-close boundary emits `CURRENT_PROSPECTIVE` only after its existing
+V2 schedule and mapping admission succeeds and `retrieved_at <= decision_cutoff`;
+a later retrieval remains `REVISED_NON_PIT` and V2 rejects it. This bounded
+temporal label does not turn yfinance history into strict as-published/PIT
+authority. V2 preserves the owner-supplied mapping trust boundary: it validates
+the admitted mapping identity and interval but neither creates nor reinterprets
+mapping evidence.
 
 ## Explicit non-goals
 
