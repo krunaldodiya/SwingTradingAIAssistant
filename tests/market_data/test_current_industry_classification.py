@@ -9,7 +9,7 @@ import json
 import os
 import socket
 from dataclasses import FrozenInstanceError
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -333,7 +333,7 @@ def test_projection_is_timeless_and_retention_stamps_trusted_utc_time(
     api = _api()
     artifact = _artifact()
     snapshot = _parse_and_project(api, 1)
-    known_at = datetime(2026, 8, 21, 10, tzinfo=UTC)
+    known_at = datetime.now(UTC)
     monkeypatch.setattr(api, "_trusted_utc_now", lambda: known_at)
     lease = _private_lease(tmp_path)
     archive = api.FileCurrentIndustryArchiveV1(tmp_path)
@@ -344,7 +344,7 @@ def test_projection_is_timeless_and_retention_stamps_trusted_utc_time(
     finally:
         lease.close()
 
-    assert retained.known_at == known_at
+    assert retained.known_at == known_at + api._RETENTION_COMPLETION_SAFETY_MARGIN
     assert not hasattr(snapshot, "known_at")
     assert not hasattr(snapshot, "decision_cutoff")
 
@@ -355,8 +355,8 @@ def test_archive_owns_its_clock_and_binds_completion_time_to_retained_identity(
     api = _api()
     artifact = _artifact()
     snapshot = _parse_and_project(api, 1)
-    known_at = datetime(2026, 8, 21, 10, 1, tzinfo=UTC)
-    monkeypatch.setattr(api, "_trusted_utc_now", lambda: known_at)
+    clock = datetime.now(UTC)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: clock)
     lease = _private_lease(tmp_path)
     try:
         retained = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
@@ -365,7 +365,7 @@ def test_archive_owns_its_clock_and_binds_completion_time_to_retained_identity(
     finally:
         lease.close()
 
-    assert retained.known_at == known_at
+    assert retained.known_at == clock + api._RETENTION_COMPLETION_SAFETY_MARGIN
     assert (
         retained.retained_identity_sha256
         == hashlib.sha256(
@@ -434,8 +434,8 @@ def test_archive_reconstructs_a_complete_deterministic_receipt_after_process_los
     api = _api()
     artifact = _artifact()
     snapshot = _parse_and_project(api)
-    known_at = datetime(2026, 8, 21, 10, 2, tzinfo=UTC)
-    monkeypatch.setattr(api, "_trusted_utc_now", lambda: known_at)
+    clock = datetime.now(UTC)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: clock)
     first_lease = _private_lease(tmp_path)
     try:
         first = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
@@ -444,17 +444,15 @@ def test_archive_reconstructs_a_complete_deterministic_receipt_after_process_los
     finally:
         first_lease.close()
 
-    receipt_path = (
+    assert not hasattr(api, "parse_retained_current_industry_receipt_v1")
+    assert not hasattr(api, "RetainedCurrentIndustryReceiptV1")
+
+    marker_path = (
         tmp_path
         / ".current-industry-classification-v1"
-        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+        / f"completion-{snapshot.snapshot_identity_sha256}.json"
     )
-    reconstructed = api.parse_retained_current_industry_receipt_v1(
-        receipt_path.read_bytes()
-    )
-    assert reconstructed.known_at == first.known_at
-    assert reconstructed.retained_identity_sha256 == first.retained_identity_sha256
-    assert reconstructed._private_rows == first._private_rows
+    assert marker_path.is_file()
 
     monkeypatch.setattr(
         api,
@@ -475,6 +473,155 @@ def test_archive_reconstructs_a_complete_deterministic_receipt_after_process_los
         second.archive_receipt_identity_sha256 == first.archive_receipt_identity_sha256
     )
     assert second.retained_identity_sha256 == first.retained_identity_sha256
+
+
+def test_retention_receipt_bound_round_trips_maximum_admitted_unicode_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    wide_industry = "\U00010000" * 512
+    artifact = _artifact(industry_at=dict.fromkeys(range(50), wide_industry))
+    snapshot = api.project_current_supplied_cohort_industry_v1(
+        _parse(api, artifact),
+        "b" * 64,
+        _members(api, 50),
+    )
+    clock = datetime.now(UTC)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: clock)
+    first_lease = _private_lease(tmp_path)
+    try:
+        first = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    assert len(receipt_path.read_bytes()) <= api._MAX_RETENTION_RECEIPT_BYTES
+
+    monkeypatch.setattr(
+        api,
+        "_trusted_utc_now",
+        lambda: (_ for _ in ()).throw(AssertionError("replay sampled a clock")),
+    )
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        second = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    assert second.canonical_json_bytes() == first.canonical_json_bytes()
+
+
+def test_retention_receipt_limit_plus_one_fails_before_publication_and_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    over_limit = b"x" * (api._MAX_RETENTION_RECEIPT_BYTES + 1)
+    with pytest.raises(ValueError):
+        api._retention_receipt_value(over_limit)
+
+    def oversized_receipt(_retained: object) -> bytes:
+        return over_limit
+
+    monkeypatch.setattr(api, "_retention_receipt_bytes", oversized_receipt)
+    lease = _private_lease(tmp_path)
+    try:
+        result = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, lease
+        )
+    finally:
+        lease.close()
+
+    _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    assert not receipt_path.exists()
+
+    monkeypatch.undo()
+    replay_root = tmp_path / "replay"
+    replay_root.mkdir(mode=0o700)
+    first_lease = _private_lease(replay_root)
+    try:
+        api.FileCurrentIndustryArchiveV1(replay_root).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+    replay_receipt = (
+        replay_root
+        / ".current-industry-classification-v1"
+        / f"retained-{snapshot.snapshot_identity_sha256}.json"
+    )
+    replay_receipt.chmod(0o600)
+    replay_receipt.write_bytes(over_limit)
+    replay_receipt.chmod(0o400)
+    acquired = StorageRootLease.try_acquire_existing(replay_root)
+    assert acquired.lease is not None
+    try:
+        replay = api.FileCurrentIndustryArchiveV1(replay_root).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(replay, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
+
+
+@pytest.mark.parametrize("fault", ("missing", "corrupt", "late"))
+def test_archive_rejects_missing_corrupt_or_late_completion_marker(
+    tmp_path: Path, fault: str
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _parse_and_project(api)
+    first_lease = _private_lease(tmp_path)
+    try:
+        first = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, first_lease
+        )
+    finally:
+        first_lease.close()
+
+    marker_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"completion-{snapshot.snapshot_identity_sha256}.json"
+    )
+    marker_path.chmod(0o600)
+    if fault == "missing":
+        marker_path.unlink()
+    elif fault == "corrupt":
+        marker_path.write_bytes(b"{}")
+        marker_path.chmod(0o400)
+    else:
+        late = first.known_at + timedelta(microseconds=1)
+        late_ns = int(late.timestamp()) * 1_000_000_000 + late.microsecond * 1_000
+        os.utime(marker_path, ns=(late_ns, late_ns))
+        marker_path.chmod(0o400)
+
+    acquired = StorageRootLease.try_acquire_existing(tmp_path)
+    assert acquired.lease is not None
+    try:
+        result = api.FileCurrentIndustryArchiveV1(tmp_path).archive_exact(
+            _input(api, artifact), artifact, snapshot, acquired.lease
+        )
+    finally:
+        acquired.lease.close()
+
+    _assert_failure(result, "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_FAILED")
 
 
 def test_archive_rejects_corrupt_deterministic_retained_receipt(tmp_path: Path) -> None:
@@ -830,7 +977,7 @@ def test_classification_schema_freezes_nfkc_casefold_privacy_key() -> None:
 
     assert (
         api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256
-        == "7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415"
+        == "29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552"
     )
 
 
@@ -878,6 +1025,13 @@ def test_cohort_member_representation_redacts_identity() -> None:
     )
 
     assert _isin(0) not in repr(member)
+
+
+def test_retained_snapshot_constructor_is_unavailable() -> None:
+    api = _api()
+
+    with pytest.raises(TypeError, match="constructor unavailable"):
+        api.RetainedCurrentIndustrySnapshotV1()
 
 
 def test_archive_rejects_root_permissions_before_and_after_archive_open(

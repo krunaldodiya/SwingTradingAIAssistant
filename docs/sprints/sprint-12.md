@@ -1,6 +1,6 @@
 # Sprint 12 — Current supplied-cohort Industry Analysis
 
-Status: **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
+Status: **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**
 
 Tracking: [GitHub Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
@@ -124,32 +124,37 @@ uses exactly `MALFORMED_EVIDENCE`, `UNSUPPORTED_CAPABILITY`, or
 No CLI, API, MCP, network acquisition, provider adapter, source registry, or
 public member transport is part of the first implementation.
 
-## Seventh repair and current review-ready evidence
+## Eighth repair and current exact-review-ready evidence
 
-The prior exact-SHA R3 review returned `REQUEST_CHANGES` / `FAIL` because the
-candidate did not persist the deterministic receipt needed to recover the
-original retained evidence across a new-process retry and its lifecycle records
-were stale. All earlier repair-round reviews and gate evidence are superseded
-trace.
+The exact-SHA quality/security review of `3286764` returned `REQUEST_CHANGES` /
+`FAIL` because the retained-receipt bound was not frozen, receipt
+parsing/reconstruction remained publicly reachable, and cutoff completion was
+not closed by a deterministic marker and final deadline checks. All earlier
+repair-round reviews and gate evidence are superseded trace.
 
-The seventh repair persists one deterministic canonical retained receipt binding
-`known_at`, all required identities, and every exact private cohort row required
-for reconstruction. A retry or new archive process deeply validates that receipt
-and reconstructs the original retained evidence. A missing, corrupt, or spliced
-receipt is rejected.
+The eighth repair freezes the retained-receipt bound at 262,144 bytes, makes
+receipt reconstruction private, archive-owned, and capability-gated, and
+persists a deterministic completion marker binding the receipt, snapshot, and
+`known_at`. It selects `known_at = trusted_utc_now + 30 seconds` only after raw
+and snapshot verification, then requires marker filesystem time and final
+clock, lease, and name checks to remain at or before that deadline. A retry
+returns only the original marked receipt; missing, corrupt, unbound, oversized,
+forged, or late receipt/marker evidence fails closed.
 
-Focused verification passed 105 tests. Full local gates passed 2,982 tests at
-90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
-official parser smoke admitted the exact current 100-row, 6,610-byte artifact
-with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+Regression repairs, including maximum-size, replay, forgery, and late-marker
+cases, then passed all four focused files: 284 tests. Full local gates passed
+2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
+build. The unchanged official parser smoke admitted the exact current 100-row,
+6,610-byte artifact with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`.
+`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`.
 That smoke is parser provenance only, not live participation or effectiveness
 evidence.
 
 ## Current lifecycle truth
 
-Issue #117 remains open and Sprint 12 is **IN PROGRESS — RECEIPT-PERSISTED
+Issue #117 remains open and Sprint 12 is **IN PROGRESS — RECEIPT-CLOSED
 CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**.
 Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
 remain pending. The exact reviewed SHA will be recorded externally after review;

@@ -1,6 +1,6 @@
 # Current supplied-cohort Industry Analysis contract
 
-Status: **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
+Status: **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** — [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117)
 
 Contract revisions:
 
@@ -31,28 +31,30 @@ module remains Sector Analysis because that is the locked pipeline module; the
 new data and result contracts are named **Industry classification** and
 **Industry participation** so their evidence claim remains truthful.
 
-Sprint 12 and Issue #117 are **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE
-LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The prior
-exact-SHA R3 review returned `REQUEST_CHANGES` / `FAIL` for missing deterministic
-receipt persistence/recovery and stale lifecycle records. All earlier
-repair-round reviews and gate evidence are superseded trace. The seventh repair
-persists one deterministic canonical retained receipt binding `known_at`, all
-required identities, and the exact private rows; a retry in a new process
-reconstructs the original retained evidence and rejects a missing, corrupt, or
-spliced receipt.
+Sprint 12 and Issue #117 are **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY
+VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The exact-SHA
+quality/security review of `3286764` returned `REQUEST_CHANGES` / `FAIL` for
+retained-receipt-bound, public receipt-parser/reconstruction, and
+cutoff-completion defects. All earlier repair-round reviews and gate evidence
+are superseded trace. The eighth repair freezes a 262,144-byte retained-receipt
+bound over the admitted 50-row, 512-Unicode-character field maximum, makes
+reconstruction private, archive-owned, and capability-gated, and mints the
+reducer-accepted retained seal only inside a verified
+`FileCurrentIndustryArchiveV1` operation. It persists a deterministic receipt-,
+snapshot-, and `known_at`-bound completion marker. `known_at` is a conservative
+deadline 30 seconds after the trusted retention clock; marker filesystem time
+and final clock, lease, and name checks must finish by that deadline. Missing,
+corrupt, unbound, forged, oversized, or late receipt/marker evidence fails
+closed, and replay returns only the original marked receipt.
 
-Focused verification passed 105 tests. Full local gates passed 2,982 tests at
-90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
-official parser smoke admitted the exact current 100-row, 6,610-byte artifact
-with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
-it is parser provenance only, not live participation or effectiveness evidence.
-Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
-remain pending. The exact reviewed SHA will be recorded externally after review;
-this contract intentionally contains no self-referential candidate SHA. Pull
-request, hosted CI/GitGuardian, merge, live participation result, and Issue
-closure remain pending.
+Regression repairs, including maximum-size, replay, forgery, and late-marker
+cases, then passed all four focused files: 284 tests. Full local gates passed
+2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
+build. Fresh exact-SHA independent quality `APPROVE` and security `PASS` and
+delivery remain pending. The exact reviewed SHA will be recorded externally
+after review; this contract intentionally contains no self-referential candidate
+SHA. Pull request, hosted CI/GitGuardian, merge, live participation result, and
+Issue closure remain pending.
 
 ## Accepted source evaluation
 
@@ -153,7 +155,7 @@ all 100 source rows after this exact privacy key:
 `unicodedata.normalize("NFKC", value.casefold())`. The same deep identity-label
 check is reused when retained private rows are revalidated. Complete Company Name
 rejection occurs before private-row projection and is frozen in classification
-schema identity `7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`.
+schema identity `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`.
 
 ### Artifact identity and revision
 
@@ -185,13 +187,14 @@ publisher_effective_through = null
 publisher_revision = null
 ```
 
-`known_at` is a conservative trusted UTC archive-completion timestamp generated
-only by `FileCurrentIndustryArchiveV1` after final archive verification. The
-implementation/spec chooses archive completion—not an owner-approved
-acquisition-time assertion—for fail-closed look-ahead safety. Classification
-input, parsing, and projected snapshots are timeless: they neither accept nor
-expose `known_at`, `decision_session`, or `decision_cutoff`. Retention alone adds
-`known_at`; it is not renamed or copied into any publisher field.
+`known_at` is a conservative trusted UTC future deadline generated only by
+`FileCurrentIndustryArchiveV1` after raw and snapshot bindings have been
+verified. Receipt and completion-marker publication and verification then occur
+before first success. Classification is intentionally not usable before that
+deadline. Classification input, parsing, and projected snapshots are timeless:
+they neither accept nor expose `known_at`, `decision_session`, or
+`decision_cutoff`. Retention alone adds `known_at`; it is not renamed or copied
+into any publisher field.
 
 The current Market Regime V2 report owns the already validated
 `decision_session` and `decision_cutoff`. The Industry Participation boundary
@@ -216,15 +219,17 @@ retained-classification `COHORT_BINDING_MISMATCH`,
 `CLASSIFICATION_FUTURE_KNOWN`, and `CLASSIFICATION_SESSION_STALE` reasons.
 Classification does not choose a session, cutoff, or calendar.
 
-Because trusted `known_at` records final archive completion, acquisition before
-the decision cutoff alone has no temporal authority. A retention that completes
-after the cutoff produces `known_at > decision_cutoff` and is therefore rejected
-as `CLASSIFICATION_FUTURE_KNOWN` even when acquisition preceded the cutoff. A
-`known_at` on any earlier or later IST date is
+Because trusted `known_at` is a future deadline selected only after raw and
+snapshot verification, acquisition before the decision cutoff alone has no
+temporal authority. First success also requires the receipt- and
+snapshot-bound marker's filesystem time plus final lease, name, and internal
+clock checks to be no later than `known_at`. A retry returns the original
+receipt only when its valid marker proves first completion no later than
+`known_at`; it never samples a replacement timestamp. A retention whose
+deadline is after the cutoff produces `known_at > decision_cutoff` and is
+therefore rejected as `CLASSIFICATION_FUTURE_KNOWN`; any other IST date is
 `CLASSIFICATION_SESSION_STALE`. Neither case permits a prior artifact, retry,
-reduced denominator, or inferred effective date. This conservative consequence
-is intentional: only final verified retention can establish when the evidence
-became usable.
+reduced denominator, or inferred effective date.
 
 This is a deliberately narrow current-observation rule. Evidence can never
 support a decision before `known_at`, another exchange date, a historical
@@ -291,19 +296,28 @@ The archive is content-addressed and immutable:
 - the admitted storage root and archive directory are owner-private, files are
   private regular single-link objects, and all opens are no-follow through
   `StorageRootLease.root_operation(root)`;
-- the first archive verifies raw and snapshot bindings, samples trusted UTC
-  completion time, seals a retained result, and publishes under the deterministic
-  no-replace name `retained-<snapshot_identity_sha256>.json` a private canonical
-  receipt binding `known_at`, archive-receipt, retained, schema, runtime, input,
-  artifact, snapshot, and archive identities plus every exact private cohort row
-  required for reconstruction;
+- the first archive verifies raw and snapshot bindings, selects conservative
+  `known_at = trusted_utc_now + 30 seconds`, and only then builds a deterministic
+  receipt under the frozen 262,144-byte bound. That bound is proven against 50
+  admitted 512-character Unicode Industry labels; canonical receipt JSON is
+  UTF-8 rather than ASCII-escaped expansion;
+- receipt reconstruction is module-private and archive-owned. It returns only an
+  unsealed candidate until a verified `FileCurrentIndustryArchiveV1` operation
+  mints its private archive-read capability; the reducer accepts only that
+  archive-minted retained seal;
+- it publishes the deterministic no-replace
+  `retained-<snapshot_identity_sha256>.json` receipt plus
+  `completion-<snapshot_identity_sha256>.json`, whose canonical marker binds
+  receipt SHA-256, snapshot identity, and `known_at`;
 - writes use private temporary objects, flush data, fsync newly accepted
   directories and their owner-private root binding, publish without replacement,
-  then stable-read and revalidate raw, snapshot, and receipt named bindings, the
-  directory binding, and live lease before success;
-- a retry or new archive process reads and deeply validates that exact receipt
-  before returning its original `known_at` and identities; a missing, corrupt,
-  or spliced deterministic receipt is `CLASSIFICATION_ARCHIVE_FAILED`; and
+  then stable-read and revalidate raw, snapshot, receipt, marker, named
+  bindings, the directory binding, and live lease before success;
+- first success additionally requires marker filesystem time and final internal
+  clock, lease, and name checks to be `<= known_at`; a retry requires the valid
+  marker and returns only its original receipt without sampling a clock. Missing,
+  corrupt, unbound, oversized, spliced, or late receipt/marker evidence is
+  `CLASSIFICATION_ARCHIVE_FAILED`; and
 - publishing identical bytes is idempotent, including concurrent acceptance;
 - an existing different object, unsafe link/type/mode, path replacement,
   unstable read, size violation, failed flush, or failed final verification is
@@ -597,30 +611,34 @@ source-at-rest drift evidence only; it is not publisher authenticity, executed-b
 attestation, licence authority, or protection against an actor able to replace
 code before verification.
 
-## R3 hardening and current review-ready state
+## Eighth repair and current exact-review-ready state
 
-The first through sixth independent `REQUEST_CHANGES` / `FAIL` rounds drove
-test-first hardening of trusted retention-time ownership, deep sealed-evidence
-validation, causal closed reasons, strict Unicode admission, immutable archive
-publication, complete canonical identities, deterministic fault merging,
-complete runtime inventories, sanitized runtime-verifier failures, deterministic
-receipt persistence/recovery, and related lifecycle corrections. All earlier
-repair-round reviews and gate evidence remain superseded trace.
+The first through seventh review/repair rounds and their gate evidence are
+superseded trace. The exact-SHA quality/security review of `3286764` found that
+the retained-receipt bound was not frozen, receipt parsing/reconstruction
+remained publicly reachable, and cutoff completion was not closed by a
+deterministic marker and final deadline checks.
 
-The prior exact-SHA review found that the candidate did not persist the receipt
-needed to recover original evidence across a new-process retry and that lifecycle
-records were stale. The seventh repair persists one deterministic canonical
-retained receipt binding `known_at`, all required identities, and every exact
-private cohort row required for reconstruction. A retry or new archive process
-deeply validates that receipt, reconstructs the original retained evidence, and
-rejects a missing, corrupt, or spliced receipt.
+The eighth repair freezes the retained-receipt bound at 262,144 bytes for the
+admitted 50-row, 512-Unicode-character field maximum. Receipt reconstruction is
+private, archive-owned, and capability-gated; the reducer accepts only the
+retained seal minted by a verified private archive operation. The archive
+persists a deterministic completion marker binding the receipt SHA-256,
+snapshot identity, and `known_at`. It selects
+`known_at = trusted_utc_now + 30 seconds` only after raw and snapshot
+verification, then requires marker filesystem time and final clock, lease, and
+name checks to remain at or before that deadline. A retry returns only the
+original marked receipt; missing, corrupt, unbound, oversized, forged, or late
+receipt/marker evidence fails closed.
 
-Focused verification passed 105 tests. Full local gates passed 2,982 tests at
-90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
-official parser smoke admitted the exact current 100-row, 6,610-byte artifact
-with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
+Regression repairs, including maximum-size, replay, forgery, and late-marker
+cases, then passed all four focused files: 284 tests. Full local gates passed
+2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
+build. The unchanged official parser smoke admitted the exact current 100-row,
+6,610-byte artifact with SHA-256
+`5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
 it is parser provenance only, not live participation or effectiveness evidence.
 
 Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery

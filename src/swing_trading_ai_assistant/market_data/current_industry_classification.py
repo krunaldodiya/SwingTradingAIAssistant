@@ -37,7 +37,10 @@ _NSE_SYMBOL: Final = re.compile(r"[A-Z0-9](?:[A-Z0-9.&_-]{0,30}[A-Z0-9])?\Z")
 _ISIN: Final = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _ARCHIVE_DIRECTORY: Final = ".current-industry-classification-v1"
 _RETENTION_RECEIPT_VERSION: Final = "retained-current-industry-receipt@v1"
-_MAX_RETENTION_RECEIPT_BYTES: Final = 65_536
+_COMPLETION_MARKER_VERSION: Final = "retained-current-industry-completion@v1"
+_MAX_RETENTION_RECEIPT_BYTES: Final = 262_144
+_MAX_COMPLETION_MARKER_BYTES: Final = 4_096
+_RETENTION_COMPLETION_SAFETY_MARGIN: Final = timedelta(seconds=30)
 _RUNTIME_MANIFEST_MODULE: Final = "swing_trading_ai_assistant.market_data.current_industry_classification_runtime_identity_manifest"
 _RUNTIME_MANIFEST: Final = "src/swing_trading_ai_assistant/market_data/current_industry_classification_runtime_identity_manifest.py"
 _RUNTIME_SOURCES: Final = (
@@ -62,6 +65,8 @@ _REASON_ORDER: Final = (
 _PARSED_SEAL: Final = object()
 _SNAPSHOT_SEAL: Final = object()
 _RETAINED_SEAL: Final = object()
+_ARCHIVE_READ_CAPABILITY_SEAL: Final = object()
+_ARCHIVE_RETAINED_SEAL: Final = object()
 _ARCHIVE_LOCK: Final = Lock()
 
 
@@ -76,7 +81,11 @@ class _ConflictingArtifactIdentity(ValueError):
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(
-            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            ensure_ascii=False,
         ).encode("utf-8")
         + b"\n"
     )
@@ -121,6 +130,14 @@ CLASSIFICATION_SCHEMA_IDENTITY_SHA256: Final = _identity(
             "artifact_bytes": _MAX_ARTIFACT_BYTES,
             "field_characters": _MAX_FIELD_CHARS,
             "records": 100,
+            "retention_receipt_bytes": _MAX_RETENTION_RECEIPT_BYTES,
+        },
+        "retention": {
+            "completion_marker_version": _COMPLETION_MARKER_VERSION,
+            "completion_safety_margin_seconds": int(
+                _RETENTION_COMPLETION_SAFETY_MARGIN.total_seconds()
+            ),
+            "receipt_version": _RETENTION_RECEIPT_VERSION,
         },
         "null_publisher_fields": [
             "publisher_published_at",
@@ -134,7 +151,7 @@ CLASSIFICATION_SCHEMA_IDENTITY_SHA256: Final = _identity(
         },
         "seals_and_identity_rules": {
             "parsed": "sealed-private-rows",
-            "retained": "sealed-retained-canonical-identity",
+            "retained": "archive-minted-private-read-capability-and-canonical-identity",
             "snapshot": "sealed-canonical-identity",
         },
     }
@@ -515,10 +532,11 @@ class RetainedCurrentIndustrySnapshotV1:
     publisher_effective_through: None
     publisher_revision: None
     _private_rows: tuple[_PrivateIndustryRow, ...]
+    _archive_read_capability: object = field(repr=False, compare=False)
     _seal: object = field(repr=False, compare=False)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("retained snapshot constructor unavailable")
+        raise TypeError("retained classification constructor unavailable")
 
     def canonical_json_bytes(self, *, include_identity: bool = True) -> bytes:
         result = {
@@ -549,6 +567,27 @@ class RetainedCurrentIndustrySnapshotV1:
     def raw_artifact_sha256(self) -> str:
         """Expose only the content address of the retained private raw object."""
         return self.artifact_sha256
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _ArchiveReadCapability:
+    snapshot_identity_sha256: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("archive read capability unavailable")
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _ArchiveRetainedSeal:
+    archive_identity_sha256: str
+    archive_receipt_identity_sha256: str
+    retained_identity_sha256: str
+    snapshot_identity_sha256: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("archive retained seal unavailable")
 
 
 def _private_row(
@@ -588,11 +627,90 @@ def _snapshot(**values: object) -> PrivateCurrentIndustrySnapshotV1:
 
 
 def _retained(**values: object) -> RetainedCurrentIndustrySnapshotV1:
+    capability = values.pop("_archive_read_capability", None)
     result = object.__new__(RetainedCurrentIndustrySnapshotV1)
     for name, value in values.items():
         object.__setattr__(result, name, value)
+    object.__setattr__(result, "_archive_read_capability", capability)
     object.__setattr__(result, "_seal", _RETAINED_SEAL)
     return result
+
+
+def _archive_read_capability(
+    snapshot: PrivateCurrentIndustrySnapshotV1,
+) -> _ArchiveReadCapability:
+    capability = object.__new__(_ArchiveReadCapability)
+    object.__setattr__(
+        capability, "snapshot_identity_sha256", snapshot.snapshot_identity_sha256
+    )
+    object.__setattr__(capability, "_seal", _ARCHIVE_READ_CAPABILITY_SEAL)
+    return capability
+
+
+def _archive_read_capability_matches(
+    capability: object, snapshot_identity_sha256: str
+) -> bool:
+    return (
+        type(capability) is _ArchiveReadCapability
+        and _seal_is(capability, _ARCHIVE_READ_CAPABILITY_SEAL)
+        and capability.snapshot_identity_sha256 == snapshot_identity_sha256
+    )
+
+
+def _archive_mint_retained(
+    candidate: RetainedCurrentIndustrySnapshotV1,
+) -> RetainedCurrentIndustrySnapshotV1:
+    if (
+        type(candidate) is not RetainedCurrentIndustrySnapshotV1
+        or not _seal_is(candidate, _RETAINED_SEAL)
+        or not _archive_read_capability_matches(
+            getattr(candidate, "_archive_read_capability", None),
+            candidate.snapshot_identity_sha256,
+        )
+    ):
+        raise ValueError("classification retained receipt invalid")
+    retained_seal = object.__new__(_ArchiveRetainedSeal)
+    for name in (
+        "archive_identity_sha256",
+        "archive_receipt_identity_sha256",
+        "retained_identity_sha256",
+        "snapshot_identity_sha256",
+    ):
+        object.__setattr__(retained_seal, name, getattr(candidate, name))
+    object.__setattr__(retained_seal, "_seal", _ARCHIVE_RETAINED_SEAL)
+    retained = object.__new__(RetainedCurrentIndustrySnapshotV1)
+    for name in RetainedCurrentIndustrySnapshotV1.__dataclass_fields__:
+        if name not in {"_archive_read_capability", "_seal"}:
+            object.__setattr__(retained, name, getattr(candidate, name))
+    object.__setattr__(retained, "_archive_read_capability", retained_seal)
+    object.__setattr__(retained, "_seal", _RETAINED_SEAL)
+    if not _archive_minted_retained(retained):
+        raise ValueError("classification retained receipt invalid")
+    return retained
+
+
+def _archive_minted_retained(value: object) -> bool:
+    if type(value) is not RetainedCurrentIndustrySnapshotV1 or not _seal_is(
+        value, _RETAINED_SEAL
+    ):
+        return False
+    retained_seal = getattr(value, "_archive_read_capability", None)
+    return (
+        type(retained_seal) is _ArchiveRetainedSeal
+        and _seal_is(retained_seal, _ARCHIVE_RETAINED_SEAL)
+        and (
+            retained_seal.archive_identity_sha256,
+            retained_seal.archive_receipt_identity_sha256,
+            retained_seal.retained_identity_sha256,
+            retained_seal.snapshot_identity_sha256,
+        )
+        == (
+            value.archive_identity_sha256,
+            value.archive_receipt_identity_sha256,
+            value.retained_identity_sha256,
+            value.snapshot_identity_sha256,
+        )
+    )
 
 
 class CurrentIndustryArchivePortV1(Protocol):
@@ -813,26 +931,14 @@ class FileCurrentIndustryArchiveV1:
         snapshot: PrivateCurrentIndustrySnapshotV1,
         lease: StorageRootLease,
     ) -> RetainedCurrentIndustrySnapshotV1 | CurrentIndustryClassificationFailureV1:
-        if (
-            type(input) is not CurrentIndustryClassificationInputV1
-            or not _valid_input(input)
-            or type(artifact) is not bytes
-            or type(snapshot) is not PrivateCurrentIndustrySnapshotV1
-            or not _seal_is(snapshot, _SNAPSHOT_SEAL)
-            or type(lease) is not StorageRootLease
-            or not _valid_snapshot(snapshot)
-            or _sha(artifact) != snapshot.artifact_sha256
-            or input.input_identity_sha256 != snapshot.input_identity_sha256
-            or input.artifact_revision != snapshot.artifact_revision
-            or input.artifact_sha256 != snapshot.artifact_sha256
-            or input.schema_identity_sha256 != snapshot.schema_identity_sha256
-        ):
+        if not _valid_archive_input(input, artifact, snapshot, lease):
             raise TypeError("classification archive input invalid")
         try:
             snapshot_raw = snapshot.canonical_json_bytes()
             raw_name = f"raw-{snapshot.artifact_sha256}.csv"
             snapshot_name = f"snapshot-{snapshot.snapshot_identity_sha256}.json"
             receipt_name = f"retained-{snapshot.snapshot_identity_sha256}.json"
+            marker_name = f"completion-{snapshot.snapshot_identity_sha256}.json"
             with _ARCHIVE_LOCK, lease.root_operation(self._root) as operation:
                 root = operation.descriptor
                 _validate_archive_root(root)
@@ -851,26 +957,8 @@ class FileCurrentIndustryArchiveV1:
                         snapshot_name,
                         snapshot_raw,
                     )
-                    existing = _read_stable_private_object(
-                        directory, receipt_name, _MAX_RETENTION_RECEIPT_BYTES
-                    )
-                    if existing is None:
-                        if not snapshot_published:
-                            raise ValueError
-                        known_at = _trusted_utc_now()
-                        if not _trusted_utc(known_at):
-                            raise ValueError
-                        retained = _retained_for_snapshot(snapshot, known_at)
-                        receipt_raw = _retention_receipt_bytes(retained)
-                        _publish_object(directory, receipt_name, receipt_raw)
-                    else:
-                        receipt_raw, _ = existing
-                        retained = parse_retained_current_industry_receipt_v1(
-                            receipt_raw
-                        )
-                        if not _retained_matches_snapshot(retained, snapshot):
-                            raise ValueError
-                    _verify_retention_binding(
+                    read_capability = _archive_read_capability(snapshot)
+                    return _retain_verified(
                         operation,
                         root,
                         directory,
@@ -878,14 +966,123 @@ class FileCurrentIndustryArchiveV1:
                         artifact,
                         snapshot_name,
                         snapshot_raw,
+                        snapshot,
+                        snapshot_published,
+                        read_capability,
                         receipt_name,
-                        receipt_raw,
+                        marker_name,
                     )
-                    return retained
                 finally:
                     os.close(directory)
         except Exception:
             return _failure(("CLASSIFICATION_ARCHIVE_FAILED",), snapshot.cohort_size)
+
+
+def _retain_verified(
+    operation: object,
+    root: int,
+    directory: int,
+    raw_name: str,
+    artifact: bytes,
+    snapshot_name: str,
+    snapshot_raw: bytes,
+    snapshot: PrivateCurrentIndustrySnapshotV1,
+    snapshot_published: bool,
+    read_capability: _ArchiveReadCapability,
+    receipt_name: str,
+    marker_name: str,
+) -> RetainedCurrentIndustrySnapshotV1:
+    existing = _read_stable_private_object(
+        directory, receipt_name, _MAX_RETENTION_RECEIPT_BYTES
+    )
+    first_completion = existing is None
+    if first_completion:
+        if not snapshot_published:
+            raise ValueError
+        sampled_at = _trusted_utc_now()
+        if not _trusted_utc(sampled_at):
+            raise ValueError
+        candidate = _retained_for_snapshot(
+            snapshot,
+            sampled_at + _RETENTION_COMPLETION_SAFETY_MARGIN,
+            read_capability,
+        )
+        receipt_raw = _retention_receipt_bytes(candidate)
+        if len(receipt_raw) > _MAX_RETENTION_RECEIPT_BYTES:
+            raise ValueError
+        _publish_object(directory, receipt_name, receipt_raw)
+        marker_raw = _completion_marker_bytes(candidate, receipt_raw)
+        if len(marker_raw) > _MAX_COMPLETION_MARKER_BYTES:
+            raise ValueError
+        _publish_object(directory, marker_name, marker_raw)
+    else:
+        receipt_raw, _ = existing
+        marker = _read_stable_private_object(
+            directory, marker_name, _MAX_COMPLETION_MARKER_BYTES
+        )
+        if marker is None:
+            raise ValueError
+        marker_raw, _ = marker
+    _verify_retention_binding(
+        operation,
+        root,
+        directory,
+        raw_name,
+        artifact,
+        snapshot_name,
+        snapshot_raw,
+        receipt_name,
+        receipt_raw,
+        marker_name,
+        marker_raw,
+    )
+    candidate = _retained_candidate_from_receipt(receipt_raw, read_capability)
+    if (
+        not _retained_matches_snapshot(candidate, snapshot)
+        or _completion_marker_known_at(marker_raw, receipt_raw, snapshot)
+        != candidate.known_at
+    ):
+        raise ValueError
+    _verify_completion_deadline(
+        operation,
+        root,
+        directory,
+        raw_name,
+        artifact,
+        snapshot_name,
+        snapshot_raw,
+        receipt_name,
+        receipt_raw,
+        marker_name,
+        marker_raw,
+        candidate.known_at,
+        require_current_clock=first_completion,
+    )
+    return _archive_mint_retained(candidate)
+
+
+def _valid_archive_input(
+    input: CurrentIndustryClassificationInputV1,
+    artifact: bytes,
+    snapshot: PrivateCurrentIndustrySnapshotV1,
+    lease: StorageRootLease,
+) -> bool:
+    return all(
+        (
+            type(input) is CurrentIndustryClassificationInputV1,
+            _valid_input(input),
+            type(artifact) is bytes,
+            type(snapshot) is PrivateCurrentIndustrySnapshotV1,
+            _seal_is(snapshot, _SNAPSHOT_SEAL),
+            type(lease) is StorageRootLease,
+            _valid_snapshot(snapshot),
+            _sha(artifact) == snapshot.artifact_sha256,
+            input.input_identity_sha256 == snapshot.input_identity_sha256,
+            input.artifact_revision == snapshot.artifact_revision,
+            input.artifact_sha256 == snapshot.artifact_sha256,
+            input.schema_identity_sha256 == snapshot.schema_identity_sha256,
+        )
+    )
 
 
 def _retained_with_identity(**values: object) -> RetainedCurrentIndustrySnapshotV1:
@@ -926,7 +1123,9 @@ def _archive_receipt_identity(
 
 
 def _retained_for_snapshot(
-    snapshot: PrivateCurrentIndustrySnapshotV1, known_at: datetime
+    snapshot: PrivateCurrentIndustrySnapshotV1,
+    known_at: datetime,
+    read_capability: _ArchiveReadCapability,
 ) -> RetainedCurrentIndustrySnapshotV1:
     archive_identity = _archive_identity(snapshot)
     return _retained_with_identity(
@@ -953,6 +1152,7 @@ def _retained_for_snapshot(
         publisher_effective_through=None,
         publisher_revision=None,
         _private_rows=snapshot.private_rows,
+        _archive_read_capability=read_capability,
     )
 
 
@@ -995,8 +1195,50 @@ def _retention_receipt_bytes(retained: RetainedCurrentIndustrySnapshotV1) -> byt
     )
 
 
-def parse_retained_current_industry_receipt_v1(
-    raw: bytes,
+def _completion_marker_bytes(
+    retained: RetainedCurrentIndustrySnapshotV1, receipt_raw: bytes
+) -> bytes:
+    return _canonical(
+        {
+            "completion_marker_version": _COMPLETION_MARKER_VERSION,
+            "known_at": _instant(retained.known_at),
+            "receipt_sha256": _sha(receipt_raw),
+            "snapshot_identity_sha256": retained.snapshot_identity_sha256,
+        }
+    )
+
+
+def _completion_marker_known_at(
+    raw: bytes, receipt_raw: bytes, snapshot: PrivateCurrentIndustrySnapshotV1
+) -> datetime:
+    if type(raw) is not bytes or len(raw) > _MAX_COMPLETION_MARKER_BYTES:
+        raise ValueError("classification completion marker invalid")
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError("classification completion marker invalid") from None
+    if type(decoded) is not dict:
+        raise ValueError("classification completion marker invalid")
+    value = cast(dict[str, object], decoded)
+    if (
+        set(value)
+        != {
+            "completion_marker_version",
+            "known_at",
+            "receipt_sha256",
+            "snapshot_identity_sha256",
+        }
+        or _canonical(value) != raw
+        or value["completion_marker_version"] != _COMPLETION_MARKER_VERSION
+        or value["receipt_sha256"] != _sha(receipt_raw)
+        or value["snapshot_identity_sha256"] != snapshot.snapshot_identity_sha256
+    ):
+        raise ValueError("classification completion marker invalid")
+    return _retention_receipt_known_at(value["known_at"])
+
+
+def _retained_candidate_from_receipt(
+    raw: bytes, read_capability: _ArchiveReadCapability
 ) -> RetainedCurrentIndustrySnapshotV1:
     value = _retention_receipt_value(raw)
     artifact_revision = value["artifact_revision"]
@@ -1026,9 +1268,12 @@ def parse_retained_current_industry_receipt_v1(
             snapshot_identity_sha256="",
         )
     )
-    retained = _retained_for_snapshot(snapshot, known_at)
+    retained = _retained_for_snapshot(snapshot, known_at, read_capability)
     if (
-        not _valid_snapshot(snapshot)
+        not _archive_read_capability_matches(
+            read_capability, snapshot.snapshot_identity_sha256
+        )
+        or not _valid_snapshot(snapshot)
         or snapshot.snapshot_identity_sha256 != snapshot_identity
         or retained.archive_identity_sha256 != archive_identity
         or retained.archive_receipt_identity_sha256 != archive_receipt_identity
@@ -1313,6 +1558,8 @@ def _verify_retention_binding(
     snapshot_raw: bytes,
     receipt_name: str,
     receipt_raw: bytes,
+    marker_name: str,
+    marker_raw: bytes,
 ) -> None:
     _verify_archive_binding(
         operation,
@@ -1324,8 +1571,12 @@ def _verify_retention_binding(
         snapshot_raw,
     )
     receipt_info = _stable_object(directory, receipt_name, receipt_raw)
-    if receipt_info is None or not _named_binding_matches(
-        directory, receipt_name, receipt_info
+    marker_info = _stable_object(directory, marker_name, marker_raw)
+    if (
+        receipt_info is None
+        or marker_info is None
+        or not _named_binding_matches(directory, receipt_name, receipt_info)
+        or not _named_binding_matches(directory, marker_name, marker_info)
     ):
         raise ValueError
     os.fsync(directory)
@@ -1339,10 +1590,79 @@ def _verify_retention_binding(
         snapshot_raw,
     )
     receipt_info = _stable_object(directory, receipt_name, receipt_raw)
-    if receipt_info is None or not _named_binding_matches(
-        directory, receipt_name, receipt_info
+    marker_info = _stable_object(directory, marker_name, marker_raw)
+    if (
+        receipt_info is None
+        or marker_info is None
+        or not _named_binding_matches(directory, receipt_name, receipt_info)
+        or not _named_binding_matches(directory, marker_name, marker_info)
     ):
         raise ValueError
+
+
+def _verify_completion_deadline(
+    operation: object,
+    root: int,
+    directory: int,
+    raw_name: str,
+    raw: bytes,
+    snapshot_name: str,
+    snapshot_raw: bytes,
+    receipt_name: str,
+    receipt_raw: bytes,
+    marker_name: str,
+    marker_raw: bytes,
+    known_at: datetime,
+    *,
+    require_current_clock: bool,
+) -> None:
+    _verify_retention_binding(
+        operation,
+        root,
+        directory,
+        raw_name,
+        raw,
+        snapshot_name,
+        snapshot_raw,
+        receipt_name,
+        receipt_raw,
+        marker_name,
+        marker_raw,
+    )
+    marker_info = _stable_object(directory, marker_name, marker_raw)
+    if (
+        marker_info is None
+        or not _named_binding_matches(directory, marker_name, marker_info)
+        or not _marker_mtime_at_or_before(marker_info, known_at)
+    ):
+        raise ValueError
+    _validate_archive_directory(root, directory)
+    _validate_archive_root(root)
+    ensure_live = getattr(operation, "ensure_live", None)
+    if not callable(ensure_live):
+        raise ValueError
+    ensure_live()
+    if require_current_clock:
+        completed_at = _trusted_utc_now()
+        if not _trusted_utc(completed_at) or completed_at > known_at:
+            raise ValueError
+
+
+def _marker_filesystem_mtime_ns(info: os.stat_result) -> int:
+    """Return the completion marker's filesystem time for deadline proof."""
+    return info.st_mtime_ns
+
+
+def _marker_mtime_at_or_before(info: os.stat_result, known_at: datetime) -> bool:
+    if not _trusted_utc(known_at):
+        return False
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    delta = known_at - epoch
+    deadline_ns = (
+        delta.days * 86_400 + delta.seconds
+    ) * 1_000_000_000 + delta.microseconds * 1_000
+    marker_mtime_ns = _marker_filesystem_mtime_ns(info)
+    return type(marker_mtime_ns) is int and marker_mtime_ns <= deadline_ns
 
 
 def _read_stable_private_object(

@@ -91,30 +91,35 @@ OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 | --- | --- | --- | --- | --- |
 | 10 | [#121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121) — Closed/completed; High priority/risk | Current supplied-cohort `market-data` foundation: bounded current price/volume facts for 1–50 Nifty 50 identities and immutable archive records. | Canonical cohort identity/selection SHA; retained instrument resolution; latest completed daily OHLCV and optional `PARTIAL_CURRENT_SESSION`; provenance/availability ledger; whole-cohort insufficiency; no effect before admission. | Historical/backtest implementation, Market Regime, sectors, news/events, signals, recommendations, entries/exits, position sizing, orders. |
 | 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Closed/completed; High priority/risk | Current Market Regime V2 comparability over admitted archived current facts, a successful provider-neutral corporate-action screen, and separate adjusted daily close facts. | Issues [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125), [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and [#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132) merged. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124) merged reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b` as `f03edf3690e34e25a57b58a15450129e3bf9a5e9`; 296 focused / 2,867 full / 91.03%, Ruff/Pyright/Vulture/build, sealed no-network and live current-prospective smokes, hosted Quality/build, and GitGuardian passed. | Historical/backtest implementation, generic adjustment engine, mixed-basis OHLC, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
-| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Open/**IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | Sprint 10 complete and Sprint 11 closed; [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md) owns the exact contract. All earlier repair-round reviews and gate evidence are superseded trace. The seventh repair persists and reconstructs the deterministic canonical retained receipt across a process retry and rejects missing, corrupt, or spliced receipts. Focused verification passed 105 tests; full local gates passed 2,982 tests at 90.82% coverage plus Ruff format/check, Pyright, Vulture 80, and build. The unchanged 100-row / 6,610-byte official parser smoke is provenance only. Fresh exact-SHA review and delivery remain pending; the exact reviewed SHA will be recorded externally after review. | Automated acquisition, alternate sources, official Sector taxonomy, historical classification, and broker order placement. |
+| 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Open/**IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | Sprint 10 complete and Sprint 11 closed; [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md) owns the exact contract. All earlier repair-round reviews and gate evidence are superseded trace. The exact-SHA quality/security review of `3286764` found retained-receipt-bound, public receipt-parser/reconstruction, and cutoff-completion defects. The eighth repair freezes the 262,144-byte receipt bound, makes reconstruction private, archive-owned, and capability-gated, and closes retention with a deterministic completion marker and a conservative `known_at` deadline 30 seconds after the trusted retention clock. Maximum-size, replay, forgery, and late-marker regressions passed within four focused files / 284 tests; full local gates passed 2,989 tests at 90.80% coverage plus Ruff format/check, Pyright, Vulture 80, and build. The unchanged 100-row / 6,610-byte official parser smoke is provenance only. Fresh exact-SHA review and delivery remain pending; the exact reviewed SHA will be recorded externally after review. | Automated acquisition, alternate sources, official Sector taxonomy, historical classification, and broker order placement. |
 | 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Todo; High priority/risk | Current news and event evidence with bounded fresh-input integration and immutable archive. | Current freshness/provenance/availability rules; no silent neutralization of absence. | Historical news/event backfill, historical validation, forecast, recommendation, order. |
 | 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — Todo; High priority/risk | Integrated current packet binding price/volume, Market Regime, sector, news, events, and their archive identities for external-AI explainable research or `NO_TRADE`. | Exact Sprint 10–13 gates and current contracts. | Autonomous tool signal/recommendation, broker order, execution, historical-context substitution, claim of effectiveness. |
 | 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Deferred fixed-cohort historical OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort, versioned OHLCV revision, and predeclared coverage/windows. | Inferred index membership, historical news/event/sector neutralization, Market Structure, recommendation, order. |
 | 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate. | Sprint 15 store; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; identities and independent review. | Market Structure implementation, Price Action, Liquidity/SMC, recommendation, broker execution, guaranteed outcomes. |
 
 Sprint 11 is closed after all three dependencies and PR #124 merged. Sprint 12 /
-Issue #117 is **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED;
-FRESH EXACT-SHA REVIEW AND DELIVERY PENDING** under Plan 24.
+Issue #117 is **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH
+EXACT-SHA REVIEW AND DELIVERY PENDING** under Plan 24.
 
-The prior exact-SHA R3 review returned `REQUEST_CHANGES` / `FAIL` for missing
-deterministic receipt persistence/recovery and stale lifecycle records. All
-earlier repair-round reviews and gate evidence are superseded trace. The seventh
-repair persists a deterministic canonical retained receipt with `known_at`, all
-required identities, and exact private rows, reconstructs the original retained
-evidence across a process retry, and rejects missing, corrupt, or spliced
-receipts. Focused verification passed 105 tests. Full local gates passed 2,982
-tests at 90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build.
+The exact-SHA quality/security review of `3286764` returned `REQUEST_CHANGES` /
+`FAIL` for retained-receipt-bound, public receipt-parser/reconstruction, and
+cutoff-completion defects. All earlier repair-round reviews and gate evidence
+are superseded trace. The eighth repair freezes the retained-receipt bound at
+262,144 bytes, makes reconstruction private, archive-owned, and
+capability-gated, and persists a deterministic completion marker. It selects
+`known_at` as a conservative deadline 30 seconds after the trusted retention
+clock and requires marker and final checks by that deadline.
+
+Regression repairs, including maximum-size, replay, forgery, and late-marker
+cases, then passed all four focused files: 284 tests. Full local gates passed
+2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
+build.
 
 The unchanged official parser smoke admitted the exact current 100-row,
 6,610-byte artifact with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 under classification schema
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+`29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
 it is parser provenance only, not live participation or effectiveness evidence.
 Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
 remain pending. The exact reviewed SHA will be recorded externally after review;

@@ -166,20 +166,25 @@ remediation are in
   historical public-page research receipts.
 
 - [Sprint 12 — Current supplied-cohort Industry Analysis](sprint-12.md) is
-  **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA
+  **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH EXACT-SHA
   REVIEW AND DELIVERY PENDING** under
   [Issue #117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117).
   [Plan 24](../plans/24-current-supplied-cohort-sector-analysis-contract.md)
   owns the exact contract. All earlier repair-round reviews and gate evidence
-  are superseded trace. The seventh repair persists and reconstructs the
-  deterministic canonical retained receipt across a process retry and rejects
-  missing, corrupt, or spliced receipts. Focused verification passed 105 tests;
-  full local gates passed 2,982 tests at 90.82% coverage plus Ruff format/check,
-  Pyright, Vulture 80, and build. The unchanged official parser smoke admitted
-  the exact current 100-row, 6,610-byte artifact with SHA-256
+  are superseded trace. The exact-SHA quality/security review of `3286764` found
+  retained-receipt-bound, public receipt-parser/reconstruction, and
+  cutoff-completion defects. The eighth repair freezes the 262,144-byte receipt
+  bound, makes reconstruction private, archive-owned, and capability-gated, and
+  closes retention with a deterministic completion marker and a conservative
+  `known_at` deadline 30 seconds after the trusted retention clock. Regression
+  repairs, including maximum-size, replay, forgery, and late-marker cases, then
+  passed all four focused files: 284 tests. Full local gates passed 2,989 tests
+  at 90.80% coverage plus Ruff format/check, Pyright, Vulture 80, and build. The
+  unchanged official parser smoke admitted the exact current 100-row,
+  6,610-byte artifact with SHA-256
   `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
   under classification schema
-  `7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
+  `29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552`;
   it is parser provenance only. Fresh exact-SHA review and delivery remain
   pending. The exact reviewed SHA will be recorded externally after review, not
   in this self-referential lifecycle record. Pull request, hosted

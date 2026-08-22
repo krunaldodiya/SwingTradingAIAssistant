@@ -20,10 +20,10 @@ from swing_trading_ai_assistant.market_data.current_corporate_action_screen impo
 from swing_trading_ai_assistant.market_data.current_industry_classification import (
     _CLASSIFICATION_RUNTIME_IDENTITY,  # pyright: ignore[reportPrivateUsage]
     _PARSED_SEAL,  # pyright: ignore[reportPrivateUsage]
-    _RETAINED_SEAL,  # pyright: ignore[reportPrivateUsage]
     CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
     CurrentIndustryClassificationFailureV1,
     RetainedCurrentIndustrySnapshotV1,
+    _archive_minted_retained,  # pyright: ignore[reportPrivateUsage]
     _field,  # pyright: ignore[reportPrivateUsage]
     _identity_labels_safe,  # pyright: ignore[reportPrivateUsage]
     _industry,  # pyright: ignore[reportPrivateUsage]
@@ -91,8 +91,12 @@ _REPORT_SEAL: Final = object()
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(
-            value, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            ensure_ascii=False,
+        ).encode("utf-8")
         + b"\n"
     )
 
@@ -814,7 +818,7 @@ def _retained_rows(
 def _valid_retained(value: RetainedCurrentIndustrySnapshotV1) -> bool:
     rows = _retained_rows(value)
     if (
-        not _has_seal(value, _RETAINED_SEAL)
+        not _archive_minted_retained(value)
         or value.evidence_state != "RETAINED"
         or value.schema_identity_sha256 != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
         or not all(

@@ -94,11 +94,23 @@ def _retained_classification(
     )
     lease = _private_lease(tmp_path)
     archive = classification_api.FileCurrentIndustryArchiveV1(tmp_path)
+
+    def marker_filesystem_mtime_ns(*_args: object) -> int:
+        return int(raw_v1_report.decision_cutoff.timestamp()) * 1_000_000_000
+
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
             classification_api,
             "_trusted_utc_now",
-            lambda: raw_v1_report.decision_cutoff,
+            lambda: (
+                raw_v1_report.decision_cutoff
+                - classification_api._RETENTION_COMPLETION_SAFETY_MARGIN
+            ),
+        )
+        monkeypatch.setattr(
+            classification_api,
+            "_marker_filesystem_mtime_ns",
+            marker_filesystem_mtime_ns,
         )
         try:
             retained = archive.archive_exact(
@@ -287,6 +299,11 @@ def test_aggregate_counts_reconcile_for_supported_cohort_bounds(
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
             classification_api, "_trusted_utc_now", lambda: classification_test._CUTOFF
+        )
+        monkeypatch.setattr(
+            classification_api,
+            "_marker_filesystem_mtime_ns",
+            lambda *_args: int(classification_test._CUTOFF.timestamp()) * 1_000_000_000,
         )
         try:
             retained = archive.archive_exact(
@@ -544,6 +561,36 @@ def test_reducer_rejects_spliced_retention_receipt_and_private_rows(
     _assert_non_observed(result, "MALFORMED_EVIDENCE", ("COHORT_BINDING_MISMATCH",))
 
 
+def test_canonical_receipt_bytes_cannot_mint_retained_evidence_or_observed_output(
+    tmp_path: Path,
+) -> None:
+    classification_api = _classification_test_module()._api()
+    raw_v1_report, raw_private_grid, screen, adjusted_handoff, retained = (
+        _retained_classification(tmp_path)
+    )
+    assert not hasattr(classification_api, "parse_retained_current_industry_receipt_v1")
+    receipt_path = (
+        tmp_path
+        / ".current-industry-classification-v1"
+        / f"retained-{retained.snapshot_identity_sha256}.json"
+    )
+    receipt_raw = receipt_path.read_bytes()
+    with pytest.raises(ValueError):
+        classification_api._retained_candidate_from_receipt(receipt_raw, object())
+    candidate = classification_api._retained_candidate_from_receipt(
+        receipt_raw,
+        classification_api._archive_read_capability(
+            SimpleNamespace(snapshot_identity_sha256=retained.snapshot_identity_sha256)
+        ),
+    )
+    assert not classification_api._archive_minted_retained(candidate)
+
+    result = _api().reduce_current_industry_participation_v1(
+        raw_v1_report, raw_private_grid, screen, adjusted_handoff, candidate
+    )
+    _assert_non_observed(result, "MALFORMED_EVIDENCE", ("COHORT_BINDING_MISMATCH",))
+
+
 def test_reducer_uses_precomputed_runtime_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -582,62 +629,63 @@ def test_reducer_merges_retained_temporal_and_cohort_faults_without_handoff(
     tmp_path: Path,
 ) -> None:
     api = _api()
-    raw_v1_report, raw_private_grid, screen, adjusted_handoff, retained = (
-        _retained_classification(tmp_path)
+    raw_v1_report, raw_private_grid, _screen, adjusted_handoff, _retained = (
+        _retained_classification(tmp_path / "observed")
     )
-    classification_api = _classification_test_module()._api()
-    insufficient_screen = _v2_test_module()._screen(
-        raw_v1_report, raw_private_grid, state="action"
+    classification_test = _classification_test_module()
+    classification_api = classification_test._api()
+    v2 = _v2_test_module()
+    artifact = classification_test._artifact(
+        symbol_at={index: member.symbol for index, member in enumerate(v2._members())},
+        isin_at={index: member.isin for index, member in enumerate(v2._members())},
     )
-    known_at = retained.known_at + timedelta(days=1)
-    snapshot = classification_api._snapshot_with_identity(
-        classification_api._snapshot(
-            schema_identity_sha256=retained.schema_identity_sha256,
-            evidence_state="PROJECTED",
-            runtime_code_identity_sha256=retained.snapshot_runtime_code_identity_sha256,
-            input_identity_sha256=retained.input_identity_sha256,
-            artifact_sha256=retained.artifact_sha256,
-            artifact_revision=retained.artifact_revision,
-            cohort_identity_sha256="f" * 64,
-            cohort_size=retained.cohort_size,
-            private_rows=retained._private_rows,
-            snapshot_identity_sha256="",
+    parsed = classification_test._parse(classification_api, artifact)
+    members = tuple(
+        classification_api.CurrentIndustryCohortMemberV1(
+            isin=member.isin, exchange="NSE", effective_symbol=member.symbol
         )
+        for member in v2._members()
     )
-    archive_identity = classification_api._identity(
-        {
-            "raw_artifact_sha256": retained.artifact_sha256,
-            "snapshot_identity_sha256": snapshot.snapshot_identity_sha256,
-        }
+    snapshot = classification_api.project_current_supplied_cohort_industry_v1(
+        parsed, "f" * 64, members
     )
-    receipt = classification_api._identity(
-        {
-            "archive_identity_sha256": archive_identity,
-            "artifact_sha256": retained.artifact_sha256,
-            "input_identity_sha256": retained.input_identity_sha256,
-            "known_at": classification_api._instant(known_at),
-            "snapshot_identity_sha256": snapshot.snapshot_identity_sha256,
-        }
-    )
-    values = {
-        name: getattr(retained, name)
-        for name in retained.__dataclass_fields__
-        if name not in {"_seal", "retained_identity_sha256"}
-    }
-    values.update(
-        cohort_identity_sha256=snapshot.cohort_identity_sha256,
-        snapshot_identity_sha256=snapshot.snapshot_identity_sha256,
-        archive_identity_sha256=archive_identity,
-        archive_receipt_identity_sha256=receipt,
-        known_at=known_at,
-    )
-    faulted_retained = classification_api._retained_with_identity(**values)
+    known_at = raw_v1_report.decision_cutoff + timedelta(days=1)
+    lease = _private_lease(tmp_path / "faulted")
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                classification_api,
+                "_trusted_utc_now",
+                lambda: (
+                    known_at - classification_api._RETENTION_COMPLETION_SAFETY_MARGIN
+                ),
+            )
+            monkeypatch.setattr(
+                classification_api,
+                "_marker_filesystem_mtime_ns",
+                lambda *_args: (
+                    int((known_at - timedelta(seconds=1)).timestamp()) * 1_000_000_000
+                ),
+            )
+            faulted_retained = classification_api.FileCurrentIndustryArchiveV1(
+                tmp_path / "faulted"
+            ).archive_exact(
+                classification_test._input(classification_api, artifact),
+                artifact,
+                snapshot,
+                lease,
+            )
+    finally:
+        lease.close()
+    assert classification_api._archive_minted_retained(faulted_retained)
+    insufficient_screen = v2._screen(raw_v1_report, raw_private_grid, state="action")
     report, handoff = importlib.import_module(
         "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2"
     )._evaluate_current_supplied_cohort_market_regime_with_handoff_v2(
         raw_v1_report, raw_private_grid, insufficient_screen, adjusted_handoff
     )
     assert report.evidence_state == "INSUFFICIENT_EVIDENCE"
+    assert api._valid_market_regime_envelope(report)
     assert handoff is None
 
     result = api.reduce_current_industry_participation_v1(

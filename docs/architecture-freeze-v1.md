@@ -77,27 +77,27 @@ no-network and live current-prospective smokes, hosted Quality/build, and
 GitGuardian. Historical exact-50 V1 semantics remain frozen; future Plan-23
 migrations remain separate.
 
-Sprint 12 is **IN PROGRESS — RECEIPT-PERSISTED CANDIDATE LOCALLY VERIFIED;
-FRESH EXACT-SHA REVIEW AND DELIVERY PENDING**. The prior exact-SHA R3 review
-returned `REQUEST_CHANGES` / `FAIL` for missing deterministic receipt
-persistence/recovery and stale lifecycle records. All earlier repair-round
-reviews and gate evidence are superseded trace. The seventh repair persists one
-deterministic canonical retained receipt binding `known_at`, all required
-identities, and the exact private rows; a retry in a new process reconstructs
-the original retained evidence and rejects a missing, corrupt, or spliced
-receipt.
+Sprint 12 is **IN PROGRESS — RECEIPT-CLOSED CANDIDATE LOCALLY VERIFIED; FRESH
+EXACT-SHA REVIEW AND DELIVERY PENDING**. The exact-SHA quality/security review
+of `3286764` returned `REQUEST_CHANGES` / `FAIL` for retained-receipt-bound,
+public receipt-parser/reconstruction, and cutoff-completion defects. All earlier
+repair-round reviews and gate evidence are superseded trace. The eighth repair
+freezes the retained-receipt bound at 262,144 bytes; makes reconstruction
+private, archive-owned, and capability-gated; and persists a deterministic
+receipt-, snapshot-, and `known_at`-bound completion marker. It selects
+`known_at` as a conservative deadline 30 seconds after the trusted retention
+clock and requires the marker and final clock, lease, and name checks to finish
+by that deadline. Missing, corrupt, unbound, forged, oversized, or late evidence
+fails closed; replay returns only the original marked receipt.
 
-Focused verification passed 105 tests. Full local gates passed 2,982 tests at
-90.82% coverage, Ruff format/check, Pyright, Vulture 80, and build. The unchanged
-official parser smoke admitted the exact current 100-row, 6,610-byte artifact
-with SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
-under classification schema
-`7bc49d5eac26551c9ae0b76b4dd7b9edf9861ccca7d73fb7ea04f6c4f72f0415`;
-it is parser provenance only, not live participation or effectiveness evidence.
-Fresh exact-SHA independent quality `APPROVE` and security `PASS` and delivery
-remain pending. The exact reviewed SHA will be recorded externally after review;
-this lifecycle record intentionally contains no self-referential candidate SHA.
-Pull request, hosted CI/GitGuardian, merge, and Issue closure remain pending.
+Regression repairs, including maximum-size, replay, forgery, and late-marker
+cases, then passed all four focused files: 284 tests. Full local gates passed
+2,989 tests at 90.80% coverage, Ruff format/check, Pyright, Vulture 80, and
+build. Fresh exact-SHA independent quality `APPROVE` and security `PASS` and
+delivery remain pending. The exact reviewed SHA will be recorded externally
+after review; this lifecycle record intentionally contains no self-referential
+candidate SHA. Pull request, hosted CI/GitGuardian, merge, and Issue closure
+remain pending.
 
 ## Repository identity
 
