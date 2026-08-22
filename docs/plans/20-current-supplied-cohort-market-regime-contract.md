@@ -1,7 +1,7 @@
 # Current supplied-cohort Market Regime contract
 
-Status: **PR #124 RESUMED — exact-candidate local evidence passed: 287 focused
-tests, 2,858 full tests, 91.04% coverage, Ruff format/check, Pyright,
+Status: **PR #124 RESUMED — exact-candidate local evidence passed: 296 focused
+tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright,
 Vulture 80, build, and required no-network/live adjusted smokes. Exact final
 review repair, hosted CI/security, merge, and publication remain pending.**
 Contract revision: `current-supplied-cohort-market-regime@v1` (frozen);

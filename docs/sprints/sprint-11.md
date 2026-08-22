@@ -1,7 +1,7 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **PR #124 RESUMED — exact-candidate local evidence passed: 287 focused
-tests, 2,858 full tests, 91.04% coverage, Ruff format/check, Pyright,
+Status: **PR #124 RESUMED — exact-candidate local evidence passed: 296 focused
+tests, 2,867 full tests, 91.03% coverage, Ruff format/check, Pyright,
 Vulture 80, build, and required no-network/live adjusted smokes. Exact final
 review repair, hosted CI/security, merge, and publication remain pending.**
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
@@ -100,7 +100,7 @@ accepted, while `data_cutoff` remains the last-bar time and may precede close.
 Exact-candidate local evidence passed:
 
 ```text
-287 focused tests; 2,858 full tests; 91.04% coverage
+296 focused tests; 2,867 full tests; 91.03% coverage
 Ruff format/check; Pyright; Vulture 80; build
 sealed no-network evaluator smoke; live current-prospective adjusted smoke
 ```

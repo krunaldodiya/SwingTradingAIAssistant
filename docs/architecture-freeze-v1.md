@@ -63,7 +63,7 @@ The narrower Issue #127 adjusted-daily MVP then merged through PR #129 as
 `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; it remains separate from Upstox
 raw facts and is not the complete Issue #130 canonical listed-equity boundary.
 Those two publication dependencies are complete. PR #124 Market Regime v2 is
-resumed. Its exact candidate passed 287 focused tests, 2,858 full tests, 91.04%
+resumed. Its exact candidate passed 296 focused tests, 2,867 full tests, 91.03%
 coverage, Ruff format/check, Pyright, Vulture 80, build, and sealed no-network
 and live current-prospective adjusted smokes. Exact final review repair, hosted
 checks, merge, and publication remain pending; Sprint 12 remains blocked.
