@@ -88,6 +88,26 @@ _MAX_RUNTIME_CODE_MODULES_V1: Final = 128
 _RUNTIME_IDENTITY_MANIFEST_NAME_V1: Final = "runtime_identity_manifest.py"
 
 
+def _runtime_source_entries_v1(
+    module_root: Path,
+) -> tuple[dict[str, Path], set[str]]:
+    entries: dict[str, Path] = {}
+    directories: set[str] = set()
+    for path in module_root.rglob("*"):
+        relative = path.relative_to(module_root)
+        if "__pycache__" in relative.parts:
+            continue
+        metadata = path.lstat()
+        relative_name = relative.as_posix()
+        if stat.S_ISDIR(metadata.st_mode):
+            directories.add(relative_name)
+        elif stat.S_ISREG(metadata.st_mode) and path.suffix == ".py":
+            entries[relative_name] = path
+        else:
+            raise ValueError
+    return entries, directories
+
+
 def _runtime_module_source_v1() -> tuple[Path, tuple[str, ...]]:
     source_path = Path(__file__)
     module_root = source_path.parent
@@ -95,18 +115,18 @@ def _runtime_module_source_v1() -> tuple[Path, tuple[str, ...]]:
     try:
         source_metadata = source_path.lstat()
         root_metadata = module_root.lstat()
-        entries = {path.name: path for path in module_root.iterdir()}
+        entries, directories = _runtime_source_entries_v1(module_root)
         required = {*module_names, _RUNTIME_IDENTITY_MANIFEST_NAME_V1}
+        expected_directories = {
+            name.rsplit("/", maxsplit=1)[0] for name in module_names if "/" in name
+        }
         if (
             not source_path.is_absolute()
             or not stat.S_ISREG(source_metadata.st_mode)
             or not stat.S_ISDIR(root_metadata.st_mode)
-            or not required.issubset(entries)
-            or set(entries) - required - {"__pycache__"}
+            or set(entries) != required
+            or directories != expected_directories
         ):
-            raise ValueError
-        cache = entries.get("__pycache__")
-        if cache is not None and not stat.S_ISDIR(cache.lstat().st_mode):
             raise ValueError
         _verify_loaded_runtime_modules(module_root, module_names)
     except (OSError, ValueError):
@@ -123,7 +143,12 @@ def _verify_loaded_runtime_modules(
     if type(package) is not str or not package:
         raise ValueError
     for name in (*module_names, _RUNTIME_IDENTITY_MANIFEST_NAME_V1):
-        qualified = package if name == "__init__.py" else f"{package}.{name[:-3]}"
+        if name == "__init__.py":
+            qualified = package
+        elif name.endswith("/__init__.py"):
+            qualified = f"{package}.{name[:-12].replace('/', '.')}"
+        else:
+            qualified = f"{package}.{name[:-3].replace('/', '.')}"
         loaded = sys.modules.get(qualified)
         if loaded is None:
             continue

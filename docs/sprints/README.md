@@ -16,6 +16,17 @@ increment and future process decisions.
 The owner-level minimum dependencies for Sprint 10 through the boundary before
 Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview.md).
 
+[Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+now separates reusable listed-equity feature cores from higher-level universe
+policy. Product qualification and default workflows focus on the point-in-time
+Nifty 50 plus Nifty Next 50; explicitly supplied supported stocks outside that
+default may use a capability only with canonical identity and all required
+evidence. Historical sprint files retain their original names, cardinalities,
+scope, and evidence and must not be rewritten as if delivered features were
+already generic. The evidence-based coupling audit and ordered incremental
+remediation are in
+[Plan 23](../plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md).
+
 ## Index
 
 - [Sprint 0 — Foundation](sprint-0.md) — closed by [PR #1](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/1), merged to `main` as `0a518813ec26d32945ce49d1f27999e8618f64cc`.
@@ -101,23 +112,64 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   not the current Sprint 10 record and does not link to `sprint-10.md`.
 - [Sprint 10 — Current supplied-cohort market data](sprint-10.md) —
   [GitHub Issue #121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121)
-  is the current foundation. It makes existing `market-data` usable for a
-  supplied 1–50 Nifty 50 equity cohort, returning bounded current price/volume facts:
-  latest completed daily OHLCV and only explicit/available
-  `PARTIAL_CURRENT_SESSION` context. Every admitted fact is immutably archived
-  with temporal availability metadata; invalid identity or incomplete required
-  evidence fails closed, and a partial session is never a completed daily bar or
-  historical close. It does not calculate Market Regime, sector, news/events,
-  signals, recommendations, or orders.
-  [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is
-  the current Sprint 10 specification.
+  is **closed/completed** and supplies the current foundation. It makes existing
+  `market-data` usable for a supplied 1–50 Nifty 50 equity cohort, returning
+  bounded current price/volume facts: latest completed daily OHLCV and only
+  explicit/available `PARTIAL_CURRENT_SESSION` context. Every admitted fact is
+  immutably archived with temporal availability metadata; invalid identity or
+  incomplete required evidence fails closed, and a partial session is never a
+  completed daily bar or historical close. It does not calculate Market Regime,
+  sector, news/events, signals, recommendations, or orders.
+  [Plan 19](../plans/19-current-supplied-cohort-market-data-contract.md) is the
+  Sprint 10 specification.
+
+- Sprint 11 — Current supplied-cohort Market Regime remains **Open / Todo /
+  paused today** under
+  [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116).
+  Its first two publication dependencies are complete:
+  1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+     and the provider-neutral Plan-21 corporate-action screen merged through
+     [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
+     as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
+  2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+     closed after the narrower `provider-neutral-adjusted-daily-close@v1-mvp`
+     merged through
+     [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+     as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
+  3. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+     Market Regime v2 remains intentionally not resumed today. When explicitly
+     resumed, it must consume the then-applicable accepted contracts and pass
+     its own review, repository, hosted, merge, and closeout gates before Sprint
+     11 closes.
+
+  Issue #130 / Plan 23 remediation begins separately tomorrow. It versions the
+  listed-equity feature boundary; it does not reopen or reimplement completed
+  Issue #127 and does not itself close Sprint 11.
+
+  Upstox remains primary for live/raw OHLCV and corporate-action screening.
+  The delivered yfinance MVP supplies only a separate adjusted-daily fact for a
+  supplied Plan-19/Nifty-50-composed input with
+  `isin`/`project_symbol`/`provider_symbol` mappings. It never changes an Upstox
+  raw candle and is not strict point-in-time authority, a complete canonical
+  exchange/effective-symbol boundary, long-range intraday data, or a live broker
+  feed. Sprint 12 / Issue #117 cannot start until Sprint 11 closes.
 
   Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
   historical news/events/sectors are not-yet-evaluated, not permanently
   removed. Issues #111 and #115 are **closed / not planned** with no published
   implementation. Plans 12 and 17 and their exact evidence remain preserved
-  historical records without a claim they were wrong when made. The
-  contemplated official-inquiry content SHA-256
+  historical records without a claim they were wrong when made.
+  Current/live-first is sequencing only. Sprint 15 preserves the historical
+  store and point-in-time evidence/availability ledgers; Sprint 16 preserves the
+  validation and pre-Market-Structure gate. Their scope still includes
+  historical backtests; look-ahead, survivorship, selection, and data-snooping
+  controls; separate in-sample, walk-forward, out-of-sample, and untouched-test
+  regions; forward/paper testing; realistic costs/slippage; and point-in-time
+  membership, sector, corporate-action, and source provenance. Unavailable
+  features remain explicit at each cutoff without fabrication or later
+  backfill, and do not block unrelated declared study profiles. No initially
+  planned feature is removed.
+  The contemplated official-inquiry content SHA-256
   `a2d762cd93dfca56d5623e260816c1aee0a6ae2a9a400097cc6f2d51c77f6412` and
   authorization-payload SHA-256
   `84797b9c424aa6da36d46b1b516f3cbe08d8205801d296953a5edf474d2ffe85` were
@@ -135,3 +187,11 @@ Market Structure are in [Upcoming Sprints Overview](../upcoming_sprints_overview
   Final full local gates, independent exact-revision quality/security re-review,
   hosted CI/security, merge, and publication remain pending; this index makes no
   current approval claim.
+
+- Future packaging outside the sprint/WIP-one sequence —
+  [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
+  is open, low priority, and standalone. It may later publish one authoritative
+  market-data codebase as `swing-trading-market-data` while the full application
+  remains installable. It must not duplicate implementation, reopen completed
+  Issues #125/#127, or interrupt Issue #130 remediation, PR #124, Sprint 11, or
+  Sprint 12's dependency gate.

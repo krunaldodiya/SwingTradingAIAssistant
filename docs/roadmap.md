@@ -14,17 +14,109 @@ tool continues to retain point-in-time provenance from now so later work cannot
 project current knowledge backward.
 
 [Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
-Sprints 10–16. It preserves the locked module order, historical work, release
-gates, `NO_TRADE`, and all explicit exclusions.
+the current sprint dependency sequence. It preserves the locked module order,
+historical work, release gates, `NO_TRADE`, and all explicit exclusions.
+
+## Listed-equity feature boundary and Nifty 100 focus
+
+[Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
+sets the owner-approved direction. Reusable feature cores consume an explicit
+bounded list of canonical listed-equity instruments independently of index
+membership. Point-in-time membership, discovery, and universe selection are a
+separate policy layer. Product research, source qualification, validation, and
+default workflows prioritize the point-in-time Nifty 50 plus Nifty Next 50.
+
+Canonical identity is ISIN and exchange with effective symbol history and
+versioned provider mappings. Each feature declares its data-capability profile
+and fails with typed unsupported or insufficient evidence when identity,
+mapping, schedule, price basis, freshness, corporate-action, sector, news, or
+event evidence required by that feature is absent. An explicitly supplied
+supported stock outside the Nifty 100 may use the same capability when all of
+its required identity and evidence exist, but it is not the primary roadmap or
+qualification focus.
+
+Existing `Nifty50*` names, exact-50 contracts, and historical sprint evidence
+remain truthful V1 records. They are not described as already generic.
+[Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
+owns tomorrow's incremental Issue #130 working-slice remediation; there is no
+big-bang refactor and completed Issue #127 is not reopened or reimplemented.
+
+Sprint 11 / [Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
+remains open. Its first two publication dependencies are complete:
+
+1. [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
+   and the standalone provider-neutral Upstox-first screen in
+   [Plan 21](plans/21-current-supplied-cohort-corporate-action-screen-contract.md)
+   merged through [PR #128](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/128)
+   as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b`;
+2. [Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)
+   closed after its owner-approved adjusted-daily working MVP merged through
+   [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129)
+   as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`;
+3. Issue #130 is documentation/audit only today. Its Plan-23 versioned
+   instrument-boundary remediation starts tomorrow and is separate from the
+   completed Issue #127 MVP; and
+4. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124)
+   Market Regime v2 remains intentionally paused today. When explicitly
+   resumed, it must use the then-applicable accepted contracts and pass its own
+   review, repository, hosted, merge, and closeout gates before Sprint 11 may
+   close.
+
+Sprint 12 / Issue #117 cannot start before Sprint 11 closes. Plan 21 remains a
+nonexhaustive provider screen, not authoritative no-break proof or an adjustment
+engine. The delivered Plan 22 MVP remains a supplied
+Plan-19/Nifty-50-composed adjusted-daily fact with
+`isin`/`project_symbol`/`provider_symbol` mappings. It is not a rewrite of raw
+OHLCV, authoritative point-in-time history, or the complete Issue #130 canonical
+listed-equity boundary.
+
+## Provider and price-basis overlay
+
+Provider routing is by narrow capability, selected explicitly before use, and
+bound into fact provenance. Upstox is primary for live/current raw OHLCV and its
+retained corporate-action screen. yfinance is accepted only for adjusted daily
+research, with explicit provider and adjusted price basis; it is never a silent
+fallback or a live broker feed. Angel One is not implemented now and remains a
+future adapter candidate requiring separate qualification.
+
+yfinance supplies long daily history, but its intraday history is limited to the
+latest 60 days. It is an unofficial Yahoo client for personal/research use, and
+retrospectively retrieved adjusted series can be revised; they are not
+as-published point-in-time authority. Every admitted fact must bind provider,
+price basis, source/schema/policy identity, timestamps, and retained
+receipt/object identity. No generic silent fallback is permitted.
+
+Existing Upstox raw OHLCV remains unchanged. A yfinance adjusted close must never
+be inserted into or used to populate an Upstox raw candle. A future Market
+Structure contract must use one complete, consistent raw-OHLC basis or one
+complete, consistent adjusted-OHLC basis and remains separate from Sprint 11.
+Historical/backtest studies use only evidence available by the declared cutoff;
+unavailable features are explicitly omitted/not applied, never later-backfilled,
+and do not block unrelated research whose declared profile does not require
+them.
+
+Current/live-first is sequencing only, never scope removal. Sprint 15 retains
+the deferred historical store; Sprint 16 retains the capability-aware historical
+validation and pre-Market-Structure gate. Together they must preserve
+point-in-time historical evidence and availability ledgers; historical
+backtests; look-ahead, survivorship, selection, and data-snooping controls;
+separate in-sample, walk-forward, out-of-sample, and untouched-test regions;
+forward/paper testing; realistic costs and slippage; and point-in-time
+membership, sector, corporate-action, and source provenance. Unavailable
+features remain explicit by cutoff without fabrication, later backfill, silent
+neutralization, or dropped dates. Market Structure remains after the Sprint 16
+gate. No initially planned feature is discarded merely because current/live was
+prioritized.
+
 
 ## Phase 0: Foundation
 
 - Freeze product scope and terminology.
 - Define measurable success and risk criteria.
 - Decide supported trading horizon and data frequency.
-- Evaluate market-data sources for adjusted equity OHLCV, corporate actions,
-  Nifty 50 membership history, and sector classification.
-- Define point-in-time data rules to prevent look-ahead and survivorship bias.
+- Evaluate market-data sources for adjusted listed-equity OHLCV, corporate
+  actions, point-in-time Nifty 50 and Nifty Next 50 membership, and sector
+  classification.
 - Select the implementation stack only after the data and research requirements
   are clear.
 
@@ -35,9 +127,10 @@ Detailed execution plan:
 
 - Define versioned schemas for market data, module facts, validation errors,
   evidence, confidence, freshness, and provenance.
-- Separate genuinely reusable point-in-time, validation, backtesting, risk, and
-  application-contract primitives from explicit Nifty 50 equity modules. Do not
-  implement another instrument or speculative generic abstractions.
+- Separate reusable listed-equity data capabilities, point-in-time validation,
+  backtesting, risk, and application contracts from higher-level universe
+  selection. A feature core accepts bounded canonical instruments; the default
+  product policy selects the point-in-time Nifty 100.
 - Build reproducible data ingestion and quality checks.
 - Create a backtesting boundary that includes costs, slippage, liquidity,
   corporate actions, and point-in-time universes.
@@ -200,6 +293,24 @@ result, ranking, or effectiveness claim.
 Proceed in locked pipeline order, integrating and validating one module at a
 time. Do not build an LLM implementation in this repository. External AI agents
 will consume the deterministic fact contracts after they are dependable.
+
+## Future packaging
+
+[Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
+is a future **low-priority** standalone packaging outcome. The working PyPI
+distribution name is `swing-trading-market-data`, subject to name, licence,
+support, release-ownership, and publication review. One authoritative
+market-data codebase must produce the standalone wheel/sdist and remain
+consumable by the installable full `swing-trading-ai-assistant` distribution;
+there is no copied implementation or duplicated provider logic.
+
+The standalone distribution may expose the existing `market-data` CLI and
+provider-neutral market-data API without research/AI modules. It must preserve
+capability-specific adapters, environment-owned credentials, explicit optional
+provider dependencies, isolated wheel/sdist verification, and publication
+provenance. It does not add a provider or change a market calculation. It does
+not reopen completed Issues #125/#127 or interrupt Issue #130 remediation,
+PR #124, Sprint 11, or WIP-one.
 
 ## Release gates
 
