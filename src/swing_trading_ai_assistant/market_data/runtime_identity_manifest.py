@@ -8,7 +8,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "acquisition_capability.py": "ef82a41126c8faa1fa66df0e2cb15f503b5c6d15a4b714b8902978fb94f67bc9",
     "acquisition_capability_worker.py": "65026c3d26fd266a9ae92c98cee286825b33023bfefc669753fe6261d6fc41d7",
     "adjusted_daily/__init__.py": "fe888b1822bc04385b6b46eb4af13aef809ce596532c8558a78bfc8674450e01",
-    "adjusted_daily/service.py": "6bc2b5ab88e5616f0f625b64bb38b30a057e174e886a79bea648fa732331ca0a",
+    "adjusted_daily/service.py": "92fcf7164838ba6b50467e2d5730a01b0e20fd723d896df9555a88e29d803055",
     "adjusted_daily/yfinance_adapter.py": "fa7d3f764726d21e5be7252f95a5c10e5e5360e7ea889685bfbb3f400d6dc869",
     "bounded_nifty50_workflow.py": "3c5029b9275352a1a68a8a2920091b94457277de5c53e0c2d5bc01c62e87bdaa",
     "catalog.py": "794f0382813dd7a5d10b14a4f6c3f487f68d777b2911fcf477dd455bdcd1fb4c",

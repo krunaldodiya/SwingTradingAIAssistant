@@ -7,17 +7,23 @@ OHLCV contracts.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Literal, Protocol, TypeAlias, cast
+from typing import Final, Literal, Protocol, TypeAlias, cast
 
 CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v1-mvp"
 PROVIDER_ID = "YFINANCE"
 PRICE_BASIS = "ADJUSTED"
 _SESSION_COUNT = 21
 V2_CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v2"
+MAPPING_VERSION_V2: Final = "yfinance-symbol-mapping@v1"
+_ISIN = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class AdjustedDailyDownloadAdapter(Protocol):
@@ -54,6 +60,10 @@ class AdjustedDailyMemberFactsV2:
     exchange: Literal["NSE", "BSE"]
     effective_symbol: str
     provider_symbol: str
+    mapping_version: Literal["yfinance-symbol-mapping@v1"]
+    mapping_valid_from: date
+    mapping_valid_through: date | None
+    mapping_identity: str
     s0: AdjustedCloseFact
     s20: AdjustedCloseFact
 
@@ -140,6 +150,12 @@ class _V2Member:
     exchange: Literal["NSE", "BSE"]
     effective_symbol: str
     provider_symbol: str
+    valid_from: date
+    valid_through: date | None
+    mapping_version: Literal["yfinance-symbol-mapping@v1"]
+    mapping_valid_from: date
+    mapping_valid_through: date | None
+    mapping_identity: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +219,10 @@ def acquire_adjusted_daily_close_v2(
                     exchange=member.exchange,
                     effective_symbol=member.effective_symbol,
                     provider_symbol=member.provider_symbol,
+                    mapping_version=member.mapping_version,
+                    mapping_valid_from=member.mapping_valid_from,
+                    mapping_valid_through=member.mapping_valid_through,
+                    mapping_identity=member.mapping_identity,
                     s0=fact.s0,
                     s20=fact.s20,
                 )
@@ -374,62 +394,203 @@ def _parse_v2_members(
 
     members: list[_V2Member] = []
     for raw_member in member_rows:
-        member = _mapping(raw_member)
-        if member is None:
-            return _invalid("INSTRUMENT_IDENTITY_INVALID")
-        isin = member.get("isin")
-        exchange = member.get("exchange")
-        effective_symbol = member.get("effective_symbol")
-        provider_symbol = member.get("provider_symbol")
-        valid_from = member.get("valid_from")
-        valid_through = member.get("valid_through")
-        if (
-            not all(
-                type(value) is str and value.strip()
-                for value in (isin, exchange, effective_symbol, provider_symbol)
-            )
-            or type(valid_from) is not date
-            or (valid_through is not None and type(valid_through) is not date)
-        ):
-            return _invalid("INSTRUMENT_IDENTITY_INVALID")
-        isin_value = cast(str, isin)
-        exchange_value = cast(Literal["NSE", "BSE"], exchange)
-        effective_symbol_value = cast(str, effective_symbol)
-        provider_symbol_value = cast(str, provider_symbol)
-        valid_from_value = valid_from
-        valid_through_value = valid_through
-        if exchange_value not in {"NSE", "BSE"}:
-            return AdjustedDailyCloseFailure(
-                "UNSUPPORTED_CAPABILITY", "EXCHANGE_UNSUPPORTED"
-            )
-        expected_suffix = ".NS" if exchange_value == "NSE" else ".BO"
-        if len(provider_symbol_value) == len(
-            expected_suffix
-        ) or not provider_symbol_value.endswith(expected_suffix):
-            return AdjustedDailyCloseFailure(
-                "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"
-            )
-        if (
-            valid_from_value > decision_session
-            or valid_through_value is not None
-            and valid_through_value < decision_session
-        ):
-            return _invalid("SYMBOL_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
-        members.append(
-            _V2Member(
-                isin_value,
-                exchange_value,
-                effective_symbol_value,
-                provider_symbol_value,
-            )
-        )
+        member = _parse_v2_member(raw_member, decision_session)
+        if isinstance(member, AdjustedDailyCloseFailure):
+            return member
+        members.append(member)
+    return _validate_v2_member_overlaps(members)
 
-    if any(
-        len({getattr(member, field) for member in members}) != len(members)
-        for field in ("isin", "effective_symbol", "provider_symbol")
+
+def _parse_v2_member(
+    raw_member: object, decision_session: date
+) -> _V2Member | AdjustedDailyCloseFailure:
+    member = _mapping(raw_member)
+    if member is None:
+        return _invalid("INSTRUMENT_IDENTITY_INVALID")
+    isin = member.get("isin")
+    exchange = member.get("exchange")
+    effective_symbol = member.get("effective_symbol")
+    provider_symbol = member.get("provider_symbol")
+    valid_from = member.get("valid_from")
+    valid_through = member.get("valid_through")
+    if (
+        type(isin) is not str
+        or not _valid_isin(isin)
+        or any(
+            type(value) is not str or not value.strip()
+            for value in (exchange, effective_symbol, provider_symbol)
+        )
+        or type(valid_from) is not date
+        or (valid_through is not None and type(valid_through) is not date)
+        or valid_through is not None
+        and valid_from > valid_through
     ):
-        return _invalid("INSTRUMENT_IDENTITY_DUPLICATE")
+        return _invalid("INSTRUMENT_IDENTITY_INVALID")
+
+    exchange_value = cast(Literal["NSE", "BSE"], exchange)
+    effective_symbol_value = cast(str, effective_symbol)
+    provider_symbol_value = cast(str, provider_symbol)
+    if exchange_value not in {"NSE", "BSE"}:
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "EXCHANGE_UNSUPPORTED"
+        )
+    expected_suffix = ".NS" if exchange_value == "NSE" else ".BO"
+    provider_base = provider_symbol_value.removesuffix(expected_suffix)
+    if (
+        not provider_base
+        or provider_base != effective_symbol_value
+        or provider_base == provider_symbol_value
+    ):
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"
+        )
+    if (
+        valid_from > decision_session
+        or valid_through is not None
+        and valid_through < decision_session
+    ):
+        return _invalid("SYMBOL_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
+
+    mapping_version = member.get("mapping_version")
+    mapping_valid_from = member.get("mapping_valid_from")
+    mapping_valid_through = member.get("mapping_valid_through")
+    mapping_identity = member.get("mapping_identity")
+    if (
+        type(mapping_version) is not str
+        or type(mapping_valid_from) is not date
+        or (
+            mapping_valid_through is not None
+            and type(mapping_valid_through) is not date
+        )
+        or type(mapping_identity) is not str
+        or _SHA256.fullmatch(mapping_identity) is None
+        or mapping_valid_through is not None
+        and mapping_valid_from > mapping_valid_through
+    ):
+        return _invalid("MAPPING_IDENTITY_INVALID")
+    if mapping_version != MAPPING_VERSION_V2:
+        return AdjustedDailyCloseFailure(
+            "UNSUPPORTED_CAPABILITY", "MAPPING_VERSION_UNSUPPORTED"
+        )
+    if (
+        mapping_valid_from > decision_session
+        or mapping_valid_through is not None
+        and mapping_valid_through < decision_session
+    ):
+        return _invalid("MAPPING_EFFECTIVE_AT_DECISION_SESSION_REQUIRED")
+
+    expected_identity = _mapping_identity_v2(
+        isin=isin,
+        exchange=exchange_value,
+        effective_symbol=effective_symbol_value,
+        provider_symbol=provider_symbol_value,
+        mapping_valid_from=mapping_valid_from,
+        mapping_valid_through=mapping_valid_through,
+    )
+    if mapping_identity != expected_identity:
+        return _invalid("MAPPING_IDENTITY_INVALID")
+    return _V2Member(
+        isin,
+        exchange_value,
+        effective_symbol_value,
+        provider_symbol_value,
+        valid_from,
+        valid_through,
+        mapping_version,
+        mapping_valid_from,
+        mapping_valid_through,
+        mapping_identity,
+    )
+
+
+def _validate_v2_member_overlaps(
+    members: Sequence[_V2Member],
+) -> tuple[_V2Member, ...] | AdjustedDailyCloseFailure:
+    for position, left in enumerate(members):
+        for right in members[position + 1 :]:
+            if _intervals_overlap(
+                left.valid_from,
+                left.valid_through,
+                right.valid_from,
+                right.valid_through,
+            ):
+                if (left.isin, left.exchange) == (right.isin, right.exchange):
+                    return _invalid("CANONICAL_IDENTITY_OVERLAP")
+                if (left.exchange, left.effective_symbol) == (
+                    right.exchange,
+                    right.effective_symbol,
+                ):
+                    return _invalid("EFFECTIVE_SYMBOL_OVERLAP")
+            if _intervals_overlap(
+                left.mapping_valid_from,
+                left.mapping_valid_through,
+                right.mapping_valid_from,
+                right.mapping_valid_through,
+            ) and (
+                left.mapping_identity == right.mapping_identity
+                or left.provider_symbol == right.provider_symbol
+            ):
+                return _invalid("PROVIDER_MAPPING_OVERLAP")
     return tuple(members)
+
+
+def _intervals_overlap(
+    left_from: date,
+    left_through: date | None,
+    right_from: date,
+    right_through: date | None,
+) -> bool:
+    return (left_through is None or right_from <= left_through) and (
+        right_through is None or left_from <= right_through
+    )
+
+
+def _valid_isin(isin: str) -> bool:
+    if _ISIN.fullmatch(isin) is None:
+        return False
+    digits = "".join(
+        str(ord(character) - 55) if character.isalpha() else character
+        for character in isin
+    )
+    total = 0
+    for index, character in enumerate(reversed(digits)):
+        value = int(character)
+        if index % 2:
+            value *= 2
+            value = value // 10 + value % 10
+        total += value
+    return total % 10 == 0
+
+
+def _mapping_identity_v2(
+    *,
+    isin: str,
+    exchange: Literal["NSE", "BSE"],
+    effective_symbol: str,
+    provider_symbol: str,
+    mapping_valid_from: date,
+    mapping_valid_through: date | None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "effective_symbol": effective_symbol,
+                "exchange": exchange,
+                "isin": isin,
+                "mapping_valid_from": mapping_valid_from.isoformat(),
+                "mapping_valid_through": (
+                    None
+                    if mapping_valid_through is None
+                    else mapping_valid_through.isoformat()
+                ),
+                "mapping_version": MAPPING_VERSION_V2,
+                "provider_id": PROVIDER_ID,
+                "provider_symbol": provider_symbol,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _cohort_matches(members: Sequence[tuple[str, str, str]], cohort: object) -> bool:

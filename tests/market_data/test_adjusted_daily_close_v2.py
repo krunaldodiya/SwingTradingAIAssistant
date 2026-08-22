@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -18,6 +20,55 @@ _S20 = date(2026, 8, 3)
 _CUTOFF = datetime(2026, 8, 4, 12, tzinfo=UTC)
 _RETRIEVED_AT = datetime(2026, 8, 4, 12, 1, tzinfo=UTC)
 _DECISION_SESSION_CLOSE = datetime(2026, 8, 3, 15, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+_MAPPING_VERSION = "yfinance-symbol-mapping@v1"
+
+
+def _mapping_identity(
+    *,
+    isin: str,
+    exchange: str,
+    effective_symbol: str,
+    provider_symbol: str,
+    mapping_valid_from: date,
+    mapping_valid_through: date | None,
+) -> str:
+    value = {
+        "effective_symbol": effective_symbol,
+        "exchange": exchange,
+        "isin": isin,
+        "mapping_valid_from": mapping_valid_from.isoformat(),
+        "mapping_valid_through": (
+            None if mapping_valid_through is None else mapping_valid_through.isoformat()
+        ),
+        "mapping_version": _MAPPING_VERSION,
+        "provider_id": "YFINANCE",
+        "provider_symbol": provider_symbol,
+    }
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _isin(index: int) -> str:
+    prefix = f"INE{index:08d}"
+    for check_digit in range(10):
+        candidate = f"{prefix}{check_digit}"
+        digits = "".join(
+            str(ord(character) - 55) if character.isalpha() else character
+            for character in candidate
+        )
+        total = sum(
+            (
+                (value := int(character) * 2) // 10 + value % 10
+                if position % 2
+                else int(character)
+            )
+            for position, character in enumerate(reversed(digits))
+        )
+        if total % 10 == 0:
+            return candidate
+    raise AssertionError("ISIN checksum digit not found")
 
 
 @dataclass
@@ -50,6 +101,9 @@ def _instrument(
     exchange: str = "NSE",
     valid_from: date = date(2026, 1, 1),
     valid_through: date | None = date(2026, 12, 31),
+    mapping_valid_from: date = date(2026, 1, 1),
+    mapping_valid_through: date | None = date(2026, 12, 31),
+    mapping_identity: str | None = None,
 ) -> dict[str, object]:
     return {
         "isin": isin,
@@ -58,6 +112,18 @@ def _instrument(
         "provider_symbol": provider_symbol,
         "valid_from": valid_from,
         "valid_through": valid_through,
+        "mapping_version": _MAPPING_VERSION,
+        "mapping_valid_from": mapping_valid_from,
+        "mapping_valid_through": mapping_valid_through,
+        "mapping_identity": mapping_identity
+        or _mapping_identity(
+            isin=isin,
+            exchange=exchange,
+            effective_symbol=effective_symbol,
+            provider_symbol=provider_symbol,
+            mapping_valid_from=mapping_valid_from,
+            mapping_valid_through=mapping_valid_through,
+        ),
     }
 
 
@@ -152,6 +218,32 @@ def test_accepts_explicit_nse_instruments_without_plan19_or_index_metadata() -> 
             Decimal("120"),
         ),
     ]
+    assert [
+        (fact.mapping_version, fact.mapping_identity) for fact in result.handoff.members
+    ] == [
+        (
+            _MAPPING_VERSION,
+            _mapping_identity(
+                isin="INE814H01011",
+                exchange="NSE",
+                effective_symbol="ADANIPOWER",
+                provider_symbol="ADANIPOWER.NS",
+                mapping_valid_from=date(2026, 1, 1),
+                mapping_valid_through=date(2026, 12, 31),
+            ),
+        ),
+        (
+            _MAPPING_VERSION,
+            _mapping_identity(
+                isin="INE002A01018",
+                exchange="NSE",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                mapping_valid_from=date(2026, 1, 1),
+                mapping_valid_through=date(2026, 12, 31),
+            ),
+        ),
+    ]
 
 
 def test_accepts_bse_dot_bo_mapping_with_open_validity_interval() -> None:
@@ -169,6 +261,7 @@ def test_accepts_bse_dot_bo_mapping_with_open_validity_interval() -> None:
                 effective_symbol="RELIANCE",
                 provider_symbol="RELIANCE.BO",
                 valid_through=None,
+                mapping_valid_through=None,
             ),
         )
     )
@@ -180,8 +273,41 @@ def test_accepts_bse_dot_bo_mapping_with_open_validity_interval() -> None:
     assert result.handoff.members[0].exchange == "BSE"
 
 
-def test_rejects_duplicate_canonical_or_provider_identity_before_fetch() -> None:
-    duplicate_isin = _request(
+def test_accepts_one_isin_listed_on_both_supported_exchanges() -> None:
+    provider = _Provider(
+        {
+            **_frame(),
+            "close": {
+                "RELIANCE.NS": tuple(100 + offset for offset in range(21)),
+                "RELIANCE.BO": tuple(200 + offset for offset in range(21)),
+            },
+        }
+    )
+    request = _request(
+        instruments=(
+            _instrument(
+                isin="INE002A01018",
+                exchange="NSE",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+            ),
+            _instrument(
+                isin="INE002A01018",
+                exchange="BSE",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.BO",
+            ),
+        )
+    )
+
+    result = _acquire(request, provider)
+
+    assert result.code == "SUCCESS"
+    assert provider.calls[0]["tickers"] == ("RELIANCE.NS", "RELIANCE.BO")
+
+
+def test_rejects_overlapping_composite_canonical_identities_before_fetch() -> None:
+    duplicate_listing = _request(
         instruments=(
             _instrument(
                 isin="INE002A01018",
@@ -195,7 +321,7 @@ def test_rejects_duplicate_canonical_or_provider_identity_before_fetch() -> None
             ),
         )
     )
-    duplicate_provider = _request(
+    duplicate_effective_symbol = _request(
         instruments=(
             _instrument(
                 isin="INE002A01018",
@@ -204,19 +330,22 @@ def test_rejects_duplicate_canonical_or_provider_identity_before_fetch() -> None
             ),
             _instrument(
                 isin="INE814H01011",
-                effective_symbol="ADANIPOWER",
+                effective_symbol="RELIANCE",
                 provider_symbol="RELIANCE.NS",
             ),
         )
     )
 
-    for request in (duplicate_isin, duplicate_provider):
+    for request, reason in (
+        (duplicate_listing, "CANONICAL_IDENTITY_OVERLAP"),
+        (duplicate_effective_symbol, "EFFECTIVE_SYMBOL_OVERLAP"),
+    ):
         provider = _Provider(_frame())
 
         result = _acquire(request, provider)
 
         assert result.code == "INVALID_REQUEST"
-        assert result.reason == "INSTRUMENT_IDENTITY_DUPLICATE"
+        assert result.reason == reason
         assert provider.calls == []
 
 
@@ -292,22 +421,103 @@ def test_rejects_missing_or_out_of_effective_period_identity_before_fetch() -> N
         assert provider.calls == []
 
 
-def test_rejects_more_than_one_hundred_instruments_before_fetch() -> None:
+def test_rejects_invalid_and_unverifiable_owner_supplied_mappings_before_fetch() -> (
+    None
+):
+    invalid_isin = _request(
+        instruments=(
+            _instrument(
+                isin="INE002A01019",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+            ),
+        )
+    )
+    missing_identity = _request()
+    missing_identity["instruments"][0].pop("mapping_identity")
+    hash_mismatch = _request()
+    hash_mismatch["instruments"][0]["mapping_identity"] = "0" * 64
+    unsupported_version = _request()
+    unsupported_version["instruments"][0]["mapping_version"] = "other@v1"
+    expired_mapping = _request(
+        instruments=(
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+                mapping_valid_through=date(2026, 8, 2),
+            ),
+        )
+    )
+    inconsistent_base = _request(
+        instruments=(
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="OTHER.NS",
+            ),
+        )
+    )
+
+    for request, code, reason in (
+        (invalid_isin, "INVALID_REQUEST", "INSTRUMENT_IDENTITY_INVALID"),
+        (missing_identity, "INVALID_REQUEST", "MAPPING_IDENTITY_INVALID"),
+        (hash_mismatch, "INVALID_REQUEST", "MAPPING_IDENTITY_INVALID"),
+        (
+            unsupported_version,
+            "UNSUPPORTED_CAPABILITY",
+            "MAPPING_VERSION_UNSUPPORTED",
+        ),
+        (
+            expired_mapping,
+            "INVALID_REQUEST",
+            "MAPPING_EFFECTIVE_AT_DECISION_SESSION_REQUIRED",
+        ),
+        (inconsistent_base, "UNSUPPORTED_CAPABILITY", "PROVIDER_MAPPING_UNSUPPORTED"),
+    ):
+        provider = _Provider(_frame())
+
+        result = _acquire(request, provider)
+
+        assert (result.code, result.reason) == (code, reason)
+        assert provider.calls == []
+
+
+def test_accepts_exactly_one_hundred_instruments_and_rejects_one_hundred_one() -> None:
     instruments = tuple(
         _instrument(
-            isin=f"INE{index:09d}",
+            isin=_isin(index),
             effective_symbol=f"STOCK{index}",
             provider_symbol=f"STOCK{index}.NS",
         )
         for index in range(101)
     )
-    provider = _Provider(_frame())
+    provider = _Provider(
+        {
+            **_frame(),
+            "close": {
+                instrument["provider_symbol"]: tuple(
+                    100 + offset for offset in range(21)
+                )
+                for instrument in instruments[:100]
+            },
+        }
+    )
 
-    result = _acquire(_request(instruments=instruments), provider)
+    exact_result = _acquire(_request(instruments=instruments[:100]), provider)
+    too_many_provider = _Provider(_frame())
+    too_many_result = _acquire(_request(instruments=instruments), too_many_provider)
 
-    assert result.code == "INVALID_REQUEST"
-    assert result.reason == "INSTRUMENT_COUNT_INVALID"
-    assert provider.calls == []
+    assert exact_result.code == "SUCCESS"
+    assert len(exact_result.handoff.members) == 100
+    assert provider.calls[0]["tickers"] == tuple(
+        instrument["provider_symbol"] for instrument in instruments[:100]
+    )
+    assert (too_many_result.code, too_many_result.reason) == (
+        "INVALID_REQUEST",
+        "INSTRUMENT_COUNT_INVALID",
+    )
+    assert too_many_provider.calls == []
 
 
 def test_retains_schedule_cutoff_provenance_and_raw_separation() -> None:
