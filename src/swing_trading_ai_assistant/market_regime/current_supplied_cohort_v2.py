@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from swing_trading_ai_assistant.market_data.adjusted_daily import (
     AdjustedCloseFact,
     AdjustedDailyCloseHandoffV2,
     AdjustedDailyMemberFactsV2,
+    adjusted_daily_close_handoff_identity_v2,
+    adjusted_daily_request_identity_v2,
+    adjusted_daily_schedule_identity_v2,
+    mapping_identity_v2,
 )
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
-    AggregateMemberOutcomeV1,
-    PrivateCorporateActionScreenOutcomeV1,
-    PrivateCorporateActionScreenResultV1,
-    ProviderObservationOutcomeV1,
+    PublishedCurrentCorporateActionScreenV1,
+    published_current_corporate_action_screen_is_exact_valid_v1,
 )
 
 from .current_supplied_cohort import (
@@ -24,18 +30,154 @@ from .current_supplied_cohort import (
     CurrentSuppliedCohortMarketRegimeReportV1,
     PrivateCurrentCohortArchiveGridProjectionV1,
     PrivateCurrentCohortMemberCloseProjectionV1,
+    current_supplied_cohort_market_regime_runtime_source_sha256_v1,
 )
 
 CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime@v2"
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_RUNTIME_MANIFEST_MODULE: Final = (
+    "swing_trading_ai_assistant.market_regime."
+    "current_supplied_cohort_v2_runtime_identity_manifest"
+)
+_RUNTIME_MANIFEST: Final = (
+    "src/swing_trading_ai_assistant/market_regime/"
+    "current_supplied_cohort_v2_runtime_identity_manifest.py"
+)
+_RUNTIME_SOURCES: Final = (
+    "src/swing_trading_ai_assistant/market_data/adjusted_daily/__init__.py",
+    "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py",
+    "src/swing_trading_ai_assistant/market_data/current_cohort.py",
+    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py",
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py",
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v2.py",
+)
 
 
-@dataclass(frozen=True, slots=True)
+def _canonical(value: object) -> bytes:
+    return (
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _identity(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+SCHEMA_IDENTITY_SHA256: Final = _identity(
+    {
+        "contract_version": CONTRACT_VERSION,
+        "report_fields": [
+            "schema_identity_sha256",
+            "calculation_identity_sha256",
+            "runtime_code_identity_sha256",
+            "raw_report_identity_sha256",
+            "corporate_action_screen_identity_sha256",
+            "adjusted_handoff_identity_sha256",
+            "cohort_identity_sha256",
+            "cohort_size",
+            "decision_cutoff",
+            "decision_session",
+            "comparison_session",
+            "evidence_state",
+            "regime_label",
+            "advances",
+            "declines",
+            "unchanged",
+            "reasons",
+            "report_identity_sha256",
+        ],
+    }
+)
+CALCULATION_IDENTITY_SHA256: Final = _identity(
+    {
+        "contract_version": CONTRACT_VERSION,
+        "directions": ["UP", "DOWN", "FLAT"],
+        "required_evidence": [
+            "exact_raw_v1_grid",
+            "sealed_published_plan21_screen",
+            "exact_adjusted_handoff",
+        ],
+        "outcomes": ["OBSERVED", "INSUFFICIENT_EVIDENCE"],
+    }
+)
+
+
+def current_supplied_cohort_market_regime_runtime_code_identity_v2() -> str:
+    """Verify reviewed source-at-rest identities; this is not byte attestation."""
+    try:
+        manifest = importlib.import_module(_RUNTIME_MANIFEST_MODULE)
+        raw_mapping = (
+            manifest.CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V2
+        )
+    except (AttributeError, ImportError):
+        raise ValueError("V2 runtime identity invalid") from None
+    if type(raw_mapping) is not dict:
+        raise ValueError("V2 runtime identity invalid")
+    mapping = cast(dict[str, object], raw_mapping)
+    if tuple(mapping) != _RUNTIME_SOURCES or any(
+        type(digest) is not str or _DIGEST.fullmatch(digest) is None
+        for digest in mapping.values()
+    ):
+        raise ValueError("V2 runtime identity invalid")
+    digests = cast(dict[str, str], mapping)
+    loaded: dict[str, str] = {
+        "src/swing_trading_ai_assistant/market_data/adjusted_daily/__init__.py": (
+            "swing_trading_ai_assistant.market_data.adjusted_daily"
+        ),
+        "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py": (
+            "swing_trading_ai_assistant.market_data.adjusted_daily.service"
+        ),
+        "src/swing_trading_ai_assistant/market_data/current_cohort.py": (
+            "swing_trading_ai_assistant.market_data.current_cohort"
+        ),
+        "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": (
+            "swing_trading_ai_assistant.market_data.current_corporate_action_screen"
+        ),
+        "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": (
+            "swing_trading_ai_assistant.market_regime.current_supplied_cohort"
+        ),
+        "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v2.py": (
+            __name__
+        ),
+    }
+    for relative in _RUNTIME_SOURCES:
+        if (
+            current_supplied_cohort_market_regime_runtime_source_sha256_v1(
+                loaded[relative], relative
+            )
+            != digests[relative]
+        ):
+            raise ValueError("V2 runtime identity invalid")
+    manifest_digest = current_supplied_cohort_market_regime_runtime_source_sha256_v1(
+        _RUNTIME_MANIFEST_MODULE, _RUNTIME_MANIFEST
+    )
+    composite = b"".join(
+        relative.encode() + b"\0" + digests[relative].encode() + b"\0"
+        for relative in _RUNTIME_SOURCES
+    )
+    return hashlib.sha256(
+        composite
+        + _RUNTIME_MANIFEST.encode()
+        + b"\0"
+        + manifest_digest.encode()
+        + b"\0"
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class CurrentSuppliedCohortMarketRegimeReportV2:
-    """Aggregate-only result; private members never cross this boundary."""
+    """Aggregate-only result with source-at-rest, not executed-byte, provenance."""
 
     contract_version: Literal["current-supplied-cohort-market-regime@v2"]
+    schema_identity_sha256: str
+    calculation_identity_sha256: str
+    runtime_code_identity_sha256: str
     raw_report_identity_sha256: str
     corporate_action_screen_identity_sha256: str
+    adjusted_handoff_identity_sha256: str
     cohort_identity_sha256: str
     cohort_size: int
     decision_cutoff: datetime
@@ -47,63 +189,133 @@ class CurrentSuppliedCohortMarketRegimeReportV2:
     declines: int | None
     unchanged: int | None
     reasons: tuple[str, ...]
+    report_identity_sha256: str
 
-    def value(self) -> dict[str, object]:
+    def __init__(
+        self,
+        *,
+        raw_report_identity_sha256: str,
+        corporate_action_screen_identity_sha256: str,
+        adjusted_handoff_identity_sha256: str,
+        cohort_identity_sha256: str,
+        cohort_size: int,
+        decision_cutoff: datetime,
+        decision_session: date,
+        comparison_session: date | None,
+        evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"],
+        regime_label: str | None,
+        advances: int | None,
+        declines: int | None,
+        unchanged: int | None,
+        reasons: tuple[str, ...],
+    ) -> None:
+        object.__setattr__(self, "contract_version", CONTRACT_VERSION)
+        object.__setattr__(self, "schema_identity_sha256", SCHEMA_IDENTITY_SHA256)
+        object.__setattr__(
+            self, "calculation_identity_sha256", CALCULATION_IDENTITY_SHA256
+        )
+        object.__setattr__(
+            self,
+            "runtime_code_identity_sha256",
+            current_supplied_cohort_market_regime_runtime_code_identity_v2(),
+        )
+        object.__setattr__(
+            self, "raw_report_identity_sha256", raw_report_identity_sha256
+        )
+        object.__setattr__(
+            self,
+            "corporate_action_screen_identity_sha256",
+            corporate_action_screen_identity_sha256,
+        )
+        object.__setattr__(
+            self, "adjusted_handoff_identity_sha256", adjusted_handoff_identity_sha256
+        )
+        object.__setattr__(self, "cohort_identity_sha256", cohort_identity_sha256)
+        object.__setattr__(self, "cohort_size", cohort_size)
+        object.__setattr__(self, "decision_cutoff", decision_cutoff)
+        object.__setattr__(self, "decision_session", decision_session)
+        object.__setattr__(self, "comparison_session", comparison_session)
+        object.__setattr__(self, "evidence_state", evidence_state)
+        object.__setattr__(self, "regime_label", regime_label)
+        object.__setattr__(self, "advances", advances)
+        object.__setattr__(self, "declines", declines)
+        object.__setattr__(self, "unchanged", unchanged)
+        object.__setattr__(self, "reasons", reasons)
+        object.__setattr__(
+            self,
+            "report_identity_sha256",
+            _identity(self.value(include_identity=False)),
+        )
+
+    def value(self, *, include_identity: bool = True) -> dict[str, object]:
         """Return the redacted, aggregate-only public representation."""
-        return {
-            "contract_version": self.contract_version,
-            "raw_report_identity_sha256": self.raw_report_identity_sha256,
-            "corporate_action_screen_identity_sha256": (
-                self.corporate_action_screen_identity_sha256
-            ),
+        result: dict[str, object] = {
+            "adjusted_handoff_identity_sha256": self.adjusted_handoff_identity_sha256,
+            "advances": self.advances,
+            "calculation_identity_sha256": self.calculation_identity_sha256,
             "cohort_identity_sha256": self.cohort_identity_sha256,
             "cohort_size": self.cohort_size,
-            "decision_cutoff": self.decision_cutoff.isoformat(),
-            "decision_session": self.decision_session.isoformat(),
             "comparison_session": (
                 None
                 if self.comparison_session is None
                 else self.comparison_session.isoformat()
             ),
-            "evidence_state": self.evidence_state,
-            "regime_label": self.regime_label,
-            "advances": self.advances,
+            "contract_version": self.contract_version,
+            "corporate_action_screen_identity_sha256": (
+                self.corporate_action_screen_identity_sha256
+            ),
+            "decision_cutoff": self.decision_cutoff.isoformat(),
+            "decision_session": self.decision_session.isoformat(),
             "declines": self.declines,
-            "unchanged": self.unchanged,
+            "evidence_state": self.evidence_state,
+            "raw_report_identity_sha256": self.raw_report_identity_sha256,
             "reasons": list(self.reasons),
+            "regime_label": self.regime_label,
+            "runtime_code_identity_sha256": self.runtime_code_identity_sha256,
+            "schema_identity_sha256": self.schema_identity_sha256,
+            "unchanged": self.unchanged,
         }
+        if include_identity:
+            result["report_identity_sha256"] = self.report_identity_sha256
+        return result
 
 
 def evaluate_current_supplied_cohort_market_regime_v2(
     raw_v1_report: CurrentSuppliedCohortMarketRegimeReportV1,
     raw_private_grid: PrivateCurrentCohortArchiveGridProjectionV1,
-    retained_screen: PrivateCorporateActionScreenResultV1,
+    retained_screen: PublishedCurrentCorporateActionScreenV1,
     adjusted_handoff: AdjustedDailyCloseHandoffV2,
 ) -> CurrentSuppliedCohortMarketRegimeReportV2:
-    """Preserve V1 breadth only when every sealed source agrees on direction.
-
-    The function intentionally receives evidence only.  It does not call a
-    provider, open storage, consult the clock, or retain any input.
-    """
+    """Preserve V1 breadth only when every exact, sealed source agrees."""
     raw_identity = (
         raw_v1_report.report_identity_sha256
         if type(raw_v1_report) is CurrentSuppliedCohortMarketRegimeReportV1
         else ""
     )
     screen_identity = (
-        retained_screen.private_result_identity_sha256
-        if type(retained_screen) is PrivateCorporateActionScreenResultV1
+        retained_screen.private_result.private_result_identity_sha256
+        if type(retained_screen) is PublishedCurrentCorporateActionScreenV1
+        else ""
+    )
+    handoff_identity = (
+        adjusted_handoff.handoff_identity_sha256
+        if type(adjusted_handoff) is AdjustedDailyCloseHandoffV2
         else ""
     )
     if not _valid_raw_report_and_grid(raw_v1_report, raw_private_grid):
         return _insufficient(
-            raw_v1_report, raw_identity, screen_identity, "RAW_V1_CLOSURE_INVALID"
+            raw_v1_report,
+            raw_identity,
+            screen_identity,
+            handoff_identity,
+            "RAW_V1_CLOSURE_INVALID",
         )
     if not _valid_screen(raw_v1_report, raw_private_grid, retained_screen):
         return _insufficient(
             raw_v1_report,
             raw_identity,
             screen_identity,
+            handoff_identity,
             "CORPORATE_ACTION_SCREEN_INSUFFICIENT",
         )
     if not _valid_adjusted_handoff(raw_v1_report, raw_private_grid, adjusted_handoff):
@@ -111,6 +323,7 @@ def evaluate_current_supplied_cohort_market_regime_v2(
             raw_v1_report,
             raw_identity,
             screen_identity,
+            handoff_identity,
             "ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID",
         )
 
@@ -124,13 +337,14 @@ def evaluate_current_supplied_cohort_market_regime_v2(
             raw_v1_report,
             raw_identity,
             screen_identity,
+            handoff_identity,
             "RAW_ADJUSTED_DIRECTION_CONFLICT",
         )
 
     return CurrentSuppliedCohortMarketRegimeReportV2(
-        contract_version=CONTRACT_VERSION,
         raw_report_identity_sha256=raw_identity,
         corporate_action_screen_identity_sha256=screen_identity,
+        adjusted_handoff_identity_sha256=handoff_identity,
         cohort_identity_sha256=raw_v1_report.cohort_identity_sha256,
         cohort_size=raw_v1_report.cohort_size,
         decision_cutoff=raw_v1_report.decision_cutoff,
@@ -146,7 +360,11 @@ def evaluate_current_supplied_cohort_market_regime_v2(
 
 
 def _insufficient(
-    raw_report: object, raw_identity: str, screen_identity: str, reason: str
+    raw_report: object,
+    raw_identity: str,
+    screen_identity: str,
+    handoff_identity: str,
+    reason: str,
 ) -> CurrentSuppliedCohortMarketRegimeReportV2:
     """Build a whole-result failure with only a validated raw denominator."""
     if type(raw_report) is CurrentSuppliedCohortMarketRegimeReportV1:
@@ -160,9 +378,9 @@ def _insufficient(
         decision_cutoff = datetime.min.replace(tzinfo=UTC)
         decision_session = date.min
     return CurrentSuppliedCohortMarketRegimeReportV2(
-        contract_version=CONTRACT_VERSION,
         raw_report_identity_sha256=raw_identity,
         corporate_action_screen_identity_sha256=screen_identity,
+        adjusted_handoff_identity_sha256=handoff_identity,
         cohort_identity_sha256=cohort_identity,
         cohort_size=cohort_size,
         decision_cutoff=decision_cutoff,
@@ -237,40 +455,18 @@ def _valid_screen(
     grid: PrivateCurrentCohortArchiveGridProjectionV1,
     screen: object,
 ) -> bool:
-    if (
-        type(screen) is not PrivateCorporateActionScreenResultV1
-        or screen.contract_version
-        != "current-supplied-cohort-corporate-action-screen@v1"
-        or screen.outcome
-        != PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
-        or screen.selected_snapshot_set_identity_sha256 is None
-        or screen.cohort_identity_sha256 != report.cohort_identity_sha256
-        or screen.comparison_session != report.comparison_session
-        or screen.decision_session != report.decision_session
-        or screen.decision_cutoff != report.decision_cutoff
-        or screen.schedule_evidence_sha256 != report.schedule_evidence_sha256
-        or screen.schedule_source != report.schedule_source
-        or screen.schedule_source_release != report.schedule_source_release
-        or len(screen.member_results) != report.cohort_size
-    ):
+    if report.comparison_session is None:
         return False
-    raw_isins = {member.member.isin for member in grid.sessions[0].members}
-    screen_isins = tuple(
-        result.provider_result.isin for result in screen.member_results
-    )
-    return (
-        len(set(screen_isins)) == report.cohort_size
-        and set(screen_isins) == raw_isins
-        and all(
-            result.row_outcome
-            == AggregateMemberOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
-            and result.provider_result.outcome == ProviderObservationOutcomeV1.AVAILABLE
-            and result.provider_result.snapshot_identity_sha256 is not None
-            and result.provider_result.snapshot_byte_count is not None
-            and result.provider_result.retrieved_at is not None
-            and not result.provider_result.normalized_supported_events
-            for result in screen.member_results
-        )
+    return published_current_corporate_action_screen_is_exact_valid_v1(
+        screen,
+        cohort_identity_sha256=report.cohort_identity_sha256,
+        comparison_session=report.comparison_session,
+        decision_session=report.decision_session,
+        decision_cutoff=report.decision_cutoff,
+        schedule_evidence_sha256=report.schedule_evidence_sha256,
+        schedule_source=report.schedule_source,
+        schedule_source_release=report.schedule_source_release,
+        expected_isins=tuple(member.member.isin for member in grid.sessions[0].members),
     )
 
 
@@ -280,52 +476,91 @@ def _valid_adjusted_handoff(
     handoff: object,
 ) -> bool:
     if (
-        type(handoff) is not AdjustedDailyCloseHandoffV2
-        or handoff.contract_version != "provider-neutral-adjusted-daily-close@v2"
+        report.comparison_session is None
+        or type(handoff) is not AdjustedDailyCloseHandoffV2
+    ):
+        return False
+    if (
+        handoff.contract_version != "provider-neutral-adjusted-daily-close@v2"
         or handoff.provider_id != "YFINANCE"
         or handoff.price_basis != "ADJUSTED"
+        or type(handoff.provider_source) is not str
         or not handoff.provider_source
         or handoff.temporal_label != "CURRENT_PROSPECTIVE"
+        or handoff.cohort_identity_sha256 != report.cohort_identity_sha256
         or handoff.decision_cutoff != report.decision_cutoff
         or handoff.retrieved_at.tzinfo is not UTC
         or handoff.retrieved_at > report.decision_cutoff
+        or handoff.schedule_evidence_sha256 != report.schedule_evidence_sha256
+        or handoff.schedule_source != report.schedule_source
+        or handoff.schedule_source_release != report.schedule_source_release
+        or handoff.schedule_sessions
+        != tuple(session.session for session in grid.sessions)
         or handoff.comparison_session != report.comparison_session
         or handoff.decision_session != report.decision_session
         or len(handoff.members) != report.cohort_size
+        or not _is_aware(handoff.decision_session_official_close_at)
+        or handoff.decision_session_official_close_at > report.decision_cutoff
+        or handoff.schedule_identity_sha256
+        != adjusted_daily_schedule_identity_v2(
+            sessions=handoff.schedule_sessions,
+            decision_session_official_close_at=handoff.decision_session_official_close_at,
+            schedule_evidence_sha256=handoff.schedule_evidence_sha256,
+            schedule_source=handoff.schedule_source,
+            schedule_source_release=handoff.schedule_source_release,
+        )
+        or handoff.request_identity_sha256
+        != adjusted_daily_request_identity_v2(
+            cohort_identity_sha256=handoff.cohort_identity_sha256,
+            decision_cutoff=handoff.decision_cutoff,
+            schedule_identity_sha256=handoff.schedule_identity_sha256,
+            members=handoff.members,
+        )
+        or handoff.handoff_identity_sha256
+        != adjusted_daily_close_handoff_identity_v2(handoff)
     ):
         return False
-    raw_members = tuple(member.member for member in grid.sessions[0].members)
+    raw_members = {
+        member.member.isin: member.member for member in grid.sessions[0].members
+    }
     adjusted_members = handoff.members
-    if (
-        tuple(member.isin for member in adjusted_members)
-        != tuple(member.isin for member in raw_members)
-        or len({member.isin for member in adjusted_members}) != report.cohort_size
-    ):
+    if tuple(member.isin for member in adjusted_members) != tuple(sorted(raw_members)):
         return False
     return all(
         _valid_adjusted_member(
-            member, raw_member, report.comparison_session, report.decision_session
+            member,
+            raw_members[member.isin],
+            report.comparison_session,
+            report.decision_session,
         )
-        for member, raw_member in zip(adjusted_members, raw_members, strict=True)
+        for member in adjusted_members
     )
 
 
 def _valid_adjusted_member(
     member: AdjustedDailyMemberFactsV2,
     raw_member: CurrentCohortMemberV1,
-    comparison_session: date | None,
+    comparison_session: date,
     decision_session: date,
 ) -> bool:
-    if comparison_session is None:
-        return False
-    if (
+    return not (
         type(member) is not AdjustedDailyMemberFactsV2
         or member.effective_symbol != raw_member.symbol
         or member.exchange not in {"NSE", "BSE"}
         or member.instrument_type != "EQUITY"
         or member.segment != "EQ"
         or member.mapping_version != "yfinance-symbol-mapping@v1"
-        or len(member.mapping_identity) != 64
+        or member.mapping_identity
+        != mapping_identity_v2(
+            isin=member.isin,
+            exchange=member.exchange,
+            instrument_type=member.instrument_type,
+            segment=member.segment,
+            effective_symbol=member.effective_symbol,
+            provider_symbol=member.provider_symbol,
+            mapping_valid_from=member.mapping_valid_from,
+            mapping_valid_through=member.mapping_valid_through,
+        )
         or member.valid_from > comparison_session
         or member.valid_through is not None
         and member.valid_through < decision_session
@@ -334,9 +569,7 @@ def _valid_adjusted_member(
         and member.mapping_valid_through < decision_session
         or not _valid_adjusted_close(member.s0, comparison_session)
         or not _valid_adjusted_close(member.s20, decision_session)
-    ):
-        return False
-    return all(character in "0123456789abcdef" for character in member.mapping_identity)
+    )
 
 
 def _valid_adjusted_close(fact: object, session: date) -> bool:
@@ -349,6 +582,13 @@ def _valid_adjusted_close(fact: object, session: date) -> bool:
     )
 
 
+def _is_aware(value: datetime) -> bool:
+    try:
+        return value.tzinfo is not None and value.utcoffset() is not None
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
 def _directions(
     prior_members: tuple[PrivateCurrentCohortMemberCloseProjectionV1, ...],
     current_members: tuple[PrivateCurrentCohortMemberCloseProjectionV1, ...],
@@ -359,7 +599,10 @@ def _directions(
         else "DOWN"
         if current.close < prior.close
         else "FLAT"
-        for prior, current in zip(prior_members, current_members, strict=True)
+        for prior, current in sorted(
+            zip(prior_members, current_members, strict=True),
+            key=lambda pair: pair[0].member.isin,
+        )
     )
 
 

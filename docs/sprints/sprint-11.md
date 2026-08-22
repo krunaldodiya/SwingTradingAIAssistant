@@ -1,8 +1,9 @@
 # Sprint 11 — Current supplied-cohort Market Regime
 
-Status: **V2 COMPARABILITY IMPLEMENTED — focused behavioral checks are recorded
-below; final full-local gates, exact re-review, hosted CI/security, merge, and
-publication remain pending**
+Status: **PR #124 RESUMED — exact-candidate local evidence passed: 287 focused
+tests, 2,858 full tests, 91.04% coverage, Ruff format/check, Pyright,
+Vulture 80, build, and required no-network/live adjusted smokes. Exact final
+review repair, hosted CI/security, merge, and publication remain pending.**
 Tracking: [GitHub Issue #116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116)
 Milestone: **Sprint 11**
 Plan: [Plan 20](../plans/20-current-supplied-cohort-market-regime-contract.md)
@@ -96,18 +97,18 @@ whole-result insufficiency for every evidence failure. The current temporal
 repair additionally requires every member fact at S0 through S20 to have
 `published_at >= close_at` and `known_at >= close_at`; facts at equality are
 accepted, while `data_cutoff` remains the last-bar time and may precede close.
-Focused evidence is GREEN on this worktree:
+Exact-candidate local evidence passed:
 
 ```text
-uv run --no-sync --extra dev pytest -q -o addopts='' tests/market_regime/test_current_supplied_cohort.py tests/market_data/test_current_cohort.py
-172 passed
+287 focused tests; 2,858 full tests; 91.04% coverage
+Ruff format/check; Pyright; Vulture 80; build
+sealed no-network evaluator smoke; live current-prospective adjusted smoke
 ```
 
-The earlier full-local gate on
-`d364bf11fac632b4d03b6c179b4519d3ca71f1bb` does not cover this repair and is
-superseded. Final full local gates, independent exact-revision quality/security
-re-review, hosted CI/security, merge, and publication evidence are pending and
-are not asserted by this record.
+This repairs and supersedes the earlier local-gate record for
+`d364bf11fac632b4d03b6c179b4519d3ca71f1bb`. Exact final review repair,
+hosted CI/security, merge, and publication evidence remain pending and are not
+asserted by this record.
 
 The main unresolved implementation risks are that the Sprint-10 archive is
 write-only/unindexed and persists only an opaque request identity—not the full

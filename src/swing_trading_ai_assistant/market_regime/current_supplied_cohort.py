@@ -674,6 +674,15 @@ def _require_loaded_source(module_name: str, root: Path, relative: str) -> None:
         raise ValueError("runtime identity invalid")
 
 
+def current_supplied_cohort_market_regime_runtime_source_sha256_v1(
+    module_name: str, relative: str
+) -> str:
+    """Read one loaded reviewed runtime source through the existing safe path."""
+    root = _runtime_root()
+    _require_loaded_source(module_name, root, relative)
+    return hashlib.sha256(_read_literal_project_file(root, relative)).hexdigest()
+
+
 def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
     try:
         manifest = importlib.import_module(

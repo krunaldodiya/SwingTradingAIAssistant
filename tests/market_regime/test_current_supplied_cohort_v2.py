@@ -14,10 +14,15 @@ from typing import Any
 
 import pytest
 
+from swing_trading_ai_assistant.market_data import current_corporate_action_screen
 from swing_trading_ai_assistant.market_data.adjusted_daily import (
     AdjustedCloseFact,
     AdjustedDailyCloseHandoffV2,
     AdjustedDailyMemberFactsV2,
+    adjusted_daily_close_handoff_identity_v2,
+    adjusted_daily_request_identity_v2,
+    adjusted_daily_schedule_identity_v2,
+    mapping_identity_v2,
 )
 from swing_trading_ai_assistant.market_data.current_cohort import CurrentCohortMemberV1
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
@@ -28,7 +33,9 @@ from swing_trading_ai_assistant.market_data.current_corporate_action_screen impo
     PrivateCorporateActionScreenProviderResultV1,
     PrivateCorporateActionScreenResultV1,
     ProviderObservationOutcomeV1,
+    PublishedCurrentCorporateActionScreenV1,
     SupportedCorporateActionKindV1,
+    publish_current_corporate_action_screen_v1,
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     CurrentSuppliedCohortMarketRegimeInputV1,
@@ -148,40 +155,77 @@ def _raw_evidence() -> tuple[
 
 
 def _handoff(
+    report: CurrentSuppliedCohortMarketRegimeReportV1,
     grid: PrivateCurrentCohortArchiveGridProjectionV1,
 ) -> AdjustedDailyCloseHandoffV2:
-    return AdjustedDailyCloseHandoffV2(
+    schedule_identity = adjusted_daily_schedule_identity_v2(
+        sessions=_SESSIONS,
+        decision_session_official_close_at=_CUTOFF,
+        schedule_evidence_sha256=report.schedule_evidence_sha256,
+        schedule_source=report.schedule_source,
+        schedule_source_release=report.schedule_source_release,
+    )
+    s20_by_isin = {
+        member.member.isin: member.close for member in grid.sessions[20].members
+    }
+    members = tuple(
+        AdjustedDailyMemberFactsV2(
+            isin=raw.member.isin,
+            exchange="NSE",
+            instrument_type="EQUITY",
+            segment="EQ",
+            effective_symbol=raw.member.symbol,
+            valid_from=_COMPARISON_SESSION,
+            valid_through=None,
+            provider_symbol=f"{raw.member.symbol}.NS",
+            mapping_version="yfinance-symbol-mapping@v1",
+            mapping_valid_from=_COMPARISON_SESSION,
+            mapping_valid_through=None,
+            mapping_identity=mapping_identity_v2(
+                isin=raw.member.isin,
+                exchange="NSE",
+                instrument_type="EQUITY",
+                segment="EQ",
+                effective_symbol=raw.member.symbol,
+                provider_symbol=f"{raw.member.symbol}.NS",
+                mapping_valid_from=_COMPARISON_SESSION,
+                mapping_valid_through=None,
+            ),
+            s0=AdjustedCloseFact(_COMPARISON_SESSION, Decimal("100")),
+            s20=AdjustedCloseFact(_DECISION_SESSION, s20_by_isin[raw.member.isin]),
+        )
+        for raw in sorted(grid.sessions[0].members, key=lambda item: item.member.isin)
+    )
+    request_identity = adjusted_daily_request_identity_v2(
+        cohort_identity_sha256=report.cohort_identity_sha256,
+        decision_cutoff=_CUTOFF,
+        schedule_identity_sha256=schedule_identity,
+        members=members,
+    )
+    provisional = AdjustedDailyCloseHandoffV2(
         contract_version="provider-neutral-adjusted-daily-close@v2",
         provider_id="YFINANCE",
         price_basis="ADJUSTED",
         provider_source="yfinance",
         retrieved_at=_CUTOFF,
         temporal_label="CURRENT_PROSPECTIVE",
+        cohort_identity_sha256=report.cohort_identity_sha256,
+        request_identity_sha256=request_identity,
         decision_cutoff=_CUTOFF,
+        schedule_evidence_sha256=report.schedule_evidence_sha256,
+        schedule_source=report.schedule_source,
+        schedule_source_release=report.schedule_source_release,
+        decision_session_official_close_at=_CUTOFF,
+        schedule_sessions=_SESSIONS,
+        schedule_identity_sha256=schedule_identity,
         comparison_session=_COMPARISON_SESSION,
         decision_session=_DECISION_SESSION,
-        members=tuple(
-            AdjustedDailyMemberFactsV2(
-                isin=raw.member.isin,
-                exchange="NSE",
-                instrument_type="EQUITY",
-                segment="EQ",
-                effective_symbol=raw.member.symbol,
-                valid_from=_COMPARISON_SESSION,
-                valid_through=None,
-                provider_symbol=f"{raw.member.symbol}.NS",
-                mapping_version="yfinance-symbol-mapping@v1",
-                mapping_valid_from=_COMPARISON_SESSION,
-                mapping_valid_through=None,
-                mapping_identity=f"{index + 1:064x}",
-                s0=AdjustedCloseFact(_COMPARISON_SESSION, Decimal("100")),
-                s20=AdjustedCloseFact(
-                    _DECISION_SESSION,
-                    grid.sessions[20].members[index].close,
-                ),
-            )
-            for index, raw in enumerate(grid.sessions[0].members)
-        ),
+        members=members,
+        handoff_identity_sha256="",
+    )
+    return replace(
+        provisional,
+        handoff_identity_sha256=adjusted_daily_close_handoff_identity_v2(provisional),
     )
 
 
@@ -191,7 +235,8 @@ def _screen(
     *,
     state: str = "screened",
     cohort_identity: str | None = None,
-) -> PrivateCorporateActionScreenResultV1:
+    sealed: bool = True,
+) -> PublishedCurrentCorporateActionScreenV1 | PrivateCorporateActionScreenResultV1:
     action = state == "action"
     missing = state == "missing"
     provider_outcome = (
@@ -265,11 +310,31 @@ def _screen(
         selected_snapshot_set_identity_sha256="b" * 64 if state == "screened" else None,
         private_result_identity_sha256="0" * 64,
     )
-    return replace(
+    private = replace(
         provisional,
         private_result_identity_sha256=hashlib.sha256(
             provisional.canonical_json_bytes(include_identity=False)
         ).hexdigest(),
+    )
+    if not sealed:
+        return private
+    object.__setattr__(
+        private,
+        "_publication_seal",
+        current_corporate_action_screen._PrivateResultPublicationSealV1(
+            private.private_result_identity_sha256,
+            hashlib.sha256(private.canonical_json_bytes()).hexdigest(),
+        ),
+    )
+    return publish_current_corporate_action_screen_v1(private)
+
+
+def _with_handoff_identity(
+    handoff: AdjustedDailyCloseHandoffV2,
+) -> AdjustedDailyCloseHandoffV2:
+    return replace(
+        handoff,
+        handoff_identity_sha256=adjusted_daily_close_handoff_identity_v2(handoff),
     )
 
 
@@ -299,7 +364,7 @@ def test_v2_preserves_agreeing_v1_aggregate_and_redacts_members(
         )
 
     monkeypatch.setattr(socket, "create_connection", forbidden_network)
-    result = _api()(raw, grid, _screen(raw, grid), _handoff(grid))
+    result = _api()(raw, grid, _screen(raw, grid), _handoff(raw, grid))
 
     assert result.contract_version == "current-supplied-cohort-market-regime@v2"
     assert (result.evidence_state, result.regime_label) == (
@@ -308,7 +373,22 @@ def test_v2_preserves_agreeing_v1_aggregate_and_redacts_members(
     )
     assert (result.advances, result.declines, result.unchanged) == (1, 1, 1)
     assert result.advances + result.declines + result.unchanged == raw.cohort_size
+    assert (
+        result.adjusted_handoff_identity_sha256
+        == _handoff(raw, grid).handoff_identity_sha256
+    )
+    assert (
+        result.report_identity_sha256
+        == hashlib.sha256(_canonical(result.value(include_identity=False))).hexdigest()
+    )
+    assert (
+        len(result.schema_identity_sha256)
+        == len(result.calculation_identity_sha256)
+        == len(result.runtime_code_identity_sha256)
+        == 64
+    )
     public = result.value()
+    assert public["report_identity_sha256"] == result.report_identity_sha256
     assert "members" not in public and "member_directions" not in public
     assert all(
         member.member.isin not in str(public) for member in grid.sessions[0].members
@@ -327,7 +407,7 @@ def test_v2_fails_closed_for_each_raw_adjusted_direction_conflict(
     direction: str, member_index: int, adjusted_close: Decimal
 ) -> None:
     raw, grid = _raw_evidence()
-    adjusted = _handoff(grid)
+    adjusted = _handoff(raw, grid)
     changed = replace(
         adjusted.members[member_index],
         s20=AdjustedCloseFact(_DECISION_SESSION, adjusted_close),
@@ -336,11 +416,13 @@ def test_v2_fails_closed_for_each_raw_adjusted_direction_conflict(
         raw,
         grid,
         _screen(raw, grid),
-        replace(
-            adjusted,
-            members=adjusted.members[:member_index]
-            + (changed,)
-            + adjusted.members[member_index + 1 :],
+        _with_handoff_identity(
+            replace(
+                adjusted,
+                members=adjusted.members[:member_index]
+                + (changed,)
+                + adjusted.members[member_index + 1 :],
+            )
         ),
     )
 
@@ -365,7 +447,7 @@ def test_v2_fails_closed_for_unusable_corporate_action_screen(
         raw,
         grid,
         _screen(raw, grid, state=state, cohort_identity=cohort_identity),
-        _handoff(grid),
+        _handoff(raw, grid),
     )
 
     _assert_insufficient(result)
@@ -385,7 +467,7 @@ def test_v2_fails_closed_for_unusable_corporate_action_screen(
 )
 def test_v2_never_drops_members_or_admits_invalid_adjusted_handoffs(fault: str) -> None:
     raw, grid = _raw_evidence()
-    adjusted = _handoff(grid)
+    adjusted = _handoff(raw, grid)
     if fault == "missing":
         adjusted = replace(adjusted, members=adjusted.members[:2])
     elif fault == "duplicate":
@@ -408,3 +490,75 @@ def test_v2_never_drops_members_or_admits_invalid_adjusted_handoffs(fault: str) 
     result = _api()(raw, grid, _screen(raw, grid), adjusted)
 
     _assert_insufficient(result)
+
+
+@pytest.mark.parametrize("sealed", (False, True), ids=("unsealed", "forged"))
+def test_v2_rejects_unsealed_or_forged_published_screen(sealed: bool) -> None:
+    raw, grid = _raw_evidence()
+    if not sealed:
+        screen: object = _screen(raw, grid, sealed=False)
+    else:
+        valid = _screen(raw, grid)
+        assert type(valid) is PublishedCurrentCorporateActionScreenV1
+        forged = object.__new__(PublishedCurrentCorporateActionScreenV1)
+        forged_private = object.__new__(PrivateCorporateActionScreenResultV1)
+        for name in valid.private_result.__dataclass_fields__:
+            object.__setattr__(
+                forged_private, name, getattr(valid.private_result, name)
+            )
+        object.__setattr__(
+            forged_private,
+            "decision_cutoff",
+            datetime(2026, 1, 12, 9, 59, tzinfo=UTC),
+        )
+        object.__setattr__(forged, "private_result", forged_private)
+        object.__setattr__(forged, "public_report", valid.public_report)
+        screen = forged
+    result = _api()(raw, grid, screen, _handoff(raw, grid))
+    _assert_insufficient(result, reason="CORPORATE_ACTION_SCREEN_INSUFFICIENT")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "cohort",
+        "request",
+        "schedule-sessions",
+        "schedule-identity",
+        "mapping-identity",
+        "handoff-identity",
+    ),
+)
+def test_v2_rejects_spliced_adjusted_handoff_identities(fault: str) -> None:
+    raw, grid = _raw_evidence()
+    handoff = _handoff(raw, grid)
+    if fault == "cohort":
+        handoff = _with_handoff_identity(
+            replace(handoff, cohort_identity_sha256="c" * 64)
+        )
+    elif fault == "request":
+        handoff = _with_handoff_identity(
+            replace(handoff, request_identity_sha256="d" * 64)
+        )
+    elif fault == "schedule-sessions":
+        handoff = _with_handoff_identity(
+            replace(handoff, schedule_sessions=_SESSIONS[:-1] + (_SESSIONS[-2],))
+        )
+    elif fault == "schedule-identity":
+        handoff = _with_handoff_identity(
+            replace(handoff, schedule_identity_sha256="e" * 64)
+        )
+    elif fault == "mapping-identity":
+        handoff = _with_handoff_identity(
+            replace(
+                handoff,
+                members=(
+                    replace(handoff.members[0], mapping_identity="f" * 64),
+                    *handoff.members[1:],
+                ),
+            )
+        )
+    else:
+        handoff = replace(handoff, handoff_identity_sha256="0" * 64)
+    result = _api()(raw, grid, _screen(raw, grid), handoff)
+    _assert_insufficient(result, reason="ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID")

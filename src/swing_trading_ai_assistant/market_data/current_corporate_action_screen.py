@@ -1688,6 +1688,85 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
         return result
 
 
+@dataclass(frozen=True, slots=True)
+class PublishedCurrentCorporateActionScreenV1:
+    """A sealed private screen paired with its exact redacted publication."""
+
+    private_result: PrivateCorporateActionScreenResultV1
+    public_report: CurrentSuppliedCohortCorporateActionScreenReportV1
+
+    def __post_init__(self) -> None:
+        if not _published_screen_core_valid(self):
+            raise ValueError("invalid published Plan-21 screen")
+
+
+def publish_current_corporate_action_screen_v1(
+    private_result: PrivateCorporateActionScreenResultV1,
+) -> PublishedCurrentCorporateActionScreenV1:
+    """Publish one resolver-sealed private result through its existing boundary."""
+    return PublishedCurrentCorporateActionScreenV1(
+        private_result=private_result,
+        public_report=private_result.to_public_report(),
+    )
+
+
+def published_current_corporate_action_screen_is_exact_valid_v1(
+    published: object,
+    *,
+    cohort_identity_sha256: str,
+    comparison_session: date,
+    decision_session: date,
+    decision_cutoff: datetime,
+    schedule_evidence_sha256: str,
+    schedule_source: str,
+    schedule_source_release: str,
+    expected_isins: tuple[str, ...],
+) -> bool:
+    """Validate the sealed Plan-21 publication against an exact caller window."""
+    if type(published) is not PublishedCurrentCorporateActionScreenV1:
+        return False
+    screen = published
+    if not _published_screen_core_valid(screen):
+        return False
+    private = screen.private_result
+    return (
+        private.outcome
+        is PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
+        and private.selected_snapshot_set_identity_sha256 is not None
+        and private.cohort_identity_sha256 == cohort_identity_sha256
+        and private.comparison_session == comparison_session
+        and private.decision_session == decision_session
+        and private.decision_cutoff == decision_cutoff
+        and private.schedule_evidence_sha256 == schedule_evidence_sha256
+        and private.schedule_source == schedule_source
+        and private.schedule_source_release == schedule_source_release
+        and tuple(member.provider_result.isin for member in private.member_results)
+        == tuple(sorted(expected_isins))
+    )
+
+
+def _published_screen_core_valid(published: object) -> bool:
+    if (
+        type(published) is not PublishedCurrentCorporateActionScreenV1
+        or type(published.private_result) is not PrivateCorporateActionScreenResultV1
+        or type(published.public_report)
+        is not CurrentSuppliedCohortCorporateActionScreenReportV1
+    ):
+        return False
+    try:
+        _validate_private_result_invariants(
+            published.private_result, require_identity=True
+        )
+        expected_public = published.private_result.to_public_report()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return (
+        expected_public == published.public_report
+        and expected_public.canonical_json_bytes()
+        == published.public_report.canonical_json_bytes()
+    )
+
+
 def _admitted_provider_result(
     result: object,
     isin: str,

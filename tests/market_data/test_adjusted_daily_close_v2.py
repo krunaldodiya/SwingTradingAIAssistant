@@ -25,6 +25,81 @@ _RETRIEVED_AT = datetime(2026, 8, 4, 12, 1, tzinfo=UTC)
 _DECISION_SESSION_CLOSE = datetime(2026, 8, 3, 15, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 _MAPPING_VERSION = "yfinance-symbol-mapping@v1"
+_COHORT = "a" * 64
+_SCHEDULE_EVIDENCE = "b" * 64
+_SCHEDULE_SOURCE = "nse-authoritative-calendar"
+_SCHEDULE_RELEASE = "sha256:" + "c" * 64
+
+
+def _identity(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    ).hexdigest()
+
+
+def _instant(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _schedule_identity() -> str:
+    return _identity(
+        {
+            "decision_session_official_close_at": _instant(_DECISION_SESSION_CLOSE),
+            "schedule_evidence_sha256": _SCHEDULE_EVIDENCE,
+            "schedule_source": _SCHEDULE_SOURCE,
+            "schedule_source_release": _SCHEDULE_RELEASE,
+            "sessions": [session.isoformat() for session in _sessions()],
+        }
+    )
+
+
+def _instrument_identity(member: dict[str, object]) -> dict[str, object]:
+    return {
+        "effective_symbol": member["effective_symbol"],
+        "exchange": member["exchange"],
+        "instrument_type": member["instrument_type"],
+        "isin": member["isin"],
+        "mapping_identity": member["mapping_identity"],
+        "mapping_valid_from": cast(date, member["mapping_valid_from"]).isoformat(),
+        "mapping_valid_through": (
+            None
+            if member["mapping_valid_through"] is None
+            else cast(date, member["mapping_valid_through"]).isoformat()
+        ),
+        "mapping_version": member["mapping_version"],
+        "provider_symbol": member["provider_symbol"],
+        "segment": member["segment"],
+        "valid_from": cast(date, member["valid_from"]).isoformat(),
+        "valid_through": (
+            None
+            if member["valid_through"] is None
+            else cast(date, member["valid_through"]).isoformat()
+        ),
+    }
+
+
+def _request_identity(instruments: list[dict[str, object]]) -> str:
+    return _identity(
+        {
+            "cohort_identity_sha256": _COHORT,
+            "contract_version": "provider-neutral-adjusted-daily-close@v2",
+            "decision_cutoff": _instant(_CUTOFF),
+            "instruments": [
+                _instrument_identity(member)
+                for member in sorted(
+                    instruments,
+                    key=lambda member: (
+                        str(member["isin"]),
+                        str(member["exchange"]),
+                        str(member["effective_symbol"]),
+                    ),
+                )
+            ],
+            "price_basis": "ADJUSTED",
+            "provider_id": "YFINANCE",
+            "schedule_identity_sha256": _schedule_identity(),
+        }
+    )
 
 
 def _mapping_identity(
@@ -143,29 +218,40 @@ def _instrument(
 def _request(
     *, instruments: tuple[dict[str, object], ...] | None = None
 ) -> dict[str, object]:
+    rows = list(
+        instruments
+        or (
+            _instrument(
+                isin="INE814H01011",
+                effective_symbol="ADANIPOWER",
+                provider_symbol="ADANIPOWER.NS",
+            ),
+            _instrument(
+                isin="INE002A01018",
+                effective_symbol="RELIANCE",
+                provider_symbol="RELIANCE.NS",
+            ),
+        )
+    )
+    try:
+        request_identity = _request_identity(rows)
+    except (AttributeError, KeyError, TypeError):
+        request_identity = "0" * 64
     return {
         "provider_id": "YFINANCE",
         "price_basis": "ADJUSTED",
+        "cohort_identity_sha256": _COHORT,
+        "request_identity_sha256": request_identity,
         "decision_cutoff": _CUTOFF,
         "plan21_schedule": {
             "sessions": _sessions(),
             "decision_session_official_close_at": _DECISION_SESSION_CLOSE,
+            "schedule_evidence_sha256": _SCHEDULE_EVIDENCE,
+            "schedule_source": _SCHEDULE_SOURCE,
+            "schedule_source_release": _SCHEDULE_RELEASE,
+            "schedule_identity_sha256": _schedule_identity(),
         },
-        "instruments": list(
-            instruments
-            or (
-                _instrument(
-                    isin="INE814H01011",
-                    effective_symbol="ADANIPOWER",
-                    provider_symbol="ADANIPOWER.NS",
-                ),
-                _instrument(
-                    isin="INE002A01018",
-                    effective_symbol="RELIANCE",
-                    provider_symbol="RELIANCE.NS",
-                ),
-            )
-        ),
+        "instruments": rows,
     }
 
 
@@ -572,6 +658,13 @@ def test_retains_schedule_cutoff_provenance_and_raw_separation() -> None:
     assert success.handoff.provider_source == "yfinance==1.6.0"
     assert success.handoff.retrieved_at == _RETRIEVED_AT
     assert success.handoff.temporal_label == "REVISED_NON_PIT"
+    assert success.handoff.cohort_identity_sha256 == _COHORT
+    assert success.handoff.request_identity_sha256 == _request_identity(
+        _request()["instruments"]
+    )
+    assert success.handoff.schedule_sessions == _sessions()
+    assert success.handoff.schedule_identity_sha256 == _schedule_identity()
+    assert len(success.handoff.handoff_identity_sha256) == 64
     assert raw_upstox == {
         "price_basis": "RAW",
         "s0_identity": "raw-s0-identity",
@@ -733,3 +826,23 @@ def test_v2_public_result_is_typed_and_redacted_for_success_and_failure() -> Non
         "code": "UNSUPPORTED_CAPABILITY",
         "reason": "SEGMENT_UNSUPPORTED",
     }
+
+
+def test_rejects_hash_spliced_v2_schedule_or_request_before_fetch() -> None:
+    for target in ("request_identity_sha256", "schedule_identity_sha256"):
+        request = _request()
+        if target == "request_identity_sha256":
+            request[target] = "d" * 64
+        else:
+            schedule = cast(dict[str, object], request["plan21_schedule"])
+            schedule[target] = "e" * 64
+        provider = _Provider(_frame())
+
+        result = _acquire(request, provider)
+
+        assert result.code == "INVALID_REQUEST"
+        assert result.reason in {
+            "REQUEST_IDENTITY_INVALID",
+            "SCHEDULE_IDENTITY_INVALID",
+        }
+        assert provider.calls == []

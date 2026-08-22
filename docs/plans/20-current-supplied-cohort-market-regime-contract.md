@@ -1,8 +1,9 @@
 # Current supplied-cohort Market Regime contract
 
-Status: **V2 COMPARABILITY IMPLEMENTED — focused behavioral checks are recorded
-below; final full local gates, independent exact-revision re-review, hosted
-CI/security, merge, and publication remain pending**
+Status: **PR #124 RESUMED — exact-candidate local evidence passed: 287 focused
+tests, 2,858 full tests, 91.04% coverage, Ruff format/check, Pyright,
+Vulture 80, build, and required no-network/live adjusted smokes. Exact final
+review repair, hosted CI/security, merge, and publication remain pending.**
 Contract revision: `current-supplied-cohort-market-regime@v1` (frozen);
 `current-supplied-cohort-market-regime@v2` (current comparability cutover)
 Schema revision: `current-supplied-cohort-market-regime-schema@v1` (V1 only)
