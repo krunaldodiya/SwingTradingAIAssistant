@@ -68,7 +68,8 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
         "--symbols RELIANCE,SBIN,TCS",
         "--universe nifty50-current",
         "latest completed authoritative session minute",
-        "Upstox is the only runtime candle and corporate-action provider",
+        "Upstox remains primary for live/raw OHLCV",
+        "yfinance is a separate adjusted-daily research provider",
         "`NSE_EQ` is an Upstox exchange-segment identifier",
     ):
         assert text in readme
