@@ -2,10 +2,10 @@
 
 Status: **ACTIVE / IN PROGRESS** — [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
 
-Plan: 25  
-Risk: **R3 / High** — financial-research evidence, provenance, source rights, prospective retention, and future point-in-time use  
-Owner: Krunal Dodiya  
-Started: 2026-08-23
+- Plan: 25
+- Risk: **R3 / High** — financial-research evidence, provenance, source rights, prospective retention, and future point-in-time use
+- Owner: Krunal Dodiya
+- Started: 2026-08-23
 
 ## Goal
 

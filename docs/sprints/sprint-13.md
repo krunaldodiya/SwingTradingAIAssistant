@@ -2,11 +2,11 @@
 
 Status: **IN PROGRESS**
 
-Issue: [#118 — Sprint 13: current news and event evidence](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)  
-Plan: [Plan 25 — Current supplied-cohort event-notice contract](../plans/25-current-supplied-cohort-event-notice-contract.md)  
-Started: 2026-08-23  
-Project status: **In Progress**  
-Risk: **R3 / High**
+- Issue: [#118 — Sprint 13: current news and event evidence](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+- Plan: [Plan 25 — Current supplied-cohort event-notice contract](../plans/25-current-supplied-cohort-event-notice-contract.md)
+- Started: 2026-08-23
+- Project status: **In Progress**
+- Risk: **R3 / High**
 
 ## Goal
 
