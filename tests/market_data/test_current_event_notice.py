@@ -584,6 +584,76 @@ def test_retention_binds_separate_identities_and_archive_owned_known_at(
     assert "ALPHA" not in repr(retained)
 
 
+def test_first_publication_samples_known_at_after_durable_content_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    raw = _artifact()
+    snapshot = _project(api, raw)
+    archive_identity = api._archive_identity(snapshot)
+    raw_name, snapshot_name, receipt_name, marker_name = api._archive_names(
+        snapshot, archive_identity
+    )
+    events: list[str] = []
+    real_publish = api._publish_object
+    real_verify = api._verify_archive_binding
+    real_require_source_date = api._require_source_ist_date
+
+    def publish(parent: int, name: str, value: bytes, maximum_size: int) -> bool:
+        published = real_publish(parent, name, value, maximum_size)
+        events.append(f"published:{name}")
+        return published
+
+    def verify(
+        operation: object,
+        root: int,
+        directory: int,
+        artifact_name: str,
+        artifact: bytes,
+        projection_name: str,
+        projection: bytes,
+    ) -> None:
+        real_verify(
+            operation,
+            root,
+            directory,
+            artifact_name,
+            artifact,
+            projection_name,
+            projection,
+        )
+        events.append("content-bound")
+
+    def trusted_now() -> datetime:
+        events.append("known-at-sampled")
+        return _KNOWN_AT
+
+    def require_source_date(value: Any, observed_at: datetime) -> None:
+        real_require_source_date(value, observed_at)
+        events.append("known-at-fresh")
+
+    monkeypatch.setattr(api, "_publish_object", publish)
+    monkeypatch.setattr(api, "_verify_archive_binding", verify)
+    monkeypatch.setattr(api, "_trusted_utc_now", trusted_now)
+    monkeypatch.setattr(api, "_require_source_ist_date", require_source_date)
+
+    with _lease(tmp_path) as lease:
+        retained = _retain(api, tmp_path, snapshot, lease, raw)
+
+    assert retained.known_at == _KNOWN_AT
+    assert events.count("known-at-sampled") == 1
+    assert max(
+        events.index(f"published:{raw_name}"),
+        events.index(f"published:{snapshot_name}"),
+        events.index("content-bound"),
+    ) < events.index("known-at-sampled")
+    assert events.index("known-at-sampled") < events.index("known-at-fresh")
+    assert events.index("known-at-fresh") < min(
+        events.index(f"published:{receipt_name}"),
+        events.index(f"published:{marker_name}"),
+    )
+
+
 def test_retention_rejects_knowledge_time_outside_filename_ist_date(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -790,6 +860,9 @@ def test_stale_archive_failure_never_publishes_completed_objects(
     )
     snapshot = _project(api)
     archive_identity = api._archive_identity(snapshot)
+    raw_name, snapshot_name, receipt_name, marker_name = api._archive_names(
+        snapshot, archive_identity
+    )
     with _lease(tmp_path) as lease:
         _failure(
             _retain(api, tmp_path, snapshot, lease, _artifact()),
@@ -797,8 +870,9 @@ def test_stale_archive_failure_never_publishes_completed_objects(
             "EVENT_SOURCE_DATE_STALE",
         )
     root = tmp_path / ".current-event-notice-v1"
-    assert not (root / f"{archive_identity}.receipt.json").exists()
-    assert not (root / f"{archive_identity}.complete.json").exists()
+    assert {path.name for path in root.iterdir()} == {raw_name, snapshot_name}
+    assert not (root / receipt_name).exists()
+    assert not (root / marker_name).exists()
 
 
 @pytest.mark.parametrize(

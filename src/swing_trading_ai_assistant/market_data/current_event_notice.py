@@ -1535,6 +1535,19 @@ def _archive_snapshot(
                 _require_source_ist_date(snapshot, known_at)
                 _require_source_ist_date(snapshot, _trusted_utc_now())
             else:
+                _publish_object(directory, raw_name, artifact, _MAX_ARTIFACT_BYTES)
+                _publish_object(
+                    directory, snapshot_name, snapshot_raw, _MAX_ARCHIVE_SNAPSHOT_BYTES
+                )
+                _verify_archive_binding(
+                    operation,
+                    operation.descriptor,
+                    directory,
+                    raw_name,
+                    artifact,
+                    snapshot_name,
+                    snapshot_raw,
+                )
                 known_at = _trusted_utc_now()
                 _require_source_ist_date(snapshot, known_at)
                 known_text = known_at.isoformat(timespec="microseconds").replace(
@@ -1552,19 +1565,6 @@ def _archive_snapshot(
                 )
                 marker_raw = _marker_bytes(
                     archive_identity, receipt_identity, known_text, retained_identity
-                )
-                _publish_object(directory, raw_name, artifact, _MAX_ARTIFACT_BYTES)
-                _publish_object(
-                    directory, snapshot_name, snapshot_raw, _MAX_ARCHIVE_SNAPSHOT_BYTES
-                )
-                _verify_archive_binding(
-                    operation,
-                    operation.descriptor,
-                    directory,
-                    raw_name,
-                    artifact,
-                    snapshot_name,
-                    snapshot_raw,
                 )
                 _publish_object(
                     directory, receipt_name, receipt_raw, _MAX_ARCHIVE_RECEIPT_BYTES
