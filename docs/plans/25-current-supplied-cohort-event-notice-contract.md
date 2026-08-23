@@ -1,11 +1,12 @@
 # Current supplied-cohort event-notice contract
 
-Status: **ACTIVE / IN PROGRESS** — [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+Status: **CLOSED / COMPLETED** — [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
 
 - Plan: 25
 - Risk: **R3 / High** — financial-research evidence, provenance, source rights, prospective retention, and future point-in-time use
 - Owner: Krunal Dodiya
-- Started: 2026-08-23
+- Project status: **Done**
+- Delivery: [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137) merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12` as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`
 
 ## Goal
 
@@ -333,7 +334,9 @@ docs/plans/25-current-supplied-cohort-event-notice-contract.md
 docs/sprints/sprint-13.md
 ```
 
-Mutable status documents may be updated only to replace stale `NOT STARTED` lifecycle text with truthful `IN PROGRESS` or delivered evidence. No dependencies, lockfiles, workflows, CLI, API, MCP, UI, other feature modules, or historical modules change.
+Mutable status documents may replace stale lifecycle wording only with this
+delivered closeout evidence. No dependencies, lockfiles, workflows, CLI, API,
+MCP, UI, other feature modules, or historical modules changed.
 
 ## RED acceptance tests
 
@@ -377,5 +380,42 @@ PR hosted Quality/build
 GitGuardian
 merge and lifecycle closeout
 ```
+
+## Delivered lifecycle evidence
+
+Issue #118 is closed, its Delivery Project item is **Done**, and it is the
+Sprint 13 milestone. Independent functional review returned **APPROVE** and
+independent security review returned **PASS** for exact committed head
+`2b65aa46f3f67552bf600675c6f1a5c09d363e12`; PR #137 merged that head as
+`75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`. Exact committed local gates passed
+Ruff format/check, Pyright 0/0, Vulture 80, `uv build`, `git diff --check`, and
+3,038 tests at 90.68% coverage. Hosted Quality/build and GitGuardian passed on
+the exact reviewed head.
+
+The official artifact was 8,016 bytes with 20 rows and SHA-256
+`a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`.
+Production parse/project/real `StorageRootLease` archive-and-retry admitted one
+notice for `GODREJCP` / `INE102D01028` and returned
+`NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`. This is
+parser/projection/retention evidence only: it does not establish source
+completeness, live participation, historical coverage, commercial permission,
+publisher correction lineage, recommendation quality, or effectiveness.
+
+The delivered scope remains the operator-acquired official NSE Equity unfiltered
+`1D` CSV under attributed owner-private personal/noncommercial local use. It
+retains the exact cohort/provenance, typed-failure, immutable archive-owned
+`known_at`, and retain-before-return controls, with no automated collection,
+attachment fetch, redistribution, sentiment, recommendation, signal, or order.
+Prospective archive only remains policy: unavailable history is explicit;
+`OHLCV_ONLY` cannot validate news/event behavior; and
+`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven retained
+coverage. A future licensed historical source remains separate.
+
+Automated/licensed acquisition, general news, other providers/types/surfaces,
+semantic correction graphs, external attestation, licensed history,
+sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
+implementation decision is recorded by this closeout.
 
 Every finding is triaged against the FIRST_WORKING_SLICE. Optional hardening, broader acquisition, generalized replay, attestation beyond the existing runtime-identity convention, extra providers, and delivery surfaces remain later work unless a finding proves a concrete current blocker.
