@@ -92,9 +92,12 @@ The closeout records the working-feature-first MVP correction and its handbook
 revision `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`: separate the first
 working slice from later improvements and stop before unplanned scope expansion.
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
-on 2026-08-23; no Sprint 13 planning, implementation, or source decision is
-recorded in this closeout.
+is **ACTIVE / IN PROGRESS** under
+[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md). Its first
+working slice admits one operator-acquired official NSE Equity `1D`
+corporate-announcement CSV for owner-private current/prospective evidence.
+Automated acquisition, general news, historical backfill, sentiment, additional
+providers, and delivery surfaces remain deferred.
 
 Plan 21 remains a nonexhaustive provider screen, not authoritative no-break
 proof or an adjustment engine. The adjusted-close successor remains separate
@@ -335,9 +338,9 @@ smoke with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 is parser provenance only.
 
-Sprint 13 / Issue #118 is unblocked but explicitly not started; owner direction
-permits starting on 2026-08-23, and this closeout makes no Sprint 13 plan,
-implementation, or source decision.
+Sprint 13 / Issue #118 is active under Plan 25. The bounded first working slice
+is current/prospective official NSE Equity corporate-announcement evidence;
+historical reconstruction and broader news/provider work remain deferred.
 
 ## Later modules
 
@@ -361,7 +364,7 @@ capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
 not reopen completed Issues #125/#127/#132, Sprint 11, or Sprint 12, alter
-future Plan-23 migrations, or pre-empt the not-started Sprint 13 scope.
+future Plan-23 migrations, or pre-empt the active Sprint 13 WIP-one scope.
 
 ## Release gates
 

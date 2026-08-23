@@ -183,10 +183,12 @@ remediation are in
   Sector taxonomy, and all source/licence limits, nonclaims, frozen V1
   preservation, and explicit deferrals remain in force.
 
-- Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-  is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
-  on 2026-08-23; this closeout records no Sprint 13 planning, implementation, or
-  source decision.
+- [Sprint 13 — Current supplied-cohort event notices](sprint-13.md) /
+  [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+  is **ACTIVE / IN PROGRESS** under
+  [Plan 25](../plans/25-current-supplied-cohort-event-notice-contract.md). The
+  first working slice is one operator-acquired official NSE Equity `1D`
+  corporate-announcement source with owner-private prospective retention.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)
@@ -194,4 +196,4 @@ remediation are in
   market-data codebase as `swing-trading-market-data` while the full application
   remains installable. It must not duplicate implementation, reopen completed
   Issues #125/#127/#132, Sprint 11, or completed Sprint 12, alter future
-  Plan-23 migrations, or pre-empt the not-started Sprint 13 scope.
+  Plan-23 migrations, or pre-empt the active Sprint 13 WIP-one scope.

@@ -135,9 +135,12 @@ current 100-row, 6,610-byte artifact with SHA-256
 that result is parser provenance only.
 
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
-on 2026-08-23, not during this closeout; no Sprint 13 planning,
-implementation, or source decision is recorded here.
+is **ACTIVE / IN PROGRESS** under
+[Plan 25](docs/plans/25-current-supplied-cohort-event-notice-contract.md).
+Its first working slice is one operator-acquired official NSE Equity `1D`
+corporate-announcement CSV for owner-private current/prospective evidence.
+Automated acquisition, general news, historical backfill, sentiment, and extra
+providers or delivery surfaces remain later improvements.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
 screening. yfinance is a separate adjusted-daily research provider, not a

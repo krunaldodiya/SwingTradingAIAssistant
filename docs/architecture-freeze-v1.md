@@ -103,9 +103,12 @@ unplanned hardening or subsystems. The corresponding handbook revision is
 `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`.
 
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is unblocked but explicitly **NOT STARTED**. Owner direction permits starting
-on 2026-08-23; this closeout records no Sprint 13 planning, implementation, or
-source decision.
+is **ACTIVE / IN PROGRESS** under
+[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md). Its first
+working slice admits one operator-acquired official NSE Equity `1D`
+corporate-announcement CSV for owner-private current/prospective evidence.
+Historical backfill, automated acquisition, general news, sentiment, additional
+providers, and delivery surfaces remain deferred.
 
 ## Repository identity
 

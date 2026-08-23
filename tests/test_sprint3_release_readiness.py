@@ -61,8 +61,15 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
     tmp_path: Path,
 ) -> None:
     readme = README.read_text()
-    source = "\n".join(path.read_text() for path in SOURCE.glob("*.py"))
-
+    source_by_name = {path.name: path.read_text() for path in SOURCE.glob("*.py")}
+    source = "\n".join(source_by_name.values())
+    cli_source = source_by_name["cli.py"]
+    event_source = source_by_name["current_event_notice.py"]
+    other_source = "\n".join(
+        text
+        for name, text in source_by_name.items()
+        if name != "current_event_notice.py"
+    )
     for text in (
         "--symbol SBIN",
         "--symbols RELIANCE,SBIN,TCS",
@@ -76,8 +83,24 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
 
     assert "https://api.upstox.com" in source
     assert "https://assets.upstox.com" in source
-    assert "nseindia.com" not in source.lower()
-    assert "nse.com" not in source.lower()
+    assert "nseindia.com" not in cli_source.lower()
+    assert "nse.com" not in cli_source.lower()
+    assert "current_event_notice" not in cli_source
+    assert (
+        "https://www.nseindia.com/companies-listing/"
+        "corporate-filings-announcements?tabIndex=equity"
+    ) in event_source
+    assert "nseindia.com" not in other_source.lower()
+    assert "nse.com" not in other_source.lower()
+    for primitive in (
+        "requests",
+        "httpx",
+        "urllib.request",
+        "urlopen",
+        "socket",
+        "browser",
+    ):
+        assert primitive not in event_source.lower()
 
     parsed = cli.build_parser().parse_args(
         [
