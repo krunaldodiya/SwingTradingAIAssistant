@@ -1,12 +1,12 @@
 # Sprint 13 — Current supplied-cohort event notices
 
-Status: **IN PROGRESS**
+Status: **CLOSED / COMPLETED**
 
-- Issue: [#118 — Sprint 13: current news and event evidence](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
+- Issue: [#118 — Sprint 13: current news and event evidence](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — **Closed**
 - Plan: [Plan 25 — Current supplied-cohort event-notice contract](../plans/25-current-supplied-cohort-event-notice-contract.md)
-- Started: 2026-08-23
-- Project status: **In Progress**
+- Project status: **Done**
 - Risk: **R3 / High**
+- Delivery: [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137) merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12` as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`
 
 ## Goal
 
@@ -39,6 +39,7 @@ This sprint does not implement a generic news platform, historical backfill, sen
 - sentiment, materiality, ranking, recommendation, signal, order, or effectiveness;
 - CLI/API/MCP/UI/notifications and Sprint 14 packet integration;
 - historical news/event acquisition or retrospective reconstruction;
+- external signing, trusted ledger, or attestation beyond the existing runtime-identity convention;
 - optimization without measured first-slice evidence.
 
 A review finding blocks the working slice only when it cites a violated current acceptance condition, R3 control, or concrete current safety, correctness, usability, authorization, or evidence-integrity failure. The scope-expansion circuit breaker applies before any later item is added.
@@ -65,7 +66,10 @@ encoding: UTF-8 with BOM
 header: SYMBOL,COMPANY NAME,SUBJECT,DETAILS,BROADCAST DATE/TIME,RECEIPT,DISSEMINATION,DIFFERENCE,ATTACHMENT
 ```
 
-The artifact is source/schema qualification only until the implementation smoke is observed. It is never committed and does not prove complete history, a live cohort notice, recommendation, or effectiveness.
+The artifact is source/schema qualification and parser/retention-smoke evidence
+only. It is never committed and does not prove source completeness, a live
+cohort notice, historical coverage, commercial permission, publisher correction
+lineage, recommendation quality, or effectiveness.
 
 ## Provider decisions
 
@@ -86,20 +90,47 @@ Historical news/event data is not silently skipped and is never fabricated.
 - `OHLCV_ONLY` studies can test price-derived behavior only and cannot claim validation of news/event effects.
 - `OHLCV_PLUS_NEWS_EVENTS` studies fail unsupported/insufficient for any required unavailable window.
 - Forward/paper observation may use a retained notice only at cutoffs at or after its exact archive-owned `known_at`.
-- A licensed historical source, if one becomes available, requires a separate source/licence evaluation and point-in-time revision contract. A current page or current archive is never projected backward.
+- A future licensed historical source requires a separate source/licence
+  evaluation, contract, point-in-time revision model, availability ledger, and
+  owner approval. A current page or current archive is never projected backward.
 
 This is the honest substitute for unavailable historical news: capability-aware studies and prospective evidence accumulation, not neutralization.
 
-## Implementation path
+## Delivered lifecycle evidence
 
-1. Finalize and review Plan 25 against the source artifact and Issue #118.
-2. Add focused RED contract tests.
-3. Implement the exact parser, cohort projection, immutable archive, retained result, and runtime identity.
-4. Run the official parser/retention smoke and focused tests.
-5. Run full repository gates.
-6. Obtain independent functional and security reviews; repair only current-slice blockers.
-7. Commit the exact candidate, open the PR, pass hosted checks, merge, and reconcile lifecycle documentation and Project status.
+Issue #118 is closed, its Delivery Project item is **Done**, and it is the
+Sprint 13 milestone. [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137)
+merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12`
+as merge commit `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`. Independent
+functional review returned **APPROVE** and independent security review returned
+**PASS**. Exact committed local gates passed Ruff format/check, Pyright 0/0,
+Vulture 80, `uv build`, `git diff --check`, and 3,038 tests at 90.68% coverage;
+hosted Quality/build and GitGuardian passed on the exact reviewed head.
 
-## Current nonclaims
+The exact official artifact was 8,016 bytes with 20 rows and SHA-256
+`a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`.
+Production parse/project/real `StorageRootLease` archive-and-retry admitted one
+notice for `GODREJCP` / `INE102D01028` and returned
+`NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`. This is
+parser/projection/retention evidence only; it does not establish source
+completeness, live participation, historical coverage, commercial permission,
+publisher correction lineage, recommendation quality, or effectiveness.
 
-Sprint 13 currently makes no claim of delivered implementation, complete NSE coverage, automated or realtime acquisition, historical coverage, licensed commercial use, publisher correction lineage, event-effective time, sentiment, materiality, recommendation, signal, order, integration with Sprint 14, or effectiveness.
+## Delivered nonclaims
+
+The delivered first slice accepts only the operator-acquired, unfiltered
+official NSE Equity `1D` CSV for attributed owner-private personal/noncommercial
+local use. It preserves exact cohort/provenance, typed failure, immutable
+archive-owned `known_at`, and retain-before-return behavior. It has no automated
+collection, attachment fetch, redistribution, sentiment, recommendation, signal,
+or order. The archive is prospective only; unavailable history remains explicit.
+`OHLCV_ONLY` cannot validate news/event behavior, and
+`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven retained
+coverage. A future licensed historical source remains separate.
+
+Automated/licensed acquisition, general news, other providers/types/surfaces,
+semantic correction graphs, external attestation, licensed history,
+sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
+implementation decision is recorded by this closeout.

@@ -135,12 +135,42 @@ current 100-row, 6,610-byte artifact with SHA-256
 that result is parser provenance only.
 
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is **ACTIVE / IN PROGRESS** under
+is **closed/completed** under
 [Plan 25](docs/plans/25-current-supplied-cohort-event-notice-contract.md).
-Its first working slice is one operator-acquired official NSE Equity `1D`
-corporate-announcement CSV for owner-private current/prospective evidence.
-Automated acquisition, general news, historical backfill, sentiment, and extra
-providers or delivery surfaces remain later improvements.
+[PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137)
+merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12`
+as merge commit `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`.
+Independent functional review returned **APPROVE** and security review returned
+**PASS**. Exact committed local gates passed Ruff format/check, Pyright 0/0,
+Vulture 80, `uv build`, `git diff --check`, and 3,038 tests at 90.68%
+coverage; hosted Quality/build and GitGuardian passed on the reviewed head.
+Issue #118 is closed, its Delivery Project item is **Done**, and it is the
+Sprint 13 milestone.
+
+The delivered first slice accepts one operator-acquired, unfiltered official
+NSE Equity `1D` corporate-announcement CSV only for attributed owner-private
+personal/noncommercial local use. It binds the exact supplied canonical cohort,
+provenance, typed failures, immutable archive-owned `known_at`, and
+retain-before-return behavior; it has no automated collection, attachment fetch,
+redistribution, sentiment, recommendation, signal, or order. The exact
+8,016-byte, 20-row official artifact has SHA-256
+`a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`.
+Production parse/project/real `StorageRootLease` archive-and-retry admitted one
+`GODREJCP` / `INE102D01028` notice and returned
+`NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`; this is
+parser/projection/retention evidence only, not source completeness, live
+participation, historical coverage, commercial permission, correction lineage,
+recommendation quality, or effectiveness.
+
+Prospective archive only and explicit unavailable history remain the policy:
+`OHLCV_ONLY` cannot validate news/event behavior, while
+`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven retained
+coverage. Licensed history, automated/licensed acquisition, general news, other
+providers/types/surfaces, semantic correction graphs, external attestation,
+sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is next and unblocked but **NOT STARTED**; this closeout records no Sprint 14
+planning, source, or implementation decision.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
 screening. yfinance is a separate adjusted-daily research provider, not a

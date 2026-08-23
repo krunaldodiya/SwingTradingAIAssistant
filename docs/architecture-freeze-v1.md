@@ -103,12 +103,42 @@ unplanned hardening or subsystems. The corresponding handbook revision is
 `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`.
 
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is **ACTIVE / IN PROGRESS** under
-[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md). Its first
-working slice admits one operator-acquired official NSE Equity `1D`
-corporate-announcement CSV for owner-private current/prospective evidence.
-Historical backfill, automated acquisition, general news, sentiment, additional
-providers, and delivery surfaces remain deferred.
+is **closed/completed** under
+[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md).
+[PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137)
+merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12`
+as merge commit `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`.
+Independent functional review returned **APPROVE** and security review returned
+**PASS**. Exact committed local gates passed Ruff format/check, Pyright 0/0,
+Vulture 80, `uv build`, `git diff --check`, and 3,038 tests at 90.68%
+coverage; hosted Quality/build and GitGuardian passed on the reviewed head.
+Issue #118 is closed, its Delivery Project item is **Done**, and it is the
+Sprint 13 milestone.
+
+The architecture now includes the delivered bounded event-notice evidence
+contract: one operator-acquired, unfiltered official NSE Equity `1D` CSV for
+attributed owner-private personal/noncommercial local use; exact cohort and
+provenance binding; typed failures; immutable archive-owned `known_at`; and
+retain-before-return. It excludes automated collection, attachment fetch,
+redistribution, sentiment, recommendation, signal, and order. The official
+8,016-byte, 20-row artifact SHA-256 is
+`a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`.
+Production parse/project/real `StorageRootLease` archive-and-retry produced one
+`GODREJCP` / `INE102D01028` notice and
+`NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`; this is
+parser/projection/retention evidence only, not source completeness, live
+participation, historical coverage, commercial permission, publisher correction
+lineage, recommendation quality, or effectiveness.
+
+Event evidence archives prospectively only; unavailable history is explicit.
+`OHLCV_ONLY` cannot validate news/event behavior and
+`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven coverage.
+Automated/licensed acquisition, general news, other providers/types/surfaces,
+semantic correction graphs, external attestation, licensed history,
+sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
+implementation decision is recorded by this closeout.
 
 ## Repository identity
 

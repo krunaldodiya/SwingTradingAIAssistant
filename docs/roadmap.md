@@ -92,12 +92,41 @@ The closeout records the working-feature-first MVP correction and its handbook
 revision `93210ed3c28df90fdb971f6b8fd7c96ce71cd240`: separate the first
 working slice from later improvements and stop before unplanned scope expansion.
 Sprint 13 / [Issue #118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118)
-is **ACTIVE / IN PROGRESS** under
-[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md). Its first
-working slice admits one operator-acquired official NSE Equity `1D`
-corporate-announcement CSV for owner-private current/prospective evidence.
-Automated acquisition, general news, historical backfill, sentiment, additional
-providers, and delivery surfaces remain deferred.
+is **closed/completed** under
+[Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md).
+[PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137)
+merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12`
+as merge commit `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`.
+Independent functional review returned **APPROVE** and security review returned
+**PASS**. Exact committed local gates passed Ruff format/check, Pyright 0/0,
+Vulture 80, `uv build`, `git diff --check`, and 3,038 tests at 90.68%
+coverage; hosted Quality/build and GitGuardian passed on the reviewed head.
+Issue #118 is closed, its Delivery Project item is **Done**, and it is the
+Sprint 13 milestone.
+
+The delivered first slice admits one operator-acquired, unfiltered official NSE
+Equity `1D` corporate-announcement CSV for attributed owner-private
+personal/noncommercial local use. It preserves exact cohort/provenance, typed
+failure, immutable archive-owned `known_at`, and retain-before-return behavior,
+without automated collection, attachment fetch, redistribution, sentiment,
+recommendation, signal, or order. The exact 8,016-byte, 20-row artifact SHA-256
+is `a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`;
+production parse/project/real `StorageRootLease` archive-and-retry returned one
+`GODREJCP` / `INE102D01028` notice and
+`NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`. This is
+parser/projection/retention evidence only, not source completeness, live
+participation, historical coverage, commercial permission, publisher correction
+lineage, recommendation quality, or effectiveness.
+
+The archive is prospective only and unavailable history remains explicit:
+`OHLCV_ONLY` cannot validate news/event behavior, and
+`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven coverage.
+Automated/licensed acquisition, general news, other providers/types/surfaces,
+semantic correction graphs, external attestation, licensed history,
+sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
+implementation decision is recorded by this closeout.
 
 Plan 21 remains a nonexhaustive provider screen, not authoritative no-break
 proof or an adjustment engine. The adjusted-close successor remains separate
@@ -338,9 +367,12 @@ smoke with SHA-256
 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85`
 is parser provenance only.
 
-Sprint 13 / Issue #118 is active under Plan 25. The bounded first working slice
-is current/prospective official NSE Equity corporate-announcement evidence;
-historical reconstruction and broader news/provider work remain deferred.
+Sprint 13 / Issue #118 is closed/completed under Plan 25 after PR #137 merged
+exact independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12`
+as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`. The delivered current/prospective
+official NSE Equity corporate-announcement evidence preserves the accepted
+owner-private source boundary; historical reconstruction and broader
+news/provider work remain deferred.
 
 ## Later modules
 
@@ -363,8 +395,9 @@ provider-neutral market-data API without research/AI modules. It must preserve
 capability-specific adapters, environment-owned credentials, explicit optional
 provider dependencies, isolated wheel/sdist verification, and publication
 provenance. It does not add a provider or change a market calculation. It does
-not reopen completed Issues #125/#127/#132, Sprint 11, or Sprint 12, alter
-future Plan-23 migrations, or pre-empt the active Sprint 13 WIP-one scope.
+not reopen completed Issues #125/#127/#132, Sprint 11, Sprint 12, or Sprint 13,
+alter future Plan-23 migrations, or pre-empt the next unstarted Sprint 14
+WIP-one scope.
 
 ## Release gates
 
