@@ -78,9 +78,19 @@ def test_project_default_retains_authoritative_branch_coverage() -> None:
     assert "--no-cov" not in addopts
 
 
-def test_ci_keeps_bare_authoritative_pytest_and_no_coverage_bypass() -> None:
+def test_ci_keeps_bare_authoritative_pytest_and_scopes_coverage_bypass() -> None:
     workflow = CI.read_text(encoding="utf-8")
+    focused_gate = workflow.split(
+        "      - name: Run focused lifecycle documentation gate", maxsplit=1
+    )[1].split("      - name: Run authoritative quality gate", maxsplit=1)[0]
+    authoritative_gate = workflow.split(
+        "      - name: Run authoritative quality gate", maxsplit=1
+    )[1].split("      - name: Build distribution", maxsplit=1)[0]
 
-    assert "uv run --no-sync --extra dev pytest" in workflow
-    assert "--no-cov" not in workflow
+    assert (
+        "uv run --no-sync --extra dev pytest "
+        "tests/test_sprint3_release_readiness.py --no-cov"
+    ) in focused_gate
+    assert "uv run --no-sync --extra dev pytest" in authoritative_gate
+    assert "--no-cov" not in authoritative_gate
     assert "PYTEST_ADDOPTS" not in workflow

@@ -1,6 +1,6 @@
 # Current same-pass Market Regime contract
 
-Status: **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); CANDIDATE COMMIT CREATED; EXACT-CURRENT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY**
+Status: **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED; ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE, ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**
 Issue: [#119 — Sprint 14: integrated current research packet](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
 Risk: **R3 / High — financial, temporal, and evidence impact**
 Decision owner and residual-risk owner: **repository owner**
@@ -36,11 +36,10 @@ It MUST be cleanly replaced; no `@v1` alias or dual public path may ship.
 Plan-26's 101 focused-test result and its specification/repair record remain
 truthful WIP history, not acceptance evidence for this successor.
 
-Lifecycle is **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL
-EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53%
-COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL,
-CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); CANDIDATE COMMIT CREATED; EXACT-CURRENT REVIEWS,
-PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY**. Raw query
+Lifecycle is **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY
+PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED;
+ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE,
+ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**. Raw query
 defects found by prior smokes remain fixed and behavior-tested, including
 within-current-month, cross-month, and closed-only retained-minute queries; the
 per-member ceiling;
@@ -119,8 +118,14 @@ installed-wheel imports/runtime checks. Installed runtime identities are raw
 Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
 Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
 and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
-A candidate commit has been created. Exact-current reviews, push, hosted checks,
-merge, and closeout remain pending. No acceptance, completion, or delivery is claimed.
+PR #140 merged exact reviewed head
+`0236942ced7127bc7220282d71e2cc35f0ff0c05` to `main` as merge commit
+`893c2127fac6ab7a2f3f416e315aee26d8b06b4f`. Exact functional review returned
+**APPROVE** and exact privacy/provenance review returned **PASS**. Hosted
+Quality/build and GitGuardian passed. Issue #119 is closed/completed, its
+Delivery Project item is **Done**, and this is the Sprint 14 milestone. Sprint
+14 is delivered and closed as a research-only capability: no autonomous trading,
+financial advice, guaranteed outcome, or broker order placement is delivered.
 
 Ten review blockers are fixed locally without a new subsystem: the two PR #140
 P2 fixes for active-date partial canonical/mapping validity and schema-specific
@@ -135,8 +140,7 @@ The directory-edge `st_nlink` portability fix remains in place without
 weakening leaf metadata checks; exact source-file checks remain enforced and
 the dependent runtime identity manifests remain current. The native supported
 target remains POSIX-style macOS and Linux; Native Windows is unsupported, WSL2
-or Docker is the stated Windows path, and exact-candidate Linux hosted CI has
-not run and is not claimed.
+or Docker is the stated Windows path, and hosted Quality/build and GitGuardian passed on the exact reviewed head.
 
 The fresh current-byte genuine IRCTC production negative passed with the exact
 `NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
@@ -148,7 +152,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
 The 2026-08-26 acquisition, parser, schedule-source, source-manifest, test, and
 runtime-manifest changes invalidate the following 461-test/full-gate/wheel and
@@ -208,10 +212,7 @@ one-lease post-close `RELIANCE` positive, mandatory Aug-27 market-hours
 `RELIANCE` positive, and genuine IRCTC production negative passed with the
 state projections recorded above. All required current smokes and exact current
 local gates have passed; the positive modes remain separate and neither
-substitutes for the other. A candidate commit has been created. Exact-SHA
-functional and provenance approval requires rerun; PR, hosted checks, merge,
-and closeout remain **PENDING**. No acceptance, completion, or delivery is
-claimed until the lifecycle is complete.
+substitutes for the other. PR #140 merged the exact reviewed head after functional **APPROVE** and privacy/provenance **PASS**; hosted Quality/build and GitGuardian passed; Issue #119 is closed/completed and its Delivery Project item is Done. Sprint 14 is delivered/closed as the research-only milestone.
 
 ## Five-line evaluation
 
@@ -2164,9 +2165,7 @@ The final 14-file focused portfolio passed **852 tests** with `--no-cov`; the
 exact current source full suite passed **3,400 tests at 89.53% total coverage**
 against the **87%** threshold. All exact-current local gates pass, including Ruff
 format/check over 275 files, Pyright 0/0, Vulture 80, diff, build, wheel, and clean
-installed-wheel imports/runtime. A candidate commit has been created; exact-current
-reviews, push, hosted checks, merge, and closeout remain pending. No completion or
-delivery is claimed.
+installed-wheel imports/runtime. PR #140 merged the exact reviewed head; exact reviews and hosted gates passed; Issue #119 is closed/completed and its Delivery Project item is Done. Sprint 14 is delivered/closed as the research-only milestone.
 
 Ten review blockers are fixed locally without a new subsystem: the two PR #140
 P2 fixes for active-date partial canonical/mapping validity and schema-specific
@@ -2187,7 +2186,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete. No history/backfill,
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim. No history/backfill,
 provider expansion,
 fallback, schedule-source relabeling, or weakening of current-session admission
 is authorized.
@@ -2304,7 +2303,7 @@ Implementation evidence conditions retained by this contract:
    ledger, five null AI facts, mandatory `NO_TRADE`, and all
    V3/Industry/event/Packet retries and original times preserved.
 
-All required current smokes have passed. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+All required current smokes have passed. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
 ## Nonclaims
 

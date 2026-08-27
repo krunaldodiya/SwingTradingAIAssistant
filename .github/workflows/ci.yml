@@ -42,26 +42,54 @@ jobs:
           if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}"; then
             echo "Comparison base is unavailable; failing closed to the full gate."
             echo "full_gate=true" >> "$GITHUB_OUTPUT"
+            echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"
           else
-            non_markdown="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA" | grep -Ev '\.md$' || true)"
-            if [[ -n "$non_markdown" ]]; then
+            changed="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA")"
+            full_gate=false
+            lifecycle_gate=false
+            outside_lifecycle=""
+            while IFS= read -r path; do
+              [[ -z "$path" ]] && continue
+              case "$path" in
+                *.md)
+                  ;;
+                tests/test_sprint3_release_readiness.py)
+                  lifecycle_gate=true
+                  ;;
+                *)
+                  full_gate=true
+                  outside_lifecycle+="${outside_lifecycle:+$'\n'}$path"
+                  ;;
+              esac
+            done <<< "$changed"
+            if [[ "$full_gate" == "true" ]]; then
               echo "full_gate=true" >> "$GITHUB_OUTPUT"
-              printf 'Full gate required for:\n%s\n' "$non_markdown"
+              echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"
+              printf 'Full gate required for:\n%s\n' "$outside_lifecycle"
+            elif [[ "$lifecycle_gate" == "true" ]]; then
+              echo "full_gate=false" >> "$GITHUB_OUTPUT"
+              echo "lifecycle_gate=true" >> "$GITHUB_OUTPUT"
+              echo "Lifecycle documentation change: using the focused lifecycle gate."
             else
               echo "full_gate=false" >> "$GITHUB_OUTPUT"
+              echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"
               echo "Markdown-only change: using the lightweight required gate."
             fi
             echo "base=$base" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run lightweight Markdown gate
-        if: steps.changes.outputs.full_gate != 'true'
+        if: >-
+          steps.changes.outputs.full_gate != 'true' &&
+          steps.changes.outputs.lifecycle_gate != 'true'
         env:
           BASE_SHA: ${{ steps.changes.outputs.base }}
         run: git diff --check "$BASE_SHA" "$GITHUB_SHA"
 
       - name: Set up uv and Python
-        if: steps.changes.outputs.full_gate == 'true'
+        if: >-
+          steps.changes.outputs.full_gate == 'true' ||
+          steps.changes.outputs.lifecycle_gate == 'true'
         uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
         with:
           version: "0.9.24"
@@ -69,8 +97,20 @@ jobs:
           checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
 
       - name: Install locked development dependencies
-        if: steps.changes.outputs.full_gate == 'true'
+        if: >-
+          steps.changes.outputs.full_gate == 'true' ||
+          steps.changes.outputs.lifecycle_gate == 'true'
         run: uv sync --extra dev --frozen
+
+      - name: Run focused lifecycle documentation gate
+        if: steps.changes.outputs.lifecycle_gate == 'true'
+        env:
+          BASE_SHA: ${{ steps.changes.outputs.base }}
+        run: >-
+          git diff --check "$BASE_SHA" "$GITHUB_SHA" &&
+          uv run --no-sync --extra dev ruff format --check tests/test_sprint3_release_readiness.py &&
+          uv run --no-sync --extra dev ruff check tests/test_sprint3_release_readiness.py &&
+          uv run --no-sync --extra dev pytest tests/test_sprint3_release_readiness.py --no-cov
 
       - name: Run authoritative quality gate
         if: steps.changes.outputs.full_gate == 'true'
