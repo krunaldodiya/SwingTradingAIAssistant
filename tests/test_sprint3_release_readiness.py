@@ -299,10 +299,17 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     assert "852-test focused portfolio" in sprint14_row
     assert "3,400-test full suite at 89.53% coverage" in sprint14_row
     assert "all exact-current local gates passed" in sprint14_row
-    assert "candidate commit created" in sprint14_row
-    assert "exact-current reviews, push/hosted/merge/closeout pending" in sprint14_row
+    assert "DELIVERED/CLOSED" in sprint14_row
+    assert "PR #140 MERGED" in sprint14_row
+    assert "ISSUE #119 CLOSED/COMPLETED" in sprint14_row
+    assert "DELIVERY PROJECT ITEM DONE" in sprint14_row
+    assert "SPRINT 14 MILESTONE" in sprint14_row
+    assert "APPROVE/PASS" in sprint14_row
+    assert "hosted Quality/build and GitGuardian passed" in sprint14_row
+    assert "0236942ced7127bc7220282d71e2cc35f0ff0c05" in sprint14_row
+    assert "893c2127fac6ab7a2f3f416e315aee26d8b06b4f" in sprint14_row
+    assert "no autonomous-trading or advice claim" in sprint14_row
     assert not stale_commit_pending_pattern.search(sprint14_row)
-    assert "no acceptance, completion, or delivery claimed" in sprint14_row
     for relative_path in lifecycle_paths:
         lifecycle = (ROOT / relative_path).read_text()
         assert not re.search(
@@ -328,17 +335,22 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
         assert re.search(
             r"clean\s+installed-wheel\s+imports/runtime\s+checks", lifecycle
         )
+        assert "0236942ced7127bc7220282d71e2cc35f0ff0c05" in lifecycle
+        assert "893c2127fac6ab7a2f3f416e315aee26d8b06b4f" in lifecycle
+        assert re.search(r"PR\s+#140\s+(?:is\s+)?merged", lifecycle, re.IGNORECASE)
+        assert re.search(r"Issue\s+#119\s+is\s+closed/completed", lifecycle)
+        assert re.search(r"Delivery\s+Project\s+item\s+is\s+\*\*?Done", lifecycle)
+        assert re.search(r"Sprint\s+14\s+(?:is\s+the\s+)?milestone", lifecycle)
+        assert "**APPROVE**" in lifecycle
+        assert "**PASS**" in lifecycle
         assert re.search(
-            r"candidate\s+commit\s+(?:has\s+been\s+)?created",
-            lifecycle,
-            re.IGNORECASE,
+            r"Hosted\s+Quality/build\s+and\s+GitGuardian\s+passed", lifecycle
         )
+        assert re.search(r"research-only", lifecycle)
+        assert re.search(r"no\s+autonomous\s+trading", lifecycle)
+        assert re.search(r"(?:financial\s+advice|financial-advice)", lifecycle)
         assert not stale_commit_pending_pattern.search(lifecycle)
         assert "exact current uncommitted" not in lifecycle
-        assert "push" in lifecycle
-        assert "hosted" in lifecycle
-        assert "merge" in lifecycle
-        assert "closeout" in lifecycle
         assert (
             "3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e"
             in lifecycle
@@ -362,10 +374,6 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
             in lifecycle
         )
         assert "`nsearchives.nseindia.com` URL attribution" in lifecycle
-        assert all(
-            re.search(re.escape(gate).replace(r"\ ", r"\s+"), lifecycle)
-            for gate in ("PR", "hosted", "merge", "closeout")
-        )
         assert not re.search(
             r"sole\s+remaining\s+smoke\s+next-open-session",
             lifecycle,
@@ -420,11 +428,6 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
         assert "Native Windows is unsupported" in lifecycle
         assert re.search(r"WSL2\s+or\s+Docker", lifecycle)
         assert re.search(
-            r"exact-candidate\s+Linux\s+hosted CI has\s+not run and is not claimed",
-            lifecycle,
-            re.IGNORECASE,
-        )
-        assert re.search(
             r"strict\s+(?:one-lease\s+)?post-close\s+`RELIANCE`",
             lifecycle,
             re.IGNORECASE,
@@ -454,15 +457,6 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
         )
         guarded_retry_pattern = re.escape(guarded_retry_text).replace(r"\ ", r"\s+")
         assert re.search(guarded_retry_pattern, lifecycle)
-        assert re.search(
-            r"No\s+(?:Plan-27\s+)?acceptance,\s+completion,\s+(?:or\s+)?delivery",
-            lifecycle,
-        )
-        assert re.search(
-            r"until\s+the\s+lifecycle\s+is\s+complete",
-            lifecycle,
-            re.IGNORECASE,
-        )
     for current_record in (plan, sprint):
         for required in (
             "21 raw bars",
