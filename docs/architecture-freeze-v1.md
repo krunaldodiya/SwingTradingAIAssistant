@@ -115,13 +115,14 @@ coverage; hosted Quality/build and GitGuardian passed on the reviewed head.
 Issue #118 is closed, its Delivery Project item is **Done**, and it is the
 Sprint 13 milestone.
 
-The architecture now includes the delivered bounded event-notice evidence
-contract: one operator-acquired, unfiltered official NSE Equity `1D` CSV for
-attributed owner-private personal/noncommercial local use; exact cohort and
-provenance binding; typed failures; immutable archive-owned `known_at`; and
-retain-before-return. It excludes automated collection, attachment fetch,
-redistribution, sentiment, recommendation, signal, and order. The official
-8,016-byte, 20-row artifact SHA-256 is
+The architecture includes the delivered event-notice evidence contract and its
+2026-08-26 bounded current-acquisition amendment: one unfiltered official NSE
+Equity `1D` CSV for attributed owner-private personal/noncommercial local use;
+legacy/current publisher filenames; UTF-8 exact bytes with or without BOM;
+exact cohort/provenance binding; typed failures; immutable archive-owned
+`known_at`; and retain-before-return. It excludes polling, systematic history,
+attachment fetch, redistribution, sentiment, recommendation, signal, and order.
+The historical official 8,016-byte, 20-row artifact SHA-256 is
 `a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`.
 Production parse/project/real `StorageRootLease` archive-and-retry produced one
 `GODREJCP` / `INE102D01028` notice and
@@ -130,15 +131,113 @@ parser/projection/retention evidence only, not source completeness, live
 participation, historical coverage, commercial permission, publisher correction
 lineage, recommendation quality, or effectiveness.
 
-Event evidence archives prospectively only; unavailable history is explicit.
-`OHLCV_ONLY` cannot validate news/event behavior and
-`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven coverage.
-Automated/licensed acquisition, general news, other providers/types/surfaces,
-semantic correction graphs, external attestation, licensed history,
-sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
-[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
-is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
-implementation decision is recorded by this closeout.
+Plan-25 event evidence archives prospectively and unavailable event history is
+explicit. Sprint 14 / [Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
+is **IN PROGRESS — ALL REQUIRED CURRENT SMOKES AND EXACT CURRENT LOCAL GATES PASSED (844 FOCUSED; 3,392 FULL AT 89.52% COVERAGE; RUFF/PYRIGHT/VULTURE/DIFF/BUILD/WHEEL); CANDIDATE COMMIT CREATED; EXACT-SHA FUNCTIONAL/PROVENANCE APPROVAL REQUIRES RERUN; PR/HOSTED/MERGE/CLOSEOUT PENDING** under
+[Plan 27](plans/27-current-same-pass-market-regime-contract.md). Operational
+evidence showed zero usable Plan-20 21-object prospective inputs, so the owner
+selected a separate versioned current-only same-pass successor.
+
+Official acquisition automation retained and validated the current exact
+schedule, mapping, Industry, event, raw, and Plan-21 evidence. Fresh post-close
+evidence passed with schedule SHA-256
+`f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`,
+Industry SHA-256
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`,
+and Event SHA-256
+`fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
+The final 14-file focused portfolio passed **844 tests** with `--no-cov`.
+The strict one-lease post-close `RELIANCE` positive passed for the 2026-08-26
+decision session: 21 raw bars; Market Regime, Industry, and Packet `OBSERVED`;
+partial `NOT_APPLICABLE`; Plan 21 `SCREENED`; Plan 22 `SUCCESS`; and guarded
+retries preserved exact bytes, identities, and original times.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive passed on frozen
+fingerprint
+`61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`
+during the actual active session. The decision cutoff was
+`2026-08-27T04:29:06.612060Z` (`09:59:06` IST), and the effect deadline was
+`2026-08-27T04:28:36.612060Z`. Composed schedule SHA-256
+`fb4e60b4c9e62887211cd5083403a4b0dfca2ab4b95f1c7415b27c0c8e1ac9ae`
+defined 2026-08-27 as `REGULAR`, 09:15–15:30 IST, with S0 2026-07-29 and S20
+2026-08-26; the 2026-08-27 mapping observation was
+`02e150b0b910f9ebe825b1c77f48126e4a0046073bf24ae767211fe66480bbf3`.
+
+Raw was 21/21 `OBSERVED`; Plan 21 was `SCREENED`; live Plan 22 was `SUCCESS`
+before the deadline; Market Data, Market Regime, Industry, and Packet were
+`OBSERVED`; Event was `RETAINED`. Packet identity SHA-256 was
+`cc3619cddcd2a35c73500947f40db863a5cb56df5a6aa377c2b0d91261556474`,
+and context identity SHA-256 was
+`e8b0371527994b39d6c905967c7814fce792fee627221cfd54cc51f65285153a`.
+The requested partial was truthfully `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows, separately labelled
+`PARTIAL_CURRENT_SESSION`, excluded from the completed grid and Market Regime,
+nonfatal, and never substituted. Exact retries preserved bytes, identities, and
+original times and caused zero effects; source remained unchanged and all
+resources were closed.
+
+The architecture now freezes this current/live invariant: feature availability
+MUST NOT depend on this tool having run on prior sessions. At one bounded cutoff,
+the successor resolves the latest 21 completed official sessions, admits exact
+approved retained/provider raw bars available now, and retains the complete grid
+now with truthful current `known_at` and
+`temporal_scope = CURRENT_SAME_PASS_ONLY`. Equal current admitted inputs produce
+the same packet after 0/1/7/30 inactive days. Missing Plan-20 prospective
+envelopes is not a current failure and no historical availability is backfilled.
+
+Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
+is separate unassigned historical work outside Sprint 14. A bounded
+per-decision-date as-of backfill may build dates independently and reuse only an
+exact verified snapshot; every admitted fact must be proven available by that
+date's cutoff. Splitting current-vintage evidence into past-dated files never
+establishes historical availability.
+
+During market hours the resolved S20 is the prior completed official session;
+after today's official close it may be today. Optional
+`PARTIAL_CURRENT_SESSION` price/volume is separately labelled, provisional, and
+excluded from completed facts, Market Regime, Industry direction, historical
+claims, signals, recommendations, and orders. Only genuine current
+schedule/mapping/bar/source/comparability/component failures can block the
+current result.
+
+Plan-20 Market Regime V1/V2 remain frozen and delivered. Plan-26 packet `@v1` is
+unpublished WIP superseded before delivery by Packet V2, will not ship, and has
+no alias. Its 101 focused-test result remains historical WIP/repair evidence
+only.
+
+The final full suite passed **3,392 tests at 89.52% total coverage** against the
+**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+
+Eight review blockers are fixed locally without a new subsystem: late
+completion-marker retry guards; zero-redirect enforcement; restored global
+`ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
+kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
+month-start acquisition; pre-Plan-22 deadline enforcement; and corrected
+Plan-24 wording.
+
+The directory-edge `st_nlink` portability fix remains in place without
+weakening leaf metadata checks; exact source-file checks remain enforced and
+the dependent runtime identity manifests remain current. Plan-27 cohort bridge
+mappings remain implemented, including truthful Plan-22 suppression after
+upstream raw or screen insufficiency.
+
+Owner platform boundary: the native supported target is POSIX-style macOS and
+Linux with identical evidence guarantees. Native Windows is unsupported and not
+claimed; Windows users use Linux through WSL2 or Docker. Exact-candidate Linux
+hosted CI has not run and is not claimed.
+
+The fresh current-byte genuine IRCTC production negative passed with the exact
+`NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
+Regime V3 insufficient; Plan 22 `NOT_ATTEMPTED` upstream; Industry V2
+`UNSUPPORTED` with `MARKET_REGIME_UNAVAILABLE` and
+`CLASSIFICATION_MEMBER_UNSUPPORTED`; and Packet insufficient with the exact
+ledger, five null AI facts, and mandatory `NO_TRADE`. Guarded V3, Industry,
+event, and Packet retries preserved exact bytes, identities, and original times.
+All required current smokes have passed: the retained post-close `RELIANCE`
+positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
+negative. The two positive modes remain separate; neither substitutes for the
+other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
+delivery is claimed until the lifecycle is complete.
 
 ## Repository identity
 

@@ -16,6 +16,10 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    exact_nse_schedule_source_release_pair_v1,
+)
+
 CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v1-mvp"
 PROVIDER_ID = "YFINANCE"
 PRICE_BASIS = "ADJUSTED"
@@ -24,7 +28,10 @@ V2_CONTRACT_VERSION = "provider-neutral-adjusted-daily-close@v2"
 MAPPING_VERSION_V2: Final = "yfinance-symbol-mapping@v1"
 _ISIN = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-_SOURCE_RELEASE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+ScheduleSourceV2: TypeAlias = Literal[
+    "nse-authoritative-calendar",
+    "nse-upstox-composed-calendar",
+]
 
 
 class AdjustedDailyDownloadAdapter(Protocol):
@@ -103,7 +110,7 @@ class AdjustedDailyCloseHandoffV2:
     request_identity_sha256: str
     decision_cutoff: datetime
     schedule_evidence_sha256: str
-    schedule_source: Literal["nse-authoritative-calendar"]
+    schedule_source: ScheduleSourceV2
     schedule_source_release: str
     decision_session_official_close_at: datetime
     schedule_sessions: tuple[date, ...]
@@ -180,7 +187,7 @@ class _V2Request:
     cohort_identity_sha256: str
     request_identity_sha256: str
     schedule_evidence_sha256: str
-    schedule_source: Literal["nse-authoritative-calendar"]
+    schedule_source: ScheduleSourceV2
     schedule_source_release: str
     decision_session_official_close_at: datetime
     sessions: tuple[date, ...]
@@ -446,10 +453,7 @@ def _parse_sessions(schedule: object) -> tuple[date, ...] | None:
 
 def _parse_v2_schedule(
     schedule: object, sessions: tuple[date, ...]
-) -> (
-    tuple[str, Literal["nse-authoritative-calendar"], str, datetime, str]
-    | AdjustedDailyCloseFailure
-):
+) -> tuple[str, ScheduleSourceV2, str, datetime, str] | AdjustedDailyCloseFailure:
     schedule_mapping = _mapping(schedule)
     if schedule_mapping is None:
         return _invalid("SCHEDULE_INVALID")
@@ -461,9 +465,9 @@ def _parse_v2_schedule(
     if (
         type(evidence) is not str
         or _SHA256.fullmatch(evidence) is None
-        or source != "nse-authoritative-calendar"
+        or type(source) is not str
         or type(release) is not str
-        or _SOURCE_RELEASE.fullmatch(release) is None
+        or not exact_nse_schedule_source_release_pair_v1(source, release)
         or type(official_close) is not datetime
         or not _is_aware(official_close)
         or type(identity) is not str
@@ -474,12 +478,12 @@ def _parse_v2_schedule(
         sessions=sessions,
         decision_session_official_close_at=official_close,
         schedule_evidence_sha256=evidence,
-        schedule_source="nse-authoritative-calendar",
+        schedule_source=cast(ScheduleSourceV2, source),
         schedule_source_release=release,
     )
     if identity != expected:
         return _invalid("SCHEDULE_IDENTITY_INVALID")
-    return evidence, "nse-authoritative-calendar", release, official_close, identity
+    return evidence, cast(ScheduleSourceV2, source), release, official_close, identity
 
 
 def _parse_members(
@@ -792,9 +796,13 @@ def adjusted_daily_schedule_identity_v2(
     sessions: Sequence[date],
     decision_session_official_close_at: datetime,
     schedule_evidence_sha256: str,
-    schedule_source: Literal["nse-authoritative-calendar"],
+    schedule_source: ScheduleSourceV2,
     schedule_source_release: str,
 ) -> str:
+    if not exact_nse_schedule_source_release_pair_v1(
+        schedule_source, schedule_source_release
+    ):
+        raise ValueError("invalid schedule source/release pair")
     return _identity(
         {
             "decision_session_official_close_at": _instant(

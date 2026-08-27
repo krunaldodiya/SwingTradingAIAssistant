@@ -4,10 +4,10 @@ from typing import Final
 
 CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V2: Final = {
     "src/swing_trading_ai_assistant/market_data/adjusted_daily/__init__.py": "ab0f9fc815c784beec0039ce5a053464acd6352b8d444e1cb81935becde0fe41",
-    "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py": "57f70e10ca162a1070b9d41c3a767786942922d4bb4311bb43709ecfd94eae7a",
+    "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py": "63c9e698608948f97a6c26828c8fb3ce795093068c1dadfe774ebf94525489e5",
     "src/swing_trading_ai_assistant/market_data/current_cohort.py": "d58bd58551f3e33289628ceba0037c32c688cc806a04d4e0e167f9c62aeef832",
-    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "235b9ddd5b8516c2d5c6abb1cf89dc5d65fe22a48f0a3693e06e97ccb0a4ee16",
-    "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "fc9e464ed7011d4e7345d26689d4b547979d3b222d57446f1780c04d50f9e820",
-    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": "de835f0a97842f89f698bc5233535f082a615f5128d094bc457ca89c9bfb6895",
+    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "f3d866a662a8bb44eb04e57b8297c89cee7a2a9005cf0b37716fdf99261fe9b3",
+    "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": "7bc9cef7f66491369e2594435233904f53a05cd59a8765edf0f5d64eaac4deee",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v2.py": "fcffeb8420355e4befb2b4fc8066c536fdff2a67aa4c5e7689a8c827033f3d07",
 }

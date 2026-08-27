@@ -52,8 +52,6 @@ class OpenMonthScheduleV1:
             or type(self.covered_from) is not date
             or type(self.covered_to) is not date
             or self.covered_from > self.covered_to
-            or (self.covered_from.year, self.covered_from.month)
-            != (self.covered_to.year, self.covered_to.month)
             or type(self.sessions) is not tuple
             or any(type(item) is not ScheduleSession for item in self.sessions)
             or type(self.closures) is not tuple
@@ -220,8 +218,8 @@ def plan_open_month(
         != (local_today.year, local_today.month)
         or (requested_to.year, requested_to.month)
         != (local_today.year, local_today.month)
-        or schedule.covered_from != month_start
-        or schedule.covered_to != requested_to
+        or schedule.covered_from > month_start
+        or schedule.covered_to < requested_to
         or schedule.as_of > invoked
     ):
         raise ValueError("invalid open-month request")

@@ -67,6 +67,7 @@ def _retained_classification(
     *,
     industries: tuple[str, str, str] = ("Banking", "Pharma", "Technology"),
     row_order: tuple[int, ...] | None = None,
+    legacy: bool = False,
 ) -> tuple[Any, Any, Any, Any, Any]:
     classification_test = _classification_test_module()
     classification_api = classification_test._api()
@@ -80,7 +81,14 @@ def _retained_classification(
         isin_at={index: member.isin for index, member in enumerate(v2._members())},
         row_order=row_order,
     )
-    parsed = classification_test._parse(classification_api, artifact)
+    classification_input = (
+        classification_test._legacy_input(classification_api, artifact)
+        if legacy
+        else classification_test._input(classification_api, artifact)
+    )
+    parsed = classification_api.parse_current_industry_artifact_v1(
+        classification_input, artifact
+    )
     members = tuple(
         classification_api.CurrentIndustryCohortMemberV1(
             isin=member.isin, exchange="NSE", effective_symbol=member.symbol
@@ -114,7 +122,7 @@ def _retained_classification(
         )
         try:
             retained = archive.archive_exact(
-                classification_test._input(classification_api, artifact),
+                classification_input,
                 artifact,
                 snapshot,
                 lease,
@@ -129,13 +137,17 @@ def _reduce(
     *,
     industries: tuple[str, str, str] = ("Banking", "Pharma", "Technology"),
     row_order: tuple[int, ...] | None = None,
+    legacy: bool = False,
     **overrides: object,
 ) -> Any:
     api = _api()
     values = _retained_classification(
-        tmp_path, industries=industries, row_order=row_order
+        tmp_path,
+        industries=industries,
+        row_order=row_order,
+        legacy=legacy,
     )
-    arguments: dict[str, Any] = dict(
+    arguments = dict(
         zip(
             (
                 "raw_v1_report",
@@ -202,7 +214,7 @@ def test_reduces_one_same_pass_observed_cohort_to_deterministic_industry_counts(
     assert result.classification_tier == "INDUSTRY"
     assert (
         result.source_url
-        == "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+        == "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
     )
     assert result.source_authority == "NSE_INDICES"
     assert result.known_at == result.decision_cutoff
@@ -247,6 +259,23 @@ def test_reduces_one_same_pass_observed_cohort_to_deterministic_industry_counts(
         str(tmp_path),
     ):
         assert secret not in encoded
+
+
+def test_v1_preserves_delivered_legacy_source_without_false_relabeling(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    result = _reduce(tmp_path, legacy=True)
+
+    assert result.evidence_state == "OBSERVED"
+    assert (
+        result.classification_schema_identity_sha256
+        == "29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552"
+    )
+    assert result.source_url == (
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+    )
+    assert api._valid_observed_report(result)
 
 
 def test_report_identity_freezes_complete_observed_schema_except_itself(

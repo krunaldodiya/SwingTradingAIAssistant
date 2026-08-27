@@ -18,7 +18,10 @@ import pytest
 
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
-_SOURCE_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+_SOURCE_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+_LEGACY_SOURCE_URL = (
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+)
 _HEADER = "Company Name,Industry,Symbol,Series,ISIN Code"
 _CUTOFF = datetime(2026, 8, 21, 10, tzinfo=UTC)
 _SESSION = date(2026, 8, 21)
@@ -88,8 +91,8 @@ def _input(api: Any, artifact: bytes, **overrides: object) -> Any:
         "schema_identity_sha256": api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
         "source_url": _SOURCE_URL,
         "source_authority": "NSE_INDICES",
-        "source_domain": "www.niftyindices.com",
-        "acquisition_method": "OPERATOR_ACQUIRED",
+        "source_domain": "nsearchives.nseindia.com",
+        "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
         "artifact_byte_count": len(artifact),
         "artifact_sha256": digest,
         "artifact_revision": f"sha256:{digest}",
@@ -98,12 +101,26 @@ def _input(api: Any, artifact: bytes, **overrides: object) -> Any:
         "publisher_effective_from": None,
         "publisher_effective_through": None,
         "publisher_revision": None,
-        "licence_policy_identity_sha256": "a" * 64,
+        "licence_policy_identity_sha256": (
+            api.CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256
+        ),
     }
     value.update(overrides)
     return api.CurrentIndustryClassificationInputV1.from_canonical_json_bytes(
         _canonical(value)
     )
+
+
+def _legacy_input(api: Any, artifact: bytes, **overrides: object) -> Any:
+    values: dict[str, object] = {
+        "schema_identity_sha256": (api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256),
+        "source_url": _LEGACY_SOURCE_URL,
+        "source_domain": "www.niftyindices.com",
+        "acquisition_method": "OPERATOR_ACQUIRED",
+        "licence_policy_identity_sha256": "a" * 64,
+    }
+    values.update(overrides)
+    return _input(api, artifact, **values)
 
 
 def _members(api: Any, size: int, *, exchange: str = "NSE") -> tuple[Any, ...]:
@@ -148,7 +165,7 @@ def _private_lease(tmp_path: Path) -> StorageRootLease:
     return acquired.lease
 
 
-def test_parses_only_exact_operator_acquired_nse_indices_artifact_and_null_publisher_fields(
+def test_parses_only_exact_bounded_nse_indices_artifact_and_null_publisher_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = _api()
@@ -164,8 +181,8 @@ def test_parses_only_exact_operator_acquired_nse_indices_artifact_and_null_publi
     assert parsed.evidence_state == "PARSED"
     assert parsed.source_url == _SOURCE_URL
     assert parsed.source_authority == "NSE_INDICES"
-    assert parsed.source_domain == "www.niftyindices.com"
-    assert parsed.acquisition_method == "OPERATOR_ACQUIRED"
+    assert parsed.source_domain == "nsearchives.nseindia.com"
+    assert parsed.acquisition_method == "BOUNDED_OFFICIAL_FETCH"
     assert parsed.classification_tier == "INDUSTRY"
     assert parsed.artifact_byte_count == len(artifact)
     assert parsed.artifact_sha256 == hashlib.sha256(artifact).hexdigest()
@@ -177,6 +194,43 @@ def test_parses_only_exact_operator_acquired_nse_indices_artifact_and_null_publi
         parsed.publisher_revision,
     ) == (None, None, None, None)
     assert len(parsed.private_rows) == 100
+
+
+def test_delivered_legacy_and_current_source_cases_do_not_cross_pair() -> None:
+    api = _api()
+    artifact = _artifact()
+    legacy = api.parse_current_industry_artifact_v1(
+        _legacy_input(api, artifact), artifact
+    )
+    assert legacy.evidence_state == "PARSED"
+    assert (
+        legacy.schema_identity_sha256
+        == api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+    )
+    assert legacy.source_url == _LEGACY_SOURCE_URL
+    assert legacy.acquisition_method == "OPERATOR_ACQUIRED"
+
+    for crossed in (
+        _input(
+            api,
+            artifact,
+            acquisition_method="OPERATOR_ACQUIRED",
+            licence_policy_identity_sha256="a" * 64,
+        ),
+        _legacy_input(
+            api,
+            artifact,
+            acquisition_method="BOUNDED_OFFICIAL_FETCH",
+            licence_policy_identity_sha256=(
+                api.CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256
+            ),
+        ),
+    ):
+        _assert_failure(
+            api.parse_current_industry_artifact_v1(crossed, artifact),
+            "UNSUPPORTED_CAPABILITY",
+            "CLASSIFICATION_SOURCE_UNSUPPORTED",
+        )
 
 
 @pytest.mark.parametrize("size", (1, 50))
@@ -278,7 +332,7 @@ def test_parser_preserves_none_as_typed_missing_artifact_evidence() -> None:
     "input_overrides",
     (
         {"source_url": _SOURCE_URL + "?redirected=1"},
-        {"source_domain": "niftyindices.com"},
+        {"source_domain": "www.niftyindices.com"},
         {"source_authority": "YFINANCE"},
         {"acquisition_method": "NETWORK"},
         {"classification_tier": "SECTOR"},
@@ -823,8 +877,8 @@ def _timeless_input(api: Any, artifact: bytes) -> Any:
         "schema_identity_sha256": api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
         "source_url": _SOURCE_URL,
         "source_authority": "NSE_INDICES",
-        "source_domain": "www.niftyindices.com",
-        "acquisition_method": "OPERATOR_ACQUIRED",
+        "source_domain": "nsearchives.nseindia.com",
+        "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
         "artifact_byte_count": len(artifact),
         "artifact_sha256": digest,
         "artifact_revision": f"sha256:{digest}",
@@ -833,7 +887,9 @@ def _timeless_input(api: Any, artifact: bytes) -> Any:
         "publisher_effective_from": None,
         "publisher_effective_through": None,
         "publisher_revision": None,
-        "licence_policy_identity_sha256": "a" * 64,
+        "licence_policy_identity_sha256": (
+            api.CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256
+        ),
     }
     return api.CurrentIndustryClassificationInputV1.from_canonical_json_bytes(
         _canonical(value)
@@ -1034,6 +1090,10 @@ def test_classification_schema_freezes_nfkc_casefold_privacy_key() -> None:
 
     assert (
         api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        == "b5e5bfd3aded2af88230447b28bebada4f101f8f9eb8b2dd03b77177626db175"
+    )
+    assert (
+        api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
         == "29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552"
     )
 

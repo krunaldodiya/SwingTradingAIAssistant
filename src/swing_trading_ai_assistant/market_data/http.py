@@ -166,12 +166,20 @@ class HttpResponse:
     body: bytes
     headers: HttpResponseHeaders = field(default_factory=_empty_headers)
     error_category: ProviderErrorCategory | None = None
+    request_url: str | None = None
+    response_url: str | None = None
 
     def __post_init__(self) -> None:
         if self.status_code < 100 or self.status_code > 599:
             raise ValueError("status_code must be an HTTP status code")
         if type(self.headers) is not HttpResponseHeaders:
             raise TypeError("headers must be an HttpResponseHeaders collection")
+        if (self.request_url is None) != (self.response_url is None) or any(
+            type(value) is not str or not value
+            for value in (self.request_url, self.response_url)
+            if value is not None
+        ):
+            raise ValueError("response URL metadata must be complete")
         if self.error_category is None:
             object.__setattr__(
                 self, "error_category", provider_error_category(self.status_code)
@@ -307,10 +315,16 @@ def _perform_bounded_get(
             headers = _headers(response.headers)
             if headers is _INVALID_RESPONSE_HEADERS:
                 return _INVALID_RESPONSE_HEADERS
+            raw_response_url: object = getattr(response, "url", request.full_url)
+            response_url = (
+                raw_response_url if type(raw_response_url) is str else request.full_url
+            )
             return HttpResponse(
                 status_code=response.status,
                 body=body,
                 headers=cast(HttpResponseHeaders, headers),
+                request_url=request.full_url,
+                response_url=response_url,
             )
     except HTTPError as exc:
         body = _read_bounded(exc, max_body_bytes)
@@ -323,6 +337,8 @@ def _perform_bounded_get(
             status_code=exc.code,
             body=body,
             headers=cast(HttpResponseHeaders, headers),
+            request_url=request.full_url,
+            response_url=exc.url,
         )
     except TimeoutError as exc:
         raise HttpTransportError(ProviderErrorCategory.TIMEOUT) from exc

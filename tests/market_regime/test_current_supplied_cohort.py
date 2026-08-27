@@ -2433,3 +2433,74 @@ def test_evaluator_has_no_filesystem_provider_network_clock_or_storage_side_effe
     _assert_observed(
         module, report, label="BROAD_ADVANCE", advances=1, declines=0, unchanged=0
     )
+
+
+def test_plan21_public_and_private_schedule_validation_rejects_cross_pairs() -> None:
+    module, _ = _api()
+    input_type = _type(module, "CurrentSuppliedCohortMarketRegimeInputV1")
+    archive_ids = tuple(f"{index:064x}" for index in range(1, 22))
+
+    def value(source: str, release: str) -> dict[str, object]:
+        result: dict[str, object] = {
+            "contract_version": _CONTRACT,
+            "cohort_identity_sha256": "a" * 64,
+            "cohort_size": 1,
+            "decision_cutoff": "2026-01-12T10:00:00.000000Z",
+            "decision_session": "2026-01-12",
+            "archive_object_sha256s": list(archive_ids),
+            "schedule_evidence_sha256": "b" * 64,
+            "schedule_source": source,
+            "schedule_source_release": release,
+        }
+        result["input_identity_sha256"] = hashlib.sha256(_canonical(result)).hexdigest()
+        return result
+
+    composed_source = "nse-upstox-composed-calendar"
+    composed_release = "composed-calendar@v1=" + "c" * 64
+    admitted = input_type.from_canonical_json_bytes(
+        _canonical(value(composed_source, composed_release))
+    )
+    assert admitted.schedule_source == composed_source
+    assert admitted.schedule_source_release == composed_release
+
+    for source, release in (
+        ("nse-authoritative-calendar", composed_release),
+        (composed_source, "sha256:" + "c" * 64),
+    ):
+        with pytest.raises(ValueError, match="invalid current-regime input"):
+            input_type.from_canonical_json_bytes(_canonical(value(source, release)))
+
+    session_type = _type(module, "PrivateRetainedScheduleSessionProjectionV1")
+    continuity_type = _type(module, "PrivateRetainedScheduleContinuityProjectionV1")
+    sessions = tuple(
+        session_type(
+            trade_date,
+            datetime.combine(trade_date, time(10), UTC),
+            "REGULAR",
+        )
+        for trade_date in _sessions()
+    )
+    assert (
+        continuity_type(
+            "b" * 64,
+            3,
+            composed_source,
+            composed_release,
+            _CUTOFF,
+            sessions,
+        ).source
+        == composed_source
+    )
+    for source, release in (
+        ("nse-authoritative-calendar", composed_release),
+        (composed_source, "sha256:" + "c" * 64),
+    ):
+        with pytest.raises(ValueError):
+            continuity_type(
+                "b" * 64,
+                3,
+                source,
+                release,
+                _CUTOFF,
+                sessions,
+            )

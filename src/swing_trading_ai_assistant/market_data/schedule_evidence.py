@@ -26,6 +26,12 @@ MAX_SCHEDULE_BYTES: Final = 1_000_000
 _TIMEZONE_NAME: Final = "Asia/Kolkata"
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _DIGEST_RE: Final = re.compile(r"[0-9a-f]{64}\Z")
+LEGACY_NSE_SCHEDULE_SOURCE_V1: Final = "nse-authoritative-calendar"
+COMPOSED_NSE_SCHEDULE_SOURCE_V1: Final = "nse-upstox-composed-calendar"
+_LEGACY_NSE_SCHEDULE_RELEASE_RE: Final = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_COMPOSED_NSE_SCHEDULE_RELEASE_RE: Final = re.compile(
+    r"composed-calendar@v1=[0-9a-f]{64}\Z"
+)
 _DATE_RE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 _INSTANT_RE: Final = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:"
@@ -35,6 +41,17 @@ _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 _RELATIVE_PREFIX: Final = "calendar-schedules/sha256/"
 _FAILURE_MESSAGE: Final = "schedule evidence unsupported"
+
+
+def exact_nse_schedule_source_release_pair_v1(source: object, release: object) -> bool:
+    """Admit only the exact legacy or composed source/release pairing."""
+    if type(source) is not str or type(release) is not str:
+        return False
+    if source == LEGACY_NSE_SCHEDULE_SOURCE_V1:
+        return _LEGACY_NSE_SCHEDULE_RELEASE_RE.fullmatch(release) is not None
+    if source == COMPOSED_NSE_SCHEDULE_SOURCE_V1:
+        return _COMPOSED_NSE_SCHEDULE_RELEASE_RE.fullmatch(release) is not None
+    return False
 
 
 class ScheduleOutcome(StrEnum):
@@ -423,11 +440,12 @@ def schedule_digest(schedule: ExpectedSessionSchedule) -> str:
 def schedule_covers_full_calendar_range(
     schedule: object, covered_from: object, covered_to: object
 ) -> bool:
-    """Prove schedule-digest-v2 explicitly classifies each requested date."""
+    """Prove an exact retained V2/V3 schedule classifies each requested date."""
     try:
         if (
             type(schedule) is not ExpectedSessionSchedule
-            or schedule.schema_version != SCHEDULE_SCHEMA_VERSION_V2
+            or schedule.schema_version
+            not in (SCHEDULE_SCHEMA_VERSION_V2, SCHEDULE_SCHEMA_VERSION_V3)
             or type(covered_from) is not date
             or type(covered_to) is not date
             or covered_from > covered_to

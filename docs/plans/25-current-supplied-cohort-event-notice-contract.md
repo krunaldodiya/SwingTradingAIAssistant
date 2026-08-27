@@ -22,7 +22,7 @@ The deterministic tool records what the exchange-disclosure snapshot said. It do
 - one fact type: an official NSE Equity corporate-announcement notice;
 - one operator-acquired, unfiltered `1D` Equity artifact per observation;
 - one explicit `1..50` supplied cohort of canonical NSE listed-equity identities;
-- strict bounded parsing of the exact nine-column UTF-8-with-BOM CSV;
+- strict bounded parsing of the exact nine-column UTF-8 CSV with the current publisher-returned BOM state, while the delivered legacy case remains BOM-present only;
 - exact cohort projection without inferred index membership;
 - source-labelled publication workflow fields preserved literally;
 - exact-byte artifact, local observation, deduplication, snapshot, archive, receipt, runtime, and retained identities;
@@ -33,21 +33,21 @@ The deterministic tool records what the exchange-disclosure snapshot said. It do
 
 ### LATER_IMPROVEMENTS
 
-- automated acquisition or polling;
+- recurring polling or systematic historical acquisition;
 - Upstox News, Angel One, RSS ingestion, paid NSE Corporate Data, or any second provider;
 - general web news, issuer-site crawling, attachment/PDF acquisition, or full-text extraction;
 - additional event types, provider registries, generic feed abstractions, or multi-source reconciliation;
 - semantic correction/supersession graphs not supplied by the admitted source;
 - sentiment, materiality scoring, ranking, recommendation, signal, order, or effectiveness claims;
 - CLI, API, MCP, UI, notification, or other delivery surfaces;
-- Sprint 14 integrated packet work;
+- packet delivery surfaces beyond the separately authorized Plan-27 integration;
 - historical acquisition, retrospective reconstruction, or backfill;
 - external signing, trusted ledger, secret-backed integrity, or attestation against deliberate coherent same-owner offline rewriting;
 - optimization without a measured first-slice bottleneck.
 
 The scope-expansion circuit breaker stops implementation before any deferred item is added. A review finding blocks this slice only when it cites a violated current acceptance condition, applicable R3 control, or concrete current safety, correctness, usability, authorization, or evidence-integrity failure.
 
-## Accepted source evaluation
+## 2026-08-23 accepted source evaluation (historical delivered slice)
 
 1. **Expected value:** official NSE Equity corporate-announcement notices provide timely issuer-disclosed context for the exact current supplied cohort.
 2. **Scope fit:** admit only an operator-acquired unfiltered `1D` Equity **Download (.csv)** for owner-private personal/noncommercial local research, with NSE attribution; no network acquisition, polling, attachment download, publication, or redistribution.
@@ -56,6 +56,156 @@ The scope-expansion circuit breaker stops implementation before any deferred ite
 5. **Decision:** **ACCEPTED** only for this operator-acquired current/prospective private evidence slice; Upstox News, Angel One, RSS polling, paid EOD data, automated acquisition, semantic correction graphs, historical backfill, sentiment, additional providers, and delivery surfaces are deferred.
 
 The decision is recorded on Issue #118 before implementation. It is a bounded project source-use decision, not legal advice and not authority for commercial use, publication, redistribution, automated collection, or a hosted multi-user service.
+
+### 2026-08-26 bounded acquisition and publisher-format amendment
+
+The repository owner authorized the Plan-27 smallest acquisition correction for
+the current private default Nifty 100 workflow. The reusable event core still
+admits any explicit bounded `1..50` canonical supported NSE equity list and
+never requires index membership. The delivered manual artifact/archive contract
+remains replay-compatible, but it is not a second live acquisition route.
+
+The sole current route initializes the fixed official NSE announcements page and
+performs one unfiltered Equity `1D`, `csv=true` GET whose `from_date` and
+`to_date` are the previous/current calendar dates. The response must contain
+exactly one singleton `Content-Disposition`; its publisher filename is parsed
+without rewriting and must equal that exact requested one-day range. The
+current route uses only `BOUNDED_OFFICIAL_FETCH`, the current owner-private
+licence identity, the publisher range filename, and UTF-8 with the exact
+publisher-returned BOM state, which may be present or absent.
+
+The parser separately preserves already-retained compatibility for
+`OPERATOR_ACQUIRED`, the legacy manual licence, legacy
+`CF-AN-equities-DD-Mon-YYYY.csv`, and BOM-present artifacts only. No
+historical snapshot is renamed, rewritten, or invalidated. A syntactically exact
+header-only nine-column CSV is valid evidence of zero announcements; projection
+returns `NO_MATCHING_NOTICE_IN_SNAPSHOT` for every supplied member.
+
+Input construction, parser admission, projected-snapshot construction, archive
+revalidation, retention receipt, and exact retry all enforce the same closed
+two-case predicate:
+
+```text
+CURRENT_LIVE =
+  BOUNDED_OFFICIAL_FETCH
+  + nse-bounded-official-fetch-owner-private-v1
+  + CF-AN-equities-DD-MM-YYYY-to-DD-MM-YYYY.csv (exact one-day range)
+  + source_encoding UTF-8
+  + BOM absent or present (exactly as returned)
+
+LEGACY_REPLAY_ONLY =
+  OPERATOR_ACQUIRED
+  + nse-manual-download-owner-private-v1
+  + CF-AN-equities-DD-Mon-YYYY.csv
+  + source_encoding UTF-8
+  + BOM present
+```
+
+These are alternatives, not independently selectable fields. The current case
+admits either exact BOM state; every crossed method/licence/filename combination
+and every legacy-without-BOM combination is structurally invalid and rejected.
+Legacy support is replay/archive compatibility only and never another live
+acquisition route. `source_encoding` must equal the response metadata-derived
+encoding on the current edge, the declared BOM state must match the exact bytes,
+and the bytes must decode exactly as UTF-8.
+
+Pre-amendment legacy archive adoption is one exact compatibility case, not a
+schema-migration framework. The delivered canonical snapshot, receipt, and
+completion-marker bytes omit `source_encoding`, `source_has_bom`, and
+`acquisition_method`. They remain admissible only with delivered schema
+`b5c87ca73362cfb3b17fdfd16565ca5de3a7fac7d82749f87107e303c2f3d841`,
+the manual licence and legacy filename grammar, a cryptographically matching
+BOM-present artifact, and delivered runtime identity
+`09c3b50461c3f02a4f61b0b2ecab9493016d7d7ee96d8ed996f6a6f02068632f`.
+Adoption returns the original snapshot/archive/receipt/retained identities and
+`known_at` without rewriting any object. UTF-8, BOM-present, and
+`OPERATOR_ACQUIRED` are fixed legacy-contract facts projected into the current
+in-memory result; no caller-selected inference or current/legacy cross-pair is
+accepted.
+
+Every observation binds the exact request/final URL, zero-redirect state,
+allowlisted arrival-ordered non-session provenance headers, exact body
+bytes/count/SHA-256, bounded cookie count/aggregate bytes, and trusted UTC
+observation time. Cookie names/values and `Set-Cookie` are never exported or
+identity-bound. Duplicate singleton provenance fields, a missing/ambiguous
+disposition, range mismatch, a declared/actual BOM mismatch, a nonexact required
+media type, any parameter other than the sole optional exact
+`charset=UTF-8`, duplicate/unknown parameters, an encoding other than UTF-8,
+non-UTF-8 bytes, an empty/oversized body, or response drift fails closed. There
+is no retry, fallback, filtering, normalization, attachment fetch, or
+credential logging.
+
+Fresh official reacquisition returned the exact current unfiltered Event
+artifact with SHA-256
+`fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
+It was parsed, retained, and validated under the current Event runtime together
+with the exact schedule, mapping, Industry, raw, and Plan-21 evidence. The fresh
+post-close schedule SHA-256 is
+`f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`;
+the Industry SHA-256 is
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`.
+Prior publisher-response observations are superseded parser-format evidence
+only and do not establish the current integrated result. The final 14-file
+focused portfolio passed **844 tests** with `--no-cov`; the strict one-lease
+post-close `RELIANCE` positive returned Packet `OBSERVED` with 21 raw bars;
+Market Regime and Industry `OBSERVED`; partial `NOT_APPLICABLE`; Plan 21
+`SCREENED`; Plan 22 `SUCCESS`; and guarded retries preserving exact bytes,
+identities, and original times.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive passed on frozen
+fingerprint
+`61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`
+during the actual active session. The decision cutoff was
+`2026-08-27T04:29:06.612060Z` (`09:59:06` IST), and the effect deadline was
+`2026-08-27T04:28:36.612060Z`. Composed schedule SHA-256
+`fb4e60b4c9e62887211cd5083403a4b0dfca2ab4b95f1c7415b27c0c8e1ac9ae`
+defined 2026-08-27 as `REGULAR`, 09:15–15:30 IST, with S0 2026-07-29 and S20
+2026-08-26; the 2026-08-27 mapping observation was
+`02e150b0b910f9ebe825b1c77f48126e4a0046073bf24ae767211fe66480bbf3`.
+
+Raw was 21/21 `OBSERVED`; Plan 21 was `SCREENED`; live Plan 22 was `SUCCESS`
+before the deadline; Market Data, Market Regime, Industry, and Packet were
+`OBSERVED`; Event was `RETAINED`. Packet identity SHA-256 was
+`cc3619cddcd2a35c73500947f40db863a5cb56df5a6aa377c2b0d91261556474`,
+and context identity SHA-256 was
+`e8b0371527994b39d6c905967c7814fce792fee627221cfd54cc51f65285153a`.
+The requested partial was truthfully `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows, separately labelled
+`PARTIAL_CURRENT_SESSION`, excluded from the completed grid and Market Regime,
+nonfatal, and never substituted. Exact retries preserved bytes, identities, and
+original times and caused zero effects; source remained unchanged and all
+resources were closed.
+
+The final full suite passed **3,392 tests at 89.52% total coverage** against the
+**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+
+Eight review blockers are fixed locally without a new subsystem: late
+completion-marker retry guards; zero-redirect enforcement; restored global
+`ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
+kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
+month-start acquisition; pre-Plan-22 deadline enforcement; and corrected
+Plan-24 wording.
+
+The directory-edge `st_nlink` portability fix remains in place without
+weakening leaf metadata checks; exact source-file checks remain enforced and
+the dependent runtime identity manifests remain current. The native supported
+target remains POSIX-style macOS and Linux; Native Windows is unsupported, WSL2
+or Docker is the stated Windows path, and exact-candidate Linux hosted CI has
+not run and is not claimed.
+
+The fresh current-byte genuine IRCTC production negative passed with the exact
+`NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
+Regime V3 insufficient; Plan 22 `NOT_ATTEMPTED` upstream; Industry V2
+`UNSUPPORTED` with `MARKET_REGIME_UNAVAILABLE` and
+`CLASSIFICATION_MEMBER_UNSUPPORTED`; and Packet insufficient with the exact
+ledger, five null AI facts, and mandatory `NO_TRADE`. Guarded V3, Industry,
+event, and Packet retries preserved exact bytes, identities, and original times.
+All required current smokes have passed: the retained post-close `RELIANCE`
+positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
+negative. The two positive modes remain separate; neither substitutes for the
+other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
+delivery is claimed until the lifecycle is complete.
+
 
 ## Source and acquisition contract
 
@@ -78,18 +228,27 @@ window: 1D
 control: Download (.csv)
 ```
 
-The implementation has no HTTP client, browser automation, redirect handling, retry, fallback, RSS reader, provider session, attachment fetch, or hidden endpoint. The operator supplies the downloaded bytes explicitly.
+The delivered manual path has no HTTP effect. The 2026-08-26 amendment adds only
+the bounded Plan-27 edge for the page initialization and exact unfiltered
+Equity `1D` API URL. It rejects redirects, retries, fallbacks, attachments,
+filters, alternate hosts/paths, wrong response types, and oversized/empty
+bodies.
 
 ### Source-use boundary
 
-The accepted use is owner-private personal/noncommercial local research with accurate NSE attribution. The NSE Copyright policy permits accurate, acknowledged personal/noncommercial downloads. NSE Terms clause 9 prohibits systematic or automated collection. Therefore:
+The accepted use remains owner-private personal/noncommercial local research
+with accurate NSE attribution. The 2026-08-26 owner authorization is a bounded
+project decision, not legal advice or authority for commercial use,
+publication, redistribution, polling, systematic history collection, or a
+hosted multi-user service. Therefore:
 
-- no code in this slice acquires NSE content;
-- no raw artifact, structured notice, or attachment is published or redistributed;
+- raw artifacts, structured notices, and attachments are not published or redistributed;
 - source narrative is exposed only in the owner-private local result;
-- attachment URLs are references only and are never fetched;
+- attachment URLs remain references only and are never fetched;
 - attachment files are not retained;
-- `licence_policy_identity` is the implementation-owned fixed literal `nse-manual-download-owner-private-v1`; it binds the reviewed 2026-08-23 Issue #118 decision, the considered NSE Terms clauses, the NSE Copyright policy, and this owner-private source-use boundary without certifying legal permission;
+- `licence_policy_identity` is the closed literal
+  `nse-manual-download-owner-private-v1` for legacy manual artifacts or
+  `nse-bounded-official-fetch-owner-private-v1` for the authorized current edge;
 - a caller cannot select another use basis, source, URL, or acquisition method.
 
 ### Observed qualification artifact
@@ -108,7 +267,10 @@ It is source/schema qualification and later parser-smoke evidence only. It is no
 
 ## Exact artifact grammar
 
-The artifact must begin with the UTF-8 BOM and contain a standards-compliant comma-delimited CSV. After BOM removal and CSV decoding of the first record, the decoded header tuple must equal, in order:
+The artifact must contain a standards-compliant UTF-8 comma-delimited CSV. Its
+declared BOM state must exactly match whether the bytes begin with the UTF-8
+BOM. After optional BOM removal for decoding only, the first decoded record
+must equal, in order:
 
 ```text
 ("SYMBOL", "COMPANY NAME", "SUBJECT", "DETAILS", "BROADCAST DATE/TIME", "RECEIPT", "DISSEMINATION", "DIFFERENCE", "ATTACHMENT")
@@ -119,20 +281,35 @@ This is decoded field identity, not raw byte equality with an unquoted line. The
 Bounds and grammar are part of the schema identity:
 
 - raw bytes: `1..4_194_304`;
-- data rows: `1..10_000`;
-- fields per row: exactly `9`;
+- data rows: `0..10_000`, so the exact header-only artifact remains valid zero-notice evidence;
+- fields per row: exactly `9`; a blank record is not a row and remains malformed;
 - decoded field length: `1..32_768` Unicode code points;
 - canonical projected snapshot archive object: at most `33_554_432` bytes;
 - canonical receipt archive object: at most `16_384` bytes;
 - canonical completion-marker object: at most `4_096` bytes;
 - symbol: exact uppercase NSE symbol grammar already used by current canonical identities;
-- attachment: exact `https://nsearchives.nseindia.com/corporate/` URL prefix;
+- attachment: either the exact publisher no-attachment sentinel `-`, projected
+  as explicit `null`, or a URL with the exact
+  `https://nsearchives.nseindia.com/corporate/` prefix; every non-sentinel
+  attachment still undergoes exact URL parsing and prefix validation;
 - `BROADCAST DATE/TIME` and `DISSEMINATION`: deterministic English `DD-Mon-YYYY HH:MM:SS` grammar using the fixed `Jan` through `Dec` month set, independent of process locale;
 - `RECEIPT`: exact `YYYY-MM-DD HH:MM:SS` grammar;
 - `DIFFERENCE`: exact non-negative `HH:MM:SS` grammar with hours `00..99` and minutes/seconds `00..59`;
-- embedded NUL, disallowed Unicode controls/separators, formula prefixes, malformed quoting, invalid UTF-8, empty required fields, or trailing non-record data: rejected.
+- embedded NUL, disallowed Unicode controls/separators, every other formula
+  prefix, malformed quoting, invalid UTF-8, empty required fields, or trailing
+  non-record data: rejected.
 
-The parser preserves source text exactly after CSV decoding. It does not summarize, translate, classify, infer event dates, infer sentiment, follow links, or parse attachment filenames.
+The parser preserves source text exactly after CSV decoding, except that the
+closed publisher attachment sentinel `-` becomes explicit `null`; it is never
+exposed as a URL. It does not summarize, translate, classify, infer event dates,
+infer sentiment, follow links, or parse attachment filenames.
+
+The redacted live diagnostic that exposed this boundary had the exact nine-field
+header, 880 data records, field-count distribution `{9: 880}`, no blank record,
+and nine rows whose attachment column was exactly the `-` sentinel. The prior
+failure was `_safe_text` treating that closed publisher sentinel as a generic
+formula prefix; no header, field-count, time, URL, or row-safety relaxation was
+needed.
 
 ## Exact supplied-cohort boundary
 
@@ -180,8 +357,9 @@ The CSV does not declare their timezone. They remain literal source-local string
 
 The first slice supports one current same-IST-date observation only:
 
-- the exact source filename date must equal `known_at` converted to IST;
-- broadcast, receipt, and dissemination calendar dates must be either the filename date or its immediately preceding date, matching the admitted `1D` boundary;
+- the legacy filename date or official range-filename end date must equal `known_at` converted to IST;
+- an official range filename must cover exactly the previous/current calendar dates for `1D`;
+- broadcast, receipt, and dissemination calendar dates must be either that source date or its immediately preceding date;
 - later dates are future evidence and fail;
 - earlier dates are stale/out-of-window and fail;
 - verified retry reconstructs and returns the original `known_at` and identities, then samples the current trusted UTC clock only to re-evaluate the current-request boundary; it never replaces the retained time;
@@ -216,12 +394,20 @@ A later different artifact never overwrites an earlier retained artifact or fact
 The file archive owns the only retention path for an admitted result. It operates beneath an already admitted owner-private `StorageRootLease` and performs:
 
 1. re-parse the exact artifact and reconstruct the exact cohort projection from the snapshot members;
-2. validate input/source/licence/artifact/schema, canonical snapshot bytes and identity, member/outcome/notice/cohort invariants, and out-of-cohort exclusion;
+2. revalidate the exact two-case acquisition/licence/filename/encoding/BOM
+   predicate at input, snapshot, and retry boundaries plus
+   input/source/artifact/schema, canonical snapshot bytes and identity,
+   member/outcome/notice/cohort invariants, and out-of-cohort exclusion;
 3. content-addressed create-only raw-byte and canonical-snapshot publication;
 4. owner/private directory and file admission, stable descriptor and named-entry binding, exact bounded re-read, file `fsync`, and directory `fsync`;
 5. trusted `known_at` sampling after stable raw/snapshot publication;
 6. same-IST-date freshness admission before any receipt or completion marker is published;
-7. canonical closed versioned retention-receipt publication binding artifact, snapshot, archive, runtime, source, cohort, and `known_at`, with recomputed receipt and retained identities;
+7. canonical closed versioned retention-receipt publication for current or
+   newly retained amended bytes, binding artifact, snapshot, archive, runtime,
+   source, cohort, `known_at`, acquisition method, licence, filename, encoding,
+   and BOM state, with recomputed receipt and retained identities; or exact
+   adoption of the delivered pre-amendment key set under the bounded legacy case
+   above, preserving its original identities and time;
 8. canonical closed completion-marker publication binding the exact receipt/retained identities and `known_at`;
 9. final stable exact verification before returning the retained result.
 
@@ -231,8 +417,10 @@ Publication is create-only and idempotent under an owner-private same-UID operat
 
 A successful result is local/private and includes:
 
-- contract, schema, source, licence-policy, runtime, artifact, snapshot, archive, receipt, and retained identities;
-- exact source URL, source segment, declared `1D` window, source filename, and NSE attribution;
+- contract, schema, source, acquisition-method, licence-policy, runtime,
+  artifact, snapshot, archive, receipt, and retained identities;
+- exact source URL, source segment, declared `1D` window, source filename,
+  `source_encoding`, exact `source_has_bom`, and NSE attribution;
 - archive-owned `known_at`;
 - cohort identity and exact member count;
 - one entry per supplied member;
@@ -320,9 +508,10 @@ Forbidden implementation patterns:
 - source attachment fetches;
 - sentiment or materiality logic.
 
-## Exact first-slice file set
+## Historical delivered file set
 
-Implementation is limited to:
+The following set records the delivered Plan-25 event/parser/archive boundary
+only:
 
 ```text
 src/swing_trading_ai_assistant/market_data/current_event_notice.py
@@ -334,9 +523,13 @@ docs/plans/25-current-supplied-cohort-event-notice-contract.md
 docs/sprints/sprint-13.md
 ```
 
-Mutable status documents may replace stale lifecycle wording only with this
-delivered closeout evidence. No dependencies, lockfiles, workflows, CLI, API,
-MCP, UI, other feature modules, or historical modules changed.
+This historical delivered file set is not the current Plan-27 authorized
+amendment. The current bounded live acquisition correction is governed
+exclusively by Plan 27's identical 66-path set. Its Plan-25-owned subset adds
+`market_data/http.py`, `current_evidence_acquisition.py`, the acquisition
+runtime manifest and test, and the exact event input/snapshot/receipt/retry
+changes; it does not rewrite the historical delivered set. No dependency,
+generic provider framework, or CLI/API/MCP transport is added.
 
 ## RED acceptance tests
 
@@ -401,21 +594,22 @@ parser/projection/retention evidence only: it does not establish source
 completeness, live participation, historical coverage, commercial permission,
 publisher correction lineage, recommendation quality, or effectiveness.
 
-The delivered scope remains the operator-acquired official NSE Equity unfiltered
-`1D` CSV under attributed owner-private personal/noncommercial local use. It
-retains the exact cohort/provenance, typed-failure, immutable archive-owned
-`known_at`, and retain-before-return controls, with no automated collection,
-attachment fetch, redistribution, sentiment, recommendation, signal, or order.
+The delivered 2026-08-23 scope remains truthful historical evidence for the
+operator-acquired official NSE Equity unfiltered `1D` CSV. The 2026-08-26
+amendment additionally permits the one bounded current acquisition edge
+described above. Both paths retain exact cohort/provenance, typed failure,
+immutable archive-owned `known_at`, and retain-before-return controls. Neither
+permits attachment fetch, redistribution, sentiment, recommendation, signal, or
+order.
+
 Prospective archive only remains policy: unavailable history is explicit;
 `OHLCV_ONLY` cannot validate news/event behavior; and
 `OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven retained
-coverage. A future licensed historical source remains separate.
-
-Automated/licensed acquisition, general news, other providers/types/surfaces,
-semantic correction graphs, external attestation, licensed history,
-sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
-[Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
-is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
-implementation decision is recorded by this closeout.
+coverage. A future licensed historical source remains separate. Polling,
+systematic history, general news, other providers/types/surfaces, semantic
+correction graphs, external attestation, licensed history, sentiment/ranking,
+and additional delivery surfaces remain deferred. Sprint 14 integration is now
+in progress under Plan 27; this completed historical Plan-25 record does not
+establish Sprint 14 acceptance, completion, delivery, or closeout.
 
 Every finding is triaged against the FIRST_WORKING_SLICE. Optional hardening, broader acquisition, generalized replay, attestation beyond the existing runtime-identity convention, extra providers, and delivery surfaces remain later work unless a finding proves a concrete current blocker.

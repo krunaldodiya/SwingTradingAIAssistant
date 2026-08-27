@@ -77,6 +77,16 @@ monitor implementation or repeatedly remind the agent to preserve MVP-first
 sequencing. Keep verified useful work when it cleanly supports the bounded slice;
 do not retain harmful complexity merely because effort was spent.
 
+### Herdr multi-agent workflow
+
+When work requires multiple visible agents or independent R3/R4 review, follow
+[`docs/herdr-multi-agent-workflow.md`](docs/herdr-multi-agent-workflow.md).
+The coordinator owns decomposition, cross-slice contracts, shared-file
+serialization, integration, final gates, and delivery claims. Reviewers inspect
+stable exact bytes; interrupted or stale-byte reviews have no verdict. After an
+agent finishes and its result is captured, close its Herdr tab immediately.
+Never close or interrupt an active agent for cleanup.
+
 ## Tool and AI boundary
 
 The deterministic tool owns data access, calculations, validation, backtests, market facts, timestamps, and

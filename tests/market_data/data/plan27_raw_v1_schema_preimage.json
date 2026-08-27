@@ -1,0 +1,1481 @@
+{
+  "contract_version": "current-supplied-cohort-market-regime-schema@v3",
+  "type_rows": [
+    {
+      "name": "CurrentSamePassEquityMemberV1",
+      "ordered_fields": [
+        {
+          "name": "isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "exchange",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE\"]"
+        },
+        {
+          "name": "instrument_type",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"EQUITY\"]"
+        },
+        {
+          "name": "segment",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"EQ\"]"
+        },
+        {
+          "name": "effective_symbol",
+          "semantic_type": "NSE_SYMBOL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..64]"
+        },
+        {
+          "name": "valid_from",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "valid_through",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "provider_symbol",
+          "semantic_type": "SAFE_TEXT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..64]"
+        },
+        {
+          "name": "mapping_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"yfinance-symbol-mapping@v1\"]"
+        },
+        {
+          "name": "mapping_valid_from",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "mapping_valid_through",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "NULLABLE",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "mapping_identity",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "provider_mapping_revision",
+          "semantic_type": "SAFE_REVISION",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..128]"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassMarketRegimeRequestV3",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-supplied-cohort-market-regime@v3\"]"
+        },
+        {
+          "name": "decision_cutoff",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "cohort_selected_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "members",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentSamePassEquityMemberV1,1..50]"
+        },
+        {
+          "name": "schedule_evidence_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "schedule_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "plan22_schedule_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "schedule_source",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"nse-upstox-composed-calendar\"]"
+        },
+        {
+          "name": "schedule_source_release",
+          "semantic_type": "SOURCE_RELEASE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "composed-calendar@v1=LOWERCASE_64_HEX"
+        },
+        {
+          "name": "include_partial_current_session",
+          "semantic_type": "BOOLEAN",
+          "unit": "BOOLEAN",
+          "nullability": "REQUIRED",
+          "bounds": "EXACT_BOOLEAN"
+        },
+        {
+          "name": "plan21_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "plan22_request_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "request_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassRawSessionV1",
+      "ordered_fields": [
+        {
+          "name": "position",
+          "semantic_type": "INTEGER",
+          "unit": "ORDINAL",
+          "nullability": "REQUIRED",
+          "bounds": "[0..20]"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "open_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "close_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "kind",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"REGULAR\",\"SPECIAL\"]"
+        },
+        {
+          "name": "session_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassPartialOfficialSessionV1",
+      "ordered_fields": [
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "open_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "close_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "kind",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"REGULAR\",\"SPECIAL\"]"
+        },
+        {
+          "name": "schedule_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "partial_official_session_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassRawMappingReceiptV1",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-same-pass-raw-mapping-receipt@v1\"]"
+        },
+        {
+          "name": "member",
+          "semantic_type": "CLOSED_OBJECT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "CurrentSamePassEquityMemberV1"
+        },
+        {
+          "name": "snapshot_schema_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[1]"
+        },
+        {
+          "name": "snapshot_source",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"upstox-bod-nse\"]"
+        },
+        {
+          "name": "observation_date",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "retrieved_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "observation_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "compressed_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "decompressed_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "compressed_byte_count",
+          "semantic_type": "INTEGER",
+          "unit": "BYTES",
+          "nullability": "REQUIRED",
+          "bounds": "[0..4_000_000]"
+        },
+        {
+          "name": "decompressed_byte_count",
+          "semantic_type": "INTEGER",
+          "unit": "BYTES",
+          "nullability": "REQUIRED",
+          "bounds": "[0..50_000_000]"
+        },
+        {
+          "name": "relative_object_path",
+          "semantic_type": "SAFE_RELATIVE_PATH",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..255]"
+        },
+        {
+          "name": "relative_metadata_path",
+          "semantic_type": "SAFE_RELATIVE_PATH",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..255]"
+        },
+        {
+          "name": "etag",
+          "semantic_type": "SAFE_HEADER",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "CONTRACT_VALIDATED_HEADER"
+        },
+        {
+          "name": "last_modified",
+          "semantic_type": "SAFE_HEADER",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "CONTRACT_VALIDATED_HEADER"
+        },
+        {
+          "name": "instrument_key",
+          "semantic_type": "SAFE_TEXT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..128]"
+        },
+        {
+          "name": "security_id",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "resolved_symbol",
+          "semantic_type": "NSE_SYMBOL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..64]"
+        },
+        {
+          "name": "resolved_exchange",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE\"]"
+        },
+        {
+          "name": "resolved_segment",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE_EQ\"]"
+        },
+        {
+          "name": "resolved_instrument_type",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"EQ\"]"
+        },
+        {
+          "name": "resolved_isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "raw_mapping_projection_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassRawCoverageSourceRowV1",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-same-pass-raw-coverage-source@v1\"]"
+        },
+        {
+          "name": "isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "source_kind",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"VERIFIED_MANIFEST\",\"PROVISIONAL_PARTITION\"]"
+        },
+        {
+          "name": "manifest_schema_version",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "VERSION",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|[1,2147483647]"
+        },
+        {
+          "name": "plan_provider",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"upstox\"]"
+        },
+        {
+          "name": "plan_instrument_key",
+          "semantic_type": "SAFE_TEXT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..128]"
+        },
+        {
+          "name": "plan_security_id",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "plan_symbol",
+          "semantic_type": "NSE_SYMBOL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..64]"
+        },
+        {
+          "name": "plan_exchange",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE\"]"
+        },
+        {
+          "name": "plan_segment",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE_EQ\"]"
+        },
+        {
+          "name": "plan_instrument_type",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"EQ\"]"
+        },
+        {
+          "name": "plan_interval",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"1m\"]"
+        },
+        {
+          "name": "plan_year",
+          "semantic_type": "INTEGER",
+          "unit": "CALENDAR_YEAR",
+          "nullability": "REQUIRED",
+          "bounds": "[2022..9999]"
+        },
+        {
+          "name": "plan_month",
+          "semantic_type": "INTEGER",
+          "unit": "CALENDAR_MONTH",
+          "nullability": "REQUIRED",
+          "bounds": "[1..12]"
+        },
+        {
+          "name": "plan_from_date",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "plan_to_date",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "ingestion_run_id",
+          "semantic_type": "SAFE_TEXT_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|UTF8_BYTES[1..128]"
+        },
+        {
+          "name": "candle_schema_version",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "VERSION",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|[1,2147483647]"
+        },
+        {
+          "name": "state",
+          "semantic_type": "LITERAL_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|Literal[\"VERIFIED\"]"
+        },
+        {
+          "name": "validation_outcome",
+          "semantic_type": "LITERAL_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|Literal[\"PASSED\"]"
+        },
+        {
+          "name": "validation_policy_version",
+          "semantic_type": "SAFE_REVISION_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|UTF8_BYTES[1..128]"
+        },
+        {
+          "name": "actual_from_ts",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "actual_to_ts",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "row_count",
+          "semantic_type": "INTEGER",
+          "unit": "ROWS",
+          "nullability": "REQUIRED",
+          "bounds": "[1,2147483647]"
+        },
+        {
+          "name": "checksum_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_path",
+          "semantic_type": "SAFE_RELATIVE_PATH",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "UTF8_BYTES[1..1024]"
+        },
+        {
+          "name": "source_version",
+          "semantic_type": "SAFE_REVISION_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|UTF8_BYTES[1..128]"
+        },
+        {
+          "name": "manifest_created_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "attempt_started_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "manifest_updated_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "failure_category",
+          "semantic_type": "EXACT_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LITERAL_NONE"
+        },
+        {
+          "name": "coverage_state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"VERIFIED\",\"PROVISIONAL\"]"
+        },
+        {
+          "name": "schedule_digest_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "evidence_published_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "evidence_known_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "provisional_schema_version",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "VERSION",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|Literal[1]"
+        },
+        {
+          "name": "provisional_cutoff",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MINUTE"
+        },
+        {
+          "name": "provisional_session_complete",
+          "semantic_type": "BOOLEAN_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|BOOLEAN"
+        },
+        {
+          "name": "provisional_byte_size",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "BYTES",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|[1,67108864]"
+        },
+        {
+          "name": "provisional_instrument_snapshot_digest_sha256",
+          "semantic_type": "SHA256_OR_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|LOWERCASE_64_HEX"
+        },
+        {
+          "name": "provisional_instrument_snapshot_retrieved_at",
+          "semantic_type": "UTC_INSTANT_OR_NONE",
+          "unit": "UTC",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "provisional_historical_attempt_count",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "ATTEMPTS",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|[0,1]"
+        },
+        {
+          "name": "provisional_intraday_attempt_count",
+          "semantic_type": "INTEGER_OR_NONE",
+          "unit": "ATTEMPTS",
+          "nullability": "CONDITIONAL",
+          "bounds": "None|[0,1]"
+        },
+        {
+          "name": "query_completed_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "source_receipt_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassRawBarV1",
+      "ordered_fields": [
+        {
+          "name": "isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "open",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "high",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "low",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "close",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "volume",
+          "semantic_type": "UINT64",
+          "unit": "SHARES",
+          "nullability": "REQUIRED",
+          "bounds": "[0,18446744073709551615]"
+        },
+        {
+          "name": "provider",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"UPSTOX\"]"
+        },
+        {
+          "name": "price_basis",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"RAW\"]"
+        },
+        {
+          "name": "interval",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"1d-derived-from-retained-1m\"]"
+        },
+        {
+          "name": "published_at",
+          "semantic_type": "EXACT_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LITERAL_NONE"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "raw_mapping_projection_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "source_receipt_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "schedule_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "raw_source_policy_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "raw_bar_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassRawGridV1",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-same-pass-raw-daily-grid@v1\"]"
+        },
+        {
+          "name": "schema_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "configuration_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "runtime_code_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "request_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "schedule_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "latest_completed_session_resolution_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "raw_mapping_set_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "raw_source_policy_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "sessions",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentSamePassRawSessionV1,21]"
+        },
+        {
+          "name": "source_rows",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentSamePassRawCoverageSourceRowV1,exact=21*cohort_size;range=21..1050]"
+        },
+        {
+          "name": "bars",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentSamePassRawBarV1,exact=21*cohort_size;range=21..1050]"
+        },
+        {
+          "name": "raw_grid_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "PartialCurrentSessionRowV1",
+      "ordered_fields": [
+        {
+          "name": "isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "as_of",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "price",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "cumulative_volume",
+          "semantic_type": "UINT64",
+          "unit": "SHARES",
+          "nullability": "REQUIRED",
+          "bounds": "[0,18446744073709551615]"
+        },
+        {
+          "name": "provider",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"UPSTOX\"]"
+        },
+        {
+          "name": "price_basis",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"RAW\"]"
+        },
+        {
+          "name": "source_receipt_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "partial_current_session_row_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "PartialCurrentSessionSnapshotV1",
+      "ordered_fields": [
+        {
+          "name": "label",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"PARTIAL_CURRENT_SESSION\"]"
+        },
+        {
+          "name": "state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "ONE_OF[NOT_REQUESTED|NOT_APPLICABLE|OBSERVED|UNAVAILABLE|CONFLICTED]"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "NULLABLE",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "as_of",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "NULLABLE",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "NULLABLE",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "rows",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "tuple[PartialCurrentSessionRowV1,count=0_or_cohort_size;range=0..50]"
+        },
+        {
+          "name": "reasons",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[PartialReason,0..6]"
+        },
+        {
+          "name": "partial_snapshot_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "PrivateCurrentSamePassRawDailyResultV1",
+      "ordered_fields": [
+        {
+          "name": "evidence_state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"OBSERVED\",\"INSUFFICIENT_EVIDENCE\"]"
+        },
+        {
+          "name": "request_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "decision_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "comparison_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "resolved_sessions",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentSamePassRawSessionV1,21]"
+        },
+        {
+          "name": "mapping_receipts",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "tuple[CurrentSamePassRawMappingReceiptV1,observed_exact=cohort_size;range=1..50]"
+        },
+        {
+          "name": "official_active_session",
+          "semantic_type": "CLOSED_OBJECT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "CurrentSamePassPartialOfficialSessionV1"
+        },
+        {
+          "name": "raw_grid",
+          "semantic_type": "CLOSED_OBJECT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "CurrentSamePassRawGridV1"
+        },
+        {
+          "name": "partial_current_session",
+          "semantic_type": "CLOSED_OBJECT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "PartialCurrentSessionSnapshotV1"
+        },
+        {
+          "name": "reasons",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[RawDailyReason,0..11]"
+        },
+        {
+          "name": "raw_result_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassDecisionMarketDataRowV1",
+      "ordered_fields": [
+        {
+          "name": "isin",
+          "semantic_type": "ISIN",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "NSE_ISIN_LUHN_12"
+        },
+        {
+          "name": "session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "close",
+          "semantic_type": "DECIMAL_TEXT",
+          "unit": "INR_PER_SHARE",
+          "nullability": "REQUIRED",
+          "bounds": "FINITE_NON_EXPONENT_POSITIVE"
+        },
+        {
+          "name": "volume",
+          "semantic_type": "UINT64",
+          "unit": "SHARES",
+          "nullability": "REQUIRED",
+          "bounds": "[0,18446744073709551615]"
+        },
+        {
+          "name": "provider",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"UPSTOX\"]"
+        },
+        {
+          "name": "price_basis",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"RAW\"]"
+        },
+        {
+          "name": "published_at",
+          "semantic_type": "EXACT_NONE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LITERAL_NONE"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "raw_bar_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "row_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentSamePassDecisionMarketDataReportV1",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-same-pass-decision-market-data@v1\"]"
+        },
+        {
+          "name": "schema_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "evidence_state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"OBSERVED\",\"INSUFFICIENT_EVIDENCE\"]"
+        },
+        {
+          "name": "request_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "decision_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "comparison_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "raw_grid_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "rows",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "tuple[CurrentSamePassDecisionMarketDataRowV1,N]"
+        },
+        {
+          "name": "partial_current_session",
+          "semantic_type": "CLOSED_OBJECT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "PartialCurrentSessionSnapshotV1"
+        },
+        {
+          "name": "reasons",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[RawDailyReason,0..11]"
+        },
+        {
+          "name": "report_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    }
+  ],
+  "state_projections": [
+    [
+      "CurrentSamePassRawCoverageSourceRowV1",
+      [
+        [
+          "VERIFIED_MANIFEST",
+          "manifest_schema_version=[1,2147483647],ingestion_run_id=REQUIRED,candle_schema_version=[1,2147483647],state=VERIFIED,validation_outcome=PASSED,validation_policy_version=REQUIRED,source_version=REQUIRED,manifest_created_at=REQUIRED,attempt_started_at=REQUIRED,manifest_updated_at=REQUIRED,coverage_state=VERIFIED,evidence_published_at=NONE,evidence_known_at=NONE,provisional_schema_version=NONE,provisional_cutoff=NONE,provisional_session_complete=NONE,provisional_byte_size=NONE,provisional_instrument_snapshot_digest_sha256=NONE,provisional_instrument_snapshot_retrieved_at=NONE,provisional_historical_attempt_count=NONE,provisional_intraday_attempt_count=NONE,row_count=[1,2147483647]"
+        ],
+        [
+          "PROVISIONAL_PARTITION",
+          "manifest_schema_version=NONE,ingestion_run_id=NONE,candle_schema_version=NONE,state=NONE,validation_outcome=NONE,validation_policy_version=NONE,source_version=NONE,manifest_created_at=NONE,attempt_started_at=NONE,manifest_updated_at=NONE,coverage_state=PROVISIONAL,evidence_published_at=REQUIRED,evidence_known_at=REQUIRED,provisional_schema_version=1,provisional_cutoff=REQUIRED,provisional_session_complete=REQUIRED,provisional_byte_size=[1,67108864],provisional_instrument_snapshot_digest_sha256=REQUIRED,provisional_instrument_snapshot_retrieved_at=REQUIRED,provisional_historical_attempt_count=[0,1],provisional_intraday_attempt_count=[0,1],row_count=[1,10000]"
+        ]
+      ]
+    ],
+    [
+      "PrivateCurrentSamePassRawDailyResultV1",
+      [
+        [
+          "OBSERVED",
+          "resolved_sessions=REQUIRED,mapping_receipts=REQUIRED,raw_grid=REQUIRED,reasons=EMPTY"
+        ],
+        [
+          "INSUFFICIENT_EVIDENCE",
+          "resolved_sessions=REQUIRED,raw_grid=NONE,reasons=NONEMPTY"
+        ]
+      ]
+    ],
+    [
+      "CurrentSamePassDecisionMarketDataReportV1",
+      [
+        [
+          "OBSERVED",
+          "raw_grid_identity_sha256=REQUIRED,rows=REQUIRED,reasons=EMPTY"
+        ],
+        [
+          "INSUFFICIENT_EVIDENCE",
+          "raw_grid_identity_sha256=NONE,rows=NONE,reasons=NONEMPTY"
+        ]
+      ]
+    ],
+    [
+      "PartialCurrentSessionSnapshotV1",
+      [
+        [
+          "NOT_REQUESTED",
+          "session=NONE,as_of=NONE,known_at=NONE,rows=NONE,reasons=EMPTY"
+        ],
+        [
+          "NOT_APPLICABLE",
+          "session=NONE,as_of=NONE,known_at=NONE,rows=NONE,reasons=EMPTY"
+        ],
+        [
+          "OBSERVED",
+          "session=REQUIRED,as_of=REQUIRED,known_at=REQUIRED,rows=REQUIRED,reasons=EMPTY"
+        ],
+        [
+          "UNAVAILABLE",
+          "session=REQUIRED,as_of=NONE,known_at=NONE,rows=NONE,reasons=NONEMPTY"
+        ],
+        [
+          "CONFLICTED",
+          "session=REQUIRED,as_of=NONE,known_at=NONE,rows=NONE,reasons=NONEMPTY"
+        ]
+      ]
+    ]
+  ],
+  "unknown_key_policy": "REJECT"
+}

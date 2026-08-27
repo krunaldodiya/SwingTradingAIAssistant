@@ -11,10 +11,13 @@ from decimal import Decimal
 from typing import cast
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from swing_trading_ai_assistant.market_data.adjusted_daily import (
     AdjustedDailyCloseFailure,
     AdjustedDailyCloseSuccessV2,
     acquire_adjusted_daily_close_v2,
+    adjusted_daily_schedule_identity_v2,
     serialize_public_result_v2,
 )
 
@@ -78,7 +81,10 @@ def _instrument_identity(member: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _request_identity(instruments: list[dict[str, object]]) -> str:
+def _request_identity(
+    instruments: list[dict[str, object]],
+    schedule_identity: str | None = None,
+) -> str:
     return _identity(
         {
             "cohort_identity_sha256": _COHORT,
@@ -97,7 +103,7 @@ def _request_identity(instruments: list[dict[str, object]]) -> str:
             ],
             "price_basis": "ADJUSTED",
             "provider_id": "YFINANCE",
-            "schedule_identity_sha256": _schedule_identity(),
+            "schedule_identity_sha256": schedule_identity or _schedule_identity(),
         }
     )
 
@@ -846,3 +852,48 @@ def test_rejects_hash_spliced_v2_schedule_or_request_before_fetch() -> None:
             "SCHEDULE_IDENTITY_INVALID",
         }
         assert provider.calls == []
+
+
+@pytest.mark.parametrize(
+    ("source", "release"),
+    [
+        ("nse-authoritative-calendar", "composed-calendar@v1=" + "c" * 64),
+        ("nse-upstox-composed-calendar", "sha256:" + "c" * 64),
+    ],
+)
+def test_plan22_parser_and_identity_reject_cross_paired_schedule_provenance(
+    source: str, release: str
+) -> None:
+
+    with pytest.raises(ValueError, match="invalid schedule source/release pair"):
+        adjusted_daily_schedule_identity_v2(
+            sessions=_sessions(),
+            decision_session_official_close_at=_DECISION_SESSION_CLOSE,
+            schedule_evidence_sha256=_SCHEDULE_EVIDENCE,
+            schedule_source=source,  # type: ignore[arg-type]
+            schedule_source_release=release,
+        )
+
+    request = _request()
+    schedule = cast(dict[str, object], request["plan21_schedule"])
+    schedule["schedule_source"] = source
+    schedule["schedule_source_release"] = release
+    schedule_identity = _identity(
+        {
+            "decision_session_official_close_at": _instant(_DECISION_SESSION_CLOSE),
+            "schedule_evidence_sha256": _SCHEDULE_EVIDENCE,
+            "schedule_source": source,
+            "schedule_source_release": release,
+            "sessions": [session.isoformat() for session in _sessions()],
+        }
+    )
+    schedule["schedule_identity_sha256"] = schedule_identity
+    instruments = cast(list[dict[str, object]], request["instruments"])
+    request["request_identity_sha256"] = _request_identity(
+        instruments, schedule_identity
+    )
+    provider = _Provider(_frame())
+    result = _acquire(request, provider)
+    assert result.code == "INVALID_REQUEST"
+    assert result.reason == "SCHEDULE_IDENTITY_INVALID"
+    assert provider.calls == []
