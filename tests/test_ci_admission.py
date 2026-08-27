@@ -1,0 +1,322 @@
+"""Behavioral contracts for exact-tree CI admission reuse."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import zipfile
+from copy import deepcopy
+from email.message import Message
+from io import BytesIO
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Self, cast
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / ".github" / "scripts" / "ci_admission.py"
+SPEC = importlib.util.spec_from_file_location("ci_admission", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+ci_admission = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(ci_admission)
+assert isinstance(ci_admission, ModuleType)
+
+BASE = "a" * 40
+HEAD = "b" * 40
+TESTED = "c" * 40
+MERGED = "d" * 40
+TREE = "e" * 40
+WORKFLOW_BLOB = "f" * 40
+REPOSITORY = "owner/repository"
+PR_NUMBER = 141
+RUN_ID = 12345
+RUN_ATTEMPT = 1
+MERGED_AT = "2026-08-27T12:01:00Z"
+
+
+def _pull_request() -> dict[str, Any]:
+    return {
+        "number": PR_NUMBER,
+        "merged_at": MERGED_AT,
+        "merge_commit_sha": MERGED,
+        "base": {
+            "ref": "main",
+            "sha": BASE,
+            "repo": {"full_name": REPOSITORY},
+        },
+        "head": {"sha": HEAD},
+    }
+
+
+def _record() -> dict[str, object]:
+    return {
+        "schema": "ci-admission-v1",
+        "repository": REPOSITORY,
+        "pr_number": PR_NUMBER,
+        "base_sha": BASE,
+        "head_sha": HEAD,
+        "tested_sha": TESTED,
+        "tested_tree": TREE,
+        "tested_parents": [BASE, HEAD],
+        "workflow_ref": (
+            f"{REPOSITORY}/.github/workflows/ci.yml@refs/pull/{PR_NUMBER}/merge"
+        ),
+        "workflow_sha": TESTED,
+        "workflow_blob_sha": WORKFLOW_BLOB,
+        "run_id": RUN_ID,
+        "run_attempt": RUN_ATTEMPT,
+    }
+
+
+def _zip_record(record: dict[str, object]) -> bytes:
+    target = BytesIO()
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "ci-admission.json",
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+        )
+    return target.getvalue()
+
+
+class FakeApi:
+    def __init__(self, record: dict[str, object] | None = None) -> None:
+        self.record = record or _record()
+        self.raw_artifact = _zip_record(self.record)
+        self.pulls: object = [_pull_request()]
+        self.runs: object = {
+            "workflow_runs": [
+                {
+                    "id": RUN_ID,
+                    "run_attempt": RUN_ATTEMPT,
+                    "path": ".github/workflows/ci.yml",
+                    "event": "pull_request",
+                    "conclusion": "success",
+                    "head_sha": HEAD,
+                    "updated_at": "2026-08-27T12:00:00Z",
+                }
+            ]
+        }
+        self.artifacts: object = {
+            "artifacts": [
+                {
+                    "id": 999,
+                    "name": f"ci-admission-v1-{RUN_ID}-{RUN_ATTEMPT}",
+                    "expired": False,
+                    "size_in_bytes": len(self.raw_artifact),
+                    "created_at": "2026-08-27T12:00:00Z",
+                    "digest": "sha256:" + hashlib.sha256(self.raw_artifact).hexdigest(),
+                }
+            ]
+        }
+        self.commit: object = {
+            "sha": TESTED,
+            "tree": {"sha": TREE},
+            "parents": [{"sha": BASE}, {"sha": HEAD}],
+        }
+
+    def get_json(self, path: str, query: dict[str, str] | None = None) -> object:
+        if path.endswith(f"/commits/{MERGED}/pulls"):
+            return self.pulls
+        if path.endswith("/actions/workflows/ci.yml/runs"):
+            assert query == {
+                "event": "pull_request",
+                "status": "completed",
+                "head_sha": HEAD,
+                "per_page": "100",
+            }
+            return self.runs
+        if path.endswith(f"/actions/runs/{RUN_ID}/artifacts"):
+            return self.artifacts
+        if path.endswith(f"/git/commits/{TESTED}"):
+            return self.commit
+        raise AssertionError(f"unexpected API path: {path}")
+
+    def get_bytes(self, path: str) -> bytes:
+        assert path.endswith("/actions/artifacts/999/zip")
+        return self.raw_artifact
+
+
+def _push_event() -> dict[str, object]:
+    return {
+        "ref": "refs/heads/main",
+        "deleted": False,
+        "forced": False,
+        "before": BASE,
+        "after": MERGED,
+    }
+
+
+def _context() -> dict[str, str]:
+    return {"repository": REPOSITORY, "sha": MERGED}
+
+
+def _git_value(*args: str) -> str:
+    values: dict[tuple[str, ...], str] = {
+        ("rev-parse", f"{MERGED}^{{tree}}"): TREE,
+        ("rev-parse", f"{MERGED}:.github/workflows/ci.yml"): WORKFLOW_BLOB,
+    }
+    return values[args]
+
+
+def test_build_admission_record_binds_exact_synthetic_merge() -> None:
+    event = {"pull_request": _pull_request()}
+    context = {
+        "repository": REPOSITORY,
+        "sha": TESTED,
+        "workflow_ref": (
+            f"{REPOSITORY}/.github/workflows/ci.yml@refs/pull/{PR_NUMBER}/merge"
+        ),
+        "workflow_sha": TESTED,
+        "run_id": str(RUN_ID),
+        "run_attempt": str(RUN_ATTEMPT),
+    }
+
+    def git_value(*args: str) -> str:
+        values: dict[tuple[str, ...], str] = {
+            ("rev-list", "--parents", "-n", "1", TESTED): (f"{TESTED} {BASE} {HEAD}"),
+            ("rev-parse", f"{TESTED}^{{tree}}"): TREE,
+            ("rev-parse", f"{TESTED}:.github/workflows/ci.yml"): WORKFLOW_BLOB,
+        }
+        return values[args]
+
+    assert ci_admission.build_admission_record(event, context, git_value) == _record()
+
+
+def test_verify_admission_accepts_only_the_exact_previously_gated_tree() -> None:
+    admitted, reason = ci_admission.verify_admission(
+        _push_event(), _context(), FakeApi(), _git_value
+    )
+
+    assert admitted is True
+    assert reason == f"exact CI admission from PR #{PR_NUMBER}, run {RUN_ID}/1"
+
+
+def test_github_api_does_not_forward_token_across_artifact_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[object] = []
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            return b"{}"
+
+    def fake_urlopen(request: object, *, timeout: float) -> Response:
+        assert timeout == 15.0
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr(ci_admission.urllib.request, "urlopen", fake_urlopen)
+    api = ci_admission.GitHubApi("secret-token")
+    assert api.get_json("/repos/owner/repository/actions/runs") == {}
+    request = cast(Any, requests[0])
+    assert "Authorization" not in request.headers
+    assert request.unredirected_hdrs["Authorization"] == "Bearer secret-token"
+
+    redirected = ci_admission.urllib.request.HTTPRedirectHandler().redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        Message(),
+        "https://artifact-storage.example/admission.zip",
+    )
+    assert redirected is not None
+    assert "Authorization" not in redirected.headers
+    assert "Authorization" not in redirected.unredirected_hdrs
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("ref", "refs/heads/other"),
+        ("deleted", True),
+        ("forced", True),
+        ("before", "0" * 40),
+        ("after", "0" * 40),
+    ),
+)
+def test_verify_admission_rejects_unsafe_push_transitions(
+    field: str, value: object
+) -> None:
+    event = _push_event()
+    event[field] = value
+
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(event, _context(), FakeApi(), _git_value)
+
+
+def test_verify_admission_rejects_direct_push_without_merged_pr() -> None:
+    api = FakeApi()
+    api.pulls = []
+
+    with pytest.raises(ValueError, match="exactly one merged pull request"):
+        ci_admission.verify_admission(_push_event(), _context(), api, _git_value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("base_sha", "0" * 40),
+        ("head_sha", "0" * 40),
+        ("tested_tree", "0" * 40),
+        ("workflow_blob_sha", "0" * 40),
+        ("run_attempt", 2),
+    ),
+)
+def test_verify_admission_rejects_tampered_record_fields(
+    field: str, value: object
+) -> None:
+    record = _record()
+    record[field] = value
+
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _context(), FakeApi(record), _git_value
+        )
+
+
+def test_verify_admission_rejects_unknown_record_fields() -> None:
+    record = _record()
+    record["unexpected"] = "value"
+
+    with pytest.raises(ValueError, match="unknown or missing fields"):
+        ci_admission.verify_admission(
+            _push_event(), _context(), FakeApi(record), _git_value
+        )
+
+
+def test_verify_admission_rejects_multiple_admission_artifacts() -> None:
+    api = FakeApi()
+    artifacts = cast(dict[str, list[dict[str, object]]], deepcopy(api.artifacts))
+    artifact_items = artifacts["artifacts"]
+    artifact_items.append(deepcopy(artifact_items[0]))
+    api.artifacts = artifacts
+
+    with pytest.raises(ValueError, match="exactly one successful"):
+        ci_admission.verify_admission(_push_event(), _context(), api, _git_value)
+
+
+def test_verify_admission_rejects_artifact_digest_mismatch() -> None:
+    api = FakeApi()
+    artifacts = cast(dict[str, list[dict[str, object]]], api.artifacts)
+    artifacts["artifacts"][0]["digest"] = "sha256:" + "0" * 64
+
+    with pytest.raises(ValueError, match="digest mismatch"):
+        ci_admission.verify_admission(_push_event(), _context(), api, _git_value)
+
+
+def test_verify_admission_rejects_tested_commit_parent_mismatch() -> None:
+    api = FakeApi()
+    commit = cast(dict[str, object], api.commit)
+    commit["parents"] = [{"sha": BASE}, {"sha": "0" * 40}]
+
+    with pytest.raises(ValueError, match="exact pull request merge"):
+        ci_admission.verify_admission(_push_event(), _context(), api, _git_value)
