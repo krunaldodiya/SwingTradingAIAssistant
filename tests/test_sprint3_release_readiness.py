@@ -289,7 +289,9 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     assert "852-test focused portfolio" in sprint14_row
     assert "3,400-test full suite at 89.53% coverage" in sprint14_row
     assert "all exact-current local gates passed" in sprint14_row
-    assert "commit, exact reviews, push/hosted/merge/closeout pending" in sprint14_row
+    assert "candidate commit created" in sprint14_row
+    assert "exact-current reviews, push/hosted/merge/closeout pending" in sprint14_row
+    assert not re.search(r"\bcommit(?:\s+remain|\s+is|,)\s+pending\b", sprint14_row)
     assert "no acceptance, completion, or delivery claimed" in sprint14_row
     for relative_path in lifecycle_paths:
         lifecycle = (ROOT / relative_path).read_text()
@@ -316,7 +318,17 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
         assert re.search(
             r"clean\s+installed-wheel\s+imports/runtime\s+checks", lifecycle
         )
-        assert re.search(r"commit,\s+(?:exact-current\s+|exact\s+)?reviews", lifecycle)
+        assert re.search(
+            r"candidate\s+commit\s+(?:has\s+been\s+)?created",
+            lifecycle,
+            re.IGNORECASE,
+        )
+        assert not re.search(
+            r"\bcommit(?:\s+remain|\s+is|,)\s+pending\b",
+            lifecycle,
+            re.IGNORECASE,
+        )
+        assert "exact current uncommitted" not in lifecycle
         assert "push" in lifecycle
         assert "hosted" in lifecycle
         assert "merge" in lifecycle

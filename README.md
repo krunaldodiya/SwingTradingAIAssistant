@@ -164,7 +164,7 @@ recommendation quality, or effectiveness.
 
 Plan-25 event evidence remains prospectively archived and unavailable event
 history remains explicit. Sprint 14 / [Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
-is **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); COMMIT, EXACT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY** under
+is **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); CANDIDATE COMMIT CREATED; EXACT-CURRENT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY** under
 [Plan 27](docs/plans/27-current-same-pass-market-regime-contract.md). The owner
 selected the current-only same-pass correction after operational evidence showed
 zero usable Plan-20 21-object prospective inputs.
@@ -221,14 +221,14 @@ Plan-26 packet `@v1` is unpublished WIP superseded before delivery by Packet V2;
 its 101 focused-test result remains historical WIP/repair evidence only. It will
 not ship and no alias is authorized.
 
-PR #140's two P2 blockers are fixed on the exact current uncommitted 66-path
+PR #140's two P2 blockers are fixed on the exact current source candidate 66-path
 set. Active-session partial acquisition now requires canonical identity and an
 effective provider mapping valid on the active date before any partial query;
 expired canonical or mapping validity performs zero partial queries. Industry V2
 preserves the schema-specific legacy/current source URL and Packet attribution.
 
 The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
-current uncommitted 66-path fingerprint
+current source candidate 66-path fingerprint
 `3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
 `2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
 `OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
@@ -248,8 +248,8 @@ installed-wheel imports/runtime checks. Installed runtime identities are raw
 Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
 Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
 and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
-Commit, exact-current reviews, push, hosted checks, merge, and closeout remain
-pending. No acceptance, completion, or delivery is claimed.
+A candidate commit has been created. Exact-current reviews, push, hosted checks,
+merge, and closeout remain pending. No acceptance, completion, or delivery is claimed.
 
 Ten review blockers are fixed locally without a new subsystem: the two PR #140
 P2 fixes for active-date partial canonical/mapping validity and schema-specific
@@ -281,7 +281,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass; commit, exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
 screening. yfinance is a separate adjusted-daily research provider, not a
