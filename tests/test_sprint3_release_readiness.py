@@ -282,6 +282,16 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
         "docs/sprints/README.md",
         "docs/sprints/sprint-14.md",
     )
+    stale_commit_pending_pattern = re.compile(
+        r"\bcommit(?:\s+(?:remains|is))?\s+pending\b"
+        r"|\bcommit,\s+[^.;|\n]*\bremains?\s+pending\b",
+        re.IGNORECASE,
+    )
+    assert stale_commit_pending_pattern.search("Commit remains pending.")
+    assert stale_commit_pending_pattern.search(
+        "Commit, exact-current reviews, push, hosted checks, merge, "
+        "and closeout remain pending."
+    )
     overview = (ROOT / "docs" / "upcoming_sprints_overview.md").read_text()
     sprint14_row = next(
         line for line in overview.splitlines() if line.startswith("| 14 |")
@@ -291,7 +301,7 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     assert "all exact-current local gates passed" in sprint14_row
     assert "candidate commit created" in sprint14_row
     assert "exact-current reviews, push/hosted/merge/closeout pending" in sprint14_row
-    assert not re.search(r"\bcommit(?:\s+remain|\s+is|,)\s+pending\b", sprint14_row)
+    assert not stale_commit_pending_pattern.search(sprint14_row)
     assert "no acceptance, completion, or delivery claimed" in sprint14_row
     for relative_path in lifecycle_paths:
         lifecycle = (ROOT / relative_path).read_text()
@@ -323,11 +333,7 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
             lifecycle,
             re.IGNORECASE,
         )
-        assert not re.search(
-            r"\bcommit(?:\s+remain|\s+is|,)\s+pending\b",
-            lifecycle,
-            re.IGNORECASE,
-        )
+        assert not stale_commit_pending_pattern.search(lifecycle)
         assert "exact current uncommitted" not in lifecycle
         assert "push" in lifecycle
         assert "hosted" in lifecycle
