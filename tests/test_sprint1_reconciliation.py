@@ -22,7 +22,7 @@ _ALWAYS_GATE = (
 )
 _RELEASE_BUILD = "uv build --no-build-isolation --python .venv/bin/python"
 _CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "concurrency:", "jobs:")
-_CI_BLOCKS = {
+_CI_STATIC_BLOCKS = {
     "name: CI": ("name: CI",),
     "on:": ("on:", "  pull_request:", "  push:", "    branches:", "      - main"),
     "permissions:": ("permissions:", "  contents: read"),
@@ -32,114 +32,55 @@ _CI_BLOCKS = {
         "github.run_id }}",
         "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
     ),
-    "jobs:": (
-        "jobs:",
-        "  quality:",
-        "    name: Quality and build",
-        "    runs-on: ubuntu-24.04",
-        "    timeout-minutes: 30",
-        "    steps:",
-        "      - name: Check out repository",
-        "        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
-        "        with:",
-        "          persist-credentials: false",
-        "          fetch-depth: 0",
-        "      - name: Classify the sealed change",
-        "        id: changes",
-        "        shell: bash",
-        "        env:",
-        "          EVENT_NAME: ${{ github.event_name }}",
-        "          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-        "          PUSH_BEFORE_SHA: ${{ github.event.before }}",
-        "        run: |",
-        "          set -euo pipefail",
-        '          if [[ "$EVENT_NAME" == "pull_request" ]]; then',
-        '            base="$PR_BASE_SHA"',
-        "          else",
-        '            base="$PUSH_BEFORE_SHA"',
-        "          fi",
-        '          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e '
-        '"${base}^{commit}"; then',
-        '            echo "Comparison base is unavailable; failing closed to the full gate."',
-        '            echo "full_gate=true" >> "$GITHUB_OUTPUT"',
-        '            echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"',
-        "          else",
-        '            changed="$(git diff --no-renames --name-only "$base" "$GITHUB_SHA")"',
-        "            full_gate=false",
-        "            lifecycle_gate=false",
-        '            outside_lifecycle=""',
-        "            while IFS= read -r path; do",
-        '              [[ -z "$path" ]] && continue',
-        '              case "$path" in',
-        "                *.md)",
-        "                  ;;",
-        "                tests/test_sprint3_release_readiness.py)",
-        "                  lifecycle_gate=true",
-        "                  ;;",
-        "                *)",
-        "                  full_gate=true",
-        "                  outside_lifecycle+=\"${outside_lifecycle:+$'\\n'}$path\"",
-        "                  ;;",
-        "              esac",
-        '            done <<< "$changed"',
-        '            if [[ "$full_gate" == "true" ]]; then',
-        '              echo "full_gate=true" >> "$GITHUB_OUTPUT"',
-        '              echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"',
-        "              printf 'Full gate required for:\\n%s\\n' \"$outside_lifecycle\"",
-        '            elif [[ "$lifecycle_gate" == "true" ]]; then',
-        '              echo "full_gate=false" >> "$GITHUB_OUTPUT"',
-        '              echo "lifecycle_gate=true" >> "$GITHUB_OUTPUT"',
-        '              echo "Lifecycle documentation change: using the focused lifecycle gate."',
-        "            else",
-        '              echo "full_gate=false" >> "$GITHUB_OUTPUT"',
-        '              echo "lifecycle_gate=false" >> "$GITHUB_OUTPUT"',
-        '              echo "Markdown-only change: using the lightweight required gate."',
-        "            fi",
-        '            echo "base=$base" >> "$GITHUB_OUTPUT"',
-        "          fi",
-        "      - name: Run lightweight Markdown gate",
-        "        if: >-",
-        "          steps.changes.outputs.full_gate != 'true' &&",
-        "          steps.changes.outputs.lifecycle_gate != 'true'",
-        "        env:",
-        "          BASE_SHA: ${{ steps.changes.outputs.base }}",
-        '        run: git diff --check "$BASE_SHA" "$GITHUB_SHA"',
-        "      - name: Set up uv and Python",
-        "        if: >-",
-        "          steps.changes.outputs.full_gate == 'true' ||",
-        "          steps.changes.outputs.lifecycle_gate == 'true'",
-        "        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
-        "        with:",
-        '          version: "0.9.24"',
-        '          python-version: "3.11"',
-        '          checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"',
-        "      - name: Install locked development dependencies",
-        "        if: >-",
-        "          steps.changes.outputs.full_gate == 'true' ||",
-        "          steps.changes.outputs.lifecycle_gate == 'true'",
-        "        run: uv sync --extra dev --frozen",
-        "      - name: Run focused lifecycle documentation gate",
-        "        if: steps.changes.outputs.lifecycle_gate == 'true'",
-        "        env:",
-        "          BASE_SHA: ${{ steps.changes.outputs.base }}",
-        "        run: >-",
-        '          git diff --check "$BASE_SHA" "$GITHUB_SHA" &&',
-        "          uv run --no-sync --extra dev ruff format --check tests/test_sprint3_release_readiness.py &&",
-        "          uv run --no-sync --extra dev ruff check tests/test_sprint3_release_readiness.py &&",
-        "          uv run --no-sync --extra dev pytest tests/test_sprint3_release_readiness.py --no-cov",
-        "      - name: Run authoritative quality gate",
-        "        if: steps.changes.outputs.full_gate == 'true'",
-        "        run: >-",
-        "          uv run --no-sync --extra dev ruff format --check . &&",
-        "          uv run --no-sync --extra dev ruff check . &&",
-        "          uv run --no-sync --extra dev pyright &&",
-        "          uv run --no-sync --extra dev vulture src --min-confidence 80 &&",
-        "          uv run --no-sync --extra dev pytest",
-        "      - name: Build distribution",
-        "        if: steps.changes.outputs.full_gate == 'true'",
-        "        run: uv build --no-build-isolation --python .venv/bin/python",
-    ),
 }
+_APPROVED_ACTIONS = (
+    "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
+    "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+    "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
+    "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
+)
+_APPROVED_JOB_IDS = ("quality", "main-backstop")
+_APPROVED_STEP_NAMES = (
+    "Check out repository",
+    "Classify the sealed change",
+    "Run lightweight Markdown gate",
+    "Set up uv and Python",
+    "Install locked development dependencies",
+    "Run focused lifecycle documentation gate",
+    "Run authoritative quality gate",
+    "Build distribution",
+    "Issue exact-tree CI admission",
+    "Retain exact-tree CI admission",
+    "Check out repository",
+    "Verify exact prior CI admission",
+    "Run admitted merge integrity gate",
+    "Explain full-gate fallback",
+    "Set up uv and Python for fallback",
+    "Install locked development dependencies for fallback",
+    "Run authoritative fallback gate",
+    "Build fallback distribution",
+)
+_REQUIRED_CI_FRAGMENTS = (
+    "    name: Quality and build",
+    "    if: github.event_name == 'pull_request'",
+    "    name: Main admission backstop",
+    "    if: github.event_name == 'push'",
+    "      actions: read",
+    "      pull-requests: read",
+    "          python3 .github/scripts/ci_admission.py issue",
+    '          --output "$RUNNER_TEMP/ci-admission.json"',
+    "          name: ci-admission-v1-${{ github.run_id }}-${{ github.run_attempt }}",
+    "          if-no-files-found: error",
+    "          retention-days: 1",
+    "          compression-level: 0",
+    "        continue-on-error: true",
+    "          GITHUB_TOKEN: ${{ github.token }}",
+    "          python3 .github/scripts/ci_admission.py verify",
+    '          --output "$GITHUB_OUTPUT"',
+    "        if: steps.admission.outputs.admitted == 'true'",
+    "        if: steps.admission.outputs.admitted != 'true'",
+)
 
 
 def _lines(text: str) -> list[str]:
@@ -166,27 +107,47 @@ def _normalize(text: str) -> str:
 
 
 def validate_ci_workflow(text: str) -> None:
-    """Validate the complete, single-job CI contract rather than a first match."""
+    """Validate the exclusive two-job CI admission and fallback contract."""
     blocks = _root_blocks(text)
-    if any(blocks[header] != expected for header, expected in _CI_BLOCKS.items()):
-        raise ValueError("CI block differs from the approved exclusive contract")
+    if any(
+        blocks[header] != expected for header, expected in _CI_STATIC_BLOCKS.items()
+    ):
+        raise ValueError("CI static block differs from the approved contract")
 
-    action_refs = [
-        line.split("uses: ", maxsplit=1)[1]
-        for line in blocks["jobs:"]
-        if "uses: " in line
-    ]
-    if len(action_refs) != 2 or any(
+    job_lines = blocks["jobs:"]
+    job_ids = tuple(
+        line[2:-1] for line in job_lines if re.fullmatch(r"  [a-z][a-z0-9-]*:", line)
+    )
+    if job_ids != _APPROVED_JOB_IDS:
+        raise ValueError("CI jobs differ from the approved exclusive contract")
+    step_names = tuple(
+        line.split("- name: ", maxsplit=1)[1]
+        for line in job_lines
+        if "- name: " in line
+    )
+    if step_names != _APPROVED_STEP_NAMES:
+        raise ValueError("CI steps differ from the approved exclusive contract")
+
+    action_refs = tuple(
+        line.split("uses: ", maxsplit=1)[1] for line in job_lines if "uses: " in line
+    )
+    if action_refs != _APPROVED_ACTIONS or any(
         _PINNED_ACTION.fullmatch(reference) is None for reference in action_refs
     ):
         raise ValueError("CI actions must use approved immutable refs")
 
-    commands = _normalize(" ".join(blocks["jobs:"]))
+    jobs_text = "\n".join(job_lines)
+    commands = _normalize(jobs_text)
+    authoritative_gate = _normalize(" && ".join(_ALWAYS_GATE))
     if (
-        _normalize(" && ".join(_ALWAYS_GATE)) not in commands
-        or _RELEASE_BUILD not in commands
+        commands.count(authoritative_gate) != 2
+        or commands.count(_RELEASE_BUILD) != 2
+        or any(fragment not in jobs_text for fragment in _REQUIRED_CI_FRAGMENTS)
+        or jobs_text.count("continue-on-error: true") != 1
     ):
-        raise ValueError("CI quality or release command is missing")
+        raise ValueError("CI admission, quality, or fallback contract is missing")
+    if any(re.fullmatch(r"\s+[a-z-]+:\s+write", line) for line in job_lines):
+        raise ValueError("CI permissions must remain read-only")
     if any(activity in commands.lower() for activity in _FORBIDDEN_CI_ACTIVITY):
         raise ValueError("CI must not use a provider or probe")
 

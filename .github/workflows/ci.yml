@@ -16,6 +16,9 @@ concurrency:
 jobs:
   quality:
     name: Quality and build
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -29,16 +32,10 @@ jobs:
         id: changes
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            base="$PR_BASE_SHA"
-          else
-            base="$PUSH_BEFORE_SHA"
-          fi
+          base="$PR_BASE_SHA"
           if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}"; then
             echo "Comparison base is unavailable; failing closed to the full gate."
             echo "full_gate=true" >> "$GITHUB_OUTPUT"
@@ -123,4 +120,83 @@ jobs:
 
       - name: Build distribution
         if: steps.changes.outputs.full_gate == 'true'
+        run: uv build --no-build-isolation --python .venv/bin/python
+
+      - name: Issue exact-tree CI admission
+        env:
+          CI_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: >-
+          python3 .github/scripts/ci_admission.py issue
+          --output "$RUNNER_TEMP/ci-admission.json"
+
+      - name: Retain exact-tree CI admission
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-admission-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-admission.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  main-backstop:
+    name: Main admission backstop
+    if: github.event_name == 'push'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify exact prior CI admission
+        id: admission
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/ci_admission.py verify
+          --output "$GITHUB_OUTPUT"
+
+      - name: Run admitted merge integrity gate
+        if: steps.admission.outputs.admitted == 'true'
+        env:
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: git diff --check "$PUSH_BEFORE_SHA" "$GITHUB_SHA"
+
+      - name: Explain full-gate fallback
+        if: steps.admission.outputs.admitted != 'true'
+        env:
+          ADMISSION_REASON: ${{ steps.admission.outputs.reason }}
+        run: printf 'Exact prior admission unavailable; running full gate.\nReason: %s\n' "$ADMISSION_REASON"
+
+      - name: Set up uv and Python for fallback
+        if: steps.admission.outputs.admitted != 'true'
+        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        with:
+          version: "0.9.24"
+          python-version: "3.11"
+          checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
+
+      - name: Install locked development dependencies for fallback
+        if: steps.admission.outputs.admitted != 'true'
+        run: uv sync --extra dev --frozen
+
+      - name: Run authoritative fallback gate
+        if: steps.admission.outputs.admitted != 'true'
+        run: >-
+          uv run --no-sync --extra dev ruff format --check . &&
+          uv run --no-sync --extra dev ruff check . &&
+          uv run --no-sync --extra dev pyright &&
+          uv run --no-sync --extra dev vulture src --min-confidence 80 &&
+          uv run --no-sync --extra dev pytest
+
+      - name: Build fallback distribution
+        if: steps.admission.outputs.admitted != 'true'
         run: uv build --no-build-isolation --python .venv/bin/python
