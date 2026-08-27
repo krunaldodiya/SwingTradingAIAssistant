@@ -1,26 +1,26 @@
 # Sprint 14 — Current supplied-cohort research packet
 
-Status: **IN PROGRESS — ALL REQUIRED CURRENT SMOKES AND EXACT CURRENT LOCAL GATES PASSED (844 FOCUSED; 3,392 FULL AT 89.52% COVERAGE; RUFF/PYRIGHT/VULTURE/DIFF/BUILD/WHEEL); CANDIDATE COMMIT CREATED; EXACT-SHA FUNCTIONAL/PROVENANCE APPROVAL REQUIRES RERUN; PR/HOSTED/MERGE/CLOSEOUT PENDING**
+Status: **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); COMMIT, EXACT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY**
 
 - Issue: [#119 — Sprint 14: integrated current research packet](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — **Open**
 - Active plan: [Plan 27 — Current same-pass Market Regime contract](../plans/27-current-same-pass-market-regime-contract.md)
 - Superseded WIP: [Plan 26 — Packet `@v1`](../plans/26-current-supplied-cohort-research-packet-contract.md) — **will not ship**
 - Risk: **R3 / High — financial, temporal, and evidence impact**
-- Current-byte Vulture/diff/build/wheel and installed-wheel evidence: **PASSED** — Vulture at 80% had no findings; `git diff --check` passed; `uv build` produced the sdist and wheel; and the clean installed-wheel smoke outside the checkout passed on CPython 3.13.7 with all 12 current runtime identities SHA256-shaped.
+- Exact-current local gates: **ALL PASSED** — Ruff format/check over 275 files, Pyright 0/0, Vulture 80, `git diff --check`, `uv build` sdist+wheel, and clean installed-wheel imports/runtime checks.
 - Official acquisition automation: **IMPLEMENTED — current exact schedule, mapping, Industry, event, raw, and Plan-21 evidence retained and validated**.
 - Fresh post-close evidence: **PASSED** with schedule SHA-256 `f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`, Industry SHA-256 `1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`, and Event SHA-256 `fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
 - Event publisher compatibility: **IMPLEMENTED — current range filename and exact UTF-8 bytes with or without BOM; legacy filename/manual licence remains BOM-only replay compatibility**.
 - Composed schedule cutover: **IMPLEMENTED — schema v3; `nse-upstox-composed-calendar`; source-manifest-bound release; no authoritative-calendar relabel**.
 - Plan-27 cohort bridge mappings: **IMPLEMENTED**; adjusted `NOT_ATTEMPTED` / `UPSTREAM_INSUFFICIENT_EVIDENCE` truthfully suppresses Plan-22 after upstream raw or screen insufficiency.
-- Eight review blockers: **FIXED LOCALLY WITHOUT A NEW SUBSYSTEM** — late completion-marker retry guards; zero-redirect enforcement; restored global `ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day month-start acquisition; pre-Plan-22 deadline enforcement; corrected Plan-24 wording.
+- Ten review blockers: **FIXED LOCALLY WITHOUT A NEW SUBSYSTEM** — both PR #140 P2 blockers (active-date partial canonical/mapping validity and schema-specific Industry/Packet URL attribution); late completion-marker retry guards; zero-redirect enforcement; restored global `ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day month-start acquisition; pre-Plan-22 deadline enforcement; corrected Plan-24 wording.
 - Current-source positive smokes: **PASSED SEPARATELY** — the strict one-lease post-close `RELIANCE` positive and mandatory Aug-27 market-hours `RELIANCE` positive both passed; neither substitutes for the other.
 - Genuine current-byte IRCTC exact `NO_TRADE` negative: **PASSED with exact insufficiency ledger and guarded retry/original-time preservation**.
-- Current-byte Vulture/diff/build/wheel and installed-wheel gates: **PASSED**.
-- Candidate commit: **CREATED**; exact-SHA functional/provenance approval requires rerun; PR, hosted checks, merge, and closeout remain **PENDING**.
+- Exact-current Vulture/diff/build/wheel and clean installed-wheel gates: **PASSED**.
+- Commit, exact-current reviews, push, hosted checks, merge, and closeout: **PENDING**.
 - Acceptance, completion, and delivery: **NOT CLAIMED**.
 - Historical WIP evidence: **Plan-26 packet `@v1` had 101 focused tests pass with `--no-cov`; not transferable to the successor**.
 
-The final 14-file focused portfolio passed **844 tests** with `--no-cov`. On
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`. On
 these current bytes, the strict one-lease post-close `RELIANCE` positive passed
 for the 2026-08-26 decision session: 21 raw bars; Market Regime, Industry, and
 Packet `OBSERVED`; partial `NOT_APPLICABLE`; Plan 21 `SCREENED`; Plan 22
@@ -51,8 +51,35 @@ nonfatal, and never substituted. Exact retries preserved bytes, identities, and
 original times and caused zero effects; source remained unchanged and all
 resources were closed.
 
-The final full suite passed **3,392 tests at 89.52% total coverage** against the
-**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+PR #140's two P2 blockers are fixed on the exact current uncommitted 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current uncommitted 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+Commit, exact-current reviews, push, hosted checks, merge, and closeout remain
+pending. No acceptance, completion, or delivery is claimed.
 
 The directory-edge `st_nlink` portability fix remains in place without
 weakening leaf metadata checks; exact source-file checks remain enforced and
@@ -73,8 +100,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
-delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass; commit, exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
 
 ## Goal
 
@@ -213,21 +239,27 @@ producer authentication and external attestation remain deferred.
 ## Current lifecycle evidence
 
 Issue #119 is open. Plan 27 is active and Sprint 14 is **IN PROGRESS — ALL
-REQUIRED CURRENT SMOKES AND EXACT CURRENT LOCAL GATES PASSED (844 FOCUSED;
-3,392 FULL AT 89.52% COVERAGE; RUFF/PYRIGHT/VULTURE/DIFF/BUILD/WHEEL);
-CANDIDATE COMMIT CREATED; EXACT-SHA FUNCTIONAL/PROVENANCE APPROVAL REQUIRES
-RERUN; PR/HOSTED/MERGE/CLOSEOUT PENDING** after operational evidence
+TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL
+EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53%
+COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL,
+CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); COMMIT, EXACT REVIEWS,
+PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY** after operational evidence
 showed zero usable Plan-20 21-object prospective inputs and the owner selected
 the current same-pass correction.
 
 Plan-26 packet `@v1` was unpublished WIP and is superseded before delivery. Its
 101 focused-test result remains historical WIP/repair evidence only.
 
-The final 14-file focused portfolio passed **844 tests** with `--no-cov`; the
-final full suite passed **3,392 tests at 89.52% total coverage** against the
-**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`; the
+exact current source full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold. Ruff format/lint and Pyright currently pass. Final
+Vulture/diff/build/wheel rerun remains pending, as do commit, exact-current
+reviews, push, hosted checks, merge, and closeout. Prior candidate Vulture, diff,
+build, and installed-wheel evidence remains historical only.
 
-Eight review blockers are fixed locally without a new subsystem: late
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
 completion-marker retry guards; zero-redirect enforcement; restored global
 `ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
 kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
@@ -268,8 +300,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
-delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass; commit, exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
 
 ## Changed and nonchanged boundaries
 

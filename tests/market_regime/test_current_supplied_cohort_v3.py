@@ -1462,7 +1462,7 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
                 "EQ",
                 manifest_member.symbol,
                 screen_test._S0,
-                screen_test._S20,
+                screen_test._CUTOFF.date() if include_partial else screen_test._S20,
                 f"{manifest_member.symbol}.NS",
                 "yfinance-symbol-mapping@v1",
                 screen_test._S0,

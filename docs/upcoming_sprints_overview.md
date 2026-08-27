@@ -110,7 +110,7 @@ OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 | 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Closed/completed; High priority/risk | Current Market Regime V2 comparability over admitted archived current facts, a successful provider-neutral corporate-action screen, and separate adjusted daily close facts. | Issues [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125), [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and [#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132) merged. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124) merged reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b` as `f03edf3690e34e25a57b58a15450129e3bf9a5e9`; 296 focused / 2,867 full / 91.03%, Ruff/Pyright/Vulture/build, sealed no-network and live current-prospective smokes, hosted Quality/build, and GitGuardian passed. | Historical/backtest implementation, generic adjustment engine, mixed-basis OHLC, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
 | 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Closed/completed; Project **Done**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md); [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135) merged reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`; quality **APPROVE**, security **PASS**; 2,991 tests / 90.82%, Ruff/Pyright/Vulture/build, hosted Quality/build, and GitGuardian passed. The 100-row / 6,610-byte parser smoke at SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85` is provenance only. | Automated acquisition, alternate sources, official Sector taxonomy or mapping, historical classification, index-membership claim, live participation/effectiveness claim, recommendation, raw/member publication, or broker order placement. |
 | 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Closed/completed; Project **Done**; Sprint 13 milestone; High priority/risk | Delivered current owner-private supplied-cohort event notices from one operator-acquired official NSE Equity unfiltered `1D` corporate-announcement CSV. | [Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md); [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137) merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12` as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`; independent functional **APPROVE** and security **PASS**; exact committed Ruff format/check, Pyright 0/0, Vulture 80, `uv build`, `git diff --check`, 3,038 tests at 90.68% coverage; hosted Quality/build and GitGuardian passed on the reviewed head; exact 8,016-byte, 20-row artifact SHA-256 `a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`; exact cohort/provenance, typed failures, immutable archive-owned `known_at`, retain-before-return; production parse/project/real `StorageRootLease` archive-and-retry: `GODREJCP` / `INE102D01028` one notice, `TCS` / `INE467B01029` `NO_MATCHING_NOTICE_IN_SNAPSHOT`. Parser/projection/retention evidence only. | Automated collection/attachment fetch/redistribution; source completeness, live participation, historical coverage, commercial permission, publisher correction lineage, sentiment/ranking, recommendation, signal, order, effectiveness; automated/licensed acquisition, general news, other providers/types/surfaces, semantic correction graph, external attestation, licensed history, Sprint 14 packet integration. |
-| 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — **IN PROGRESS — ALL REQUIRED CURRENT SMOKES AND EXACT CURRENT LOCAL GATES PASSED (844 FOCUSED; 3,392 FULL AT 89.52% COVERAGE; RUFF/PYRIGHT/VULTURE/DIFF/BUILD/WHEEL); CANDIDATE COMMIT CREATED; EXACT-SHA FUNCTIONAL/PROVENANCE APPROVAL REQUIRES RERUN; PR/HOSTED/MERGE/CLOSEOUT PENDING**; High priority/risk | Owner-private current same-pass raw grid `@v1`, Market Regime V3, Industry Participation V2, and clean-cutover Packet V2; latest completed official S20, optional separately labelled partial context, facts-only same-owner local AI research, or mandatory insufficient information / `NO_TRADE`. | [Plan 27](plans/27-current-same-pass-market-regime-contract.md); eight review blockers fixed without a new subsystem; all required current smokes passed, including the mandatory Aug-27 market-hours `RELIANCE` positive on frozen fingerprint `61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`; 844-test focused portfolio and 3,392-test full suite at 89.52% coverage recorded; exact local gates passed; candidate commit created; exact-SHA functional/provenance approval requires rerun; PR/hosted/merge/closeout pending; no acceptance, completion, or delivery claimed. | Historical replay/backfill, polling, generic provider framework, additional providers/fallback, attachments, general news, Sector mapping, signals, recommendations, orders, hosted/shared/public delivery. |
+| 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); COMMIT, EXACT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY**; High priority/risk | Owner-private current same-pass raw grid `@v1`, Market Regime V3, Industry Participation V2, and clean-cutover Packet V2; latest completed official S20, optional separately labelled partial context, facts-only same-owner local AI research, or mandatory insufficient information / `NO_TRADE`. | [Plan 27](plans/27-current-same-pass-market-regime-contract.md); ten review blockers fixed without a new subsystem, including both PR #140 P2 blockers; all required current smokes passed, including the mandatory Aug-27 market-hours `RELIANCE` positive rerun on exact current uncommitted 66-path fingerprint `3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e`; 852-test focused portfolio and 3,400-test full suite at 89.53% coverage recorded; all exact-current local gates passed, including Ruff format/check 275, Pyright 0/0, Vulture 80, diff, build, wheel, and clean installed-wheel imports/runtime; commit, exact reviews, push/hosted/merge/closeout pending; no acceptance, completion, or delivery claimed. | Historical replay/backfill, polling, generic provider framework, additional providers/fallback, attachments, general news, Sector mapping, signals, recommendations, orders, hosted/shared/public delivery. |
 | 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Supplied fixed-cohort historical daily OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort/date range/daily interval/resource ceilings/source/price basis; validated bounded download or import; immutable revisions, incremental sessions, and correction lineage. | Inferred historical index membership; point-in-time membership/sector/news/event/corporate-action snapshot construction; historical validation; Market Structure; recommendation; order. |
 | 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate over supplied immutable evidence. | Sprint 15 store; explicit supplied cohort; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; reproducible identities and independent review. | Evidence acquisition or point-in-time membership/sector/news/event/corporate-action snapshot construction; Market Structure implementation; Price Action; Liquidity/SMC; recommendation; broker execution; guaranteed outcomes. |
 
@@ -161,7 +161,7 @@ polling, systematic history, attachment fetch, redistribution, sentiment,
 recommendation, signal, or order. Plan-25 event archives remain prospective and
 unavailable event history remains explicit. Sprint 14 /
 [Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
-is **IN PROGRESS — ALL REQUIRED CURRENT SMOKES AND EXACT CURRENT LOCAL GATES PASSED (844 FOCUSED; 3,392 FULL AT 89.52% COVERAGE; RUFF/PYRIGHT/VULTURE/DIFF/BUILD/WHEEL); CANDIDATE COMMIT CREATED; EXACT-SHA FUNCTIONAL/PROVENANCE APPROVAL REQUIRES RERUN; PR/HOSTED/MERGE/CLOSEOUT PENDING** under
+is **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); COMMIT, EXACT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY** under
 [Plan 27](plans/27-current-same-pass-market-regime-contract.md). Operational
 evidence showed zero usable Plan-20 21-object prospective inputs, and the owner
 selected the prior-run-independent current same-pass successor. Plan-20 V1/V2
@@ -177,7 +177,7 @@ Industry SHA-256
 `1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`,
 and Event SHA-256
 `fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
-The final 14-file focused portfolio passed **844 tests** with `--no-cov`.
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`.
 The strict one-lease post-close `RELIANCE` positive passed for the 2026-08-26
 decision session: 21 raw bars; Market Regime, Industry, and Packet `OBSERVED`;
 partial `NOT_APPLICABLE`; Plan 21 `SCREENED`; Plan 22 `SUCCESS`; and guarded
@@ -207,10 +207,39 @@ nonfatal, and never substituted. Exact retries preserved bytes, identities, and
 original times and caused zero effects; source remained unchanged and all
 resources were closed.
 
-The final full suite passed **3,392 tests at 89.52% total coverage** against the
-**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+PR #140's two P2 blockers are fixed on the exact current uncommitted 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
 
-Eight review blockers are fixed locally without a new subsystem: late
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current uncommitted 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+Commit, exact-current reviews, push, hosted checks, merge, and closeout remain
+pending. No acceptance, completion, or delivery is claimed.
+
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
 completion-marker retry guards; zero-redirect enforcement; restored global
 `ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
 kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
@@ -238,8 +267,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
-delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass; commit, exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
 
 Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
 is unassigned bounded per-decision-date as-of research snapshot construction.

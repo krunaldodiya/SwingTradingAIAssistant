@@ -146,7 +146,7 @@ the Industry SHA-256 is
 `1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`.
 Prior publisher-response observations are superseded parser-format evidence
 only and do not establish the current integrated result. The final 14-file
-focused portfolio passed **844 tests** with `--no-cov`; the strict one-lease
+focused portfolio passed **852 tests** with `--no-cov`; the strict one-lease
 post-close `RELIANCE` positive returned Packet `OBSERVED` with 21 raw bars;
 Market Regime and Industry `OBSERVED`; partial `NOT_APPLICABLE`; Plan 21
 `SCREENED`; Plan 22 `SUCCESS`; and guarded retries preserving exact bytes,
@@ -176,10 +176,39 @@ nonfatal, and never substituted. Exact retries preserved bytes, identities, and
 original times and caused zero effects; source remained unchanged and all
 resources were closed.
 
-The final full suite passed **3,392 tests at 89.52% total coverage** against the
-**87%** threshold. Ruff format/lint and Pyright currently pass. Vulture at 80% reports no findings and `git diff --check` passes. `uv build` produced the sdist and wheel. A clean installed-wheel smoke outside the checkout passed on CPython 3.13.7, with all 12 current runtime identities SHA256-shaped.
+PR #140's two P2 blockers are fixed on the exact current uncommitted 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
 
-Eight review blockers are fixed locally without a new subsystem: late
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current uncommitted 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+Commit, exact-current reviews, push, hosted checks, merge, and closeout remain
+pending. No acceptance, completion, or delivery is claimed.
+
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
 completion-marker retry guards; zero-redirect enforcement; restored global
 `ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
 kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
@@ -203,8 +232,7 @@ event, and Packet retries preserved exact bytes, identities, and original times.
 All required current smokes have passed: the retained post-close `RELIANCE`
 positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
-other. A candidate commit has been created. Exact-SHA functional and provenance approval requires rerun; PR, hosted checks, merge, and closeout remain pending. No acceptance, completion, or
-delivery is claimed until the lifecycle is complete.
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass; commit, exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
 
 
 ## Source and acquisition contract

@@ -104,6 +104,35 @@ _INSUFFICIENT_REASONS: Final = frozenset(
     }
 )
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
+_CURRENT_CLASSIFICATION_SOURCE_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+)
+_LEGACY_CLASSIFICATION_SOURCE_URL: Final = (
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+)
+_CLASSIFICATION_SCHEMA_IDENTITIES: Final = frozenset(
+    {
+        LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+        CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+    }
+)
+
+
+def _classification_source_url(schema_identity: str) -> str:
+    if schema_identity == LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256:
+        return _LEGACY_CLASSIFICATION_SOURCE_URL
+    if schema_identity == CLASSIFICATION_SCHEMA_IDENTITY_SHA256:
+        return _CURRENT_CLASSIFICATION_SOURCE_URL
+    raise ValueError("unsupported classification schema")
+
+
+def _admitted_classification_source_url(schema_identity: object) -> str | None:
+    if type(schema_identity) is not str:
+        return None
+    try:
+        return _classification_source_url(schema_identity)
+    except ValueError:
+        return None
 
 
 def _canonical(value: object) -> bytes:
@@ -806,7 +835,7 @@ def _reduce_current_industry_participation_unsealed_v2(  # noqa: C901 - closed f
             "decision_session": report.decision_session,
             "comparison_session": report.comparison_session,
             "decision_cutoff": report.decision_cutoff,
-            "source_url": "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+            "source_url": _classification_source_url(retained.schema_identity_sha256),
             "source_attribution": "NSE_INDICES",
             "classification_tier": "INDUSTRY",
             "artifact_revision": retained.artifact_revision,
@@ -968,7 +997,11 @@ def _valid_market_regime_report(report: CurrentSamePassMarketRegimeReportV3) -> 
         return False
 
 
-def _industry_value_is_exact_unsealed_v2(value: object, market_context: object) -> bool:
+def _industry_value_is_exact_unsealed_v2(
+    value: object,
+    market_context: object,
+    classification_schema_identity: str | None,
+) -> bool:
     """Revalidate a V2 report/failure against its sealed V3 upstream context."""
     if type(market_context) is not RetainedCurrentSamePassMarketContextV3:
         return False
@@ -976,6 +1009,9 @@ def _industry_value_is_exact_unsealed_v2(value: object, market_context: object) 
         report, candidate = _admit_context(market_context)
     except (AttributeError, TypeError, ValueError):
         return False
+    expected_source_url = _admitted_classification_source_url(
+        classification_schema_identity
+    )
     if type(value) is CurrentIndustryParticipationReportV2:
         if candidate is None or (
             value.contract_version != CONTRACT_VERSION
@@ -993,8 +1029,7 @@ def _industry_value_is_exact_unsealed_v2(value: object, market_context: object) 
             or value.decision_session != report.decision_session
             or value.comparison_session != report.comparison_session
             or value.decision_cutoff != report.decision_cutoff
-            or value.source_url
-            != "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+            or value.source_url != expected_source_url
             or value.source_attribution != "NSE_INDICES"
             or value.classification_tier != "INDUSTRY"
             or value.publisher_published_at is not None
@@ -1210,11 +1245,7 @@ def _valid_retained_classification(value: RetainedCurrentIndustrySnapshotV1) -> 
     if (
         not _archive_minted_retained(value)
         or value.evidence_state != "RETAINED"
-        or value.schema_identity_sha256
-        not in (
-            LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
-            CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
-        )
+        or value.schema_identity_sha256 not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or not all(
             _valid_digest(item)
             for item in (
@@ -1413,6 +1444,7 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
         context_identity_sha256: str
         result_sha256: str
         classification_identity_sha256: str | None
+        classification_schema_identity_sha256: str | None
 
     bindings: dict[object, _ReducerBinding] = {}
 
@@ -1440,6 +1472,11 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
             if type(result) is CurrentIndustryParticipationReportV2
             else result.classification_identity_sha256
         )
+        classification_schema_identity = (
+            classification.schema_identity_sha256
+            if type(classification) is RetainedCurrentIndustrySnapshotV1
+            else None
+        )
         for item in fields(type(result)):
             if item.name != "_reducer_seal":
                 object.__setattr__(copy, item.name, getattr(result, item.name))
@@ -1449,6 +1486,7 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
             market_context.retained_context_identity_sha256,
             _sha(copy.canonical_json_bytes()),
             classification_identity,
+            classification_schema_identity,
         )
         return copy
 
@@ -1487,7 +1525,11 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
             and binding.classification_identity_sha256 == classification_identity
             and binding.context_identity_sha256
             == getattr(market_context, "retained_context_identity_sha256", None)
-            and _industry_value_is_exact_unsealed_v2(value, market_context)
+            and _industry_value_is_exact_unsealed_v2(
+                value,
+                market_context,
+                binding.classification_schema_identity_sha256,
+            )
         )
 
     return reduce, exact

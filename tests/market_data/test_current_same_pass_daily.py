@@ -6,7 +6,7 @@ import importlib
 import json
 import shutil
 from copy import deepcopy
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -58,7 +58,7 @@ _RAW_SCHEMA_METADATA_DIGEST = (
     "aca0c687ebe594d0a4e0f8be12771723ffdfa73906659e74230f11b9dd8eb381"
 )
 _RAW_RUNTIME_CODE_IDENTITY = (
-    "f833de3e6aacb862ae27a853a76bf4b963611f37d2f9a69a146f556a03adcc4a"
+    "8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b"
 )
 _RAW_CONFIGURATION_PREIMAGE = json.loads(
     (
@@ -2075,6 +2075,150 @@ def test_optional_partial_errors_are_visible_nonfatal_unavailable_evidence(
     assert result.partial_current_session.state == "UNAVAILABLE"
     assert result.partial_current_session.reasons == ("PARTIAL_SOURCE_UNAVAILABLE",)
     assert result.partial_current_session.rows is None
+
+
+@pytest.mark.parametrize(
+    ("validity_field", "valid_through", "expected_partial_state"),
+    (
+        pytest.param(
+            "valid_through",
+            date(2026, 8, 24),
+            "UNAVAILABLE",
+            id="expired-canonical-validity",
+        ),
+        pytest.param(
+            "mapping_valid_through",
+            date(2026, 8, 24),
+            "UNAVAILABLE",
+            id="expired-mapping-validity",
+        ),
+        pytest.param(
+            "valid_through",
+            date(2026, 8, 25),
+            "OBSERVED",
+            id="canonical-valid-through-active-date",
+        ),
+        pytest.param(
+            "mapping_valid_through",
+            date(2026, 8, 25),
+            "OBSERVED",
+            id="mapping-valid-through-active-date",
+        ),
+    ),
+)
+def test_active_partial_requires_member_and_mapping_validity_on_active_date(
+    tmp_path: Path,
+    validity_field: str,
+    valid_through: date,
+    expected_partial_state: str,
+) -> None:
+    class PartialEvidence(_TemporaryRetainedEvidence):
+        def __init__(self) -> None:
+            super().__init__()
+            self.partial_query_calls = 0
+
+        def partial_current_session_under_lease(
+            self,
+            request: CurrentSamePassMarketRegimeRequestV3,
+            mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
+            active: raw_daily.CurrentSamePassPartialOfficialSessionV1,
+            lease: StorageRootLease,
+        ) -> PartialCurrentSessionSnapshotV1:
+            del lease
+            self.partial_query_calls += 1
+            as_of = request.decision_cutoff.replace(
+                second=0, microsecond=0
+            ) - timedelta(minutes=1)
+            rows = []
+            for mapping in mappings:
+                row_values = {
+                    "isin": mapping.member.isin,
+                    "session": active.session,
+                    "as_of": as_of,
+                    "price": Decimal("101.00"),
+                    "cumulative_volume": 1000,
+                    "provider": "UPSTOX",
+                    "price_basis": "RAW",
+                    "source_receipt_identity_sha256": raw_daily._hash(
+                        {
+                            "mapping": mapping.raw_mapping_projection_identity_sha256,
+                            "official_active_session": active.partial_official_session_identity_sha256,
+                            "session": active.session,
+                            "as_of": as_of,
+                            "query_known_at": as_of,
+                        }
+                    ),
+                    "known_at": as_of,
+                }
+                rows.append(
+                    raw_daily.PartialCurrentSessionRowV1(
+                        **row_values,
+                        partial_current_session_row_identity_sha256=raw_daily._identity_from_values(
+                            raw_daily.PartialCurrentSessionRowV1,
+                            row_values,
+                            "partial_current_session_row_identity_sha256",
+                        ),
+                    )
+                )
+            snapshot_values = {
+                "label": "PARTIAL_CURRENT_SESSION",
+                "state": "OBSERVED",
+                "session": active.session,
+                "as_of": as_of,
+                "known_at": as_of,
+                "rows": tuple(rows),
+                "reasons": (),
+            }
+            return PartialCurrentSessionSnapshotV1(
+                **snapshot_values,
+                partial_snapshot_identity_sha256=raw_daily._identity_from_values(
+                    PartialCurrentSessionSnapshotV1,
+                    snapshot_values,
+                    "partial_snapshot_identity_sha256",
+                ),
+            )
+
+    sessions = _raw_sessions()
+    member = replace(_member(1), **{validity_field: valid_through})
+    cutoff = datetime(2026, 8, 25, 10, 0, tzinfo=UTC)
+    request = _request(1, members=(member,), cutoff=cutoff)
+    active = raw_daily.ScheduleSession(
+        date(2026, 8, 25),
+        datetime(2026, 8, 25, 3, 45, tzinfo=UTC),
+        datetime(2026, 8, 25, 10, 30, tzinfo=UTC),
+        "REGULAR",
+    )
+    evidence = PartialEvidence()
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        result = UpstoxCurrentSamePassRawDailyV1(
+            tmp_path,
+            tmp_path / "schedule.json",
+            clock=_FixedClock(cutoff - timedelta(minutes=5)),
+            evidence_port=evidence,  # type: ignore[arg-type]
+        ).acquire_exact(
+            request,
+            sessions,
+            acquired.lease,
+            official_active_session=active,
+        )
+
+    assert result.evidence_state == "OBSERVED"
+    assert result.reasons == ()
+    assert result.raw_grid is not None
+    assert len(result.raw_grid.bars) == 21
+    assert evidence.query_calls == 1
+    assert result.partial_current_session.state == expected_partial_state
+    if expected_partial_state == "UNAVAILABLE":
+        assert evidence.partial_query_calls == 0
+        assert result.partial_current_session.reasons == ("PARTIAL_MEMBER_MISSING",)
+        assert result.partial_current_session.rows is None
+    else:
+        assert evidence.partial_query_calls == 1
+        assert result.partial_current_session.reasons == ()
+        assert result.partial_current_session.rows is not None
+        assert len(result.partial_current_session.rows) == 1
 
 
 @pytest.mark.parametrize("inactive_days", (0, 1, 7, 30))

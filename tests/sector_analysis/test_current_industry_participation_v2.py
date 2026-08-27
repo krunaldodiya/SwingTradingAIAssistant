@@ -140,6 +140,7 @@ def _retained_classification(
     industries: tuple[str, ...] = ("Technology",),
     row_order: tuple[int, ...] | None = None,
     known_at: datetime | None = None,
+    legacy: bool = False,
 ) -> Any:
     classification_test = _classification_test_module()
     classification_api = classification_test._api()
@@ -153,7 +154,14 @@ def _retained_classification(
         isin_at={index: member.isin for index, member in enumerate(members)},
         row_order=row_order,
     )
-    parsed = classification_test._parse(classification_api, artifact)
+    classification_input = (
+        classification_test._legacy_input(classification_api, artifact)
+        if legacy
+        else classification_test._input(classification_api, artifact)
+    )
+    parsed = classification_api.parse_current_industry_artifact_v1(
+        classification_input, artifact
+    )
     cohort = tuple(
         classification_api.CurrentIndustryCohortMemberV1(
             isin=member.isin,
@@ -190,7 +198,7 @@ def _retained_classification(
         )
         try:
             return archive.archive_exact(
-                classification_test._input(classification_api, artifact),
+                classification_input,
                 artifact,
                 snapshot,
                 lease,
@@ -388,6 +396,72 @@ def test_observed_v2_binds_current_classification_and_context_sessions_exactly(
     assert result.known_at == classification.known_at
     assert result.known_at <= result.decision_cutoff
     assert result.known_at.astimezone(api._IST).date() != result.decision_session
+
+
+@pytest.mark.parametrize(
+    ("legacy", "expected_url", "crossed_url"),
+    (
+        (
+            False,
+            "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+            "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+        ),
+        (
+            True,
+            "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+            "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+        ),
+    ),
+)
+def test_industry_v2_binds_schema_to_non_crossable_source_url(
+    tmp_path: Path,
+    legacy: bool,
+    expected_url: str,
+    crossed_url: str,
+) -> None:
+    api = _api()
+    classification_api = _classification_test_module()._api()
+    context, private_context = _retained_context(tmp_path / "context")
+    classification = _retained_classification(
+        tmp_path / "classification",
+        context,
+        private_context,
+        legacy=legacy,
+    )
+    result = api.reduce_current_industry_participation_v2(context, classification)
+    expected_schema = (
+        classification_api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        if legacy
+        else classification_api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+    )
+    crossed_schema = (
+        classification_api.CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        if legacy
+        else classification_api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+    )
+
+    assert classification.schema_identity_sha256 == expected_schema
+    assert result.source_url == expected_url
+    assert api._classification_source_url(expected_schema) == expected_url
+    assert api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert not api._industry_value_is_exact_unsealed_v2(
+        result,
+        context,
+        crossed_schema,
+    )
+
+    original_identity = result.report_identity_sha256
+    object.__setattr__(result, "source_url", crossed_url)
+    object.__setattr__(
+        result,
+        "report_identity_sha256",
+        api._object_identity_without(result, "report_identity_sha256", "_reducer_seal"),
+    )
+    assert not api.current_industry_participation_is_exact_valid_v2(result, context)
+
+    object.__setattr__(result, "source_url", expected_url)
+    object.__setattr__(result, "report_identity_sha256", original_identity)
+    assert api.current_industry_participation_is_exact_valid_v2(result, context)
 
 
 def test_future_known_classification_failure_is_exact_and_retains_its_time(

@@ -361,6 +361,60 @@ def _packet_builder_inputs(tmp_path: Path) -> tuple[Any, Any, Any, Any, Any]:
     return api, request, context, industry, event_failure
 
 
+@pytest.mark.parametrize(
+    ("legacy", "expected_url"),
+    (
+        (
+            False,
+            "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+        ),
+        (
+            True,
+            "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+        ),
+    ),
+)
+def test_packet_industry_ledger_and_source_preserve_schema_bound_url(
+    tmp_path: Path,
+    legacy: bool,
+    expected_url: str,
+) -> None:
+    api = _api()
+    industry_test = _industry_test_module()
+    context, private_context = industry_test._retained_context(
+        tmp_path / "industry/context"
+    )
+    classification = industry_test._retained_classification(
+        tmp_path / "industry/classification",
+        context,
+        private_context,
+        legacy=legacy,
+    )
+    industry = industry_test._api().reduce_current_industry_participation_v2(
+        context, classification
+    )
+    v3_request = private_context.request
+    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+        decision_cutoff=v3_request.decision_cutoff,
+        cohort_selected_at=v3_request.cohort_selected_at,
+        members=v3_request.members,
+        market_context_identity_sha256=context.context_identity_sha256,
+    )
+
+    ledger, source, projection, reasons = packet_module._project_industry(
+        request, context, industry
+    )
+
+    assert reasons == set()
+    assert projection is not None
+    assert ledger.evidence_state == "OBSERVED"
+    assert ledger.primary_identity_sha256 == industry.report_identity_sha256
+    assert source.source_state == "BOUND"
+    assert source.source_url == expected_url == industry.source_url
+    assert source.source_release == industry.artifact_revision
+    assert source.primary_identity_sha256 == ledger.primary_identity_sha256
+
+
 def test_v2_is_the_only_public_packet_cutover_surface() -> None:
     api = _api()
 

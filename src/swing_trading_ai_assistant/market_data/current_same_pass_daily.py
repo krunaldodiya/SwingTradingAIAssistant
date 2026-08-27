@@ -1861,18 +1861,24 @@ class UpstoxCurrentSamePassRawDailyV1:
                         "partial_official_session_identity_sha256",
                     ),
                 )
-                try:
-                    partial = _admit_partial(
-                        request,
-                        evidence.partial_current_session_under_lease(
-                            request, mappings, active, lease
-                        ),
-                        active,
-                        mappings,
-                        sessions,
-                    )
-                except Exception:
-                    partial = _partial_failure(request, "PARTIAL_SOURCE_UNAVAILABLE")
+                validity_gap = _partial_validity_gap(request, active.session)
+                if validity_gap is not None:
+                    partial = _partial_failure(request, "PARTIAL_MEMBER_MISSING")
+                else:
+                    try:
+                        partial = _admit_partial(
+                            request,
+                            evidence.partial_current_session_under_lease(
+                                request, mappings, active, lease
+                            ),
+                            active,
+                            mappings,
+                            sessions,
+                        )
+                    except Exception:
+                        partial = _partial_failure(
+                            request, "PARTIAL_SOURCE_UNAVAILABLE"
+                        )
         if _deadline_reached(clock, deadline):
             return _insufficient(
                 request,
@@ -3052,6 +3058,25 @@ def _active_market_window(
     )
 
 
+def _partial_validity_gap(
+    request: CurrentSamePassMarketRegimeRequestV3,
+    active_session: date,
+) -> Literal["CANONICAL_VALIDITY", "MAPPING_VALIDITY"] | None:
+    if any(
+        not member.valid_from <= active_session <= member.valid_through
+        for member in request.members
+    ):
+        return "CANONICAL_VALIDITY"
+    if any(
+        not member.mapping_valid_from <= active_session
+        or member.mapping_valid_through is not None
+        and active_session > member.mapping_valid_through
+        for member in request.members
+    ):
+        return "MAPPING_VALIDITY"
+    return None
+
+
 def _partial_failure(
     request: CurrentSamePassMarketRegimeRequestV3, reason: str
 ) -> PartialCurrentSessionSnapshotV1:
@@ -3095,6 +3120,7 @@ def _admit_partial(
         or type(active_session) is not CurrentSamePassPartialOfficialSessionV1
         or active_session.schedule_identity_sha256 != expected_schedule
         or active_session.session <= sessions[-1].session
+        or _partial_validity_gap(request, active_session.session) is not None
         or not (
             active_session.open_at
             <= completed_minute

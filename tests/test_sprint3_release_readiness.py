@@ -286,20 +286,11 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     sprint14_row = next(
         line for line in overview.splitlines() if line.startswith("| 14 |")
     )
-    assert "844-test focused portfolio" in sprint14_row
-    assert "3,392-test full suite at 89.52% coverage" in sprint14_row
-    assert "exact local gates passed" in sprint14_row
-    assert "candidate commit created" in sprint14_row
-    assert "exact-SHA functional/provenance approval requires rerun" in sprint14_row
-    assert "PR/hosted/merge/closeout pending" in sprint14_row
+    assert "852-test focused portfolio" in sprint14_row
+    assert "3,400-test full suite at 89.53% coverage" in sprint14_row
+    assert "all exact-current local gates passed" in sprint14_row
+    assert "commit, exact reviews, push/hosted/merge/closeout pending" in sprint14_row
     assert "no acceptance, completion, or delivery claimed" in sprint14_row
-    assert not re.search(r"\b850(?:-test|\s+focused)\b", sprint14_row, re.IGNORECASE)
-    assert not re.search(
-        r"(?:local\s+gate\s+rerun|commit)(?:\s*,[^;|]*)?"
-        r"\s+remain(?:s)?\s+pending",
-        sprint14_row,
-        re.IGNORECASE,
-    )
     for relative_path in lifecycle_paths:
         lifecycle = (ROOT / relative_path).read_text()
         assert not re.search(
@@ -307,33 +298,52 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
             lifecycle,
         )
         assert re.search(
-            r"14-file\s+focused\s+portfolio\s+passed\s+\*\*844 tests\*\*",
+            r"14-file\s+focused\s+portfolio\s+passed\s+\*\*852 tests\*\*",
             lifecycle,
             re.IGNORECASE,
         )
-        assert "3,392 tests at 89.52% total coverage" in lifecycle
+        assert "3,400 tests at 89.53% total coverage" in lifecycle
         assert "3,374 tests at 89.50% total coverage" not in lifecycle
         assert "**87%** threshold" in lifecycle
-        assert "Ruff format/lint and Pyright currently pass" in lifecycle
-        assert "Vulture at 80% reports no findings" in lifecycle
-        assert "`git diff --check` passes" in lifecycle
-        assert "`uv build` produced the sdist and wheel" in lifecycle
+        assert re.search(
+            r"all\s+exact-current\s+local\s+gates\s+pass", lifecycle, re.IGNORECASE
+        )
+        assert "Ruff format/check over 275 files" in lifecycle
+        assert "Pyright 0/0" in lifecycle
+        assert "Vulture at 80%" in lifecycle
+        assert "`git diff --check`" in lifecycle
+        assert "`uv build` producing sdist and wheel" in lifecycle
+        assert re.search(
+            r"clean\s+installed-wheel\s+imports/runtime\s+checks", lifecycle
+        )
+        assert re.search(r"commit,\s+(?:exact-current\s+|exact\s+)?reviews", lifecycle)
+        assert "push" in lifecycle
+        assert "hosted" in lifecycle
+        assert "merge" in lifecycle
+        assert "closeout" in lifecycle
         assert (
-            "clean installed-wheel smoke outside the checkout passed on CPython 3.13.7"
+            "3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e"
             in lifecycle
         )
-        assert "all 12 current runtime identities SHA256-shaped" in lifecycle
-        assert re.search(
-            r"candidate\s+commit\s+(?:has\s+been\s+)?created",
-            lifecycle,
-            re.IGNORECASE,
+        assert all(
+            installed_identity in lifecycle
+            for installed_identity in (
+                "8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b",
+                "e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29",
+                "74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a",
+                "a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea",
+            )
         )
-        assert re.search(
-            r"exact-SHA\s+functional(?:/|\s+and\s+)provenance\s+approval"
-            r"\s+requires\s+rerun",
-            lifecycle,
-            re.IGNORECASE,
+        assert "`2026-08-27T08:18:59Z`" in lifecycle
+        assert (
+            "expired canonical or mapping validity performs zero partial queries"
+            in lifecycle
         )
+        assert (
+            "schema-specific legacy/current source URL and Packet attribution"
+            in lifecycle
+        )
+        assert "`nsearchives.nseindia.com` URL attribution" in lifecycle
         assert all(
             re.search(re.escape(gate).replace(r"\ ", r"\s+"), lifecycle)
             for gate in ("PR", "hosted", "merge", "closeout")
@@ -348,15 +358,7 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
             lifecycle,
             re.IGNORECASE,
         )
-        assert "final Vulture/diff/build/wheel gates" not in lifecycle
-        assert "final reruns remain pending" not in lifecycle
         assert "will be rerun after these lifecycle records" not in lifecycle
-        assert not re.search(
-            r"(?:local\s+gate\s+rerun|commit)\s+(?:remain|still|is|are)"
-            r"\s+pending",
-            lifecycle,
-            re.IGNORECASE,
-        )
         for evidence_sha256 in (
             "f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0",
             "1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9",
@@ -370,6 +372,8 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
             assert evidence_sha256 in lifecycle
         _assert_aug27_market_hours_lifecycle(lifecycle)
         for review_fix in (
+            "active-date partial canonical/mapping validity",
+            "schema-specific Industry/Packet URL attribution",
             "late completion-marker retry guards",
             "zero-redirect enforcement",
             "`ScheduleSession` kind compatibility",
