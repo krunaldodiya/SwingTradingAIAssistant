@@ -293,7 +293,7 @@ def _finalized_timestamps(
         return set()
     finalized: set[datetime] = set()
     for session in schedule.sessions:
-        if session.trade_date > plan.historical_to:
+        if not plan.month_start <= session.trade_date <= plan.historical_to:
             continue
         current = session.open_at
         final = session.close_at - timedelta(minutes=1)
@@ -309,6 +309,8 @@ def _expected_timestamps(
 ) -> tuple[datetime, ...]:
     expected: list[datetime] = []
     for session in schedule.sessions:
+        if session.trade_date < plan.month_start:
+            continue
         final = session.close_at - timedelta(minutes=1)
         if session.trade_date == plan.intraday_trade_date:
             if plan.last_completed_bar_start is None:

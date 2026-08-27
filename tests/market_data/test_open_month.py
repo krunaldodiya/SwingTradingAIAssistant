@@ -97,6 +97,34 @@ def test_after_close_caps_intraday_at_final_scheduled_minute() -> None:
     assert result.active_session_complete is True
 
 
+def test_planner_accepts_explicitly_classified_schedule_superset() -> None:
+    baseline = _schedule(as_of=_instant(11, 9, 0))
+    covered_from = date(2026, 7, 28)
+    schedule = OpenMonthScheduleV1(
+        schema_version=baseline.schema_version,
+        source=baseline.source,
+        source_release=baseline.source_release,
+        as_of=baseline.as_of,
+        timezone=baseline.timezone,
+        covered_from=covered_from,
+        covered_to=baseline.covered_to,
+        sessions=baseline.sessions,
+        closures=tuple(
+            ScheduleClosure(covered_from + timedelta(days=offset), "EXCHANGE_CLOSED")
+            for offset in range(4)
+        )
+        + baseline.closures,
+    )
+
+    result = plan_open_month(
+        date(2026, 8, 1), date(2026, 8, 11), schedule, _instant(11, 18, 0)
+    )
+
+    assert result.historical_from == date(2026, 8, 1)
+    assert result.historical_to == date(2026, 8, 10)
+    assert result.active_session_complete is True
+
+
 def test_before_first_completed_minute_avoids_intraday_request() -> None:
     schedule = _schedule(as_of=_instant(11, 9, 0))
     result = plan_open_month(

@@ -1,14 +1,40 @@
 # Provider-neutral adjusted daily close contract
 
-Status: **ISSUE #127 WORKING MVP IMPLEMENTED AND MERGED — [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129) merged as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; Issue #127 is closed. The larger hardening design retained below is future remediation and is not delivered MVP evidence.**
+Status: **DELIVERED BOUNDARIES IMPLEMENTED AND MERGED — Issue #127 / PR #129
+delivered the narrow `@v1-mvp`; Issue #132 / PR #133 delivered the lightweight
+canonical explicit-stock `@v2` input/handoff surface. The larger hardening
+design retained below predates `@v2`, is historical/non-shippable, and is not
+implementation or delivery evidence.**
 
-Delivered contract revision: `provider-neutral-adjusted-daily-close@v1-mvp`
-Deferred target contract revision: `provider-neutral-adjusted-daily-close@v1`
-Deferred target schema revision: `provider-neutral-adjusted-daily-close-schema@v1`
-Risk: **R3 / High** — financial-research integrity, revised third-party data, dependency/network behavior, identity continuity, and immutable evidence.
-Outcome owner, acceptance authority, and residual-risk owner: **repository owner through the completed [GitHub Issue #127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127)**.
+Delivered contract revisions:
 
-Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md) and the [Plan 19](19-current-supplied-cohort-market-data-contract.md) supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merged through PR #128 as `cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b` before Issue #127 / Plan 22 merged through PR #129. That publication order is complete. PR #124 Market Regime v2 is intentionally not resumed today. Issue #130 / Plan 23 remediation starts separately tomorrow and does not reopen or reimplement Issue #127.
+- `provider-neutral-adjusted-daily-close@v1-mvp` — Issue #127 /
+  [PR #129](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/129),
+  merged as `c530ae3d6dc43714a71c1f874fe81ecb6b4944c6`; and
+- `provider-neutral-adjusted-daily-close@v2` — canonical explicit-stock
+  boundary from [Issue #132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132) /
+  [PR #133](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/133),
+  merged as `847dfbdf7b6114cb736e00abf9126c995d30e828`.
+
+Retained original hardening contract revision:
+`provider-neutral-adjusted-daily-close@v1` (**historical/non-shippable**)
+Retained original hardening schema revision:
+`provider-neutral-adjusted-daily-close-schema@v1` (**historical/non-shippable**)
+Any post-`@v2` hardening requires separate owner authorization and a properly
+versioned successor. This plan defines no successor and grants no implementation
+authority.
+
+Risk: **R3 / High** — financial-research integrity, revised third-party data,
+dependency/network behavior, identity continuity, and immutable evidence.
+Outcome owner, acceptance authority, and residual-risk owner: **repository
+owner through completed Issues #127 and #132**.
+
+Depends on merged [Plan 21](21-current-supplied-cohort-corporate-action-screen-contract.md)
+and the [Plan 19](19-current-supplied-cohort-market-data-contract.md)
+supplied-cohort/current raw-fact boundary. Issue #125 / Plan 21 merged through
+PR #128 before Issue #127 / Plan 22; Issue #132 then added only the versioned
+canonical explicit-stock input/handoff surface through PR #133. That publication
+order is complete.
 
 ## Delivered MVP boundary and evidence
 
@@ -28,40 +54,230 @@ evidence, a live `RELIANCE.NS` adapter smoke, hosted Quality and build, and
 GitGuardian. This section records that completed lifecycle; it does not transfer
 those results to any future extended contract.
 
-Authoritative mapping evidence is deferred. The owner-supplied unique mapping is
-the explicit trusted MVP boundary; the delivered slice neither verifies nor
-constructs mapping evidence.
+The original `@v1-mvp` does not establish authoritative mapping evidence. Its
+owner-supplied unique mapping is an explicit trusted boundary.
 
-Also deferred to separately approved iterations: durable seals and stores;
-crash recovery and idempotent replay; subprocess, timeout, watchdog, and cleanup
-machinery; dependency-byte attestation and lock projection; and the exhaustive
-temporal, frame, and lifecycle matrices. These safeguards are not represented
-as implemented by the MVP.
+The later delivered lightweight `@v2` surface adds deterministic mapping,
+schedule, request, and handoff identities over caller-supplied canonical
+listed-equity rows. It still does not acquire, verify, retain, or publish
+authoritative mapping-source evidence. Also deferred to separately approved
+iterations are durable seals/stores, crash recovery/idempotent replay,
+subprocess/timeout/watchdog/cleanup machinery, dependency-byte attestation and
+lock projection, and the exhaustive temporal/frame/lifecycle matrices. None is
+represented as delivered by either lightweight surface.
 
 
-## Deferred hardening design: trusted pinned provider, not a security sandbox
+### Delivered lightweight V2 boundary
 
-The retained extended design requires explicit provider selection, pinned
+Issue #132 / PR #133 added these exact service-level inputs without
+reimplementing the provider adapter:
+
+```text
+request =
+  provider_id: "YFINANCE"
+  price_basis: "ADJUSTED"
+  decision_cutoff: aware datetime
+  plan21_schedule:
+    sessions: exactly 21 LocalDate values
+    decision_session_official_close_at: aware datetime
+    schedule_evidence_sha256: Sha256
+    schedule_source: "nse-authoritative-calendar" | "nse-upstox-composed-calendar"
+    schedule_source_release: "sha256:<64 lowercase hex>" | "composed-calendar@v1=<64 lowercase hex>"
+    schedule_identity_sha256: Sha256
+  instruments: 1..50 rows, canonical by (isin, exchange, effective_symbol)
+  cohort_identity_sha256: Sha256
+  request_identity_sha256: Sha256
+
+instrument row =
+  isin
+  exchange: "NSE" | "BSE"
+  instrument_type: "EQUITY"
+  segment: "EQ"
+  effective_symbol
+  valid_from
+  valid_through: LocalDate | null
+  provider_symbol
+  mapping_version: "yfinance-symbol-mapping@v1"
+  mapping_valid_from
+  mapping_valid_through: LocalDate | null
+  mapping_identity: Sha256
+```
+
+The 2026-08-26 Plan-27 integration amendment preserves the delivered
+`nse-authoritative-calendar` / `sha256:<digest>` pair for existing V2 artifacts
+and additionally admits only the truthful `nse-upstox-composed-calendar` /
+`composed-calendar@v1=<manifest digest>` pair. One central exact predicate is
+used by the Plan-21 public/private validators and this Plan-22 parser and
+schedule-identity function; either cross-pair fails closed even when every
+digest is recomputed. Plan 27 itself accepts only the composed pair. No alias,
+relabel, fallback, or schedule recomposition occurs in the adjusted boundary.
+
+The `1..50` bound is only a request resource ceiling over an explicit canonical
+supported NSE equity list. It is not a Nifty membership rule. `YFINANCE`
+identifies this delivered adjusted-close capability and does not admit or reject
+the canonical equity domain identity; no additional provider or asset is added.
+
+Current-byte Plan-27 evidence for this adjusted boundary: official acquisition
+automation retained and validated the current exact schedule, mapping, Industry,
+event, raw, and Plan-21 evidence. Fresh post-close evidence passed with schedule
+SHA-256
+`f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`,
+Industry SHA-256
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`,
+and Event SHA-256
+`fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`; the
+strict one-lease post-close `RELIANCE` positive returned Plan 22 `SUCCESS` with
+21 raw bars; Market Regime, Industry, and Packet `OBSERVED`; partial
+`NOT_APPLICABLE`; Plan 21 `SCREENED`; and guarded retries preserving exact
+bytes, identities, and original times.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive passed on frozen
+fingerprint
+`61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`
+during the actual active session. The decision cutoff was
+`2026-08-27T04:29:06.612060Z` (`09:59:06` IST), and the effect deadline was
+`2026-08-27T04:28:36.612060Z`. Composed schedule SHA-256
+`fb4e60b4c9e62887211cd5083403a4b0dfca2ab4b95f1c7415b27c0c8e1ac9ae`
+defined 2026-08-27 as `REGULAR`, 09:15–15:30 IST, with S0 2026-07-29 and S20
+2026-08-26; the 2026-08-27 mapping observation was
+`02e150b0b910f9ebe825b1c77f48126e4a0046073bf24ae767211fe66480bbf3`.
+
+Raw was 21/21 `OBSERVED`; Plan 21 was `SCREENED`; live Plan 22 was `SUCCESS`
+before the deadline; Market Data, Market Regime, Industry, and Packet were
+`OBSERVED`; Event was `RETAINED`. Packet identity SHA-256 was
+`cc3619cddcd2a35c73500947f40db863a5cb56df5a6aa377c2b0d91261556474`,
+and context identity SHA-256 was
+`e8b0371527994b39d6c905967c7814fce792fee627221cfd54cc51f65285153a`.
+The requested partial was truthfully `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows, separately labelled
+`PARTIAL_CURRENT_SESSION`, excluded from the completed grid and Market Regime,
+nonfatal, and never substituted. Exact retries preserved bytes, identities, and
+original times and caused zero effects; source remained unchanged and all
+resources were closed.
+
+PR #140's two P2 blockers are fixed on the exact current source candidate 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current source candidate 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+A candidate commit has been created. Exact-current reviews, push, hosted checks,
+merge, and closeout remain pending. No acceptance, completion, or delivery is claimed.
+
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
+completion-marker retry guards; zero-redirect enforcement; restored global
+`ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
+kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
+month-start acquisition; pre-Plan-22 deadline enforcement; and corrected
+Plan-24 wording.
+
+The directory-edge `st_nlink` portability fix remains in place without
+weakening leaf metadata checks; exact source-file checks remain enforced and
+the dependent runtime identity manifests remain current. The native supported
+target remains POSIX-style macOS and Linux; Native Windows is unsupported, WSL2
+or Docker is the stated Windows path, and exact-candidate Linux hosted CI has
+not run and is not claimed.
+
+The fresh current-byte genuine IRCTC production negative passed with the exact
+`NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
+Regime V3 insufficient; Plan 22 `NOT_ATTEMPTED` upstream; Industry V2
+`UNSUPPORTED` with `MARKET_REGIME_UNAVAILABLE` and
+`CLASSIFICATION_MEMBER_UNSUPPORTED`; and Packet insufficient with the exact
+ledger, five null AI facts, and mandatory `NO_TRADE`. Guarded V3, Industry,
+event, and Packet retries preserved exact bytes, identities, and original times.
+All required current smokes have passed: the retained post-close `RELIANCE`
+positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
+negative. The two positive modes remain separate; neither substitutes for the
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+
+`mapping_identity_v2` hashes the canonical identity/mapping projection,
+`mapping_valid_from`, `mapping_valid_through`, `provider_id="YFINANCE"`, and
+the mapping version; it does not include the instrument-level `valid_from` or
+`valid_through`. The request identity separately hashes the contract version,
+`YFINANCE`, `ADJUSTED`, cohort identity, cutoff, schedule identity, and all
+exact instrument projections, including the instrument-validity interval. An
+exact success returns
+`AdjustedDailyCloseHandoffV2` with ordered fields:
+
+```text
+contract_version, provider_id, price_basis, provider_source, retrieved_at,
+temporal_label, cohort_identity_sha256, request_identity_sha256,
+decision_cutoff, schedule_evidence_sha256, schedule_source,
+schedule_source_release, decision_session_official_close_at,
+schedule_sessions, schedule_identity_sha256, comparison_session,
+decision_session, members, handoff_identity_sha256
+```
+
+Each handoff member copies the exact canonical/mapping row and adds only exact
+`s0` and `s20` adjusted-close facts. `adjusted_daily_close_handoff_identity_v2`
+hashes every displayed handoff field except its own identity, including mapping
+fields, endpoint sessions/values, provider source, retrieval time, temporal
+label, cutoff, and schedule. The temporal label is
+`CURRENT_PROSPECTIVE` only when `retrieved_at <= decision_cutoff`; otherwise it
+is `REVISED_NON_PIT`.
+
+This is a lightweight in-process value boundary. The service reads the named
+mapping keys but does not itself establish serialized unknown-key rejection,
+mapping-source provenance, storage, receipt, completion marker, retry recovery,
+or network-call deduplication. A consumer such as Plan 27 must construct a
+closed exact bridge, validate the returned exact type/projection/identity, and
+acquire it before any pure downstream builder. Plan 27 orders schedule
+preflight, raw mapping/acquisition, and Plan-21 admission before this call. If
+raw or screen evidence is insufficient, Plan 27 does not call this service and
+owns its separate `NOT_ATTEMPTED / UPSTREAM_INSUFFICIENT_EVIDENCE` archive
+projection; that projection is not a result, failure code, provider failure, or
+extension of this delivered V2 contract. The surface remains yfinance adjusted
+close only; it adds no raw mutation, provider fallback, strict PIT claim,
+general provider framework, or outside-capability guarantee.
+
+## Historical non-shippable hardening design: trusted pinned provider, not a security sandbox
+
+The retained original design required explicit provider selection, pinned
 dependencies, private retained evidence, bounded provider/network work,
-cancellation, cleanup, and fail-closed market-data outcomes. It does **not**
+cancellation, cleanup, and fail-closed market-data outcomes. It did **not**
 require adversarial operating-system containment of the reviewed yfinance
 dependency. Plan 21 adds no sandbox; the architecture freeze and roadmap govern
 data integrity and provider separation, not malicious-process isolation.
 
-If separately implemented, the extended target would trust the exact reviewed
-first-party implementation and locked `yfinance==1.6.0` dependency closure as
-code running with the invoking non-root user's authority. Its worker would be
-an ordinary fresh subprocess for wall-time cancellation and failure separation,
-not a security boundary. The merged MVP calls its injected adapter directly and
-does not claim this deferred subprocess lifecycle.
+That historical design assumed the exact reviewed first-party implementation
+and locked `yfinance==1.6.0` dependency closure would run with the invoking
+non-root user's authority. Its worker would have been an ordinary fresh
+subprocess for wall-time cancellation and failure separation, not a security
+boundary. The merged MVP calls its injected adapter directly and does not claim
+this historical subprocess lifecycle.
 
-The extended design deliberately includes no cgroup, pidfd, seccomp, Darwin
+The historical design deliberately included no cgroup, pidfd, seccomp, Darwin
 sandbox, `RLIMIT_NPROC`, kqueue, process-group kill, watchdog, descendant
-tracker, thread ceiling, or PID/PGID/SID guarantee. `threads=False` disables
-only yfinance's ticker worker pool. A malicious dependency remains outside the
-accepted threat boundary; hostile provider code would require a different
-isolation product. The superseded cross-platform watchdog/sandbox design is
-rejected, but none of this deferred machinery is delivered MVP behavior.
+tracker, thread ceiling, or PID/PGID/SID guarantee. `threads=False` would have
+disabled only yfinance's ticker worker pool. A malicious dependency remained
+outside the accepted threat boundary; hostile provider code would have required
+a different isolation product. The superseded cross-platform watchdog/sandbox
+design was rejected. None of this machinery is delivered behavior or an
+authorized implementation contract.
 
 ## Outcome and product/data scope
 
@@ -80,43 +296,51 @@ The repository owner accepts optional personal/internal research use and the uno
 ### Issue #130 listed-equity boundary overlay
 
 [Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
-defines future remediation that will separate a reusable adjusted-close feature
-boundary from index selection. The target successor accepts explicit bounded
-canonical listed-equity identities and provider mappings; a higher-level policy
-decides whether the caller requested a point-in-time Nifty 50, Nifty Next 50,
-combined Nifty 100, or another explicitly supplied supported stock. The future
-feature must return typed unsupported or insufficient evidence for an
-unavailable provider mapping, schedule, price basis, freshness, or
-adjusted-close fact rather than perform an index check.
+defined remediation separating the reusable adjusted-close feature boundary
+from index selection. Issue #132 / PR #133 delivered its lightweight canonical
+explicit-stock input/handoff portion: a higher-level policy may supply a
+point-in-time Nifty 50, Nifty Next 50, combined Nifty 100, or another explicitly
+supported stock, while this capability checks only the supplied canonical
+identity, mapping, schedule, price basis, and adjusted-close facts. Unavailable
+mapping or capability remains typed unsupported/insufficient evidence rather
+than an index-membership check. The durable hardening target remains deferred.
 
-The delivered MVP still names `plan19_cohort` and supplies only
-`isin`/`project_symbol`/`provider_symbol` mappings. It lacks the complete
-ISIN/exchange/effective-symbol identity required by Issue #130. It therefore is
-not evidence that Plan 22 is already instrument-agnostic or that stocks outside
-the Plan-19/Nifty-50 composition are supported. The first ordered
-[Plan 23](23-instrument-agnostic-feature-boundary-and-coupling-audit.md)
-remediation slice must version that input/mapping boundary while preserving the
-delivered provider, price-basis, failure, and raw-separation behavior. That
-future work does not reopen or reimplement Issue #127 and does not silently
-reinterpret or rehash the deferred twelve-projection design below.
+The original `@v1-mvp` still names `plan19_cohort` and supplies only
+`isin`/`project_symbol`/`provider_symbol`. It is not instrument-agnostic.
+Issue #132 / PR #133 subsequently delivered the separate lightweight `@v2`
+canonical explicit-stock input/handoff described above. That V2 accepts
+explicit bounded canonical listed-equity rows and caller-supplied provider
+mapping identities, while preserving the delivered provider, price-basis,
+failure, and raw-separation behavior.
+
+The lightweight V2 is not the deferred twelve-projection hardening design
+below. It has no authoritative mapping evidence, durable archive, replay,
+subprocess lifecycle, dependency closure, or exhaustive provenance. Neither
+delivery rehashes or silently claims implementation of that deferred design.
 
 | Capability | Delivered/current route | Binding |
 | --- | --- | --- |
 | Current/live raw OHLCV | Upstox | Existing Plan-19 facts and immutable raw objects remain unchanged. |
 | Corporate-action screen | Plan 21 / Upstox | Separate nonexhaustive screen; no adjusted-price authority. |
-| Adjusted daily close | Plan 22 `@v1-mvp` / yfinance | Separate `ADJUSTED` close fact with supplied MVP identities. |
+| Adjusted daily close V1 | Plan 22 `@v1-mvp` / yfinance | Supplied MVP identities and separate `ADJUSTED` S0/S20 facts. |
+| Adjusted daily close V2 | Plan 22 `@v2` / yfinance | Caller-supplied canonical listed-equity and mapping rows; exact mapping/schedule/request/handoff identities; no durable hardening. |
 | Angel One | none | Deferred; no credential, sandbox, or call. |
 | Fallback | none | Any failure closes only this capability. |
 
 No yfinance value fills, rewrites, changes, or enters an Upstox candle or raw archive. No raw and adjusted values share one OHLC candle. Plan 22 does not calculate member direction, breadth, Market Regime, Market Structure, recommendation, or order.
 
-## Deferred target canonical profile and twelve projections
+## Historical non-shippable hardening profile and twelve projections
 
-Everything from this heading through the deferred evidence/design matrices
-specifies the unimplemented extended `@v1` target unless a paragraph explicitly
-identifies merged MVP behavior. It must not be read as PR #129 evidence.
+Everything from this heading through the historical evidence/design matrices
+records the original unimplemented `@v1` hardening proposal that predates the
+delivered `@v2`. It is retained only as historical design evidence, is not an
+implementation target, and must not ship under the lower `@v1`. Any
+implementation requires separate owner authorization and a properly versioned
+successor later than `@v2`; this plan intentionally does not specify that
+successor.
 
-The target external and retained metadata objects use closed canonical JSON:
+Within that historical record, the proposed external and retained metadata
+objects used closed canonical JSON:
 UTF-8, no BOM, lexicographic object keys, compact separators,
 `allow_nan=false`, no duplicate keys, and exactly one trailing LF. Arrays retain
 declared order. `UtcInstant` has six fractional UTC digits; `LocalDate` is a real
@@ -124,7 +348,8 @@ ISO date; SHA-256 is 64 lowercase hexadecimal characters. Unknown/missing keys,
 wrong type/nullability, noncanonical bytes, invalid order/bounds, or invariant
 failure reject.
 
-The compact `schema_bundle` is the sole deferred `@v1` target shape source.
+The compact `schema_bundle` was the sole proposed shape source inside the
+historical design.
 Every field triple is `[name,type,nullable]`; all fields are required and
 ordered; `nullable=true` means JSON null is additionally admitted. Prose cannot
 add another shape, enum, reason, event, or field. Every projection identity is
@@ -342,38 +567,50 @@ Mapping reasons map only to `NOT_ADMITTED / UNAVAILABLE / PROVIDER_SYMBOL_MAPPIN
 
 ## Integration and immutable raw boundary
 
-In the deferred target, the authoritative internal success surface would be `CompletedAcquisition.adjusted_fact_handoff`, containing one canonical `AdjustedEndpointPair` for every Plan-19 member with nested `Fact` values and identities for official `S[0]` and `S[20]`. It would bind the full cohort/schedule scope, observation, receipt/finalization, mapping, executable dependency projection, provider policy, schema, and runtime identities, with no Upstox value, direction, breadth, regime label, or Market Structure result. Ordinary failure would have a null handoff. These types are not delivered by PR #129.
+In the historical non-shippable design, the authoritative internal success
+surface would have been `CompletedAcquisition.adjusted_fact_handoff`, containing
+one canonical `AdjustedEndpointPair` for every Plan-19 member with nested `Fact`
+values and identities for official `S[0]` and `S[20]`. It would have bound the
+full cohort/schedule scope, observation, receipt/finalization, mapping,
+executable dependency projection, provider policy, schema, and runtime
+identities, with no Upstox value, direction, breadth, regime label, or Market
+Structure result. Ordinary failure would have had a null handoff. These types
+are not delivered by PR #129 or PR #133.
 
-The deferred public target would expose status, price basis, provider, temporal
-state, and opaque provenance identities while excluding adjusted closes,
-provider symbols, member failure detail, handoff identity, paths, logs, terms
-bytes, raw payloads, cookies, queries, and free-form diagnostics. Those
-`CompletedAcquisition` / `PublishedAcquisitionReport` surfaces are not merged
-MVP types.
+The historical design's public surface would have exposed status, price basis,
+provider, temporal state, and opaque provenance identities while excluding
+adjusted closes, provider symbols, member failure detail, handoff identity,
+paths, logs, terms bytes, raw payloads, cookies, queries, and free-form
+diagnostics. Those `CompletedAcquisition` / `PublishedAcquisitionReport`
+surfaces are not merged `@v1-mvp` or `@v2` types.
 
 [Issue #127 comment 5367936629](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127#issuecomment-5367936629)
 records the original responsibility split. PR #129 completed the narrower owner-
-approved MVP; the unimplemented obligations below remain future target work:
+approved MVP. The rows below are retained historical design elements, not an
+authorized backlog or implementation target:
 
-| Evidence | Deferred target obligation | Downstream owner |
+| Evidence | Historical design element | Current authority |
 | --- | --- | --- |
 | Plan-21 corporate-action report | validate exact successful/insufficient identity-bearing report separately; no event reclassification or exhaustive no-break claim | Plan 21 |
-| Upstox raw endpoints | composition fixture retains exact existing `S[0]`/`S[20]` identities and `RAW` basis; Plan 22 never writes or adjusts them | PR #124 |
-| Extended Plan-22 adjusted endpoints | future handoff returns adjusted facts and observation/receipt/mapping/dependency/policy/schema/runtime identities | future versioned Plan-22 remediation |
-| raw/adjusted disagreement | adjusted/raw separation remains mandatory | PR #124 exclusively computes `RAW_ADJUSTED_DIRECTION_CONFLICT` when resumed |
-| Market Structure | no field, import, calculation, or test | future post-Sprint-16 approved contract |
+| Upstox raw endpoints | composition fixture retains exact existing `S[0]`/`S[20]` identities and `RAW` basis; Plan 22 never writes or adjusts them | Delivered PR #124 boundary |
+| Extended Plan-22 adjusted endpoints | handoff concept with adjusted facts and observation/receipt/mapping/dependency/policy/schema/runtime identities | Unassigned; requires an owner-authorized successor later than `@v2` |
+| raw/adjusted disagreement | adjusted/raw separation remains mandatory | Delivered PR #124 computes `RAW_ADJUSTED_DIRECTION_CONFLICT` |
+| Market Structure | no field, import, calculation, or test | Earliest after the separate Sprint-16 gate and an approved contract |
 
-Plans 21 and the Issue #127 MVP are merged. PR #124 may rebase to Market Regime
-v2 only when that work is explicitly resumed and its then-applicable contracts
-are accepted. It is intentionally not resumed today. Tomorrow's Issue #130 /
-Plan 23 remediation is a separate versioned boundary migration, not a retry or
-reimplementation of Issue #127.
+The former pre-merge wording that called PR #124 paused, Issue #116 future, and
+Sprint 12 not started is historical only and no longer describes repository
+state. PR #124 merged Market Regime V2 and closed Sprint 11 / Issue #116.
+Sprint 12 / Issue #117 then closed through PR #135, and Sprint 13 / Issue #118
+closed through PR #137. Issue #132 / PR #133 delivered the current lightweight
+`@v2` Plan-22 surface. Plan 23 remains a separate versioned migration boundary;
+none of these deliveries authorizes the retained hardening design.
 
-## Deferred extended-contract implementation evidence matrix
+## Historical non-shippable extended-design evidence matrix
 
-The following matrix belongs only to a future extended hardening contract. It
-is not the evidence matrix for the merged `@v1-mvp` and none of its unimplemented
-stores, subprocess controls, seals, or exhaustive matrices is claimed delivered.
+The following matrix belonged only to the original unimplemented hardening
+design. It is not evidence for the merged `@v1-mvp` or `@v2`; none of its
+stores, subprocess controls, seals, or exhaustive matrices is claimed delivered
+or authorized for implementation.
 
 | Area | Required evidence |
 | --- | --- |
@@ -394,14 +631,15 @@ stores, subprocess controls, seals, or exhaustive matrices is claimed delivered.
 | Capacity | Exact 544-byte maximum `ObjectRef`, 140,912-byte maximum 256-row selected set, 208-ref success, 208-ref temporal failure, 101,683-byte maximum handoff; 961,777-byte maximum-width private-result and 1,662-byte maximum-width public-report constructions within enforced 2 MiB/64 KiB stores, plus 64 KiB seal/locator stores; runtime-derived dependency rows; 64 MiB quota boundaries. |
 
 PR #129 completed the narrower MVP gates recorded in the delivered-evidence
-section above. The deferred matrix requires its own future implementation,
-focused/full gates, installed-wheel smoke, independent exact-revision reviews,
-hosted CI/security, merge, and lifecycle closeout. Issue #127's completed MVP
-evidence cannot be reused as proof of that future contract.
+section above. The historical matrix has no transferable implementation,
+review, or delivery authority. Any owner-authorized successor must define its
+own contract and pass its own focused/full gates, installed-wheel smoke,
+independent exact-revision reviews, hosted CI/security, merge, and lifecycle
+closeout. Issue #127's completed MVP evidence cannot prove such a successor.
 
-## Deferred extended-contract design record and artifact self-check
+## Historical extended-design record and artifact self-check
 
-| Exact blocker | Specified closure in the deferred design |
+| Exact blocker | Specified closure in the retained historical design |
 | --- | --- |
 | No executable adjusted-fact return | `AdjustedFactHandoff` + `AdjustedEndpointPair` are retained and returned inside authoritative `CompletedAcquisition`; public serialization remains the nested value-free report/seal. |
 | Marker-aware executable dependency closure | Admission evaluates all and only the frozen exact CPython marker-active yfinance rows: 22 common plus one Python-version-selected NumPy row on all platforms, plus tzdata only on win32/emscripten; therefore 23 rows on Darwin/Linux and 24 on win32/emscripten. Runtime evidence binds marker inputs and exact derived rows; unrelated installed distributions remain allowed but worker imports are closed. Selected-artifact, installed-RECORD/file evidence and its non-attestation limit remain explicit; no venv is added. |
@@ -417,7 +655,7 @@ evidence cannot be reused as proof of that future contract.
 | Pre-admission acquisition leakage risk | The four pre-admission schemas have a closed transitive type graph that cannot reference any acquisition-only schema/state. |
 | Superseded hostile-code sandbox claims | No cgroup/pidfd/seccomp/Darwin sandbox/thread/descendant/PID-group guarantee or test exists; the trusted pinned provider/simple direct subprocess decision remains explicit. |
 
-The documentation self-check for these exact candidate bytes must establish:
+The retained historical design's documentation self-check required:
 
 - 12 displayed canonical projections parse and hash to the table identities;
 - unchanged projections: `provider_source`, `enablement_policy`, `mapping_policy`, `runtime_manifest_policy`, `conversion_policy`;
@@ -434,18 +672,19 @@ The documentation self-check for these exact candidate bytes must establish:
 - the public report/seal closure contains no adjusted value, provider symbol, or handoff identity; its receipt/finalization/private-result hashes are honestly public, while the internal completed surface binds and returns the retained handoff;
 - recovery has exactly one stable Input-keyed completion authority; identical calls serialize and are idempotent, seal-only retry is locator-only, incomplete reservation never reruns a worker, and no scan or reconstructed timestamp path exists.
 
-For any future extended-contract revision, the exact plan-file SHA-256 must be
-reported externally after the file is written because embedding it would be
-self-referential. No documentation self-check substitutes for implementation,
-tests, review, merge, or publication.
+Any separately authorized successor must report its own exact plan-file SHA-256
+after its file is written because embedding it would be self-referential. No
+identity or documentation self-check in this historical plan substitutes for
+that successor's implementation, tests, review, merge, or publication.
 
 ```text
-COMPLETED: Issue #125 / Plan 21 merged through PR #128 at cdb9ab1c2796356a3e9f604bdd5aeb404cf7519b
-  -> COMPLETED: Issue #127 MVP / Plan 22 merged through PR #129 at c530ae3
-  -> TOMORROW: Issue #130 / Plan 23 versioned remediation; Issue #127 stays closed
-  -> PAUSED TODAY: PR #124 Market Regime v2 / Sprint 11
-  -> FUTURE: Issue #116 / Sprint 11 closes only after its own gates
-  -> FUTURE: Sprint 12 may start only after Sprint 11 closes
+COMPLETED: Issue #125 / Plan 21 -> PR #128
+  -> COMPLETED: Issue #127 / Plan 22 @v1-mvp -> PR #129
+  -> COMPLETED: Issue #132 / Plan 22 lightweight @v2 -> PR #133
+  -> COMPLETED: Issue #116 / Sprint 11 Market Regime V2 -> PR #124
+  -> COMPLETED: Issue #117 / Sprint 12 Industry Analysis -> PR #135
+  -> COMPLETED: Issue #118 / Sprint 13 event notices -> PR #137
+  -> SEPARATE: Plan 23 migrations and any owner-authorized post-@v2 hardening
 ```
 
 ## Explicit non-goals
@@ -457,7 +696,7 @@ dependency-byte attestation, exhaustive temporal/frame hardening, adjusted OHLC,
 intraday support, Market Regime v2, Market Structure, Angel One, a general
 provider framework, broker orders, recommendations, silent fallback, strict PIT
 Yahoo history, Yahoo authorization/endorsement, or general redistribution.
-This documentation repair implements no code, test, dependency, provider call,
-or data change; does not change Plan 21 or reimplement Issue #127; does not
-resume PR #124 / Sprint 11 v2 today; does not start Sprint 12; and does not
-publish Issue #126 packaging.
+This retained hardening record implements and authorizes no code, test,
+dependency, provider call, or data change. It does not reopen Plan 21, the
+delivered Plan-22 surfaces, PR #124 / Sprint 11, completed Sprints 12–13,
+Plan 20, Plan 26, or Issue #126 packaging.

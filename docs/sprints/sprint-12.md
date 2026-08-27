@@ -20,7 +20,7 @@ V2. The source is one operator-acquired artifact from the exact official NSE
 Indices URL:
 
 ```text
-https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv
+https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv
 ```
 
 The tool must preserve the literal source tier `INDUSTRY`; it must never relabel

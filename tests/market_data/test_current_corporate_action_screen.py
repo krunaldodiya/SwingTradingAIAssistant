@@ -246,6 +246,77 @@ def _resolve(api: Any, scenario: _Scenario) -> Any:
     ).resolve_exact(_input(api, scenario), scenario.lease)
 
 
+def test_every_plan21_surface_rejects_crossed_schedule_source_release_pairs(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path)
+    try:
+        for schedule_source, schedule_release in (
+            ("nse-authoritative-calendar", "composed-calendar@v1=" + "c" * 64),
+            ("nse-upstox-composed-calendar", _RELEASE),
+        ):
+            with pytest.raises(ValueError):
+                api.CurrentSuppliedCohortCorporateActionScreenInputV1(
+                    scenario.manifest,
+                    _S0,
+                    _S20,
+                    _CUTOFF,
+                    scenario.schedule_sha256,
+                    schedule_source,
+                    schedule_release,
+                    "UPSTOX",
+                )
+
+            private = _resolve(api, scenario)
+            forged_private = object.__new__(type(private))
+            for name in private.__dataclass_fields__:
+                object.__setattr__(forged_private, name, getattr(private, name))
+            object.__setattr__(forged_private, "schedule_source", schedule_source)
+            object.__setattr__(
+                forged_private, "schedule_source_release", schedule_release
+            )
+            object.__setattr__(
+                forged_private,
+                "private_result_identity_sha256",
+                api._sha256(forged_private.value(False)),
+            )
+            with pytest.raises(ValueError):
+                api._private_result_descriptor(forged_private)
+            with pytest.raises(ValueError):
+                api._validate_private_result_invariants(
+                    forged_private, require_identity=True
+                )
+            with pytest.raises(ValueError):
+                api.publish_current_corporate_action_screen_v1(forged_private)
+
+            report_value = private.to_public_report().value()
+            report_value["schedule_source"] = schedule_source
+            report_value["schedule_source_release"] = schedule_release
+            report_value["report_identity_sha256"] = api._sha256(
+                {
+                    key: value
+                    for key, value in report_value.items()
+                    if key != "report_identity_sha256"
+                }
+            )
+            crossed_raw = (
+                json.dumps(
+                    report_value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+                + b"\n"
+            )
+            with pytest.raises(ValueError):
+                api.CurrentSuppliedCohortCorporateActionScreenReportV1.from_canonical_json_bytes(
+                    crossed_raw
+                )
+    finally:
+        scenario.close()
+
+
 def test_generic_public_contract_round_trip_and_no_old_names(tmp_path: Path) -> None:
     api = _api()
     scenario = _scenario(tmp_path)

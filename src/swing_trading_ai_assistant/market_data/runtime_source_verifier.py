@@ -47,6 +47,21 @@ def same_metadata(first: os.stat_result, second: os.stat_result) -> bool:
     )
 
 
+def same_directory_edge_metadata(first: os.stat_result, second: os.stat_result) -> bool:
+    """Compare a directory binding without volatile unrelated-entry metadata."""
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        first.st_uid,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        second.st_uid,
+    )
+
+
 def _close_descriptors(descriptors: list[int]) -> None:
     close_failed = False
     for descriptor in reversed(descriptors):
@@ -81,7 +96,9 @@ def read_runtime_source(root: Path, relative: str) -> bytes:
             )
             descriptors.append(child)
             opened = os.fstat(child)
-            if not stat.S_ISDIR(opened.st_mode) or not same_metadata(named, opened):
+            if not stat.S_ISDIR(opened.st_mode) or not same_directory_edge_metadata(
+                named, opened
+            ):
                 raise ValueError("runtime source identity invalid")
             descriptor_metadata.append((child, opened))
             bindings.append((parent, part, opened))
@@ -121,11 +138,11 @@ def read_runtime_source(root: Path, relative: str) -> bytes:
                 or not same_metadata(named_after, opened_after)
                 or not same_metadata(opened_before, opened_after)
                 or any(
-                    not same_metadata(before, os.fstat(opened))
+                    not same_directory_edge_metadata(before, os.fstat(opened))
                     for opened, before in descriptor_metadata
                 )
                 or any(
-                    not same_metadata(
+                    not same_directory_edge_metadata(
                         os.stat(part, dir_fd=parent_fd, follow_symlinks=False), opened
                     )
                     for parent_fd, part, opened in bindings

@@ -26,6 +26,9 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRoo
 
 CONTRACT_VERSION: Final = "current-supplied-cohort-industry-classification@v1"
 _SOURCE_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+)
+_LEGACY_SOURCE_URL: Final = (
     "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 )
 _HEADER: Final = ("Company Name", "Industry", "Symbol", "Series", "ISIN Code")
@@ -100,9 +103,12 @@ CLASSIFICATION_SCHEMA_IDENTITY_SHA256: Final = _identity(
         "contract_version": CONTRACT_VERSION,
         "fixed_header": list(_HEADER),
         "fixed_source": {
-            "acquisition_method": "OPERATOR_ACQUIRED",
+            "acquisition_methods": [
+                "OPERATOR_ACQUIRED",
+                "BOUNDED_OFFICIAL_FETCH",
+            ],
             "authority": "NSE_INDICES",
-            "domain": "www.niftyindices.com",
+            "domain": "nsearchives.nseindia.com",
             "tier": "INDUSTRY",
             "url": _SOURCE_URL,
         },
@@ -155,6 +161,45 @@ CLASSIFICATION_SCHEMA_IDENTITY_SHA256: Final = _identity(
         },
     }
 )
+LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256: Final = (
+    "29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552"
+)
+CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256: Final = hashlib.sha256(
+    b"nse-indices-bounded-official-fetch-owner-private-v1"
+).hexdigest()
+_CLASSIFICATION_SCHEMA_IDENTITIES: Final = frozenset(
+    {
+        LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+        CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+    }
+)
+
+
+def _exact_classification_source_case(
+    schema_identity: object,
+    source_url: object,
+    source_authority: object,
+    source_domain: object,
+    acquisition_method: object,
+    licence_policy_identity: object,
+) -> bool:
+    legacy = (
+        schema_identity == LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        and source_url == _LEGACY_SOURCE_URL
+        and source_authority == "NSE_INDICES"
+        and source_domain == "www.niftyindices.com"
+        and acquisition_method == "OPERATOR_ACQUIRED"
+        and _valid_digest(licence_policy_identity)
+    )
+    current = (
+        schema_identity == CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        and source_url == _SOURCE_URL
+        and source_authority == "NSE_INDICES"
+        and source_domain == "nsearchives.nseindia.com"
+        and acquisition_method == "BOUNDED_OFFICIAL_FETCH"
+        and licence_policy_identity == CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256
+    )
+    return legacy or current
 
 
 def _instant(value: datetime) -> str:
@@ -315,7 +360,7 @@ class CurrentIndustryClassificationInputV1:
             type(value) is not dict
             or set(value) != expected
             or value["contract_version"] != CONTRACT_VERSION
-            or value["schema_identity_sha256"] != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+            or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
         ):
             raise ValueError("classification input invalid")
         artifact_byte_count = value["artifact_byte_count"]
@@ -696,12 +741,14 @@ def parse_current_industry_artifact_v1(
         raise TypeError("classification input invalid")
     artifact = _artifact_or_missing(artifact)
     unsupported: list[str] = []
-    if (
+    if not _exact_classification_source_case(
+        input.schema_identity_sha256,
         input.source_url,
         input.source_authority,
         input.source_domain,
         input.acquisition_method,
-    ) != (_SOURCE_URL, "NSE_INDICES", "www.niftyindices.com", "OPERATOR_ACQUIRED"):
+        input.licence_policy_identity_sha256,
+    ):
         unsupported.append("CLASSIFICATION_SOURCE_UNSUPPORTED")
     if input.classification_tier != "INDUSTRY":
         unsupported.append("CLASSIFICATION_TIER_UNSUPPORTED")
@@ -811,21 +858,24 @@ def _valid_parsed(parsed: ParsedCurrentIndustryArtifactV1) -> bool:
     rows = parsed.private_rows
     return (
         parsed.evidence_state == "PARSED"
-        and parsed.schema_identity_sha256 == CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        and parsed.schema_identity_sha256 in _CLASSIFICATION_SCHEMA_IDENTITIES
         and (
-            parsed.source_url,
-            parsed.source_authority,
-            parsed.source_domain,
-            parsed.acquisition_method,
-            parsed.classification_tier,
+            (
+                parsed.schema_identity_sha256
+                == LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+                and parsed.source_url == _LEGACY_SOURCE_URL
+                and parsed.source_domain == "www.niftyindices.com"
+                and parsed.acquisition_method == "OPERATOR_ACQUIRED"
+            )
+            or (
+                parsed.schema_identity_sha256 == CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+                and parsed.source_url == _SOURCE_URL
+                and parsed.source_domain == "nsearchives.nseindia.com"
+                and parsed.acquisition_method == "BOUNDED_OFFICIAL_FETCH"
+            )
         )
-        == (
-            _SOURCE_URL,
-            "NSE_INDICES",
-            "www.niftyindices.com",
-            "OPERATOR_ACQUIRED",
-            "INDUSTRY",
-        )
+        and parsed.source_authority == "NSE_INDICES"
+        and parsed.classification_tier == "INDUSTRY"
         and type(parsed.artifact_byte_count) is int
         and 0 < parsed.artifact_byte_count <= _MAX_ARTIFACT_BYTES
         and _valid_digest(parsed.artifact_sha256)
@@ -1309,7 +1359,7 @@ def _retention_receipt_value(raw: bytes) -> dict[str, object]:
         or _canonical(value) != raw
         or value["receipt_version"] != _RETENTION_RECEIPT_VERSION
         or value["evidence_state"] != "RETAINED"
-        or value["schema_identity_sha256"] != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or any(
             value[field] is not None
             for field in (
@@ -1411,21 +1461,15 @@ def _trusted_utc_now() -> datetime:
 
 def _valid_input(value: CurrentIndustryClassificationInputV1) -> bool:
     return (
-        value.schema_identity_sha256 == CLASSIFICATION_SCHEMA_IDENTITY_SHA256
-        and (
+        _exact_classification_source_case(
+            value.schema_identity_sha256,
             value.source_url,
             value.source_authority,
             value.source_domain,
             value.acquisition_method,
-            value.classification_tier,
+            value.licence_policy_identity_sha256,
         )
-        == (
-            _SOURCE_URL,
-            "NSE_INDICES",
-            "www.niftyindices.com",
-            "OPERATOR_ACQUIRED",
-            "INDUSTRY",
-        )
+        and value.classification_tier == "INDUSTRY"
         and type(value.artifact_byte_count) is int
         and value.artifact_byte_count >= 0
         and _valid_digest(value.artifact_sha256)
@@ -1455,7 +1499,7 @@ def _trusted_utc(value: object) -> bool:
 def _valid_snapshot(snapshot: PrivateCurrentIndustrySnapshotV1) -> bool:
     return (
         snapshot.evidence_state == "PROJECTED"
-        and snapshot.schema_identity_sha256 == CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        and snapshot.schema_identity_sha256 in _CLASSIFICATION_SCHEMA_IDENTITIES
         and snapshot.runtime_code_identity_sha256 == _CLASSIFICATION_RUNTIME_IDENTITY
         and _valid_digest(snapshot.input_identity_sha256)
         and _valid_digest(snapshot.artifact_sha256)

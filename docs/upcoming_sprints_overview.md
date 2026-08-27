@@ -16,9 +16,10 @@ then current Market Regime, Sector Analysis, news/events, and an integrated
 current packet. The product-default selection policy focuses on the
 point-in-time Nifty 50 plus Nifty Next 50; a reusable feature receives only the
 explicit bounded canonical listed-equity cohort selected above it. The
-deterministic tool supplies facts only; an external AI may produce explainable
-research or `NO_TRADE`, never a tool-invented autonomous signal,
-recommendation, position size, entry/exit, or order.
+deterministic tool supplies facts only; a consuming AI may produce explainable
+research or `NO_TRADE` only within the applicable owner-private/source-use
+boundary, never a tool-invented autonomous signal, recommendation, position
+size, entry/exit, or order.
 
 Index membership and feature capability are separate gates. Membership evidence
 is required when the workflow claims a Nifty 50, Nifty Next 50, or combined
@@ -62,16 +63,33 @@ it is never fabricated or backfilled from later evidence, and it does not block
 unrelated available-feature research. The current/live contract may instead
 require a factor as a whole-result gate for the specific claim it makes.
 
-This is sequencing only. Sprint 15 remains the historical store and Sprint 16
-remains the historical validation/pre-structure gate. Their retained scope
-includes point-in-time membership, sector, corporate-action, and source
-provenance plus point-in-time availability ledgers; historical backtests with
-look-ahead, survivorship, selection, and data-snooping controls; separated
-in-sample, walk-forward, out-of-sample, and untouched-test regions;
-forward/paper testing; and realistic costs and slippage. Missing historical
-evidence remains an explicit unavailable
-state at the cutoff and is neither fabricated nor treated as neutral. No
-initially planned capability is removed by the current/live-first order.
+Current same-pass availability is independent of prior tool runs. For one bounded
+cutoff, it resolves the latest 21 completed official sessions and admits exact
+approved retained/provider bars available now with truthful current `known_at`.
+Equal current inputs produce the same packet after 0/1/7/30 inactive days;
+missing prospective envelopes is not a current reason or historical backfill.
+Optional `PARTIAL_CURRENT_SESSION` context is separately labelled and excluded
+from completed facts, Market Regime/Industry direction, signals, and orders.
+
+This is sequencing only. Sprint 15 / Issue #120 owns the supplied fixed-cohort
+historical daily OHLCV store: bounded download or import, immutable revisions,
+incremental sessions, exact corrections, and declared price-basis/source
+evidence. Consistent with Plan 18, that store makes no inferred historical
+index-membership claim. Sprint 16 / Issue #122 owns capability-aware validation
+of explicit study profiles over the supplied cohort and immutable evidence
+revisions, including availability-ledger checks and the pre-Market-Structure
+gate. It validates only evidence already proven for the requested profile and
+cutoff.
+
+Neither sprint automatically owns point-in-time membership, sector or
+classification, news, event, or corporate-action snapshot construction or
+acquisition. Missing historical evidence remains explicit and is neither
+fabricated nor treated as neutral. Broader bounded per-decision-date as-of
+research snapshot construction belongs to Issue #139 and a separate accepted
+contract; it depends on #120/#122 unless the owner changes the ordering and does
+not expand either issue. The architecture sequence, historical validation
+controls, forward/paper path, costs/slippage requirements, and Plan 18
+fixed-cohort limitation remain intact.
 
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
@@ -86,16 +104,15 @@ Raw Upstox OHLCV remains unchanged. A yfinance adjusted close never fills an
 Upstox candle. Any later Market Structure calculation must use a complete raw
 OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 
-
 | Sprint | Tracker and lifecycle | Atomic outcome | Minimum dependency and gate | Explicit non-goals |
 | --- | --- | --- | --- | --- |
 | 10 | [#121](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/121) — Closed/completed; High priority/risk | Current supplied-cohort `market-data` foundation: bounded current price/volume facts for 1–50 Nifty 50 identities and immutable archive records. | Canonical cohort identity/selection SHA; retained instrument resolution; latest completed daily OHLCV and optional `PARTIAL_CURRENT_SESSION`; provenance/availability ledger; whole-cohort insufficiency; no effect before admission. | Historical/backtest implementation, Market Regime, sectors, news/events, signals, recommendations, entries/exits, position sizing, orders. |
 | 11 | [#116](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/116) — Closed/completed; High priority/risk | Current Market Regime V2 comparability over admitted archived current facts, a successful provider-neutral corporate-action screen, and separate adjusted daily close facts. | Issues [#125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125), [#127](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/127), and [#132](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/132) merged. [PR #124](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/124) merged reviewed head `d56120fb5966dffea32207b59f1edf0673b2e51b` as `f03edf3690e34e25a57b58a15450129e3bf9a5e9`; 296 focused / 2,867 full / 91.03%, Ruff/Pyright/Vulture/build, sealed no-network and live current-prospective smokes, hosted Quality/build, and GitGuardian passed. | Historical/backtest implementation, generic adjustment engine, mixed-basis OHLC, Market Structure, signals, recommendations, entries/exits, position sizing, orders. |
 | 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Closed/completed; Project **Done**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md); [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135) merged reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`; quality **APPROVE**, security **PASS**; 2,991 tests / 90.82%, Ruff/Pyright/Vulture/build, hosted Quality/build, and GitGuardian passed. The 100-row / 6,610-byte parser smoke at SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85` is provenance only. | Automated acquisition, alternate sources, official Sector taxonomy or mapping, historical classification, index-membership claim, live participation/effectiveness claim, recommendation, raw/member publication, or broker order placement. |
 | 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Closed/completed; Project **Done**; Sprint 13 milestone; High priority/risk | Delivered current owner-private supplied-cohort event notices from one operator-acquired official NSE Equity unfiltered `1D` corporate-announcement CSV. | [Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md); [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137) merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12` as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`; independent functional **APPROVE** and security **PASS**; exact committed Ruff format/check, Pyright 0/0, Vulture 80, `uv build`, `git diff --check`, 3,038 tests at 90.68% coverage; hosted Quality/build and GitGuardian passed on the reviewed head; exact 8,016-byte, 20-row artifact SHA-256 `a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`; exact cohort/provenance, typed failures, immutable archive-owned `known_at`, retain-before-return; production parse/project/real `StorageRootLease` archive-and-retry: `GODREJCP` / `INE102D01028` one notice, `TCS` / `INE467B01029` `NO_MATCHING_NOTICE_IN_SNAPSHOT`. Parser/projection/retention evidence only. | Automated collection/attachment fetch/redistribution; source completeness, live participation, historical coverage, commercial permission, publisher correction lineage, sentiment/ranking, recommendation, signal, order, effectiveness; automated/licensed acquisition, general news, other providers/types/surfaces, semantic correction graph, external attestation, licensed history, Sprint 14 packet integration. |
-| 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — Unblocked; **NOT STARTED**; High priority/risk | Next integrated current packet binding price/volume, Market Regime, sector, news, events, and archive identities for external-AI explainable research or `NO_TRADE`. | Exact completed Sprint 10–13 contracts. This closeout records no Sprint 14 planning, source, or implementation decision. | Autonomous tool signal/recommendation, broker order, execution, historical-context substitution, claim of effectiveness. |
-| 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Deferred fixed-cohort historical OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort, versioned OHLCV revision, and predeclared coverage/windows. | Inferred index membership, historical news/event/sector neutralization, Market Structure, recommendation, order. |
-| 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate. | Sprint 15 store; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; identities and independent review. | Market Structure implementation, Price Action, Liquidity/SMC, recommendation, broker execution, guaranteed outcomes. |
+| 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); CANDIDATE COMMIT CREATED; EXACT-CURRENT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY**; High priority/risk | Owner-private current same-pass raw grid `@v1`, Market Regime V3, Industry Participation V2, and clean-cutover Packet V2; latest completed official S20, optional separately labelled partial context, facts-only same-owner local AI research, or mandatory insufficient information / `NO_TRADE`. | [Plan 27](plans/27-current-same-pass-market-regime-contract.md); ten review blockers fixed without a new subsystem, including both PR #140 P2 blockers; all required current smokes passed, including the mandatory Aug-27 market-hours `RELIANCE` positive rerun on exact current source candidate 66-path fingerprint `3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e`; 852-test focused portfolio and 3,400-test full suite at 89.53% coverage recorded; all exact-current local gates passed, including Ruff format/check 275, Pyright 0/0, Vulture 80, diff, build, wheel, and clean installed-wheel imports/runtime; candidate commit created; exact-current reviews, push/hosted/merge/closeout pending; no acceptance, completion, or delivery claimed. | Historical replay/backfill, polling, generic provider framework, additional providers/fallback, attachments, general news, Sector mapping, signals, recommendations, orders, hosted/shared/public delivery. |
+| 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Todo; High priority/risk | Supplied fixed-cohort historical daily OHLCV store. | Current/live Sprints 10–14 usable; explicit cohort/date range/daily interval/resource ceilings/source/price basis; validated bounded download or import; immutable revisions, incremental sessions, and correction lineage. | Inferred historical index membership; point-in-time membership/sector/news/event/corporate-action snapshot construction; historical validation; Market Structure; recommendation; order. |
+| 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate over supplied immutable evidence. | Sprint 15 store; explicit supplied cohort; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; reproducible identities and independent review. | Evidence acquisition or point-in-time membership/sector/news/event/corporate-action snapshot construction; Market Structure implementation; Price Action; Liquidity/SMC; recommendation; broker execution; guaranteed outcomes. |
 
 Sprint 11 is closed after all three dependencies and PR #124 merged. Sprint 12 /
 Issue #117 is **closed/completed** under Plan 24 after PR #135 merged exact
@@ -138,17 +155,128 @@ production parse/project/real `StorageRootLease` archive-and-retry returned one
 `NO_MATCHING_NOTICE_IN_SNAPSHOT` for `TCS` / `INE467B01029`. This is
 parser/projection/retention evidence only, not source completeness, live
 participation, historical coverage, commercial permission, publisher correction
-lineage, recommendation quality, or effectiveness. No automated collection,
-attachment fetch, redistribution, sentiment, recommendation, signal, or order
-is delivered. Prospective archive only and explicit unavailable history remain
-policy: `OHLCV_ONLY` cannot validate news/event behavior, while
-`OHLCV_PLUS_NEWS_EVENTS` fails unsupported/insufficient before proven coverage.
-Automated/licensed acquisition, general news, other providers/types/surfaces,
-semantic correction graphs, external attestation, licensed history,
-sentiment/ranking, and Sprint 14 packet integration remain deferred. Sprint 14 /
+lineage, recommendation quality, or effectiveness. The 2026-08-26 amendment
+adds one bounded current schedule/Industry/event acquisition edge; it adds no
+polling, systematic history, attachment fetch, redistribution, sentiment,
+recommendation, signal, or order. Plan-25 event archives remain prospective and
+unavailable event history remains explicit. Sprint 14 /
 [Issue #119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
-is next and unblocked but **NOT STARTED**; no Sprint 14 planning, source, or
-implementation decision is recorded by this closeout.
+is **IN PROGRESS — TWO PR #140 P2 BLOCKERS FIXED; ALL REQUIRED CURRENT SMOKES AND ALL EXACT-CURRENT LOCAL GATES PASSED (852 FOCUSED; 3,400 FULL AT 89.53% COVERAGE; RUFF FORMAT/CHECK 275, PYRIGHT 0/0, VULTURE 80, DIFF, BUILD, WHEEL, CLEAN INSTALLED-WHEEL IMPORTS/RUNTIME); CANDIDATE COMMIT CREATED; EXACT-CURRENT REVIEWS, PUSH/HOSTED/MERGE/CLOSEOUT PENDING; NO COMPLETION/DELIVERY** under
+[Plan 27](plans/27-current-same-pass-market-regime-contract.md). Operational
+evidence showed zero usable Plan-20 21-object prospective inputs, and the owner
+selected the prior-run-independent current same-pass successor. Plan-20 V1/V2
+remain frozen/delivered. Plan-26 packet `@v1` is unpublished WIP superseded
+before delivery, will not ship, and has no alias; its 101 focused tests remain
+historical WIP/repair evidence only.
+
+Official acquisition automation retained and validated the current exact
+schedule, mapping, Industry, event, raw, and Plan-21 evidence. Fresh post-close
+evidence passed with schedule SHA-256
+`f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`,
+Industry SHA-256
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`,
+and Event SHA-256
+`fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`.
+The strict one-lease post-close `RELIANCE` positive passed for the 2026-08-26
+decision session: 21 raw bars; Market Regime, Industry, and Packet `OBSERVED`;
+partial `NOT_APPLICABLE`; Plan 21 `SCREENED`; Plan 22 `SUCCESS`; and guarded
+retries preserved exact bytes, identities, and original times.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive passed on frozen
+fingerprint
+`61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`
+during the actual active session. The decision cutoff was
+`2026-08-27T04:29:06.612060Z` (`09:59:06` IST), and the effect deadline was
+`2026-08-27T04:28:36.612060Z`. Composed schedule SHA-256
+`fb4e60b4c9e62887211cd5083403a4b0dfca2ab4b95f1c7415b27c0c8e1ac9ae`
+defined 2026-08-27 as `REGULAR`, 09:15–15:30 IST, with S0 2026-07-29 and S20
+2026-08-26; the 2026-08-27 mapping observation was
+`02e150b0b910f9ebe825b1c77f48126e4a0046073bf24ae767211fe66480bbf3`.
+
+Raw was 21/21 `OBSERVED`; Plan 21 was `SCREENED`; live Plan 22 was `SUCCESS`
+before the deadline; Market Data, Market Regime, Industry, and Packet were
+`OBSERVED`; Event was `RETAINED`. Packet identity SHA-256 was
+`cc3619cddcd2a35c73500947f40db863a5cb56df5a6aa377c2b0d91261556474`,
+and context identity SHA-256 was
+`e8b0371527994b39d6c905967c7814fce792fee627221cfd54cc51f65285153a`.
+The requested partial was truthfully `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows, separately labelled
+`PARTIAL_CURRENT_SESSION`, excluded from the completed grid and Market Regime,
+nonfatal, and never substituted. Exact retries preserved bytes, identities, and
+original times and caused zero effects; source remained unchanged and all
+resources were closed.
+
+PR #140's two P2 blockers are fixed on the exact current source candidate 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current source candidate 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+A candidate commit has been created. Exact-current reviews, push, hosted checks,
+merge, and closeout remain pending. No acceptance, completion, or delivery is claimed.
+
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
+completion-marker retry guards; zero-redirect enforcement; restored global
+`ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
+kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
+month-start acquisition; pre-Plan-22 deadline enforcement; and corrected
+Plan-24 wording.
+
+The directory-edge `st_nlink` portability fix remains in place without
+weakening leaf metadata checks; exact source-file checks remain enforced and
+the dependent runtime identity manifests remain current. Plan-27 cohort bridge
+mappings remain implemented, including truthful Plan-22 suppression after
+upstream raw or screen insufficiency.
+
+Owner platform boundary: the native supported target is POSIX-style macOS and
+Linux with identical evidence guarantees. Native Windows is unsupported and not
+claimed; Windows users use Linux through WSL2 or Docker. Exact-candidate Linux
+hosted CI has not run and is not claimed.
+
+The fresh current-byte genuine IRCTC production negative passed with the exact
+`NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
+Regime V3 insufficient; Plan 22 `NOT_ATTEMPTED` upstream; Industry V2
+`UNSUPPORTED` with `MARKET_REGIME_UNAVAILABLE` and
+`CLASSIFICATION_MEMBER_UNSUPPORTED`; and Packet insufficient with the exact
+ledger, five null AI facts, and mandatory `NO_TRADE`. Guarded V3, Industry,
+event, and Packet retries preserved exact bytes, identities, and original times.
+All required current smokes have passed: the retained post-close `RELIANCE`
+positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
+negative. The two positive modes remain separate; neither substitutes for the
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+
+Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
+is unassigned bounded per-decision-date as-of research snapshot construction.
+It depends on
+[#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) and
+[#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
+unless the owner later changes ordering. It requires a separate accepted
+contract and does not automatically expand either Sprint 15 / #120 or Sprint 16
+/ #122.
 
 ## Market Structure boundary
 
@@ -167,8 +295,7 @@ distribution while the full application remains installable. Both distributions
 must consume one authoritative market-data codebase with no copied provider
 logic. This packaging outcome is not part of Sprints 11–16 and must not reopen
 completed Issues #125/#127/#132, Sprint 11, Sprint 12, or Sprint 13, alter
-future Plan-23 migrations, or pre-empt the next unstarted Sprint 14 WIP-one
-scope.
+future Plan-23 migrations, or pre-empt the active Sprint 14 WIP-one scope.
 
 ## Deferred and superseded historical records
 

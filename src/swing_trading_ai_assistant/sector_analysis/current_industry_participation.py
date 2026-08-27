@@ -21,6 +21,7 @@ from swing_trading_ai_assistant.market_data.current_industry_classification impo
     _CLASSIFICATION_RUNTIME_IDENTITY,  # pyright: ignore[reportPrivateUsage]
     _PARSED_SEAL,  # pyright: ignore[reportPrivateUsage]
     CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+    LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
     CurrentIndustryClassificationFailureV1,
     RetainedCurrentIndustrySnapshotV1,
     _archive_minted_retained,  # pyright: ignore[reportPrivateUsage]
@@ -52,6 +53,28 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2 import 
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v2 import (
     SCHEMA_IDENTITY_SHA256 as _V2_SCHEMA_IDENTITY,  # pyright: ignore[reportPrivateUsage]
 )
+
+_CURRENT_CLASSIFICATION_SOURCE_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+)
+_LEGACY_CLASSIFICATION_SOURCE_URL: Final = (
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+)
+_CLASSIFICATION_SCHEMA_IDENTITIES: Final = frozenset(
+    {
+        LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+        CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+    }
+)
+
+
+def _classification_source_url(schema_identity: str) -> str:
+    if schema_identity == LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256:
+        return _LEGACY_CLASSIFICATION_SOURCE_URL
+    if schema_identity == CLASSIFICATION_SCHEMA_IDENTITY_SHA256:
+        return _CURRENT_CLASSIFICATION_SOURCE_URL
+    raise ValueError("unsupported classification schema")
+
 
 CONTRACT_VERSION: Final = "current-supplied-cohort-industry-participation@v1"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
@@ -561,7 +584,7 @@ def _observed_report(
             decision_cutoff=report.decision_cutoff,
             decision_session=report.decision_session,
             comparison_session=report.comparison_session,
-            source_url="https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+            source_url=_classification_source_url(retained.schema_identity_sha256),
             source_authority="NSE_INDICES",
             classification_tier="INDUSTRY",
             known_at=retained.known_at,
@@ -614,7 +637,7 @@ def _valid_observed_report(report: CurrentIndustryParticipationReportV1) -> bool
         or report.calculation_identity_sha256 != CALCULATION_IDENTITY_SHA256
         or report.runtime_code_identity_sha256 != _PARTICIPATION_RUNTIME_IDENTITY
         or report.classification_schema_identity_sha256
-        != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or not all(
             _valid_digest(value)
             for value in (
@@ -633,7 +656,7 @@ def _valid_observed_report(report: CurrentIndustryParticipationReportV1) -> bool
         )
         or report.artifact_revision != f"sha256:{report.artifact_sha256}"
         or report.source_url
-        != "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+        != _classification_source_url(report.classification_schema_identity_sha256)
         or report.source_authority != "NSE_INDICES"
         or report.classification_tier != "INDUSTRY"
         or report.evidence_state != "OBSERVED"
@@ -820,7 +843,7 @@ def _valid_retained(value: RetainedCurrentIndustrySnapshotV1) -> bool:
     if (
         not _archive_minted_retained(value)
         or value.evidence_state != "RETAINED"
-        or value.schema_identity_sha256 != CLASSIFICATION_SCHEMA_IDENTITY_SHA256
+        or value.schema_identity_sha256 not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or not all(
             _valid_digest(item)
             for item in (

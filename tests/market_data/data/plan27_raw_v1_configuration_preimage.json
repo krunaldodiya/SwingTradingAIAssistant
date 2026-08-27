@@ -1,0 +1,85 @@
+{
+  "canonicalization": "CJ UTF-8 sorted keys compact no-NaN trailing-LF",
+  "contract_version": "current-same-pass-raw-daily-grid@v1",
+  "partial_policy": {
+    "completed_projection_use": "forbidden",
+    "failure": "visible-nonfatal-unavailable",
+    "role": "separate-optional-context"
+  },
+  "precedence": "mapping-before-partial-before-coverage; catalog-errors-fail-closed; missing-ranges-only-download",
+  "raw_source_policy": "0ed73c15ab503022e4e98fbbe9f8d68c636799c3dd1ff1e88dca7b1fb829c521",
+  "reason_order": {
+    "partial": [
+      "PARTIAL_SOURCE_UNAVAILABLE",
+      "PARTIAL_SESSION_MISMATCH",
+      "PARTIAL_MEMBER_MISSING",
+      "PARTIAL_MEMBER_CONFLICTED",
+      "PARTIAL_SNAPSHOT_INVALID",
+      "PARTIAL_FUTURE_KNOWN"
+    ],
+    "raw": [
+      "COHORT_BINDING_MISMATCH",
+      "RAW_MAPPING_MISSING",
+      "RAW_MAPPING_STALE",
+      "RAW_MAPPING_CONFLICTED",
+      "RAW_ACQUISITION_UNAVAILABLE",
+      "ACQUISITION_DEADLINE_EXCEEDED",
+      "RAW_BAR_MISSING",
+      "RAW_BAR_STALE",
+      "RAW_BAR_CONFLICTED",
+      "RAW_BAR_INVALID",
+      "RAW_BAR_FUTURE_KNOWN"
+    ]
+  },
+  "retention_names_and_limits": {
+    "new_raw_archive_byte_limits": [],
+    "new_raw_archive_names": [],
+    "storage_authority": "caller-supplied-live-StorageRootLease"
+  },
+  "structural_bounds": {
+    "cohort_members": [
+      1,
+      50
+    ],
+    "completed_raw_bars": {
+      "exact": "21*cohort_size",
+      "range": [
+        21,
+        1050
+      ]
+    },
+    "completed_sessions": {
+      "exact": 21
+    },
+    "completed_source_rows": {
+      "exact": "21*cohort_size",
+      "range": [
+        21,
+        1050
+      ]
+    },
+    "mapping_receipts": {
+      "observed_exact": "cohort_size",
+      "range": [
+        1,
+        50
+      ]
+    },
+    "optional_partial_rows": {
+      "allowed_counts": [
+        0,
+        "cohort_size"
+      ],
+      "range": [
+        0,
+        50
+      ]
+    },
+    "per_member_retained_minute_query_rows": {
+      "range": [
+        1,
+        10000
+      ]
+    }
+  }
+}

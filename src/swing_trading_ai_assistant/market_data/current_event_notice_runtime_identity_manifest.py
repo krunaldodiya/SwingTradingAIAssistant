@@ -3,7 +3,7 @@
 from typing import Final
 
 CURRENT_EVENT_NOTICE_RUNTIME_SOURCE_DIGESTS_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "d23b68c7887d4b46ea48d8bb93b60c7ef6f50a42f74d9ceee326f20560653d53",
-    "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "fc9e464ed7011d4e7345d26689d4b547979d3b222d57446f1780c04d50f9e820",
+    "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "39abe6faeebb932c8fa64205f246e02906fed2cd4f36660af398cbbe2e9b57e2",
+    "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "b8164dcba4d7cadc73a173d668be61f3d17aa447af8379b926aeeabc288982f7",
 }

@@ -1,0 +1,385 @@
+{
+  "contract_version": "current-supplied-cohort-industry-participation@v2",
+  "type_rows": [
+    {
+      "name": "CurrentIndustryCountV2",
+      "ordered_fields": [
+        {
+          "name": "industry",
+          "semantic_type": "SAFE_TEXT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LENGTH[1,512]"
+        },
+        {
+          "name": "member_count",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[1,50]"
+        },
+        {
+          "name": "advances",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[0,50]"
+        },
+        {
+          "name": "declines",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[0,50]"
+        },
+        {
+          "name": "unchanged",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[0,50]"
+        },
+        {
+          "name": "row_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentIndustryParticipationReportV2",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-supplied-cohort-industry-participation@v2\"]"
+        },
+        {
+          "name": "schema_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "calculation_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "runtime_code_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "evidence_state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"OBSERVED\"]"
+        },
+        {
+          "name": "market_regime_report_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "direction_candidate_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "classification_input_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "artifact_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "snapshot_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "archive_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "archive_receipt_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "retained_classification_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "cohort_size",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[1,50]"
+        },
+        {
+          "name": "decision_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "comparison_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "decision_cutoff",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "source_url",
+          "semantic_type": "SAFE_TEXT",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LENGTH[1,2048]"
+        },
+        {
+          "name": "source_attribution",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"NSE_INDICES\"]"
+        },
+        {
+          "name": "classification_tier",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"INDUSTRY\"]"
+        },
+        {
+          "name": "artifact_revision",
+          "semantic_type": "SAFE_REVISION",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "SAFE_REVISION"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "publisher_published_at",
+          "semantic_type": "NULL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "None"
+        },
+        {
+          "name": "publisher_effective_from",
+          "semantic_type": "NULL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "None"
+        },
+        {
+          "name": "publisher_effective_through",
+          "semantic_type": "NULL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "None"
+        },
+        {
+          "name": "publisher_revision",
+          "semantic_type": "NULL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "None"
+        },
+        {
+          "name": "industries",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[CurrentIndustryCountV2,1..N]"
+        },
+        {
+          "name": "reasons",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[(),0]"
+        },
+        {
+          "name": "report_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    },
+    {
+      "name": "CurrentIndustryParticipationFailureV2",
+      "ordered_fields": [
+        {
+          "name": "contract_version",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"current-supplied-cohort-industry-participation-failure@v2\"]"
+        },
+        {
+          "name": "evidence_state",
+          "semantic_type": "LITERAL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "Literal[\"MALFORMED_EVIDENCE\",\"UNSUPPORTED_CAPABILITY\",\"INSUFFICIENT_EVIDENCE\"]"
+        },
+        {
+          "name": "canonical_cohort_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "cohort_size",
+          "semantic_type": "UINT",
+          "unit": "MEMBERS",
+          "nullability": "REQUIRED",
+          "bounds": "[1,50]"
+        },
+        {
+          "name": "decision_session",
+          "semantic_type": "LOCAL_DATE",
+          "unit": "ISO_8601_DATE",
+          "nullability": "REQUIRED",
+          "bounds": "YYYY_MM_DD"
+        },
+        {
+          "name": "decision_cutoff",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "REQUIRED",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "market_regime_report_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "classification_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "NULLABLE",
+          "bounds": "LOWERCASE_64_HEX"
+        },
+        {
+          "name": "known_at",
+          "semantic_type": "UTC_INSTANT",
+          "unit": "UTC",
+          "nullability": "NULLABLE",
+          "bounds": "AWARE_UTC_MICROSECOND"
+        },
+        {
+          "name": "industries",
+          "semantic_type": "NULL",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "None"
+        },
+        {
+          "name": "reasons",
+          "semantic_type": "ORDERED_TUPLE",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "tuple[IndustryReason,1..13]"
+        },
+        {
+          "name": "failure_identity_sha256",
+          "semantic_type": "SHA256",
+          "unit": "NOT_APPLICABLE",
+          "nullability": "REQUIRED",
+          "bounds": "LOWERCASE_64_HEX"
+        }
+      ]
+    }
+  ],
+  "state_projections": [
+    [
+      "CurrentIndustryParticipationFailureV2",
+      [
+        [
+          "MALFORMED_EVIDENCE",
+          "industries=NONE,reasons=NONEMPTY"
+        ],
+        [
+          "UNSUPPORTED_CAPABILITY",
+          "industries=NONE,reasons=NONEMPTY"
+        ],
+        [
+          "INSUFFICIENT_EVIDENCE",
+          "industries=NONE,reasons=NONEMPTY"
+        ]
+      ]
+    ],
+    [
+      "CurrentIndustryParticipationReportV2",
+      [
+        [
+          "OBSERVED",
+          "industries=REQUIRED,reasons=EMPTY"
+        ]
+      ]
+    ]
+  ],
+  "unknown_key_policy": "REJECT"
+}

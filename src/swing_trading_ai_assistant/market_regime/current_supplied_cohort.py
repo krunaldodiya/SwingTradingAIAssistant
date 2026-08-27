@@ -37,6 +37,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
     ScheduleEvidenceStore,
     ScheduleOutcome,
+    exact_nse_schedule_source_release_pair_v1,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
@@ -62,7 +63,6 @@ _MAX_INPUT_BYTES: Final = 16 * 1024
 _MAX_REPORT_BYTES: Final = 16 * 1024
 _MAX_ARCHIVE_BYTES: Final = 2 * 1024 * 1024
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_RELEASE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _INSTANT = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z\Z"
 )
@@ -285,12 +285,9 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
         if tuple(sorted(ids)) != ids or len(set(ids)) != 21:
             raise ValueError
         schedule = _digest(value["schedule_evidence_sha256"])
+        source = value["schedule_source"]
         release = value["schedule_source_release"]
-        if (
-            value["schedule_source"] != "nse-authoritative-calendar"
-            or type(release) is not str
-            or _RELEASE.fullmatch(release) is None
-        ):
+        if not exact_nse_schedule_source_release_pair_v1(source, release):
             raise ValueError
         identity = _digest(value["input_identity_sha256"])
         projection = {key: value[key] for key in fields - {"input_identity_sha256"}}
@@ -307,7 +304,7 @@ class CurrentSuppliedCohortMarketRegimeInputV1:
             ("decision_session", session),
             ("archive_object_sha256s", ids),
             ("schedule_evidence_sha256", schedule),
-            ("schedule_source", "nse-authoritative-calendar"),
+            ("schedule_source", source),
             ("schedule_source_release", release),
             ("input_identity_sha256", identity),
         ):
@@ -507,8 +504,9 @@ class PrivateRetainedScheduleContinuityProjectionV1:
         if (
             _DIGEST.fullmatch(self.schedule_evidence_sha256) is None
             or self.schema_version not in (2, 3)
-            or self.source != "nse-authoritative-calendar"
-            or _RELEASE.fullmatch(self.source_release) is None
+            or not exact_nse_schedule_source_release_pair_v1(
+                self.source, self.source_release
+            )
             or type(self.as_of) is not datetime
             or self.as_of.tzinfo is None
             or type(self.sessions) is not tuple
@@ -1683,9 +1681,10 @@ class DirectCurrentCohortScheduleResolverV1:
             len(result.canonical_bytes) > MAX_SCHEDULE_BYTES
             or schedule.schema_version not in (2, 3)
             or schedule.source != schedule_source
-            or schedule.source != "nse-authoritative-calendar"
             or schedule.source_release != schedule_source_release
-            or _RELEASE.fullmatch(schedule.source_release) is None
+            or not exact_nse_schedule_source_release_pair_v1(
+                schedule.source, schedule.source_release
+            )
             or schedule.timezone != "Asia/Kolkata"
             or len(schedule.sessions) + len(schedule.closures) > 4096
         ):

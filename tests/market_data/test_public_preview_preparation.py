@@ -138,7 +138,7 @@ def _schedule() -> ExpectedSessionSchedule:
                 session_date,
                 datetime(2026, 7, 1, 3, 45, tzinfo=UTC),
                 datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
-                "regular",
+                "REGULAR",
             ),
         ),
         closures=closures,
@@ -158,13 +158,13 @@ def _open_schedule() -> ExpectedSessionSchedule:
             date(2026, 8, 10),
             datetime(2026, 8, 10, 3, 45, tzinfo=UTC),
             datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
-            "regular",
+            "REGULAR",
         ),
         ScheduleSession(
             date(2026, 8, 11),
             datetime(2026, 8, 11, 3, 45, tzinfo=UTC),
             datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
-            "regular",
+            "REGULAR",
         ),
     )
     closures = tuple(
@@ -212,6 +212,45 @@ def test_open_month_preparation_retains_v3_schedule_and_resolves_instrument(
     assert report.prepared is not None
     assert report.prepared.schedule == schedule
     assert report.prepared.instrument.instrument_key == "NSE_EQ|INE002A01018"
+
+
+def test_open_month_preparation_accepts_explicitly_classified_schedule_superset(
+    tmp_path: Path,
+) -> None:
+    schedule = _open_schedule()
+    covered_from = date(2026, 7, 28)
+    schedule = replace(
+        schedule,
+        covered_from=covered_from,
+        closures=tuple(
+            ScheduleClosure(covered_from + timedelta(days=offset), "sourced closure")
+            for offset in range(4)
+        )
+        + schedule.closures,
+    )
+    snapshot_client, _ = _snapshot_client(datetime(2026, 8, 11, 3, 0, tzinfo=UTC))
+    service = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(
+            AuthoritativeScheduleInputV1(schedule, canonical_schedule_bytes(schedule))
+        ),
+        CountingSnapshotSource(snapshot_client),
+    )
+
+    report = service.prepare_open_month(
+        DownloadPreparationRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            tmp_path,
+            datetime(2026, 8, 11, 6, 30, tzinfo=UTC),
+        )
+    )
+
+    assert report.outcome is PreparationOutcomeV1.SUCCEEDED
+    assert report.prepared is not None
+    assert report.prepared.schedule == schedule
 
 
 def test_preparation_rejects_resolved_instrument_identity_policy_mismatch(

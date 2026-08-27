@@ -702,6 +702,56 @@ def test_private_handoff_has_no_public_constructor_or_package_root_export() -> N
     )
 
 
+def test_v2_runtime_reader_accepts_unrelated_sibling_rename_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    sibling = directory / "unrelated.pyc"
+    sibling.write_bytes(b"unrelated")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    renamed = False
+
+    def rename_sibling_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal renamed
+        chunk = original_read(descriptor, size)
+        if not renamed:
+            sibling.rename(directory / "renamed-unrelated.pyc")
+            renamed = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", rename_sibling_after_read)
+
+    assert read_runtime_source(tmp_path, relative) == b"trusted"
+
+
+def test_v2_runtime_reader_accepts_unrelated_sibling_directory_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    created = False
+
+    def create_sibling_directory_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal created
+        chunk = original_read(descriptor, size)
+        if not created:
+            (directory / "__pycache__").mkdir()
+            created = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", create_sibling_directory_after_read)
+
+    assert read_runtime_source(tmp_path, relative) == b"trusted"
+
+
 def test_v2_runtime_reader_rejects_leaf_replacement_during_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -724,6 +774,31 @@ def test_v2_runtime_reader_rejects_leaf_replacement_during_read(
         return chunk
 
     monkeypatch.setattr(os, "read", replace_after_read)
+    with pytest.raises(ValueError, match="runtime source identity invalid"):
+        read_runtime_source(tmp_path, relative)
+
+
+def test_v2_runtime_reader_rejects_source_mutation_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "market_regime"
+    directory.mkdir()
+    source = directory / "sample.py"
+    source.write_bytes(b"trusted")
+    relative = "src/swing_trading_ai_assistant/market_regime/sample.py"
+    original_read = os.read
+    mutated = False
+
+    def mutate_after_read(descriptor: int, size: int) -> bytes:
+        nonlocal mutated
+        chunk = original_read(descriptor, size)
+        if not mutated:
+            source.write_bytes(b"mutated")
+            mutated = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", mutate_after_read)
+
     with pytest.raises(ValueError, match="runtime source identity invalid"):
         read_runtime_source(tmp_path, relative)
 

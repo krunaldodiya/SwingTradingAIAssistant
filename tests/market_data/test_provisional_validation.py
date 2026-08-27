@@ -117,6 +117,41 @@ def test_first_refresh_combines_prior_history_and_current_completed_minutes() ->
     assert len(result.candles) == 6
 
 
+def test_validation_ignores_sessions_before_current_month_start() -> None:
+    baseline = _schedule()
+    covered_from = date(2026, 7, 28)
+    schedule = OpenMonthScheduleV1(
+        baseline.schema_version,
+        baseline.source,
+        baseline.source_release,
+        baseline.as_of,
+        baseline.timezone,
+        covered_from,
+        baseline.covered_to,
+        (
+            ScheduleSession(
+                covered_from,
+                datetime(2026, 7, 28, 9, 15, tzinfo=IST),
+                datetime(2026, 7, 28, 9, 18, tzinfo=IST),
+                "TEST_SESSION",
+            ),
+            *baseline.sessions,
+        ),
+        tuple(
+            ScheduleClosure(date(2026, 7, day), "EXCHANGE_CLOSED")
+            for day in range(29, 32)
+        )
+        + baseline.closures,
+    )
+    plan = plan_open_month(date(2026, 8, 1), date(2026, 8, 11), schedule, _local(9, 18))
+
+    result = validate_provisional_advance(schedule, plan, (), _history(), _today(17))
+
+    assert result.complete_to_target is True
+    assert result.missing_count == 0
+    assert result.appended_count == 6
+
+
 def test_second_refresh_reuses_prefix_and_appends_only_new_completed_minutes() -> None:
     first = validate_provisional_advance(
         _schedule(), _plan(_local(9, 18)), (), _history(), _today(17)

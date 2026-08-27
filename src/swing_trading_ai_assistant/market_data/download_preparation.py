@@ -471,7 +471,7 @@ def _validate_open_schedule_input(
 def _schedule_classifies_range(
     schedule: ExpectedSessionSchedule, covered_from: date, covered_to: date
 ) -> bool:
-    if schedule.covered_from != covered_from or schedule.covered_to != covered_to:
+    if schedule.covered_from > covered_from or schedule.covered_to < covered_to:
         return False
     classified = {value.trade_date for value in schedule.sessions} | {
         value.trade_date for value in schedule.closures

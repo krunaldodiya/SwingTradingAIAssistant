@@ -47,17 +47,142 @@ it is parser provenance only, not live participation or effectiveness evidence.
 All source/licence limits, literal `Industry` semantics, nonclaims, and
 deferrals in this contract remain in force.
 
-Sprint 13 / Issue #118 is unblocked but explicitly **NOT STARTED**. Owner
-direction permits starting on 2026-08-23; this closeout records no Sprint 13
-planning, implementation, or source decision.
+### 2026-08-26 bounded acquisition amendment
 
-## Accepted source evaluation
+The repository owner authorized the smallest acquisition correction recorded in
+Plan 27. The existing five-column parser, literal `Industry` semantics,
+owner-private raw/member boundary, archive, and all historical/nonclaim limits
+remain unchanged. A new bounded edge may perform exactly one GET to the fixed
+URL, reject every redirect/host/path/content-type/body-bound mismatch, retain
+the exact response bytes and SHA-256, and construct the existing parser input.
+There is no polling, retry, fallback, alternate source, normalization, generic
+provider framework, or public raw/member output.
+
+The input's closed acquisition-method set is now `OPERATOR_ACQUIRED` for
+already-retained legacy artifacts and `BOUNDED_OFFICIAL_FETCH` for the current
+authorized edge. Legacy artifact bytes remain valid and are never renamed or
+rewritten. The current observed 2026-08-26 artifact is 6,611 exact bytes with
+SHA-256
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`;
+the existing five-column parser admitted it before this implementation.
+
+This fixed Nifty 100 CSV is the default workflow's Industry capability source,
+not a reusable-core admission universe. The supplied cohort remains any explicit
+bounded `1..50` canonical supported NSE equity list. A member absent from the
+CSV returns `CLASSIFICATION_MEMBER_UNSUPPORTED` for classification only; it
+does not reject that member's price, schedule, event, or other independently
+supported capabilities. No parser or projection assumes index equals cohort,
+and provider identity is not a domain-admission field.
+
+Current-byte Plan-27 evidence for this Industry boundary: official acquisition
+automation retained and validated the current exact schedule, mapping, Industry,
+event, raw, and Plan-21 evidence. Fresh post-close evidence passed with schedule
+SHA-256
+`f50e7853ce91e3868678b40b5ece79beea0aa469317d348129e96b1c3b71b0a0`,
+Industry SHA-256
+`1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9`,
+and Event SHA-256
+`fe77c222ccf73c9a90b7c94641f6e39055c5a4956467729fabda4c8a9ea4b297`.
+The final 14-file focused portfolio passed **852 tests** with `--no-cov`; the
+strict one-lease post-close `RELIANCE` positive returned Industry `OBSERVED`
+with 21 raw bars; Market Regime and Packet `OBSERVED`; partial
+`NOT_APPLICABLE`; Plan 21 `SCREENED`; Plan 22 `SUCCESS`; and guarded retries
+preserving exact bytes, identities, and original times.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive passed on frozen
+fingerprint
+`61d5574bc6ae034cab471d3cc30b1b6d7aa891859c6c48c6eaf60f65224c541d`
+during the actual active session. The decision cutoff was
+`2026-08-27T04:29:06.612060Z` (`09:59:06` IST), and the effect deadline was
+`2026-08-27T04:28:36.612060Z`. Composed schedule SHA-256
+`fb4e60b4c9e62887211cd5083403a4b0dfca2ab4b95f1c7415b27c0c8e1ac9ae`
+defined 2026-08-27 as `REGULAR`, 09:15–15:30 IST, with S0 2026-07-29 and S20
+2026-08-26; the 2026-08-27 mapping observation was
+`02e150b0b910f9ebe825b1c77f48126e4a0046073bf24ae767211fe66480bbf3`.
+
+Raw was 21/21 `OBSERVED`; Plan 21 was `SCREENED`; live Plan 22 was `SUCCESS`
+before the deadline; Market Data, Market Regime, Industry, and Packet were
+`OBSERVED`; Event was `RETAINED`. Packet identity SHA-256 was
+`cc3619cddcd2a35c73500947f40db863a5cb56df5a6aa377c2b0d91261556474`,
+and context identity SHA-256 was
+`e8b0371527994b39d6c905967c7814fce792fee627221cfd54cc51f65285153a`.
+The requested partial was truthfully `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows, separately labelled
+`PARTIAL_CURRENT_SESSION`, excluded from the completed grid and Market Regime,
+nonfatal, and never substituted. Exact retries preserved bytes, identities, and
+original times and caused zero effects; source remained unchanged and all
+resources were closed.
+
+PR #140's two P2 blockers are fixed on the exact current source candidate 66-path
+set. Active-session partial acquisition now requires canonical identity and an
+effective provider mapping valid on the active date before any partial query;
+expired canonical or mapping validity performs zero partial queries. Industry V2
+preserves the schema-specific legacy/current source URL and Packet attribution.
+
+The mandatory Aug-27 market-hours `RELIANCE` positive rerun **PASSED** on exact
+current source candidate 66-path fingerprint
+`3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e` at cutoff
+`2026-08-27T08:18:59Z`. Raw, Market Regime, Industry, and Packet were
+`OBSERVED`; Plan 21 was `SCREENED`; Plan 22 was `SUCCESS`. Active-date canonical
+and mapping validity passed before the partial path returned `UNAVAILABLE` /
+`PARTIAL_MEMBER_MISSING` with zero rows. Industry and Packet retained the current
+`nsearchives.nseindia.com` URL attribution. Exact retries preserved bytes,
+identities, and original times and caused zero provider effects. The prior
+post-close positive, earlier Aug-27 market-hours positive, genuine IRCTC
+negative, and exact 66-path set remain preserved.
+
+The exact-current full suite passed **3,400 tests at 89.53% total coverage**
+against the **87%** threshold, and the 14-file focused portfolio passed 852 tests.
+All exact-current local gates pass: Ruff format/check over 275 files, Pyright 0/0,
+Vulture at 80%, `git diff --check`, `uv build` producing sdist and wheel, and clean
+installed-wheel imports/runtime checks. Installed runtime identities are raw
+`8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b`,
+Industry V2 `e8e4c5408afe49e4f99484c0ab8a23cc897dfb3a34b84d00f7230405e7d93f29`,
+Market Regime V3 `74928b2b190e0e676ebb88fd4df5ae3d3856edaf8a08694da325393543a3542a`,
+and Packet V2 `a36e3f42a773f0d533dcfbc3726b83c800028bdf9f11bcae299e176eb020a4ea`.
+A candidate commit has been created. Exact-current reviews, push, hosted checks,
+merge, and closeout remain pending. No acceptance, completion, or delivery is claimed.
+
+Ten review blockers are fixed locally without a new subsystem: the two PR #140
+P2 fixes for active-date partial canonical/mapping validity and schema-specific
+Industry/Packet URL attribution; late
+completion-marker retry guards; zero-redirect enforcement; restored global
+`ScheduleSession` kind compatibility with the exact `REGULAR`/`SPECIAL` gate
+kept Plan-27-only; Industry V1 compatibility; Event legacy adoption; 62-day
+month-start acquisition; pre-Plan-22 deadline enforcement; and corrected
+Plan-24 wording.
+
+The directory-edge `st_nlink` portability fix remains in place without
+weakening leaf metadata checks; exact source-file checks remain enforced and
+the dependent runtime identity manifests remain current. The native supported
+target remains POSIX-style macOS and Linux; Native Windows is unsupported, WSL2
+or Docker is the stated Windows path, and exact-candidate Linux hosted CI has
+not run and is not claimed.
+
+The fresh current-byte genuine IRCTC production negative passed with the exact
+`NO_TRADE` outcome: raw `INSUFFICIENT` / `RAW_ACQUISITION_UNAVAILABLE`; Market
+Regime V3 insufficient; Plan 22 `NOT_ATTEMPTED` upstream; Industry V2
+`UNSUPPORTED` with `MARKET_REGIME_UNAVAILABLE` and
+`CLASSIFICATION_MEMBER_UNSUPPORTED`; and Packet insufficient with the exact
+ledger, five null AI facts, and mandatory `NO_TRADE`. Guarded V3, Industry,
+event, and Packet retries preserved exact bytes, identities, and original times.
+All required current smokes have passed: the retained post-close `RELIANCE`
+positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
+negative. The two positive modes remain separate; neither substitutes for the
+other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. A candidate commit has been created; exact-current reviews, push, hosted checks, merge, and closeout remain pending. No acceptance, completion, or delivery is claimed until the lifecycle is complete.
+
+
+The following Sprint 13 / Issue #118 **NOT STARTED** statement is historical
+Sprint 12 closeout text recorded on 2026-08-22; it is not the current lifecycle
+state and does not override the 2026-08-26 bounded acquisition amendment above.
+
+## 2026-08-22 accepted source evaluation (historical first slice)
 
 1. **Expected value:** official current NSE Indices Industry labels enable deterministic participation counts for the exact current supplied cohort.
 2. **Scope fit:** NSE/NSE Indices is the classification authority; Upstox's instrument master has no Industry field, and yfinance and Angel One are not accepted taxonomy authorities for this slice.
 3. **Material risk:** bounded personal/noncommercial use with attribution is accepted for the owner-private workflow, but automated harvesting and redistribution authority are not established; raw rows remain private and uncommitted.
 4. **Smallest alternative:** parse and retain one operator-acquired exact official CSV, project its rows to the supplied cohort, and expose aggregate Industry counts only.
-5. **Decision — accepted:** build the provider-neutral current-only core and exact artifact parser; defer automated acquisition, alternate sources, official Sector taxonomy, and all historical classification work.
+5. **Historical decision — accepted for Sprint 12:** build the provider-neutral current-only core and exact operator-acquired artifact parser; at that time automated acquisition, alternate sources, official Sector taxonomy, and all historical classification work remained deferred. The 2026-08-26 amendment later authorized only the single bounded GET described above.
 
 ## Outcome and non-claims
 
@@ -89,18 +214,30 @@ It does not claim:
 
 ### Fixed source
 
-The only admitted source location is the exact literal URL:
+Two exact, non-crossable provenance cases are admitted:
 
 ```text
+LEGACY_REPLAY_ONLY
 https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv
+domain = www.niftyindices.com
+acquisition_method = OPERATOR_ACQUIRED
+schema = 29b292b6d8f6f048ca4a86ef3b5185b6be5a903770fd8f2be5818c76932b2552
+licence = exact delivered input-bound licence-policy digest
+
+CURRENT_LIVE
+https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv
+domain = nsearchives.nseindia.com
+acquisition_method = BOUNDED_OFFICIAL_FETCH
+schema = b5e5bfd3aded2af88230447b28bebada4f101f8f9eb8b2dd03b77177626db175
+licence = 77aba40bbeb08fe8687ab677ef747399fe232a1cc6ae0547e2c270a50f1aabf9
 ```
 
-The source authority is exactly `NSE_INDICES`, the source domain is exactly
-`www.niftyindices.com`, and acquisition method is exactly
-`OPERATOR_ACQUIRED`. The runtime receives already-acquired bytes; it has no URL
-client or transport port. It must not request the URL, follow a redirect, accept
-a URL variant, normalize to another host/path, retry, scrape a page, or use an
-alternate source.
+Both use source authority `NSE_INDICES` and tier `INDUSTRY`. Existing Sprint 12
+inputs, retained archives, and Participation V1 reports preserve the legacy URL
+and identities literally. The current acquisition edge emits only the current
+case. Crossed URL/domain/method/schema/licence combinations fail closed. The
+current edge rejects redirects, URL variants, alternate hosts/paths, wrong
+response types, oversized/empty bodies, retries, polling, and alternate sources.
 
 The URL and owner acquisition assertion establish the approved owner-private
 workflow boundary; they are not cryptographic publisher-origin attestation. The
@@ -548,9 +685,9 @@ network, filesystem, archive, clock, universe, or index-membership operation.
 No compatibility alias, alternate parser, generic source registry, or package-root
 Market Regime handoff export is permitted.
 
-## Exact delivered implementation file set
+## Historical delivered file set
 
-The delivered implementation is limited to:
+The following set records the delivered Plan-24 V1 boundary only:
 
 ```text
 src/swing_trading_ai_assistant/market_data/current_industry_classification.py
@@ -567,9 +704,14 @@ tests/market_regime/test_current_supplied_cohort_v2.py
 tests/sector_analysis/test_current_industry_participation.py
 ```
 
-No dependency or provider-adapter file is added. No CLI/API/MCP transport is in
-scope. Any additional production file requires a concrete contract obligation
-and an update to this plan before implementation.
+This historical delivered file set is not the current Plan-27 authorized
+amendment. The latter is governed exclusively by Plan 27's identical 66-path
+set and includes the changed V2 integration files
+`sector_analysis/current_industry_participation_v2.py`, its runtime manifest,
+`tests/sector_analysis/test_current_industry_participation_v2.py`, and
+`tests/sector_analysis/data/plan27_industry_v2_schema_preimage.json`, together
+with the bounded acquisition/classification integration files named there.
+Neither set silently amends the other.
 
 ## Runtime code identity
 
@@ -645,11 +787,12 @@ abstractions, or subsystems. The corresponding handbook revision is
 ## Licence, privacy, and provenance limits
 
 The accepted use is owner-private personal/noncommercial research with source
-attribution. The slice does not establish automated access, API use, scraping,
-bulk harvesting, redistribution, sublicensing, public dataset publication, or
-commercial-use authority. Raw bytes and raw/member rows remain outside Git,
-packages, fixtures, logs, issues, pull requests, CI artifacts, and public result
-surfaces.
+attribution. Sprint 12 did not establish automated access. The 2026-08-26
+amendment authorizes only one bounded GET to the exact current URL; it does not
+authorize scraping, polling, refresh loops, retries, bulk harvesting,
+redistribution, sublicensing, public dataset publication, or commercial use.
+Raw bytes and raw/member rows remain outside Git, packages, fixtures, logs,
+issues, pull requests, CI artifacts, and public result surfaces.
 
 The public artifact hash and source URL provide reproducibility and attribution
 without publishing the artifact. They do not prove origin, publisher timestamp,
@@ -660,10 +803,11 @@ not optional diagnostics.
 ## Explicit deferrals
 
 - official NSE Indices Sector taxonomy and any Industry-to-Sector mapping;
-- automated acquisition, scraping, redirects, refresh, polling, retries,
-  credentials, or network transport;
-- yfinance, Angel One, Upstox, or another taxonomy authority or fallback;
-- alternate artifacts, generic source registries, and multi-source reconciliation;
+- recurring polling, refresh loops, scraping, retries, credentials, or a
+  generalized acquisition/provider framework;
+- alternate Industry URLs, artifacts, taxonomy authorities, or fallbacks,
+  including yfinance, Angel One, and Upstox;
+- generic source registries and multi-source reconciliation;
 - publisher publication/effective-time inference;
 - historical classification acquisition, revisions, reconstruction, backfill,
   availability studies, and backtests;

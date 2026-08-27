@@ -26,8 +26,19 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 CONTRACT_VERSION: Final = "current-supplied-cohort-event-notice@v1"
+CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1: Final = (
+    "nse-bounded-official-fetch-owner-private-v1"
+)
+LEGACY_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1: Final = (
+    "nse-manual-download-owner-private-v1"
+)
+CURRENT_EVENT_NOTICE_ACQUISITION_METHOD_V1: Final = "BOUNDED_OFFICIAL_FETCH"
+LEGACY_EVENT_NOTICE_ACQUISITION_METHOD_V1: Final = "OPERATOR_ACQUIRED"
 _SOURCE_URL: Final = "https://www.nseindia.com/companies-listing/corporate-filings-announcements?tabIndex=equity"
-_LICENCE_POLICY_IDENTITY: Final = "nse-manual-download-owner-private-v1"
+_LICENCE_POLICY_IDENTITIES: Final = (
+    LEGACY_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1,
+    CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1,
+)
 _HEADER: Final = (
     "SYMBOL",
     "COMPANY NAME",
@@ -52,7 +63,10 @@ _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _NSE_SYMBOL: Final = re.compile(r"[A-Z0-9](?:[A-Z0-9.&_-]{0,30}[A-Z0-9])?\Z")
 _ISIN: Final = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
-_FILENAME: Final = re.compile(r"CF-AN-equities-(\d{2}-[A-Za-z]{3}-\d{4})\.csv\Z")
+_LEGACY_FILENAME: Final = re.compile(r"CF-AN-equities-(\d{2}-[A-Za-z]{3}-\d{4})\.csv\Z")
+_RANGE_FILENAME: Final = re.compile(
+    r"CF-AN-equities-(\d{2}-\d{2}-\d{4})-to-(\d{2}-\d{2}-\d{4})\.csv\Z"
+)
 _EVENT_TIME: Final = re.compile(r"\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}\Z")
 _RECEIPT_TIME: Final = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\Z")
 _DIFFERENCE: Final = re.compile(r"\d{2}:\d{2}:\d{2}\Z")
@@ -145,16 +159,44 @@ _SCHEMA_BINDING: Final = {
         "url": _SOURCE_URL,
         "segment": "Equity",
         "window": "1D",
-        "filename_grammar": _FILENAME.pattern,
-        "licence_policy_identity": _LICENCE_POLICY_IDENTITY,
+        "filename_grammars": [
+            _LEGACY_FILENAME.pattern,
+            _RANGE_FILENAME.pattern,
+        ],
+        "licence_policy_identities": list(_LICENCE_POLICY_IDENTITIES),
+        "exact_source_cases": [
+            {
+                "acquisition_method": LEGACY_EVENT_NOTICE_ACQUISITION_METHOD_V1,
+                "licence_policy_identity": (
+                    LEGACY_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
+                ),
+                "filename_grammar": _LEGACY_FILENAME.pattern,
+                "encoding": "UTF-8",
+                "bom_states": ["PRESENT"],
+                "use": "LEGACY_REPLAY_ONLY",
+            },
+            {
+                "acquisition_method": CURRENT_EVENT_NOTICE_ACQUISITION_METHOD_V1,
+                "licence_policy_identity": (
+                    CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
+                ),
+                "filename_grammar": _RANGE_FILENAME.pattern,
+                "encoding": "UTF-8",
+                "bom_states": ["ABSENT", "PRESENT"],
+                "use": "CURRENT_LIVE",
+            },
+        ],
         "row_date_window": {
-            "current_source_filename_date": True,
+            "range_end_is_source_date": True,
+            "range_start_is_previous_calendar_date": True,
+            "legacy_source_filename_date": True,
             "prior_calendar_days": 1,
         },
     },
     "csv": {
-        "utf8_bom_required": True,
-        "utf8_decode_after_bom": True,
+        "encoding": "UTF-8",
+        "bom_states": ["ABSENT", "PRESENT"],
+        "decode_after_optional_bom": True,
         "string_io_newline": "",
         "reader_strict": True,
         "decoded_header_exact": list(_HEADER),
@@ -172,6 +214,7 @@ _SCHEMA_BINDING: Final = {
         "symbol": _NSE_SYMBOL.pattern,
         "isin": _ISIN.pattern,
         "attachment_prefix": "https://nsearchives.nseindia.com/corporate/",
+        "attachment_absent_sentinel": "-",
         "workflow_time": _EVENT_TIME.pattern,
         "receipt_time": _RECEIPT_TIME.pattern,
         "difference": _DIFFERENCE.pattern,
@@ -254,6 +297,18 @@ _SCHEMA_BINDING: Final = {
     },
 }
 EVENT_NOTICE_SCHEMA_IDENTITY_SHA256: Final = _identity(_SCHEMA_BINDING)
+LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256: Final = (
+    "b5c87ca73362cfb3b17fdfd16565ca5de3a7fac7d82749f87107e303c2f3d841"
+)
+_EVENT_NOTICE_SCHEMA_IDENTITIES: Final = frozenset(
+    {
+        LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+    }
+)
+_DELIVERED_EVENT_NOTICE_RUNTIME_IDENTITY_V1: Final = (
+    "09c3b50461c3f02a4f61b0b2ecab9493016d7d7ee96d8ed996f6a6f02068632f"
+)
 
 
 def _ordered(reasons: tuple[str, ...]) -> tuple[str, ...]:
@@ -357,14 +412,29 @@ def _receipt_datetime(value: str) -> datetime | None:
         return None
 
 
-def _parse_filename(value: object) -> date | None:
+def _parse_filename_range(value: object) -> tuple[date, date] | None:
     if type(value) is not str:
         return None
-    match = _FILENAME.fullmatch(value)
-    if match is None:
+    legacy = _LEGACY_FILENAME.fullmatch(value)
+    if legacy is not None:
+        parsed = _event_datetime(f"{legacy.group(1)} 00:00:00")
+        return None if parsed is None else (parsed.date(), parsed.date())
+    current = _RANGE_FILENAME.fullmatch(value)
+    if current is None:
         return None
-    parsed = _event_datetime(f"{match.group(1)} 00:00:00")
-    return None if parsed is None else parsed.date()
+    try:
+        range_from = datetime.strptime(current.group(1), "%d-%m-%Y").date()
+        range_to = datetime.strptime(current.group(2), "%d-%m-%Y").date()
+    except ValueError:
+        return None
+    if range_to - range_from != timedelta(days=1):
+        return None
+    return range_from, range_to
+
+
+def _parse_filename(value: object) -> date | None:
+    parsed = _parse_filename_range(value)
+    return None if parsed is None else parsed[1]
 
 
 def _source_date(value: str, receipt: bool = False) -> date | None:
@@ -475,6 +545,41 @@ def current_event_notice_runtime_code_identity_v1() -> str:
     )
 
 
+def _exact_event_source_case_v1(
+    schema_identity_sha256: object,
+    acquisition_method: object,
+    licence_policy_identity: object,
+    source_filename: object,
+    source_encoding: object,
+    source_has_bom: object,
+) -> bool:
+    if (
+        type(schema_identity_sha256) is not str
+        or schema_identity_sha256 not in _EVENT_NOTICE_SCHEMA_IDENTITIES
+        or type(acquisition_method) is not str
+        or type(licence_policy_identity) is not str
+        or type(source_filename) is not str
+        or type(source_encoding) is not str
+        or type(source_has_bom) is not bool
+        or source_encoding != "UTF-8"
+    ):
+        return False
+    return (
+        schema_identity_sha256 == EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+        and acquisition_method == CURRENT_EVENT_NOTICE_ACQUISITION_METHOD_V1
+        and licence_policy_identity == CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
+        and _RANGE_FILENAME.fullmatch(source_filename) is not None
+        and _parse_filename_range(source_filename) is not None
+    ) or (
+        schema_identity_sha256 == LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+        and acquisition_method == LEGACY_EVENT_NOTICE_ACQUISITION_METHOD_V1
+        and licence_policy_identity == LEGACY_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
+        and _LEGACY_FILENAME.fullmatch(source_filename) is not None
+        and _parse_filename(source_filename) is not None
+        and source_has_bom is True
+    )
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class CurrentEventNoticeInputV1:
     schema_identity_sha256: str
@@ -483,7 +588,10 @@ class CurrentEventNoticeInputV1:
     source_window: str
     source_filename: str
     artifact_identity_sha256: str
+    acquisition_method: Literal["BOUNDED_OFFICIAL_FETCH", "OPERATOR_ACQUIRED"]
     licence_policy_identity: str
+    source_encoding: Literal["UTF-8"]
+    source_has_bom: bool
 
     def __init__(
         self,
@@ -494,7 +602,10 @@ class CurrentEventNoticeInputV1:
         source_window: str,
         source_filename: str,
         artifact_identity_sha256: str,
+        acquisition_method: str,
         licence_policy_identity: str,
+        source_encoding: str = "UTF-8",
+        source_has_bom: bool = True,
     ) -> None:
         if (
             not _valid_digest(schema_identity_sha256)
@@ -506,8 +617,19 @@ class CurrentEventNoticeInputV1:
                     source_segment,
                     source_window,
                     source_filename,
+                    acquisition_method,
                     licence_policy_identity,
+                    source_encoding,
                 )
+            )
+            or type(source_has_bom) is not bool
+            or not _exact_event_source_case_v1(
+                schema_identity_sha256,
+                acquisition_method,
+                licence_policy_identity,
+                source_filename,
+                source_encoding,
+                source_has_bom,
             )
         ):
             raise ValueError("event notice input invalid")
@@ -516,15 +638,30 @@ class CurrentEventNoticeInputV1:
                 object.__setattr__(self, name, value)
 
 
+def event_notice_licence_policy_identity_is_replay_compatible_v1(
+    value: object,
+) -> TypeGuard[str]:
+    """Admit current fetches and retained legacy snapshots without live fallback."""
+    return type(value) is str and value in _LICENCE_POLICY_IDENTITIES
+
+
 def _input_failure(input: CurrentEventNoticeInputV1) -> str | None:
-    if input.licence_policy_identity != _LICENCE_POLICY_IDENTITY:
+    if not event_notice_licence_policy_identity_is_replay_compatible_v1(
+        input.licence_policy_identity
+    ):
         return "EVENT_SOURCE_UNAUTHORIZED"
     if (
-        input.schema_identity_sha256 != EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
-        or input.source_url != _SOURCE_URL
+        input.source_url != _SOURCE_URL
         or input.source_segment != "Equity"
         or input.source_window != "1D"
-        or _parse_filename(input.source_filename) is None
+        or not _exact_event_source_case_v1(
+            input.schema_identity_sha256,
+            input.acquisition_method,
+            input.licence_policy_identity,
+            input.source_filename,
+            input.source_encoding,
+            input.source_has_bom,
+        )
     ):
         return "EVENT_SOURCE_MISMATCH"
     return None
@@ -671,7 +808,7 @@ class CurrentEventNoticeV1:
     receipt_at: str
     dissemination_at: str
     difference: str
-    attachment_url: str
+    attachment_url: str | None
     observation_identity_sha256: str
     deduplication_identity_sha256: str
     publisher_timezone: None = None
@@ -738,6 +875,9 @@ class PrivateCurrentEventNoticeSnapshotV1:
     source_url: str
     source_segment: str
     source_window: str
+    source_encoding: Literal["UTF-8"]
+    source_has_bom: bool
+    acquisition_method: Literal["BOUNDED_OFFICIAL_FETCH", "OPERATOR_ACQUIRED"]
     licence_policy_identity: str
     cohort_size: int
     members: tuple[CurrentEventNoticeMemberResultV1, ...]
@@ -759,6 +899,9 @@ def _snapshot_value(snapshot: PrivateCurrentEventNoticeSnapshotV1) -> dict[str, 
         "source_segment": snapshot.source_segment,
         "source_window": snapshot.source_window,
         "source_filename": snapshot.source_filename,
+        "source_encoding": snapshot.source_encoding,
+        "source_has_bom": snapshot.source_has_bom,
+        "acquisition_method": snapshot.acquisition_method,
         "licence_policy_identity": snapshot.licence_policy_identity,
         "cohort_size": snapshot.cohort_size,
         "members": [member.value() for member in snapshot.members],
@@ -772,26 +915,31 @@ def _snapshot(**values: object) -> PrivateCurrentEventNoticeSnapshotV1:
     return result
 
 
-def _records(artifact: bytes) -> list[list[str]]:
-    if not artifact.startswith(b"\xef\xbb\xbf"):
+def _records(artifact: bytes, source_has_bom: bool) -> list[list[str]]:
+    actual_has_bom = artifact.startswith(b"\xef\xbb\xbf")
+    if actual_has_bom is not source_has_bom:
         raise ValueError("malformed")
     if not 1 <= len(artifact) <= _MAX_ARTIFACT_BYTES:
         raise OverflowError("bounds")
     try:
-        text = artifact[3:].decode("utf-8")
+        text = artifact[3 if source_has_bom else 0 :].decode("utf-8")
         records = list(csv.reader(io.StringIO(text, newline=""), strict=True))
     except (UnicodeDecodeError, csv.Error):
         raise ValueError("malformed") from None
     if not records or tuple(records[0]) != _HEADER:
         raise LookupError("header")
-    if not 1 <= len(records) - 1 <= _MAX_ROWS:
+    if len(records) - 1 > _MAX_ROWS:
         raise OverflowError("bounds")
     for record in records[1:]:
         if len(record) != 9:
             raise ValueError("malformed")
         if any(len(field) > _MAX_FIELD_CHARS for field in record):
             raise OverflowError("bounds")
-        if any(not _safe_text(field) for field in record):
+        if any(
+            not _safe_text(field)
+            for position, field in enumerate(record)
+            if not (position == 8 and field == "-")
+        ):
             raise ValueError("malformed")
     return records
 
@@ -817,8 +965,15 @@ def _admit_rows(
             or _RECEIPT_TIME.fullmatch(fields[5]) is None
             or _EVENT_TIME.fullmatch(fields[6]) is None
             or not _valid_difference(fields[7])
-            or urlsplit(fields[8]).geturl() != fields[8]
-            or not fields[8].startswith("https://nsearchives.nseindia.com/corporate/")
+            or (
+                fields[8] != "-"
+                and (
+                    urlsplit(fields[8]).geturl() != fields[8]
+                    or not fields[8].startswith(
+                        "https://nsearchives.nseindia.com/corporate/"
+                    )
+                )
+            )
         ):
             raise RuntimeError("time")
         dates = _row_dates(fields)
@@ -838,7 +993,9 @@ def _parse_admitted_rows(
         return _failure("EVENT_SOURCE_MISMATCH")
     try:
         return _admit_rows(
-            _records(artifact), input.artifact_identity_sha256, filename_date
+            _records(artifact, input.source_has_bom),
+            input.artifact_identity_sha256,
+            filename_date,
         )
     except LookupError:
         return _failure("EVENT_HEADER_MISMATCH")
@@ -861,9 +1018,7 @@ def _parsed_artifact(
 ) -> ParsedCurrentEventNoticeArtifactV1:
     result = object.__new__(ParsedCurrentEventNoticeArtifactV1)
     object.__setattr__(result, "evidence_state", "PARSED")
-    object.__setattr__(
-        result, "schema_identity_sha256", EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
-    )
+    object.__setattr__(result, "schema_identity_sha256", input.schema_identity_sha256)
     object.__setattr__(result, "input", input)
     object.__setattr__(
         result, "artifact_identity_sha256", input.artifact_identity_sha256
@@ -957,7 +1112,7 @@ def _member_result(
             row.receipt_at,
             row.dissemination_at,
             row.difference,
-            row.attachment_url,
+            None if row.attachment_url == "-" else row.attachment_url,
             row.observation_identity_sha256,
             row.deduplication_identity_sha256,
         )
@@ -977,24 +1132,30 @@ def _projected_snapshot(
 ) -> PrivateCurrentEventNoticeSnapshotV1:
     base = {
         "contract_version": CONTRACT_VERSION,
-        "schema_identity_sha256": EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        "schema_identity_sha256": parsed.schema_identity_sha256,
         "artifact_identity_sha256": parsed.artifact_identity_sha256,
         "source_url": parsed.input.source_url,
         "source_segment": parsed.input.source_segment,
         "source_window": parsed.input.source_window,
         "source_filename": parsed.input.source_filename,
+        "source_encoding": parsed.input.source_encoding,
+        "source_has_bom": parsed.input.source_has_bom,
+        "acquisition_method": parsed.input.acquisition_method,
         "licence_policy_identity": parsed.input.licence_policy_identity,
         "cohort_size": len(results),
         "members": [result.value() for result in results],
     }
     return _snapshot(
         evidence_state="PROJECTED",
-        schema_identity_sha256=EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        schema_identity_sha256=parsed.schema_identity_sha256,
         artifact_identity_sha256=parsed.artifact_identity_sha256,
         source_filename=parsed.input.source_filename,
         source_url=parsed.input.source_url,
         source_segment=parsed.input.source_segment,
         source_window=parsed.input.source_window,
+        source_encoding=parsed.input.source_encoding,
+        source_has_bom=parsed.input.source_has_bom,
+        acquisition_method=parsed.input.acquisition_method,
         licence_policy_identity=parsed.input.licence_policy_identity,
         cohort_size=len(results),
         members=results,
@@ -1036,6 +1197,9 @@ class RetainedCurrentEventNoticeSnapshotV1:
     source_segment: str
     source_window: str
     source_filename: str
+    source_encoding: Literal["UTF-8"]
+    source_has_bom: bool
+    acquisition_method: Literal["BOUNDED_OFFICIAL_FETCH", "OPERATOR_ACQUIRED"]
     licence_policy_identity: str
     artifact_identity_sha256: str
     snapshot_identity_sha256: str
@@ -1108,12 +1272,23 @@ def _validated_snapshot(
 ) -> str | None:
     if (
         snapshot.evidence_state != "PROJECTED"
-        or snapshot.schema_identity_sha256 != EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+        or snapshot.schema_identity_sha256 != input.schema_identity_sha256
         or snapshot.artifact_identity_sha256 != input.artifact_identity_sha256
         or snapshot.source_filename != input.source_filename
         or snapshot.source_url != input.source_url
         or snapshot.source_segment != input.source_segment
         or snapshot.source_window != input.source_window
+        or snapshot.source_encoding != input.source_encoding
+        or snapshot.source_has_bom is not input.source_has_bom
+        or snapshot.acquisition_method != input.acquisition_method
+        or not _exact_event_source_case_v1(
+            snapshot.schema_identity_sha256,
+            snapshot.acquisition_method,
+            snapshot.licence_policy_identity,
+            snapshot.source_filename,
+            snapshot.source_encoding,
+            snapshot.source_has_bom,
+        )
         or snapshot.licence_policy_identity != input.licence_policy_identity
         or type(snapshot.cohort_size) is not int
         or snapshot.cohort_size != len(snapshot.members)
@@ -1354,7 +1529,7 @@ def _receipt_core(
     archive_identity: str,
     runtime: str,
     known_text: str,
-) -> dict[str, str]:
+) -> dict[str, object]:
     return {
         "version": _RECEIPT_VERSION,
         "artifact_identity_sha256": snapshot.artifact_identity_sha256,
@@ -1362,12 +1537,17 @@ def _receipt_core(
         "archive_identity_sha256": archive_identity,
         "runtime_code_identity_sha256": runtime,
         "known_at": known_text,
+        "acquisition_method": snapshot.acquisition_method,
+        "licence_policy_identity": snapshot.licence_policy_identity,
+        "source_filename": snapshot.source_filename,
+        "source_encoding": snapshot.source_encoding,
+        "source_has_bom": snapshot.source_has_bom,
     }
 
 
 def _retained_core(
-    receipt_core: dict[str, str], receipt_identity: str
-) -> dict[str, str]:
+    receipt_core: dict[str, object], receipt_identity: str
+) -> dict[str, object]:
     return {**receipt_core, "receipt_identity_sha256": receipt_identity}
 
 
@@ -1410,6 +1590,11 @@ def _receipt_value(
         "archive_identity_sha256",
         "runtime_code_identity_sha256",
         "known_at",
+        "acquisition_method",
+        "licence_policy_identity",
+        "source_filename",
+        "source_encoding",
+        "source_has_bom",
         "receipt_identity_sha256",
         "retained_identity_sha256",
     }
@@ -1420,6 +1605,15 @@ def _receipt_value(
     retained_identity = receipt["retained_identity_sha256"]
     if not _valid_digest(receipt_identity) or not _valid_digest(retained_identity):
         raise ValueError("receipt identity")
+    if not _exact_event_source_case_v1(
+        snapshot.schema_identity_sha256,
+        receipt.get("acquisition_method"),
+        receipt.get("licence_policy_identity"),
+        receipt.get("source_filename"),
+        receipt.get("source_encoding"),
+        receipt.get("source_has_bom"),
+    ):
+        raise ValueError("receipt source binding")
     core = _receipt_core(snapshot, archive_identity, runtime, known_text)
     if (
         any(receipt[key] != value for key, value in core.items())
@@ -1463,6 +1657,8 @@ def _retained_snapshot(
     known_at: datetime,
     receipt_identity: str,
     retained_identity: str,
+    *,
+    snapshot_identity: str | None = None,
 ) -> RetainedCurrentEventNoticeSnapshotV1:
     return RetainedCurrentEventNoticeSnapshotV1(
         "RETAINED",
@@ -1473,9 +1669,14 @@ def _retained_snapshot(
         snapshot.source_segment,
         snapshot.source_window,
         snapshot.source_filename,
+        snapshot.source_encoding,
+        snapshot.source_has_bom,
+        snapshot.acquisition_method,
         snapshot.licence_policy_identity,
         snapshot.artifact_identity_sha256,
-        snapshot.snapshot_identity_sha256,
+        snapshot.snapshot_identity_sha256
+        if snapshot_identity is None
+        else snapshot_identity,
         archive_identity,
         receipt_identity,
         runtime,
@@ -1485,6 +1686,139 @@ def _retained_snapshot(
         len(snapshot.members),
         known_at,
         snapshot.members,
+    )
+
+
+def _legacy_snapshot_value(
+    snapshot: PrivateCurrentEventNoticeSnapshotV1,
+) -> dict[str, object]:
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "schema_identity_sha256": LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+        "source_url": snapshot.source_url,
+        "source_segment": snapshot.source_segment,
+        "source_window": snapshot.source_window,
+        "source_filename": snapshot.source_filename,
+        "licence_policy_identity": snapshot.licence_policy_identity,
+        "cohort_size": snapshot.cohort_size,
+        "members": [member.value() for member in snapshot.members],
+    }
+
+
+def _adopt_delivered_legacy_archive(
+    root: Path,
+    lease: StorageRootLease,
+    snapshot: PrivateCurrentEventNoticeSnapshotV1,
+    artifact: bytes,
+) -> RetainedCurrentEventNoticeSnapshotV1 | None:
+    if snapshot.schema_identity_sha256 != LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256:
+        return None
+    if not artifact.startswith(b"\xef\xbb\xbf") or not _exact_event_source_case_v1(
+        snapshot.schema_identity_sha256,
+        snapshot.acquisition_method,
+        snapshot.licence_policy_identity,
+        snapshot.source_filename,
+        snapshot.source_encoding,
+        snapshot.source_has_bom,
+    ):
+        raise ValueError("legacy event source binding")
+    snapshot_raw = _canonical(_legacy_snapshot_value(snapshot))
+    snapshot_identity = _sha(snapshot_raw)
+    archive_identity = _identity(
+        {
+            "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+            "snapshot_identity_sha256": snapshot_identity,
+            "contract_version": CONTRACT_VERSION,
+            "archive_protocol": _ARCHIVE_PROTOCOL_VERSION,
+        }
+    )
+    raw_name = f"{snapshot.artifact_identity_sha256}.raw.csv"
+    snapshot_name = f"{snapshot_identity}.snapshot.json"
+    receipt_name = f"{archive_identity}.receipt.json"
+    marker_name = f"{archive_identity}.complete.json"
+    with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
+        directory = _open_archive(operation.descriptor)
+        try:
+            receipt_entry = _read_stable_private_object(
+                directory, receipt_name, _MAX_ARCHIVE_RECEIPT_BYTES
+            )
+            if receipt_entry is None:
+                return None
+            _verify_archive_binding(
+                operation,
+                operation.descriptor,
+                directory,
+                raw_name,
+                artifact,
+                snapshot_name,
+                snapshot_raw,
+            )
+            receipt_raw = receipt_entry[0]
+            decoded: object = json.loads(receipt_raw)
+            expected_keys = {
+                "version",
+                "artifact_identity_sha256",
+                "snapshot_identity_sha256",
+                "archive_identity_sha256",
+                "runtime_code_identity_sha256",
+                "known_at",
+                "receipt_identity_sha256",
+                "retained_identity_sha256",
+            }
+            if (
+                not _string_object_mapping(decoded)
+                or set(decoded) != expected_keys
+                or _canonical(decoded) != receipt_raw
+            ):
+                raise ValueError("legacy event receipt")
+            receipt = decoded
+            known_text, known_at = _known_at_text(receipt["known_at"])
+            core: dict[str, object] = {
+                "version": _RECEIPT_VERSION,
+                "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+                "snapshot_identity_sha256": snapshot_identity,
+                "archive_identity_sha256": archive_identity,
+                "runtime_code_identity_sha256": (
+                    _DELIVERED_EVENT_NOTICE_RUNTIME_IDENTITY_V1
+                ),
+                "known_at": known_text,
+            }
+            receipt_identity = receipt["receipt_identity_sha256"]
+            retained_identity = receipt["retained_identity_sha256"]
+            if (
+                not _valid_digest(receipt_identity)
+                or not _valid_digest(retained_identity)
+                or any(receipt.get(key) != value for key, value in core.items())
+                or receipt_identity != _identity(core)
+                or retained_identity
+                != _identity(_retained_core(core, receipt_identity))
+            ):
+                raise ValueError("legacy event receipt binding")
+            marker = _read_stable_private_object(
+                directory, marker_name, _MAX_ARCHIVE_MARKER_BYTES
+            )
+            if marker is None or marker[0] != _marker_bytes(
+                archive_identity,
+                receipt_identity,
+                known_text,
+                retained_identity,
+            ):
+                raise ValueError("legacy event completion")
+            _require_source_ist_date(snapshot, known_at)
+            _require_source_ist_date(snapshot, _trusted_utc_now())
+            operation.ensure_live()
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return _retained_snapshot(
+        snapshot,
+        archive_identity,
+        _DELIVERED_EVENT_NOTICE_RUNTIME_IDENTITY_V1,
+        known_at,
+        receipt_identity,
+        retained_identity,
+        snapshot_identity=snapshot_identity,
     )
 
 
@@ -1660,6 +1994,14 @@ class FileCurrentEventNoticeArchiveV1:
         if isinstance(runtime, CurrentEventNoticeFailureV1):
             return runtime
         try:
+            legacy = _adopt_delivered_legacy_archive(
+                self._root,
+                lease,
+                snapshot,
+                artifact,
+            )
+            if legacy is not None:
+                return legacy
             return _archive_snapshot(
                 self._root,
                 lease,

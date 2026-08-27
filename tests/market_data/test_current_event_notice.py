@@ -8,6 +8,7 @@ import json
 import os
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,8 @@ _HEADER = (
 )
 _FILENAME = "CF-AN-equities-23-Aug-2026.csv"
 _KNOWN_AT = datetime(2026, 8, 23, 10, tzinfo=UTC)
+_CURRENT_FILENAME = "CF-AN-equities-25-08-2026-to-26-08-2026.csv"
+_CURRENT_KNOWN_AT = datetime(2026, 8, 26, 10, tzinfo=UTC)
 
 
 def _expected_schema_identity() -> str:
@@ -43,16 +46,50 @@ def _expected_schema_identity() -> str:
             "url": _SOURCE_URL,
             "segment": "Equity",
             "window": "1D",
-            "filename_grammar": r"CF-AN-equities-(\d{2}-[A-Za-z]{3}-\d{4})\.csv\Z",
-            "licence_policy_identity": "nse-manual-download-owner-private-v1",
+            "filename_grammars": [
+                r"CF-AN-equities-(\d{2}-[A-Za-z]{3}-\d{4})\.csv\Z",
+                r"CF-AN-equities-(\d{2}-\d{2}-\d{4})-to-(\d{2}-\d{2}-\d{4})\.csv\Z",
+            ],
+            "licence_policy_identities": [
+                "nse-manual-download-owner-private-v1",
+                "nse-bounded-official-fetch-owner-private-v1",
+            ],
+            "exact_source_cases": [
+                {
+                    "acquisition_method": "OPERATOR_ACQUIRED",
+                    "licence_policy_identity": "nse-manual-download-owner-private-v1",
+                    "filename_grammar": (
+                        r"CF-AN-equities-(\d{2}-[A-Za-z]{3}-\d{4})\.csv\Z"
+                    ),
+                    "encoding": "UTF-8",
+                    "bom_states": ["PRESENT"],
+                    "use": "LEGACY_REPLAY_ONLY",
+                },
+                {
+                    "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
+                    "licence_policy_identity": (
+                        "nse-bounded-official-fetch-owner-private-v1"
+                    ),
+                    "filename_grammar": (
+                        r"CF-AN-equities-(\d{2}-\d{2}-\d{4})-to-"
+                        r"(\d{2}-\d{2}-\d{4})\.csv\Z"
+                    ),
+                    "encoding": "UTF-8",
+                    "bom_states": ["ABSENT", "PRESENT"],
+                    "use": "CURRENT_LIVE",
+                },
+            ],
             "row_date_window": {
-                "current_source_filename_date": True,
+                "range_end_is_source_date": True,
+                "range_start_is_previous_calendar_date": True,
+                "legacy_source_filename_date": True,
                 "prior_calendar_days": 1,
             },
         },
         "csv": {
-            "utf8_bom_required": True,
-            "utf8_decode_after_bom": True,
+            "encoding": "UTF-8",
+            "bom_states": ["ABSENT", "PRESENT"],
+            "decode_after_optional_bom": True,
             "string_io_newline": "",
             "reader_strict": True,
             "decoded_header_exact": [
@@ -80,6 +117,7 @@ def _expected_schema_identity() -> str:
             "symbol": r"[A-Z0-9](?:[A-Z0-9.&_-]{0,30}[A-Z0-9])?\Z",
             "isin": r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z",
             "attachment_prefix": "https://nsearchives.nseindia.com/corporate/",
+            "attachment_absent_sentinel": "-",
             "workflow_time": r"\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}\Z",
             "receipt_time": r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\Z",
             "difference": r"\d{2}:\d{2}:\d{2}\Z",
@@ -178,6 +216,19 @@ def _api() -> Any:
     )
 
 
+def _canonical(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
 def _isin(index: int) -> str:
     """Return a deterministic syntactically and checksum-valid ISIN."""
     stem = f"INE{index:08d}"
@@ -232,18 +283,243 @@ def _artifact(rows: list[tuple[str, ...]] | None = None) -> bytes:
     ).encode()
 
 
+def _current_artifact(source_has_bom: bool) -> bytes:
+    raw = (
+        _artifact()
+        .replace(b"23-Aug-2026", b"26-Aug-2026")
+        .replace(b"2026-08-23", b"2026-08-26")
+    )
+    return raw if source_has_bom else raw[3:]
+
+
+def _current_source_changes(api: Any, source_has_bom: bool) -> dict[str, object]:
+    return {
+        "schema_identity_sha256": api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        "source_filename": _CURRENT_FILENAME,
+        "licence_policy_identity": "nse-bounded-official-fetch-owner-private-v1",
+        "source_encoding": "UTF-8",
+        "source_has_bom": source_has_bom,
+        "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
+    }
+
+
 def _input(api: Any, artifact: bytes, **changes: object) -> Any:
     values: dict[str, object] = {
-        "schema_identity_sha256": api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        "schema_identity_sha256": (api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256),
         "source_url": _SOURCE_URL,
         "source_segment": "Equity",
         "source_window": "1D",
         "source_filename": _FILENAME,
         "artifact_identity_sha256": hashlib.sha256(artifact).hexdigest(),
+        "acquisition_method": "OPERATOR_ACQUIRED",
         "licence_policy_identity": "nse-manual-download-owner-private-v1",
     }
     values.update(changes)
     return api.CurrentEventNoticeInputV1(**values)
+
+
+@pytest.mark.parametrize("source_has_bom", (False, True))
+def test_official_range_filename_and_both_utf8_bom_states_are_admitted_exactly(
+    source_has_bom: bool,
+) -> None:
+    api = _api()
+    raw = _current_artifact(source_has_bom)
+    parsed = _parse(api, raw, **_current_source_changes(api, source_has_bom))
+    assert parsed.evidence_state == "PARSED"
+    assert parsed.input.source_has_bom is source_has_bom
+    assert parsed.input.artifact_identity_sha256 == hashlib.sha256(raw).hexdigest()
+
+
+@pytest.mark.parametrize("source_has_bom", (False, True))
+def test_exact_dash_attachment_sentinel_projects_explicit_unavailable(
+    source_has_bom: bool,
+) -> None:
+    api = _api()
+    raw = _current_artifact(source_has_bom).replace(
+        b"https://nsearchives.nseindia.com/corporate/alpha.pdf",
+        b"-",
+    )
+    parsed = _parse(api, raw, **_current_source_changes(api, source_has_bom))
+    assert parsed.evidence_state == "PARSED"
+    snapshot = api.project_current_supplied_cohort_event_notices_v1(
+        parsed, _members(api)
+    )
+    assert snapshot.evidence_state == "PROJECTED"
+    assert snapshot.members[0].notices[0].attachment_url is None
+
+
+@pytest.mark.parametrize(
+    ("replacement", "reason"),
+    [
+        (b"-unsafe", "EVENT_ARTIFACT_MALFORMED"),
+        (b"@unsafe", "EVENT_ARTIFACT_MALFORMED"),
+        (b"https://example.com/unsafe.pdf", "EVENT_TIME_MALFORMED"),
+    ],
+)
+def test_attachment_sentinel_does_not_weaken_formula_or_url_validation(
+    replacement: bytes,
+    reason: str,
+) -> None:
+    api = _api()
+    raw = _current_artifact(True).replace(
+        b"https://nsearchives.nseindia.com/corporate/alpha.pdf",
+        replacement,
+    )
+    _failure(
+        _parse(api, raw, **_current_source_changes(api, True)),
+        "MALFORMED_EVIDENCE",
+        reason,
+    )
+
+
+def test_trailing_blank_record_remains_malformed() -> None:
+    api = _api()
+    raw = _current_artifact(True) + b"\r\n"
+    _failure(
+        _parse(api, raw, **_current_source_changes(api, True)),
+        "MALFORMED_EVIDENCE",
+        "EVENT_ARTIFACT_MALFORMED",
+    )
+
+
+def test_event_source_admission_is_exactly_two_closed_cases() -> None:
+    api = _api()
+    legacy_raw = _artifact()
+    current_without_bom = _current_artifact(False)
+    current_with_bom = _current_artifact(True)
+    methods = ("OPERATOR_ACQUIRED", "BOUNDED_OFFICIAL_FETCH")
+    licences = (
+        "nse-manual-download-owner-private-v1",
+        "nse-bounded-official-fetch-owner-private-v1",
+    )
+    filenames = (
+        _FILENAME,
+        _CURRENT_FILENAME,
+    )
+    bom_states = (True, False)
+    admitted = {
+        (
+            "OPERATOR_ACQUIRED",
+            "nse-manual-download-owner-private-v1",
+            _FILENAME,
+            True,
+        ): legacy_raw,
+        (
+            "BOUNDED_OFFICIAL_FETCH",
+            "nse-bounded-official-fetch-owner-private-v1",
+            _CURRENT_FILENAME,
+            False,
+        ): current_without_bom,
+        (
+            "BOUNDED_OFFICIAL_FETCH",
+            "nse-bounded-official-fetch-owner-private-v1",
+            _CURRENT_FILENAME,
+            True,
+        ): current_with_bom,
+    }
+    for combination in product(methods, licences, filenames, bom_states):
+        method, licence, filename, has_bom = combination
+        values = {
+            "schema_identity_sha256": (
+                api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+                if method == "OPERATOR_ACQUIRED"
+                else api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+            ),
+            "source_url": _SOURCE_URL,
+            "source_segment": "Equity",
+            "source_window": "1D",
+            "source_filename": filename,
+            "artifact_identity_sha256": hashlib.sha256(
+                admitted.get(combination, legacy_raw)
+            ).hexdigest(),
+            "acquisition_method": method,
+            "licence_policy_identity": licence,
+            "source_encoding": "UTF-8",
+            "source_has_bom": has_bom,
+        }
+        if combination in admitted:
+            input_value = api.CurrentEventNoticeInputV1(**values)
+            parsed = api.parse_current_event_notice_artifact_v1(
+                input_value, admitted[combination]
+            )
+            assert parsed.evidence_state == "PARSED"
+        else:
+            with pytest.raises(ValueError, match="event notice input invalid"):
+                api.CurrentEventNoticeInputV1(**values)
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _input(
+            api,
+            legacy_raw,
+            schema_identity_sha256=api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
+        )
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _input(
+            api,
+            current_with_bom,
+            **{
+                **_current_source_changes(api, True),
+                "schema_identity_sha256": (
+                    api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+                ),
+            },
+        )
+
+
+def test_exact_header_only_csv_projects_no_matching_notice_for_every_member() -> None:
+    api = _api()
+    raw = ("\ufeff" + _HEADER + "\n").encode()
+    parsed = _parse(api, raw)
+    assert parsed.evidence_state == "PARSED"
+    assert parsed.private_rows == ()
+    snapshot = api.project_current_supplied_cohort_event_notices_v1(
+        parsed, _members(api)
+    )
+    assert snapshot.evidence_state == "PROJECTED"
+    assert tuple(member.outcome for member in snapshot.members) == (
+        "NO_MATCHING_NOTICE_IN_SNAPSHOT",
+        "NO_MATCHING_NOTICE_IN_SNAPSHOT",
+    )
+
+
+def test_current_fetch_licence_is_distinct_from_replay_compatible_legacy() -> None:
+    api = _api()
+    assert api.CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1 == (
+        "nse-bounded-official-fetch-owner-private-v1"
+    )
+    assert api.event_notice_licence_policy_identity_is_replay_compatible_v1(
+        "nse-bounded-official-fetch-owner-private-v1"
+    )
+    assert api.event_notice_licence_policy_identity_is_replay_compatible_v1(
+        "nse-manual-download-owner-private-v1"
+    )
+    assert not api.event_notice_licence_policy_identity_is_replay_compatible_v1(
+        "unknown"
+    )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "CF-AN-equities-24-08-2026-to-26-08-2026.csv",
+        "CF-AN-equities-26-08-2026-to-25-08-2026.csv",
+        "CF-AN-equities-31-02-2026-to-01-03-2026.csv",
+    ],
+)
+def test_official_range_filename_rejects_non_1d_and_invalid_ranges(
+    filename: str,
+) -> None:
+    api = _api()
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _parse(api, _artifact(), source_filename=filename)
+
+
+def test_encoding_and_bom_declaration_must_match_exact_bytes() -> None:
+    api = _api()
+    raw = _artifact()
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _parse(api, raw, source_encoding="UTF-16")
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _parse(api, raw, source_has_bom=False)
 
 
 def _members(api: Any, size: int = 2, **changes: object) -> tuple[Any, ...]:
@@ -284,9 +560,14 @@ def _lease(tmp_path: Path) -> StorageRootLease:
     return acquired.lease
 
 
-def _project(api: Any, artifact: bytes | None = None, size: int = 2) -> Any:
+def _project(
+    api: Any,
+    artifact: bytes | None = None,
+    size: int = 2,
+    input_changes: dict[str, object] | None = None,
+) -> Any:
     raw = _artifact() if artifact is None else artifact
-    parsed = _parse(api, raw)
+    parsed = _parse(api, raw, **(input_changes or {}))
     assert parsed.evidence_state == "PARSED"
     snapshot = api.project_current_supplied_cohort_event_notices_v1(
         parsed, _members(api, size)
@@ -311,13 +592,16 @@ def test_exact_input_schema_source_licence_and_redacted_representations() -> Non
     api = _api()
     raw = _artifact()
     parsed = _parse(api, raw)
-    assert parsed.schema_identity_sha256 == api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
-    assert _expected_schema_identity() == api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
-    _failure(
-        _parse(api, raw, licence_policy_identity="caller-chosen"),
-        "UNSUPPORTED_CAPABILITY",
-        "EVENT_SOURCE_UNAUTHORIZED",
+    assert (
+        parsed.schema_identity_sha256 == api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
     )
+    assert (
+        api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+        == "b5c87ca73362cfb3b17fdfd16565ca5de3a7fac7d82749f87107e303c2f3d841"
+    )
+    assert _expected_schema_identity() == api.EVENT_NOTICE_SCHEMA_IDENTITY_SHA256
+    with pytest.raises(ValueError, match="event notice input invalid"):
+        _parse(api, raw, licence_policy_identity="caller-chosen")
     with pytest.raises(TypeError, match="private event row constructor unavailable"):
         api._PrivateEventNoticeRow()
 
@@ -553,10 +837,163 @@ def test_duplicate_and_conflicting_admitted_rows_fail_whole_artifact() -> None:
 
 
 def _retain(
-    api: Any, root: Path, snapshot: Any, lease: StorageRootLease, raw: bytes
+    api: Any,
+    root: Path,
+    snapshot: Any,
+    lease: StorageRootLease,
+    raw: bytes,
+    input_changes: dict[str, object] | None = None,
 ) -> Any:
     return api.FileCurrentEventNoticeArchiveV1(root).archive_exact(
-        _input(api, raw), raw, snapshot, lease
+        _input(api, raw, **(input_changes or {})), raw, snapshot, lease
+    )
+
+
+def _seed_delivered_legacy_archive_fixture(
+    api: Any,
+    root: Path,
+    snapshot: Any,
+    raw: bytes,
+) -> dict[str, object]:
+    snapshot_value = {
+        "contract_version": api.CONTRACT_VERSION,
+        "schema_identity_sha256": (api.LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256),
+        "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+        "source_url": snapshot.source_url,
+        "source_segment": snapshot.source_segment,
+        "source_window": snapshot.source_window,
+        "source_filename": snapshot.source_filename,
+        "licence_policy_identity": snapshot.licence_policy_identity,
+        "cohort_size": snapshot.cohort_size,
+        "members": [member.value() for member in snapshot.members],
+    }
+    snapshot_raw = _canonical(snapshot_value)
+    snapshot_identity = hashlib.sha256(snapshot_raw).hexdigest()
+    archive_identity = hashlib.sha256(
+        _canonical(
+            {
+                "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+                "snapshot_identity_sha256": snapshot_identity,
+                "contract_version": api.CONTRACT_VERSION,
+                "archive_protocol": "current-event-notice-archive@v1",
+            }
+        )
+    ).hexdigest()
+    known_text = "2026-08-23T10:00:00.000000Z"
+    receipt_core = {
+        "version": "retained-current-event-notice-receipt@v1",
+        "artifact_identity_sha256": snapshot.artifact_identity_sha256,
+        "snapshot_identity_sha256": snapshot_identity,
+        "archive_identity_sha256": archive_identity,
+        "runtime_code_identity_sha256": (
+            "09c3b50461c3f02a4f61b0b2ecab9493016d7d7ee96d8ed996f6a6f02068632f"
+        ),
+        "known_at": known_text,
+    }
+    receipt_identity = hashlib.sha256(_canonical(receipt_core)).hexdigest()
+    retained_identity = hashlib.sha256(
+        _canonical(
+            {
+                **receipt_core,
+                "receipt_identity_sha256": receipt_identity,
+            }
+        )
+    ).hexdigest()
+    receipt_raw = _canonical(
+        {
+            **receipt_core,
+            "receipt_identity_sha256": receipt_identity,
+            "retained_identity_sha256": retained_identity,
+        }
+    )
+    marker_raw = _canonical(
+        {
+            "version": "retained-current-event-notice-complete@v1",
+            "archive_identity_sha256": archive_identity,
+            "receipt_identity_sha256": receipt_identity,
+            "retained_identity_sha256": retained_identity,
+            "known_at": known_text,
+        }
+    )
+    archive_root = root / ".current-event-notice-v1"
+    archive_root.mkdir(mode=0o700)
+    objects = {
+        f"{snapshot.artifact_identity_sha256}.raw.csv": raw,
+        f"{snapshot_identity}.snapshot.json": snapshot_raw,
+        f"{archive_identity}.receipt.json": receipt_raw,
+        f"{archive_identity}.complete.json": marker_raw,
+    }
+    for name, content in objects.items():
+        path = archive_root / name
+        path.write_bytes(content)
+        path.chmod(0o600)
+    return {
+        "archive_root": archive_root,
+        "objects": objects,
+        "snapshot_identity": snapshot_identity,
+        "archive_identity": archive_identity,
+        "receipt_identity": receipt_identity,
+        "retained_identity": retained_identity,
+    }
+
+
+def test_pre_amendment_archive_adopts_and_retries_without_rewriting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _api()
+    raw = _artifact()
+    snapshot = _project(api, raw)
+    fixture = _seed_delivered_legacy_archive_fixture(api, tmp_path, snapshot, raw)
+    archive_root = fixture["archive_root"]
+    assert isinstance(archive_root, Path)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: _KNOWN_AT)
+    before = {path.name: path.read_bytes() for path in archive_root.iterdir()}
+    with _lease(tmp_path) as lease:
+        adopted = _retain(api, tmp_path, snapshot, lease, raw)
+        retry = _retain(api, tmp_path, snapshot, lease, raw)
+
+    assert adopted.evidence_state == retry.evidence_state == "RETAINED"
+    assert adopted.known_at == retry.known_at == _KNOWN_AT
+    assert adopted.snapshot_identity_sha256 == fixture["snapshot_identity"]
+    assert adopted.archive_identity_sha256 == fixture["archive_identity"]
+    assert adopted.receipt_identity_sha256 == fixture["receipt_identity"]
+    assert adopted.retained_identity_sha256 == fixture["retained_identity"]
+    assert adopted.runtime_code_identity_sha256 == (
+        "09c3b50461c3f02a4f61b0b2ecab9493016d7d7ee96d8ed996f6a6f02068632f"
+    )
+    assert adopted.source_encoding == "UTF-8"
+    assert adopted.source_has_bom is True
+    assert adopted.acquisition_method == "OPERATOR_ACQUIRED"
+    assert {path.name: path.read_bytes() for path in archive_root.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "corrupt_suffix", ("raw.csv", "snapshot.json", "receipt.json", "complete.json")
+)
+def test_pre_amendment_archive_corruption_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt_suffix: str,
+) -> None:
+    api = _api()
+    raw = _artifact()
+    snapshot = _project(api, raw)
+    fixture = _seed_delivered_legacy_archive_fixture(api, tmp_path, snapshot, raw)
+    archive_root = fixture["archive_root"]
+    assert isinstance(archive_root, Path)
+    target = next(
+        path for path in archive_root.iterdir() if path.name.endswith(corrupt_suffix)
+    )
+    target.write_bytes(target.read_bytes() + b" ")
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: _KNOWN_AT)
+    with _lease(tmp_path) as lease:
+        result = _retain(api, tmp_path, snapshot, lease, raw)
+
+    _failure(
+        result,
+        "INSUFFICIENT_EVIDENCE",
+        "EVENT_ARCHIVE_FAILED",
     )
 
 
@@ -582,6 +1019,33 @@ def test_retention_binds_separate_identities_and_archive_owned_known_at(
     }
     assert len(identities) == 8
     assert "ALPHA" not in repr(retained)
+
+
+@pytest.mark.parametrize("source_has_bom", (False, True))
+def test_current_bom_state_is_bound_through_snapshot_receipt_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_has_bom: bool,
+) -> None:
+    api = _api()
+    raw = _current_artifact(source_has_bom)
+    changes = _current_source_changes(api, source_has_bom)
+    snapshot = _project(api, raw, input_changes=changes)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: _CURRENT_KNOWN_AT)
+    with _lease(tmp_path) as lease:
+        retained = _retain(api, tmp_path, snapshot, lease, raw, changes)
+        retry = _retain(api, tmp_path, snapshot, lease, raw, changes)
+    receipt_path = (
+        tmp_path
+        / ".current-event-notice-v1"
+        / f"{retained.archive_identity_sha256}.receipt.json"
+    )
+    receipt = json.loads(receipt_path.read_bytes())
+    assert snapshot.source_has_bom is source_has_bom
+    assert retained.source_has_bom is source_has_bom
+    assert receipt["source_has_bom"] is source_has_bom
+    assert retry.receipt_identity_sha256 == retained.receipt_identity_sha256
+    assert retry.retained_identity_sha256 == retained.retained_identity_sha256
 
 
 def test_first_publication_samples_known_at_after_durable_content_binding(
@@ -719,6 +1183,13 @@ def test_retry_requires_current_trusted_time_on_source_ist_date_without_mutation
         assert receipt["known_at"] == "2026-08-23T10:00:00.000000Z"
         assert receipt["receipt_identity_sha256"] == retained.receipt_identity_sha256
         assert receipt["retained_identity_sha256"] == retained.retained_identity_sha256
+        assert receipt["acquisition_method"] == "OPERATOR_ACQUIRED"
+        assert (
+            receipt["licence_policy_identity"] == "nse-manual-download-owner-private-v1"
+        )
+        assert receipt["source_filename"] == _FILENAME
+        assert receipt["source_encoding"] == "UTF-8"
+        assert receipt["source_has_bom"] is True
         assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
@@ -777,6 +1248,9 @@ def _forge_snapshot(api: Any, snapshot: Any, **changes: object) -> Any:
         "source_url": snapshot.source_url,
         "source_segment": snapshot.source_segment,
         "source_window": snapshot.source_window,
+        "source_encoding": snapshot.source_encoding,
+        "source_has_bom": snapshot.source_has_bom,
+        "acquisition_method": snapshot.acquisition_method,
         "licence_policy_identity": snapshot.licence_policy_identity,
         "cohort_size": snapshot.cohort_size,
         "members": snapshot.members,
@@ -977,6 +1451,9 @@ def test_retained_result_exposes_required_local_provenance(
     assert retained.source_segment == "Equity"
     assert retained.source_window == "1D"
     assert retained.source_filename == _FILENAME
+    assert retained.source_encoding == "UTF-8"
+    assert retained.source_has_bom is True
+    assert retained.acquisition_method == "OPERATOR_ACQUIRED"
     assert retained.licence_policy_identity == "nse-manual-download-owner-private-v1"
     assert retained.cohort_identity_sha256
     assert retained.cohort_size == retained.member_count == 2
@@ -1031,7 +1508,11 @@ def test_source_and_licence_admission_failures_are_typed(
     changes: dict[str, object], state: str, reason: str
 ) -> None:
     api = _api()
-    _failure(_parse(api, _artifact(), **changes), state, reason)
+    if "licence_policy_identity" in changes:
+        with pytest.raises(ValueError, match="event notice input invalid"):
+            _parse(api, _artifact(), **changes)
+    else:
+        _failure(_parse(api, _artifact(), **changes), state, reason)
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,7 @@ from .schedule_evidence import (
     ScheduleEvidenceStore,
     ScheduleOutcome,
     canonical_schedule_bytes,
+    exact_nse_schedule_source_release_pair_v1,
     schedule_digest,
 )
 from .storage_root_lease import StorageRootLease
@@ -50,13 +51,13 @@ CURRENT_CORPORATE_ACTION_SCREEN_CONTRACT_VERSION_V1: Final = (
     "current-supplied-cohort-corporate-action-screen@v1"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "1f0ab03a7ffa39ec8bfe849b6cdbfbe200e5fcb5f3e17bfaace8dc55e0d028da"
+    "39995af9d91e97ed934e4a0090b050ef30086203cc16284c97e61e9f6f62a090"
 )
 CURRENT_CORPORATE_ACTION_SCREEN_POLICY_IDENTITY_SHA256_V1: Final = (
-    "fdde10e35400c3efaf114f9081b96a1ee801faa3610ab4fb1329b35eda654df2"
+    "b58488bf94d66dce95b8324d1e614d5824faddb01a634a5c318c719e9d04ddb4"
 )
 SELECTED_SNAPSHOT_SET_SCHEMA_IDENTITY_SHA256_V1: Final = (
-    "63c4e4ea71df6a32080b82d946e5a77af87d11b6c1f1f1c005d057b58d3fb9b0"
+    "f4f8ed6a5a931d6070d1c428a1336c38c8c774d47c6f5c7760865af82b0ad854"
 )
 UPSTOX_CORPORATE_ACTION_SCREEN_SOURCE_IDENTITY_SHA256_V1: Final = (
     "3853a15b853b73a945065486ca96b48d4ee3625e4ed7c6e4927579e2b0b372a2"
@@ -71,9 +72,8 @@ UPSTOX_CORPORATE_ACTION_SCREEN_CAPABILITY_IDENTITY_SHA256_V1: Final = (
     "24893177d0e0c733f92dfa92cb7216c2516f15dc5c71841f85e09101b8cffa0b"
 )
 
-_SCHEDULE_SOURCE: Final = "nse-authoritative-calendar"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
-_PREFIXED_DIGEST: Final = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_PREFIXED_DIGEST: Final = re.compile(r"(?:sha256:|composed-calendar@v1=)[0-9a-f]{64}\Z")
 _PROVIDER_ID: Final = re.compile(r"[A-Z0-9-]{1,32}\Z")
 _ISIN: Final = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _MAX_INPUT_REQUEST_PUBLIC_DTO_BYTES: Final = 16 * 1024
@@ -445,7 +445,9 @@ class CurrentSuppliedCohortCorporateActionScreenInputV1:
             or comparison_session > decision_session
             or (decision_session - comparison_session).days > 63
             or not _is_utc(decision_cutoff)
-            or schedule_source != _SCHEDULE_SOURCE
+            or not exact_nse_schedule_source_release_pair_v1(
+                schedule_source, schedule_source_release
+            )
             or provider_id != "UPSTOX"
         ):
             raise ValueError("invalid Plan-21 input")
@@ -1243,6 +1245,10 @@ class PrivateCorporateActionScreenResultV1:
 def _private_result_descriptor(
     result: PrivateCorporateActionScreenResultV1,
 ) -> CorporateActionScreenProviderDescriptorV1:
+    if not exact_nse_schedule_source_release_pair_v1(
+        result.schedule_source, result.schedule_source_release
+    ):
+        raise ValueError("invalid private Plan-21 result")
     return CorporateActionScreenProviderDescriptorV1(
         result.provider_id,
         result.provider_capability_identity_sha256,
@@ -1261,7 +1267,9 @@ def _validate_private_result_header(
         or type(result.decision_session) is not date
         or result.comparison_session > result.decision_session
         or not _is_utc(result.decision_cutoff)
-        or result.schedule_source != _SCHEDULE_SOURCE
+        or not exact_nse_schedule_source_release_pair_v1(
+            result.schedule_source, result.schedule_source_release
+        )
         or type(result.outcome) is not PrivateCorporateActionScreenOutcomeV1
         or type(result.member_results) is not tuple
     ):
@@ -1479,7 +1487,9 @@ class CurrentSuppliedCohortCorporateActionScreenReportV1:
             or type(decision_session) is not date
             or comparison_session > decision_session
             or not _is_utc(decision_cutoff)
-            or schedule_source != _SCHEDULE_SOURCE
+            or not exact_nse_schedule_source_release_pair_v1(
+                schedule_source, schedule_source_release
+            )
             or type(screen_state) not in (CorporateActionScreenStateV1, type(None))
             or type(reason) not in (CorporateActionScreenReasonV1, type(None))
             or screen_schema_identity_sha256
@@ -1723,6 +1733,10 @@ def published_current_corporate_action_screen_is_exact_valid_v1(
     expected_isins: tuple[str, ...],
 ) -> bool:
     """Validate the sealed Plan-21 publication against an exact caller window."""
+    if not exact_nse_schedule_source_release_pair_v1(
+        schedule_source, schedule_source_release
+    ):
+        return False
     if type(published) is not PublishedCurrentCorporateActionScreenV1:
         return False
     screen = published
