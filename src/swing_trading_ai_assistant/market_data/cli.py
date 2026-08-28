@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import stat
@@ -67,6 +68,11 @@ from .historical import (
     HistoricalRequest,
     HistoricalResponse,
     UpstoxV3HistoricalClient,
+)
+from .historical_revision_store import (
+    HistoricalOhlcvImportOutcomeV1,
+    HistoricalOhlcvImportResultV1,
+    HistoricalOhlcvRevisionStoreV1,
 )
 from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
 from .instrument_snapshot import InstrumentSnapshotClientV1
@@ -167,6 +173,20 @@ class _CommandAdmissionV1:
     universe_source: CanonicalFileNifty50UniverseSourceV1 | None
     admitted: bool
     invalid_universe_source: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedHistoricalStorageRootV1:
+    path: Path
+    identity: tuple[int, int]
+    path_parts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedHistoricalLocalFileV1:
+    path_parts: tuple[str, ...]
+    identity: tuple[int, int]
+    raw: bytes
 
 
 class _SystemClock:
@@ -364,6 +384,49 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
+    historical_import = commands.add_parser(
+        "historical-ohlcv-import",
+        help="store one strict operator-local historical daily OHLCV revision",
+    )
+    historical_import.add_argument(
+        "--request-file", type=Path, required=True, metavar="ABSOLUTE_JSON_FILE"
+    )
+    historical_import.add_argument(
+        "--source-policy-file",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_JSON_FILE",
+    )
+    historical_import.add_argument(
+        "--source-artifact-file",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_ARTIFACT_FILE",
+    )
+    historical_import.add_argument(
+        "--receipt-file", type=Path, required=True, metavar="ABSOLUTE_JSON_FILE"
+    )
+    historical_import.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    historical_import.add_argument("--output", choices=("json",), required=True)
+    historical_read = commands.add_parser(
+        "historical-ohlcv-read",
+        help="read one exact immutable historical daily OHLCV revision",
+    )
+    historical_read.add_argument(
+        "--revision-sha256", required=True, metavar="LOWERCASE_SHA256"
+    )
+    historical_read.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    historical_read.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -418,7 +481,153 @@ def main(
         )
     if args.command == "regime-current":
         return _run_current_regime_command(args)
+    if args.command == "historical-ohlcv-import":
+        return _run_historical_ohlcv_import_command(args)
+    if args.command == "historical-ohlcv-read":
+        return _run_historical_ohlcv_read_command(args)
     return _run_public_command(args, download_service, coverage_service, query_service)
+
+
+def _run_historical_ohlcv_import_command(args: argparse.Namespace) -> int:
+    try:
+        storage_root = _admit_historical_storage_root(args.storage_root)
+        result = HistoricalOhlcvRevisionStoreV1(
+            storage_root.path, storage_root.identity
+        ).import_exact(
+            _read_historical_local_file(args.request_file, 1_048_576, storage_root),
+            _read_historical_local_file(
+                args.source_policy_file, 1_048_576, storage_root
+            ),
+            _read_historical_local_file(
+                args.source_artifact_file, 134_217_728, storage_root
+            ),
+            _read_historical_local_file(args.receipt_file, 1_048_576, storage_root),
+        )
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        sys.stderr.write("invalid historical-ohlcv-import request\n")
+        return 2
+    return _render_historical_ohlcv_result(result)
+
+
+def _run_historical_ohlcv_read_command(args: argparse.Namespace) -> int:
+    try:
+        storage_root = _admit_historical_storage_root(args.storage_root)
+        result = HistoricalOhlcvRevisionStoreV1(
+            storage_root.path, storage_root.identity
+        ).read_exact(args.revision_sha256)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        sys.stderr.write("invalid historical-ohlcv-read request\n")
+        return 2
+    return _render_historical_ohlcv_result(result)
+
+
+def _render_historical_ohlcv_result(result: HistoricalOhlcvImportResultV1) -> int:
+    payload: dict[str, object] = {
+        "outcome": str(result.outcome),
+        "revision_sha256": result.revision_sha256,
+    }
+    if result.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS:
+        payload["revision"] = result.revision
+    sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0 if result.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS else 1
+
+
+def _absolute_no_follow_parts(path: object) -> tuple[str, ...]:
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise ValueError
+    normalized: list[str] = []
+    for part in path.parts:
+        if part in {"/", "."}:
+            continue
+        if part == "..":
+            if normalized:
+                normalized.pop()
+            continue
+        normalized.append(part)
+    if not normalized:
+        raise ValueError
+    return tuple(normalized)
+
+
+def _admit_historical_storage_root(
+    value: object,
+) -> _AdmittedHistoricalStorageRootV1:
+    parts = _absolute_no_follow_parts(value)
+    path = Path("/", *parts)
+    identity = StorageRootLease.admit_existing_private_identity(path)
+    if identity is None:
+        raise ValueError
+    return _AdmittedHistoricalStorageRootV1(path, identity, parts)
+
+
+def _read_historical_local_file(
+    path: object,
+    maximum: int,
+    storage_root: _AdmittedHistoricalStorageRootV1,
+) -> bytes:
+    if maximum < 1:
+        raise ValueError
+    parts = _absolute_no_follow_parts(path)
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    parent_identities = {(os.fstat(parent).st_dev, os.fstat(parent).st_ino)}
+    descriptor: int | None = None
+    try:
+        for part in parts[:-1]:
+            next_parent = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent,
+            )
+            os.close(parent)
+            parent = next_parent
+            metadata = os.fstat(parent)
+            parent_identities.add((metadata.st_dev, metadata.st_ino))
+        if (
+            storage_root.identity in parent_identities
+            or parts[: len(storage_root.path_parts)] == storage_root.path_parts
+        ):
+            raise ValueError
+        descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=parent,
+        )
+        before = os.fstat(descriptor)
+        named = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size < 1
+            or before.st_size > maximum
+            or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise ValueError
+        raw = bytearray()
+        while len(raw) <= maximum:
+            chunk = os.read(descriptor, min(65_536, maximum + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        after = os.fstat(descriptor)
+        named_after = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        admitted = _AdmittedHistoricalLocalFileV1(
+            parts, (before.st_dev, before.st_ino), bytes(raw)
+        )
+        if (
+            len(admitted.raw) != before.st_size
+            or before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_mode != after.st_mode
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+            or admitted.identity != (named_after.st_dev, named_after.st_ino)
+        ):
+            raise ValueError
+        return admitted.raw
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
 
 
 def _admit_regime_current_argv(argv: list[str] | None) -> bool:

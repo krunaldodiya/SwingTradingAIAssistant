@@ -286,10 +286,13 @@ them.
 
 Current/live-first is sequencing only, never scope removal. Sprint 15 /
 [Issue #120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120)
-owns the supplied fixed-cohort historical daily OHLCV store: bounded
-download/import, immutable revisions, incremental sessions, exact corrections,
-and declared source and price basis. It makes no inferred historical
-index-membership claim.
+owns the supplied fixed-cohort historical daily OHLCV store. Its accepted
+first-working slice is [Plan 28](plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md):
+one strict operator-local import profile with pre-effect admission, exact
+`SPLIT_ADJUSTED_DIVIDEND_UNADJUSTED` evidence, immutable revisions, and exact
+`INITIAL`/`APPEND`/`CORRECTION` lineage. Provider download and final real-source
+smoke remain deferred; the store makes no inferred historical index-membership
+claim.
 
 Sprint 16 /
 [Issue #122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
