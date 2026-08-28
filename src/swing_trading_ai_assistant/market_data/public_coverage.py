@@ -1060,6 +1060,7 @@ def _validate_partition_stat(value: os.stat_result) -> None:
         not stat.S_ISREG(value.st_mode)
         or value.st_uid != os.geteuid()
         or stat.S_IMODE(value.st_mode) != 0o600
+        or value.st_nlink != 1
     ):
         raise _PartitionReadFailure(FailureCategory.PATH_INVALID_OR_MISMATCHED)
     if value.st_size <= 0 or value.st_size > MAX_COVERAGE_PARQUET_BYTES_V1:
@@ -1070,6 +1071,7 @@ def _partition_identity(value: os.stat_result) -> tuple[int, ...]:
     return (
         value.st_dev,
         value.st_ino,
+        value.st_nlink,
         value.st_size,
         value.st_mtime_ns,
         value.st_ctime_ns,

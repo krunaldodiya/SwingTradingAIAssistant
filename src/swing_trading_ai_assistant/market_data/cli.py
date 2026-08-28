@@ -74,6 +74,7 @@ from .historical_revision_store import (
     HistoricalOhlcvImportResultV1,
     HistoricalOhlcvRevisionStoreV1,
 )
+from .historical_upstox_raw import complete_upstox_raw_historical_ohlcv_v1
 from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
 from .instrument_snapshot import InstrumentSnapshotClientV1
 from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalogClient
@@ -384,38 +385,29 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
-    historical_import = commands.add_parser(
-        "historical-ohlcv-import",
-        help="store one strict operator-local historical daily OHLCV revision",
+    historical_upstox_raw = commands.add_parser(
+        "historical-ohlcv-upstox-raw",
+        help="complete one retained Upstox raw daily OHLCV revision",
     )
-    historical_import.add_argument(
+    historical_upstox_raw.add_argument(
         "--request-file", type=Path, required=True, metavar="ABSOLUTE_JSON_FILE"
     )
-    historical_import.add_argument(
-        "--source-policy-file",
+    historical_upstox_raw.add_argument(
+        "--source-storage-root",
         type=Path,
-        required=True,
-        metavar="ABSOLUTE_JSON_FILE",
+        default=Path.home() / "SwingTradingAIAssistantData",
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
-    historical_import.add_argument(
-        "--source-artifact-file",
-        type=Path,
-        required=True,
-        metavar="ABSOLUTE_ARTIFACT_FILE",
-    )
-    historical_import.add_argument(
-        "--receipt-file", type=Path, required=True, metavar="ABSOLUTE_JSON_FILE"
-    )
-    historical_import.add_argument(
+    historical_upstox_raw.add_argument(
         "--storage-root",
         type=Path,
         required=True,
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
-    historical_import.add_argument("--output", choices=("json",), required=True)
+    historical_upstox_raw.add_argument("--output", choices=("json",), required=True)
     historical_read = commands.add_parser(
-        "historical-ohlcv-read",
-        help="read one exact immutable historical daily OHLCV revision",
+        "historical-ohlcv-upstox-raw-read",
+        help="read one exact immutable retained Upstox raw daily OHLCV revision",
     )
     historical_read.add_argument(
         "--revision-sha256", required=True, metavar="LOWERCASE_SHA256"
@@ -481,42 +473,38 @@ def main(
         )
     if args.command == "regime-current":
         return _run_current_regime_command(args)
-    if args.command == "historical-ohlcv-import":
-        return _run_historical_ohlcv_import_command(args)
-    if args.command == "historical-ohlcv-read":
-        return _run_historical_ohlcv_read_command(args)
+    if args.command == "historical-ohlcv-upstox-raw":
+        return _run_historical_ohlcv_upstox_raw_command(args)
+    if args.command == "historical-ohlcv-upstox-raw-read":
+        return _run_historical_ohlcv_upstox_raw_read_command(args)
     return _run_public_command(args, download_service, coverage_service, query_service)
 
 
-def _run_historical_ohlcv_import_command(args: argparse.Namespace) -> int:
+def _run_historical_ohlcv_upstox_raw_command(args: argparse.Namespace) -> int:
+
     try:
         storage_root = _admit_historical_storage_root(args.storage_root)
-        result = HistoricalOhlcvRevisionStoreV1(
-            storage_root.path, storage_root.identity
-        ).import_exact(
+        source_root = _admit_historical_storage_root(args.source_storage_root)
+        result = complete_upstox_raw_historical_ohlcv_v1(
             _read_historical_local_file(args.request_file, 1_048_576, storage_root),
-            _read_historical_local_file(
-                args.source_policy_file, 1_048_576, storage_root
-            ),
-            _read_historical_local_file(
-                args.source_artifact_file, 134_217_728, storage_root
-            ),
-            _read_historical_local_file(args.receipt_file, 1_048_576, storage_root),
+            source_root.path,
+            storage_root.path,
+            storage_root.identity,
         )
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-        sys.stderr.write("invalid historical-ohlcv-import request\n")
+        sys.stderr.write("invalid historical-ohlcv-upstox-raw request\n")
         return 2
     return _render_historical_ohlcv_result(result)
 
 
-def _run_historical_ohlcv_read_command(args: argparse.Namespace) -> int:
+def _run_historical_ohlcv_upstox_raw_read_command(args: argparse.Namespace) -> int:
     try:
         storage_root = _admit_historical_storage_root(args.storage_root)
         result = HistoricalOhlcvRevisionStoreV1(
             storage_root.path, storage_root.identity
         ).read_exact(args.revision_sha256)
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-        sys.stderr.write("invalid historical-ohlcv-read request\n")
+        sys.stderr.write("invalid historical-ohlcv-upstox-raw-read request\n")
         return 2
     return _render_historical_ohlcv_result(result)
 

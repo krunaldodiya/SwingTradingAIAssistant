@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -636,3 +638,21 @@ def test_default_coverage_cli_creates_storage_then_requires_retained_universe(
     assert unavailable == 4
     assert unavailable_output["failure"]["code"] == "QUERY_CATALOG_UNAVAILABLE"
     assert root.is_dir()
+
+
+def test_partition_hardlink_is_rejected_and_changes_identity(tmp_path: Path) -> None:
+    partition = tmp_path / "bars.parquet"
+    partition.write_bytes(b"retained-partition")
+    partition.chmod(0o600)
+    original = os.stat(partition)
+    linked = tmp_path / "linked.parquet"
+    os.link(partition, linked)
+
+    with pytest.raises(coverage_module._PartitionReadFailure):  # pyright: ignore[reportPrivateUsage]
+        coverage_module._validate_partition_stat(os.stat(partition))  # pyright: ignore[reportPrivateUsage]
+
+    assert coverage_module._partition_identity(
+        original
+    ) != coverage_module._partition_identity(  # pyright: ignore[reportPrivateUsage]
+        os.stat(partition)
+    )
