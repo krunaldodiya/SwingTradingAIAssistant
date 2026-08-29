@@ -3608,7 +3608,7 @@ def _assert_final_descriptor(
 
 def _admit_final_name(
     parent: int, name: str, maximum: int
-) -> tuple[int, tuple[int, int]]:
+) -> tuple[int, tuple[int, int], int]:
     descriptor = os.open(
         name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
     )
@@ -3626,45 +3626,48 @@ def _admit_final_name(
             or identity != (named.st_dev, named.st_ino)
         ):
             raise RuntimeError
-        return mode, identity
-    finally:
+        return mode, identity, descriptor
+    except Exception:
         os.close(descriptor)
+        raise
 
 
 def _fsync_immutable_object(
-    parent: int, name: str, size: int, identity: tuple[int, int]
+    parent: int,
+    name: str,
+    descriptor: int,
+    size: int,
+    identity: tuple[int, int],
 ) -> None:
-    descriptor = os.open(
-        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
+    _assert_final_descriptor(
+        parent,
+        name,
+        descriptor,
+        mode=_IMMUTABLE_FILE_MODE,
+        size=size,
+        identity=identity,
     )
-    try:
-        _assert_final_descriptor(
-            parent,
-            name,
-            descriptor,
-            mode=_IMMUTABLE_FILE_MODE,
-            size=size,
-            identity=identity,
-        )
-        os.fsync(descriptor)
-        _assert_final_descriptor(
-            parent,
-            name,
-            descriptor,
-            mode=_IMMUTABLE_FILE_MODE,
-            size=size,
-            identity=identity,
-        )
-    finally:
-        os.close(descriptor)
+    os.fsync(descriptor)
+    _assert_final_descriptor(
+        parent,
+        name,
+        descriptor,
+        mode=_IMMUTABLE_FILE_MODE,
+        size=size,
+        identity=identity,
+    )
 
 
 def _accept_existing_immutable(
-    parent: int, name: str, raw: bytes, identity: tuple[int, int]
+    parent: int,
+    name: str,
+    raw: bytes,
+    identity: tuple[int, int],
+    descriptor: int,
 ) -> bool:
     if _read_object(parent, name, len(raw), identity) != raw:
         raise RuntimeError
-    _fsync_immutable_object(parent, name, len(raw), identity)
+    _fsync_immutable_object(parent, name, descriptor, len(raw), identity)
     os.fsync(parent)
     return False
 
@@ -3725,20 +3728,33 @@ def _resume_direct_final(
     return True
 
 
+def _accept_admitted_final(
+    parent: int,
+    name: str,
+    raw: bytes,
+    mode: int,
+    identity: tuple[int, int],
+    descriptor: int,
+) -> bool:
+    try:
+        if mode == _IMMUTABLE_FILE_MODE:
+            return _accept_existing_immutable(parent, name, raw, identity, descriptor)
+        if mode == 0o600:
+            return _resume_direct_final(parent, name, raw, identity)
+        raise RuntimeError
+    finally:
+        os.close(descriptor)
+
+
 def _publish_object(parent: int, name: str, raw: bytes) -> bool:
     try:
-        mode, identity = _admit_final_name(parent, name, len(raw))
+        mode, identity, admitted_descriptor = _admit_final_name(parent, name, len(raw))
     except FileNotFoundError:
-        mode = None
-        identity = None
-    if mode == _IMMUTABLE_FILE_MODE:
-        if identity is None:
-            raise RuntimeError
-        return _accept_existing_immutable(parent, name, raw, identity)
-    if mode == 0o600:
-        if identity is None:
-            raise RuntimeError
-        return _resume_direct_final(parent, name, raw, identity)
+        pass
+    else:
+        return _accept_admitted_final(
+            parent, name, raw, mode, identity, admitted_descriptor
+        )
     try:
         descriptor = os.open(
             name,
@@ -3747,10 +3763,10 @@ def _publish_object(parent: int, name: str, raw: bytes) -> bool:
             dir_fd=parent,
         )
     except FileExistsError:
-        mode, identity = _admit_final_name(parent, name, len(raw))
-        if mode == _IMMUTABLE_FILE_MODE:
-            return _accept_existing_immutable(parent, name, raw, identity)
-        return _resume_direct_final(parent, name, raw, identity)
+        mode, identity, admitted_descriptor = _admit_final_name(parent, name, len(raw))
+        return _accept_admitted_final(
+            parent, name, raw, mode, identity, admitted_descriptor
+        )
     try:
         identity = _assert_final_descriptor(
             parent, name, descriptor, mode=0o600, size=0

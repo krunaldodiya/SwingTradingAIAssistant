@@ -5,7 +5,7 @@ from typing import Final
 HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/catalog.py": "794f0382813dd7a5d10b14a4f6c3f487f68d777b2911fcf477dd455bdcd1fb4c",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "e400561577ca68559c2690c5135cbb7abfc0ef0ad225c41e67af5005ec259f25",
-    "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "f77cf208b6cce8d4cacae4a61ae2cf54f28bf9edab2eb896078975b5aa891184",
+    "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3bc35a624ebff3b238b31bb2619dde8b2115b7b55277b3f916355642629039bf",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "c25eaef6b45d5f090becc10530873d318b19bac0a2f5b1d315db380a67fc081e",
     "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "fed80a7b61cf81323871a86dd9674bdeb2d13b76bc0432cfc6b5a54c8a153ec6",
     "src/swing_trading_ai_assistant/market_data/instruments.py": "2ed92851353fd378b54ce4d2817ae20966ac84d136eee37edb467615b1e95b00",
