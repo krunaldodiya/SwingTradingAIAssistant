@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ast
 import re
+import runpy
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
-import conftest as pytest_contract
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -269,17 +269,15 @@ class _MarkedItem:
 
 
 def test_collected_private_source_hook_rejects_every_unapproved_marker() -> None:
-    assert (
-        frozenset(_APPROVED_PRIVATE_SOURCE_TESTS)
-        == pytest_contract.APPROVED_PRIVATE_SOURCE_TESTS
-    )
+    contract = runpy.run_path(str(ROOT / "tests" / "conftest.py"))
+    approved_tests = contract["APPROVED_PRIVATE_SOURCE_TESTS"]
+    collection_hook = contract["pytest_collection_modifyitems"]
+    assert frozenset(_APPROVED_PRIVATE_SOURCE_TESTS) == approved_tests
     approved = _MarkedItem(next(iter(_APPROVED_PRIVATE_SOURCE_TESTS)))
-    pytest_contract.pytest_collection_modifyitems([approved])
+    collection_hook([approved])
 
     with pytest.raises(pytest.UsageError, match="unapproved private_source"):
-        pytest_contract.pytest_collection_modifyitems(
-            [_MarkedItem("tests/test_unrelated.py::test_hidden_failure")]
-        )
+        collection_hook([_MarkedItem("tests/test_unrelated.py::test_hidden_failure")])
 
 
 def test_ci_classifier_fails_closed_for_non_markdown_to_markdown_rename() -> None:
