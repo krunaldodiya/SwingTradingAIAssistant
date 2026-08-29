@@ -297,10 +297,11 @@ historical-index-membership claim.
 Sprint 16 /
 [Issue #122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
 owns capability-aware validation over the supplied cohort and immutable evidence
-revisions, the required availability-ledger checks for each declared study
-profile, and the pre-Market-Structure gate. It validates evidence proven
-available at the applicable cutoff; it does not construct or acquire missing
-evidence.
+revisions under
+[Plan 29](plans/29-capability-aware-historical-validation-gate-contract.md),
+the required availability-ledger checks for each declared study profile, and the
+pre-Market-Structure gate. It validates evidence proven available at the
+applicable cutoff; it does not construct or acquire missing evidence.
 
 Neither sprint automatically owns point-in-time membership, sector or
 classification, news, event, or corporate-action snapshot construction.

@@ -149,6 +149,9 @@ def test_distribution_ci_secrets_and_future_scope_are_release_bounded() -> None:
             "swing_trading_ai_assistant.historical_evaluation.prospective_cli:main"
         ),
         "historical-census": "swing_trading_ai_assistant.historical_evaluation.cli:main",
+        "historical-validation-gate": (
+            "swing_trading_ai_assistant.entrypoints.historical_validation_gate:main"
+        ),
         "market-data": "swing_trading_ai_assistant.market_data.cli:main",
         "market-regime-acquisition-decision": (
             "swing_trading_ai_assistant.historical_evaluation."

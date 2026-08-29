@@ -1,6 +1,6 @@
 # Fixed-cohort historical Upstox RAW OHLCV revision store contract
 
-Status: **ACCEPTED CONTRACT — Sprint 15 / Issue #120 in progress; the implementation candidate is complete, with fresh exact-byte review and delivery gates pending.**
+Status: **DELIVERED/CLOSED — Sprint 15 / Issue #120; PR #143 merged**
 Completion profile: `UPSTOX_RAW`
 Revision contract: `fixed-cohort-historical-ohlcv-upstox-raw-revision-store@v1`
 Risk: **R3** — persisted financial-research evidence, immutable lineage, source identity, filesystem authority, and concurrency.
