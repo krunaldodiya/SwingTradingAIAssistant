@@ -33,6 +33,7 @@ _LIMITATION: Final = "FIXED_COHORT_RETROSPECTIVE_SELECTION_SURVIVORSHIP_LIMITATI
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _ISIN = re.compile(r"[A-Z0-9]{12}\Z")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}\Z")
+_EFFECTIVE_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 
 
 class HistoricalValidationRuntimeIdentityError(RuntimeError):
@@ -235,7 +236,7 @@ class CanonicalEquityV1:
             type(self.isin) is not str
             or _ISIN.fullmatch(self.isin) is None
             or not _valid_token(self.exchange)
-            or not _valid_token(self.effective_symbol)
+            or _EFFECTIVE_SYMBOL.fullmatch(self.effective_symbol) is None
             or not _valid_digest(self.symbol_history_identity_sha256)
             or not _valid_digest(self.provider_mapping_identity_sha256)
         ):

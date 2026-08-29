@@ -115,6 +115,62 @@ def _points() -> tuple[HistoricalDecisionPointV1, ...]:
     )
 
 
+def _sprint15_revision(
+    *,
+    isin: str = _MEMBER.isin,
+    effective_symbol: str = _MEMBER.effective_symbol,
+) -> dict[str, Any]:
+    points = _points()
+    provider_mapping = {
+        **_SPRINT15_PROVIDER_MAPPING,
+        "provider_instrument_id": f"NSE_EQ|{isin}",
+    }
+    revision: dict[str, Any] = {
+        "contract_version": "fixed-cohort-historical-ohlcv-upstox-raw-revision-store@v1",
+        "research_scope": "FIXED_COHORT_RETROSPECTIVE",
+        "source_profile": "UPSTOX_RAW",
+        "cohort": [
+            {
+                "isin": isin,
+                "exchange": _MEMBER.exchange,
+                "listed_equity_segment": "EQUITY",
+                **_SPRINT15_SYMBOL_HISTORY,
+                "effective_symbol": effective_symbol,
+                "provider_mapping": provider_mapping,
+            }
+        ],
+        "from_session": "2025-01-01",
+        "to_session": "2025-01-04",
+        "interval": "1d",
+        "expected_sessions": [point.session.isoformat() for point in points],
+        "price_basis": "RAW",
+        "temporal_status": "REVISED_NON_PIT",
+        "corporate_action_status": "NOT_EVALUATED",
+        "comparability_status": "NOT_ESTABLISHED",
+        "permitted_use": "OWNER_PRIVATE_RESEARCH",
+        "source_policy_sha256": _SOURCE,
+        "schema_identity_sha256": _SCHEMA,
+        "runtime_code_identity_sha256": _EVIDENCE_RUNTIME,
+        "configuration_identity_sha256": _EVIDENCE_CONFIGURATION,
+        "context_status": "HISTORICAL_CONTEXT_NOT_EVALUATED",
+        "limitation": "FIXED_COHORT_RETROSPECTIVE_SELECTION_SURVIVORSHIP_LIMITATION",
+        "bars": [
+            {
+                "isin": isin,
+                "exchange": _MEMBER.exchange,
+                "session": point.session.isoformat(),
+                "known_at": (point.decision_cutoff + timedelta(days=30)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "price_basis": "RAW",
+            }
+            for point in points
+        ],
+    }
+    revision["revision_sha256"] = _sha(revision)
+    return revision
+
+
 def _comparability_provenance(
     points: tuple[HistoricalDecisionPointV1, ...],
 ) -> tuple[HistoricalComparabilityProvenanceV1, ...]:
@@ -683,48 +739,7 @@ def test_canonical_equity_identity_binds_symbol_and_provider_mapping_histories()
 
 
 def test_sprint15_raw_revision_preserves_non_pit_and_comparability_limits() -> None:
-    revision: dict[str, Any] = {
-        "contract_version": "fixed-cohort-historical-ohlcv-upstox-raw-revision-store@v1",
-        "research_scope": "FIXED_COHORT_RETROSPECTIVE",
-        "source_profile": "UPSTOX_RAW",
-        "cohort": [
-            {
-                "isin": _MEMBER.isin,
-                "exchange": _MEMBER.exchange,
-                "listed_equity_segment": "EQUITY",
-                **_SPRINT15_SYMBOL_HISTORY,
-                "provider_mapping": _SPRINT15_PROVIDER_MAPPING,
-            }
-        ],
-        "from_session": "2025-01-01",
-        "to_session": "2025-01-04",
-        "interval": "1d",
-        "expected_sessions": [point.session.isoformat() for point in _points()],
-        "price_basis": "RAW",
-        "temporal_status": "REVISED_NON_PIT",
-        "corporate_action_status": "NOT_EVALUATED",
-        "comparability_status": "NOT_ESTABLISHED",
-        "permitted_use": "OWNER_PRIVATE_RESEARCH",
-        "source_policy_sha256": _SOURCE,
-        "schema_identity_sha256": _SCHEMA,
-        "runtime_code_identity_sha256": _EVIDENCE_RUNTIME,
-        "configuration_identity_sha256": _EVIDENCE_CONFIGURATION,
-        "context_status": "HISTORICAL_CONTEXT_NOT_EVALUATED",
-        "limitation": "FIXED_COHORT_RETROSPECTIVE_SELECTION_SURVIVORSHIP_LIMITATION",
-        "bars": [
-            {
-                "isin": _MEMBER.isin,
-                "exchange": _MEMBER.exchange,
-                "session": point.session.isoformat(),
-                "known_at": (point.decision_cutoff + timedelta(days=30)).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-                "price_basis": "RAW",
-            }
-            for point in _points()
-        ],
-    }
-    revision["revision_sha256"] = _sha(revision)
+    revision = _sprint15_revision()
     evidence = historical_evidence_from_sprint15_revision_v1(revision)
 
     assert evidence.cohort == (_MEMBER,)
@@ -747,6 +762,16 @@ def test_sprint15_raw_revision_preserves_non_pit_and_comparability_limits() -> N
     assert report.limitation == (
         "FIXED_COHORT_RETROSPECTIVE_SELECTION_SURVIVORSHIP_LIMITATION"
     )
+
+
+def test_sprint15_projection_accepts_valid_nse_ampersand_symbol() -> None:
+    evidence = historical_evidence_from_sprint15_revision_v1(
+        _sprint15_revision(isin="INE101A01026", effective_symbol="M&M")
+    )
+
+    assert len(evidence.cohort) == 1
+    assert evidence.cohort[0].isin == "INE101A01026"
+    assert evidence.cohort[0].effective_symbol == "M&M"
 
 
 def test_canonical_request_round_trips_without_losing_identities() -> None:
