@@ -536,6 +536,7 @@ def test_unsupported_operator_capabilities_precede_root_admission() -> None:
         assert result.outcome is HistoricalOhlcvImportOutcomeV1.UNSUPPORTED_CAPABILITY
 
 
+@pytest.mark.private_source
 def test_real_retained_reliance_july_initial_and_exact_retry(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -648,6 +649,7 @@ def test_real_retained_reliance_july_initial_and_exact_retry(
     assert second.revision_sha256 == first.revision_sha256
 
 
+@pytest.mark.private_source
 def test_real_retained_reliance_append_is_source_backed_and_preserves_known_at(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -710,6 +712,7 @@ def test_real_retained_reliance_append_is_source_backed_and_preserves_known_at(
     assert append.revision["bars"][0]["known_at"] < append.revision["observed_at"]
 
 
+@pytest.mark.private_source
 def test_real_current_august_provisional_partition_is_insufficient(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -830,6 +833,7 @@ _AUGUST_SESSIONS = [
 ]
 
 
+@pytest.mark.private_source
 def test_real_current_fifty_member_schedule_conflict_fails_closed(
     tmp_path: Path,
 ) -> None:

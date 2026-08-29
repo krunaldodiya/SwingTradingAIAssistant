@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1168,6 +1169,43 @@ def test_exact_retry_fsyncs_visible_publication_names(
     assert calls >= 2
 
 
+def test_exact_retry_fsyncs_interrupted_immutable_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = store_module.os.fsync
+    interrupted_identity: tuple[int, int] | None = None
+
+    def interrupt_first_immutable_file(descriptor: int) -> None:
+        nonlocal interrupted_identity
+        info = os.fstat(descriptor)
+        if interrupted_identity is None and stat.S_ISREG(info.st_mode):
+            interrupted_identity = (info.st_dev, info.st_ino)
+            raise OSError("interrupted immutable file fsync")
+        original(descriptor)
+
+    monkeypatch.setattr(store_module.os, "fsync", interrupt_first_immutable_file)
+    first = _publish(tmp_path, _inputs())
+    assert (
+        first.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert interrupted_identity is not None
+
+    synced_regular_identities: list[tuple[int, int]] = []
+
+    def track_retry_fsync(descriptor: int) -> None:
+        info = os.fstat(descriptor)
+        if stat.S_ISREG(info.st_mode):
+            synced_regular_identities.append((info.st_dev, info.st_ino))
+        original(descriptor)
+
+    monkeypatch.setattr(store_module.os, "fsync", track_retry_fsync)
+    retry = _publish(tmp_path, _inputs())
+
+    assert retry.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    assert interrupted_identity in synced_regular_identities
+
+
 def test_cli_rejects_request_file_inside_destination_root(tmp_path: Path) -> None:
     request = tmp_path / "request.json"
     request.write_bytes(b"{}")
@@ -1318,3 +1356,526 @@ def test_divergent_initial_rejects_visible_partial_source_object(
         path.name: path.read_bytes() for path in objects.iterdir()
     } == before_objects
     assert not any(revisions.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("operation", "publication_index", "prefix_length"),
+    tuple(
+        (operation, publication_index, prefix_length)
+        for operation in ("INITIAL", "APPEND", "CORRECTION")
+        for publication_index in range(4)
+        for prefix_length in (0, 1, None)
+    ),
+)
+def test_direct_final_prefix_interruption_retries_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    publication_index: int,
+    prefix_length: int | None,
+) -> None:
+    parent = _publish(tmp_path, _inputs())
+    assert parent.revision_sha256 is not None
+    if operation == "INITIAL":
+        root = tmp_path / "initial-retry"
+        root.mkdir(mode=0o700)
+        _prepare_private_initial_root(root)
+        inputs = _inputs()
+    elif operation == "APPEND":
+        root = tmp_path
+        inputs = _inputs(
+            operation="APPEND",
+            parent=parent.revision_sha256,
+            sessions=("2026-07-01", "2026-07-02"),
+            upper="2026-07-02",
+        )
+    else:
+        root = tmp_path
+        inputs = _inputs(
+            operation="CORRECTION",
+            parent=parent.revision_sha256,
+            corrections=[
+                {"isin": "INE002A01018", "exchange": "NSE", "session": "2026-07-01"}
+            ],
+            open_value="101",
+        )
+
+    original_publish = store_module._publish_object
+    publications = 0
+
+    def interrupt_selected_publication(parent_fd: int, name: str, raw: bytes) -> bool:
+        nonlocal publications
+        publications += 1
+        if publications != publication_index + 1:
+            return original_publish(parent_fd, name, raw)
+        descriptor = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            prefix = raw if prefix_length is None else raw[:prefix_length]
+            if prefix:
+                assert os.write(descriptor, prefix) == len(prefix)
+        finally:
+            os.close(descriptor)
+        raise KeyboardInterrupt("direct final publication interrupted")
+
+    monkeypatch.setattr(store_module, "_publish_object", interrupt_selected_publication)
+    with pytest.raises(KeyboardInterrupt):
+        _publish(root, inputs)
+
+    retry = _publish(root, inputs)
+
+    assert retry.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    assert retry.revision_sha256 is not None
+    assert (
+        HistoricalOhlcvRevisionStoreV1(root).read_exact(retry.revision_sha256) == retry
+    )
+
+
+@pytest.mark.parametrize(
+    "unexpected_parent",
+    (
+        (),
+        ("historical_ohlcv_revisions",),
+        ("historical_ohlcv_revisions", "upstox-raw"),
+        ("historical_ohlcv_revisions", "upstox-raw", "v1"),
+    ),
+)
+def test_initial_existing_writer_rejects_unrelated_hierarchy_content(
+    tmp_path: Path, unexpected_parent: tuple[str, ...]
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    lock = root / ".ingestion.lock"
+    lock.write_bytes(b"")
+    lock.chmod(0o600)
+    parent = root
+    for name in unexpected_parent:
+        parent /= name
+        parent.mkdir(mode=0o700)
+    unrelated = parent / "unrelated"
+    unrelated.write_bytes(b"unrelated")
+    unrelated.chmod(0o400)
+
+    result = _publish(root, _inputs())
+
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert unrelated.read_bytes() == b"unrelated"
+    version = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1"
+    for directory in (version / "objects", version / "revisions"):
+        if directory.exists():
+            assert not list(directory.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("mode", "candidate"),
+    (
+        (0o600, b"divergent"),
+        (0o400, b"divergent"),
+        (0o400, b"exact-prefix"),
+    ),
+)
+def test_nonexact_direct_final_remains_conflict(
+    tmp_path: Path, mode: int, candidate: bytes
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    _prepare_private_initial_root(root)
+    objects = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1" / "objects"
+    objects.mkdir(mode=0o700, parents=True)
+    revisions = objects.parent / "revisions"
+    revisions.mkdir(mode=0o700)
+    for directory in (
+        objects.parent.parent.parent,
+        objects.parent.parent,
+        objects.parent,
+        objects,
+        revisions,
+    ):
+        directory.chmod(0o700)
+    inputs = _inputs()
+    request, _, _, _ = _candidate_objects_from(inputs)
+    policy = inputs[1]
+    final = objects / request["source_policy_sha256"]
+    final.write_bytes(candidate)
+    final.chmod(mode)
+
+    result = _publish(root, inputs)
+
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert final.read_bytes() == candidate
+    assert policy != candidate
+    assert not any(revisions.iterdir())
+
+
+def test_initial_root_insertion_after_hierarchy_open_conflicts_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    _prepare_private_initial_root(root)
+    unrelated = root / "unrelated"
+    original_open_directory = store_module._open_directory
+    inserted = False
+
+    def insert_after_hierarchy_open(parent: int, name: str) -> int:
+        nonlocal inserted
+        descriptor = original_open_directory(parent, name)
+        if not inserted and name == store_module._REVISION_DIRECTORY:
+            unrelated.write_bytes(b"unrelated")
+            unrelated.chmod(0o400)
+            inserted = True
+        return descriptor
+
+    monkeypatch.setattr(store_module, "_open_directory", insert_after_hierarchy_open)
+
+    result = _publish(root, _inputs())
+
+    assert inserted
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert unrelated.read_bytes() == b"unrelated"
+    version = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1"
+    assert not list((version / "objects").iterdir())
+    assert not list((version / "revisions").iterdir())
+
+
+def test_direct_final_replacement_after_descriptor_admission_retains_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    _prepare_private_initial_root(root)
+    objects = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1" / "objects"
+    objects.mkdir(mode=0o700, parents=True)
+    revisions = objects.parent / "revisions"
+    revisions.mkdir(mode=0o700)
+    for directory in (
+        objects.parent.parent.parent,
+        objects.parent.parent,
+        objects.parent,
+        objects,
+        revisions,
+    ):
+        directory.chmod(0o700)
+    inputs = _inputs()
+    request, _, _, _ = _candidate_objects_from(inputs)
+    policy = inputs[1]
+    final = objects / request["source_policy_sha256"]
+    final.write_bytes(policy[:1])
+    final.chmod(0o600)
+    foreign = b"foreign replacement"
+    original_write = store_module.os.write
+    replaced = False
+
+    def replace_after_admission(descriptor: int, payload: bytes) -> int:
+        nonlocal replaced
+        if not replaced:
+            final.unlink()
+            final.write_bytes(foreign)
+            final.chmod(0o600)
+            replaced = True
+        return original_write(descriptor, payload)
+
+    monkeypatch.setattr(store_module.os, "write", replace_after_admission)
+
+    result = _publish(root, inputs)
+
+    assert replaced
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert final.read_bytes() == foreign
+    assert not any(revisions.iterdir())
+
+
+def test_exact_immutable_replacement_after_admission_remains_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    _prepare_private_initial_root(root)
+    objects = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1" / "objects"
+    objects.mkdir(mode=0o700, parents=True)
+    revisions = objects.parent / "revisions"
+    revisions.mkdir(mode=0o700)
+    for directory in (
+        objects.parent.parent.parent,
+        objects.parent.parent,
+        objects.parent,
+        objects,
+        revisions,
+    ):
+        directory.chmod(0o700)
+    inputs = _inputs()
+    request, _, _, _ = _candidate_objects_from(inputs)
+    policy = inputs[1]
+    final = objects / request["source_policy_sha256"]
+    final.write_bytes(policy)
+    final.chmod(0o400)
+    original_read = store_module._read_object
+    replaced = False
+
+    def replace_before_identity_bound_read(
+        parent: int,
+        name: str,
+        maximum: int,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> bytes:
+        nonlocal replaced
+        if not replaced and expected_identity is not None:
+            final.unlink()
+            final.write_bytes(policy)
+            final.chmod(0o400)
+            replaced = True
+        return original_read(parent, name, maximum, expected_identity)
+
+    monkeypatch.setattr(
+        store_module, "_read_object", replace_before_identity_bound_read
+    )
+
+    result = _publish(root, inputs)
+
+    assert replaced
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert final.read_bytes() == policy
+    assert not any(revisions.iterdir())
+
+
+def test_exact_read_rechecks_destination_root_before_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _publish(tmp_path, _inputs())
+    assert first.revision_sha256 is not None
+    store = HistoricalOhlcvRevisionStoreV1(tmp_path)
+    original = (
+        store_module.HistoricalOhlcvRevisionStoreV1._read_stored_exact_from_directories
+    )
+    moved = tmp_path.with_name(f"{tmp_path.name}-moved")
+    replaced = False
+
+    def replace_root_after_read(
+        self: HistoricalOhlcvRevisionStoreV1,
+        revision_id: str,
+        objects: int,
+        revisions: int,
+    ) -> dict[str, Any]:
+        nonlocal replaced
+        value = original(self, revision_id, objects, revisions)
+        if not replaced:
+            tmp_path.rename(moved)
+            tmp_path.mkdir(mode=0o700)
+            replaced = True
+        return value
+
+    monkeypatch.setattr(
+        store_module.HistoricalOhlcvRevisionStoreV1,
+        "_read_stored_exact_from_directories",
+        replace_root_after_read,
+    )
+
+    result = store.read_exact(first.revision_sha256)
+
+    assert replaced
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+
+
+@pytest.mark.parametrize(
+    "edge",
+    ("store-root", "profile", "version", "objects", "revisions"),
+)
+def test_exact_read_rechecks_each_named_hierarchy_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edge: str
+) -> None:
+    first = _publish(tmp_path, _inputs())
+    assert first.revision_sha256 is not None
+    store = HistoricalOhlcvRevisionStoreV1(tmp_path)
+    original = (
+        store_module.HistoricalOhlcvRevisionStoreV1._read_stored_exact_from_directories
+    )
+    replaced = False
+
+    def replace_edge_after_read(
+        self: HistoricalOhlcvRevisionStoreV1,
+        revision_id: str,
+        objects: int,
+        revisions: int,
+    ) -> dict[str, Any]:
+        nonlocal replaced
+        value = original(self, revision_id, objects, revisions)
+        if not replaced:
+            version = tmp_path / "historical_ohlcv_revisions" / "upstox-raw" / "v1"
+            edges = {
+                "store-root": version.parent.parent,
+                "profile": version.parent,
+                "version": version,
+                "objects": version / "objects",
+                "revisions": version / "revisions",
+            }
+            target = edges[edge]
+            moved = target.with_name(f"{target.name}-moved")
+            target.rename(moved)
+            target.mkdir(mode=0o700)
+            replaced = True
+        return value
+
+    monkeypatch.setattr(
+        store_module.HistoricalOhlcvRevisionStoreV1,
+        "_read_stored_exact_from_directories",
+        replace_edge_after_read,
+    )
+
+    result = store.read_exact(first.revision_sha256)
+
+    assert replaced
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+
+
+def test_exact_retry_rechecks_destination_root_before_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _publish(tmp_path, _inputs())
+    assert first.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    original = (
+        store_module.HistoricalOhlcvRevisionStoreV1._read_stored_exact_from_directories
+    )
+    moved = tmp_path.with_name(f"{tmp_path.name}-moved")
+    replaced = False
+
+    def replace_root_after_read(
+        self: HistoricalOhlcvRevisionStoreV1,
+        revision_id: str,
+        objects: int,
+        revisions: int,
+    ) -> dict[str, Any]:
+        nonlocal replaced
+        value = original(self, revision_id, objects, revisions)
+        if not replaced:
+            tmp_path.rename(moved)
+            tmp_path.mkdir(mode=0o700)
+            replaced = True
+        return value
+
+    monkeypatch.setattr(
+        store_module.HistoricalOhlcvRevisionStoreV1,
+        "_read_stored_exact_from_directories",
+        replace_root_after_read,
+    )
+
+    result = _publish(tmp_path, _inputs())
+
+    assert replaced
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+
+
+@pytest.mark.parametrize("quarantine", (False, True))
+def test_stale_candidate_temp_or_quarantine_remains_conflict(
+    tmp_path: Path, quarantine: bool
+) -> None:
+    root = tmp_path / "destination"
+    root.mkdir(mode=0o700)
+    _prepare_private_initial_root(root)
+    objects = root / "historical_ohlcv_revisions" / "upstox-raw" / "v1" / "objects"
+    objects.mkdir(mode=0o700, parents=True)
+    revisions = objects.parent / "revisions"
+    revisions.mkdir(mode=0o700)
+    for directory in (
+        objects.parent.parent.parent,
+        objects.parent.parent,
+        objects.parent,
+        objects,
+        revisions,
+    ):
+        directory.chmod(0o700)
+    inputs = _inputs()
+    request, _, _, _ = _candidate_objects_from(inputs)
+    prefix = ".quarantine." if quarantine else "."
+    stale = objects / f"{prefix}{request['source_policy_sha256']}.{'0' * 32}.tmp"
+    stale.write_bytes(b"unrelated")
+    stale.chmod(0o400)
+
+    result = _publish(root, inputs)
+
+    assert (
+        result.outcome
+        is HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+    )
+    assert stale.read_bytes() == b"unrelated"
+    assert not any(revisions.iterdir())
+
+
+def test_publication_paths_never_call_link_unlink_or_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_os = store_module.os
+
+    class PublicationOs:
+        def __getattr__(self, name: str) -> Any:
+            if name in {"link", "rename", "unlink"}:
+                raise AssertionError(f"publication helper called os.{name}")
+            return getattr(original_os, name)
+
+    monkeypatch.setattr(store_module, "os", PublicationOs())
+    initial = _publish(tmp_path, _inputs())
+    assert initial.revision_sha256 is not None
+    assert (
+        _publish(tmp_path, _inputs()).outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    )
+    appended_inputs = _inputs(
+        operation="APPEND",
+        parent=initial.revision_sha256,
+        sessions=("2026-07-01", "2026-07-02"),
+        upper="2026-07-02",
+    )
+    appended = _publish(tmp_path, appended_inputs)
+    assert appended.revision_sha256 is not None
+    assert (
+        _publish(tmp_path, appended_inputs).outcome
+        is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    )
+    correction_inputs = _inputs(
+        operation="CORRECTION",
+        parent=initial.revision_sha256,
+        corrections=[
+            {"isin": "INE002A01018", "exchange": "NSE", "session": "2026-07-01"}
+        ],
+        open_value="101",
+    )
+    assert (
+        _publish(tmp_path, correction_inputs).outcome
+        is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    )
+    assert (
+        _publish(tmp_path, correction_inputs).outcome
+        is HistoricalOhlcvImportOutcomeV1.SUCCESS
+    )
+
+
+def _prepare_private_initial_root(root: Path) -> None:
+    lock = root / ".ingestion.lock"
+    lock.write_bytes(b"")
+    lock.chmod(0o600)

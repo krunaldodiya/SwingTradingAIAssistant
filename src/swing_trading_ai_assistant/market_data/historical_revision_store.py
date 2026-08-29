@@ -8,14 +8,13 @@ import os
 import re
 import stat
 from calendar import monthrange
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, cast
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .historical_upstox_raw_runtime_identity_manifest import (
@@ -28,6 +27,7 @@ from .storage_root_lease import (
     LeaseOutcome,
     LeaseResult,
     StorageRootLease,
+    StorageRootLeaseOperation,
 )
 
 _CONTRACT_VERSION: Final = "fixed-cohort-historical-ohlcv-upstox-raw-revision-store@v1"
@@ -2195,7 +2195,7 @@ _CONFIGURATION_IDENTITY_PREIMAGE: Final = {
         "directory_mode": "0700",
         "lock_mode": "0600",
         "immutable_object_mode": "0400",
-        "publication": "create-only no-clobber; fsync file before link and parent after visibility; no unlink visible content-addressed names; exact readback",
+        "publication": "create final content-addressed name with O_EXCL at 0600; resume only stable exact-prefix 0600 inode; fchmod immutable 0400; fsync file and parent after visibility; never link, rename, replace, truncate, or unlink visible names; identity-bound exact readback",
         "final_recheck": "source root/catalog/schedule/snapshots/manifests/partition descriptor/checksum/links revalidated before source release",
     },
     "lineage": {
@@ -3479,15 +3479,12 @@ def _open_directory(parent: int, name: str) -> int:
     descriptor = os.open(
         name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent
     )
-    info = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid()
-        or stat.S_IMODE(info.st_mode) != _DIRECTORY_MODE
-    ):
+    try:
+        _assert_directory_edge(parent, name, descriptor)
+        return descriptor
+    except Exception:
         os.close(descriptor)
-        raise RuntimeError
-    return descriptor
+        raise
 
 
 def _open_existing_directory(parent: int, name: str) -> int:
@@ -3496,17 +3493,23 @@ def _open_existing_directory(parent: int, name: str) -> int:
         name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent
     )
     try:
-        info = os.fstat(descriptor)
-        if (
-            not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != _DIRECTORY_MODE
-        ):
-            raise RuntimeError
+        _assert_directory_edge(parent, name, descriptor)
         return descriptor
     except Exception:
         os.close(descriptor)
         raise
+
+
+def _assert_directory_edge(parent: int, name: str, descriptor: int) -> None:
+    held = os.fstat(descriptor)
+    named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(held.st_mode)
+        or held.st_uid != os.geteuid()
+        or stat.S_IMODE(held.st_mode) != _DIRECTORY_MODE
+        or (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+    ):
+        raise RuntimeError
 
 
 def _assert_owner_private_directory(descriptor: int) -> None:
@@ -3519,7 +3522,12 @@ def _assert_owner_private_directory(descriptor: int) -> None:
         raise RuntimeError
 
 
-def _read_object(parent: int, name: str, maximum: int) -> bytes:
+def _read_object(
+    parent: int,
+    name: str,
+    maximum: int,
+    expected_identity: tuple[int, int] | None = None,
+) -> bytes:
     descriptor = os.open(
         name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
     )
@@ -3532,6 +3540,10 @@ def _read_object(parent: int, name: str, maximum: int) -> bytes:
             or before.st_nlink != 1
             or before.st_size > maximum
             or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
+            or (
+                expected_identity is not None
+                and (before.st_dev, before.st_ino) != expected_identity
+            )
         ):
             raise RuntimeError
         raw = bytearray()
@@ -3549,6 +3561,10 @@ def _read_object(parent: int, name: str, maximum: int) -> bytes:
             or before.st_nlink != after.st_nlink
             or before.st_size != after.st_size
             or (after.st_dev, after.st_ino) != (named_after.st_dev, named_after.st_ino)
+            or (
+                expected_identity is not None
+                and (after.st_dev, after.st_ino) != expected_identity
+            )
         ):
             raise RuntimeError
         return bytes(raw)
@@ -3556,68 +3572,270 @@ def _read_object(parent: int, name: str, maximum: int) -> bytes:
         os.close(descriptor)
 
 
+def _write_all(descriptor: int, raw: bytes) -> None:
+    offset = 0
+    while offset < len(raw):
+        written = os.write(descriptor, raw[offset:])
+        if written <= 0:
+            raise RuntimeError
+        offset += written
+
+
+def _assert_final_descriptor(
+    parent: int,
+    name: str,
+    descriptor: int,
+    *,
+    mode: int,
+    size: int,
+    identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    held = os.fstat(descriptor)
+    named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    actual_identity = (held.st_dev, held.st_ino)
+    if (
+        not stat.S_ISREG(held.st_mode)
+        or held.st_uid != os.geteuid()
+        or stat.S_IMODE(held.st_mode) != mode
+        or held.st_nlink != 1
+        or held.st_size != size
+        or actual_identity != (named.st_dev, named.st_ino)
+        or (identity is not None and actual_identity != identity)
+    ):
+        raise RuntimeError
+    return actual_identity
+
+
+def _admit_final_name(
+    parent: int, name: str, maximum: int
+) -> tuple[int, tuple[int, int]]:
+    descriptor = os.open(
+        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
+    )
+    try:
+        held = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        identity = (held.st_dev, held.st_ino)
+        mode = stat.S_IMODE(held.st_mode)
+        if (
+            not stat.S_ISREG(held.st_mode)
+            or held.st_uid != os.geteuid()
+            or mode not in (0o600, _IMMUTABLE_FILE_MODE)
+            or held.st_nlink != 1
+            or held.st_size > maximum
+            or identity != (named.st_dev, named.st_ino)
+        ):
+            raise RuntimeError
+        return mode, identity
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_immutable_object(
+    parent: int, name: str, size: int, identity: tuple[int, int]
+) -> None:
+    descriptor = os.open(
+        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
+    )
+    try:
+        _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=_IMMUTABLE_FILE_MODE,
+            size=size,
+            identity=identity,
+        )
+        os.fsync(descriptor)
+        _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=_IMMUTABLE_FILE_MODE,
+            size=size,
+            identity=identity,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _accept_existing_immutable(
+    parent: int, name: str, raw: bytes, identity: tuple[int, int]
+) -> bool:
+    if _read_object(parent, name, len(raw), identity) != raw:
+        raise RuntimeError
+    _fsync_immutable_object(parent, name, len(raw), identity)
+    os.fsync(parent)
+    return False
+
+
+def _resume_direct_final(
+    parent: int, name: str, raw: bytes, admitted_identity: tuple[int, int]
+) -> bool:
+    descriptor = os.open(
+        name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
+    )
+    try:
+        before = os.fstat(descriptor)
+        identity = _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=0o600,
+            size=before.st_size,
+            identity=admitted_identity,
+        )
+        if before.st_size > len(raw):
+            raise RuntimeError
+        observed = bytearray()
+        while len(observed) <= len(raw):
+            chunk = os.read(descriptor, min(65_536, len(raw) + 1 - len(observed)))
+            if not chunk:
+                break
+            observed.extend(chunk)
+        existing = bytes(observed)
+        if len(existing) != before.st_size or not raw.startswith(existing):
+            raise RuntimeError
+        _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=0o600,
+            size=len(existing),
+            identity=identity,
+        )
+        if os.lseek(descriptor, len(existing), os.SEEK_SET) != len(existing):
+            raise RuntimeError
+        _write_all(descriptor, raw[len(existing) :])
+        os.fchmod(descriptor, _IMMUTABLE_FILE_MODE)
+        _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=_IMMUTABLE_FILE_MODE,
+            size=len(raw),
+            identity=identity,
+        )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.fsync(parent)
+    if _read_object(parent, name, len(raw), identity) != raw:
+        raise RuntimeError
+    return True
+
+
 def _publish_object(parent: int, name: str, raw: bytes) -> bool:
     try:
-        if _read_object(parent, name, len(raw)) == raw:
-            os.fsync(parent)
-            return False
-        raise RuntimeError
+        mode, identity = _admit_final_name(parent, name, len(raw))
     except FileNotFoundError:
-        pass
-    temporary = f".{name}.{uuid4().hex}.tmp"
-    descriptor: int | None = None
-    linked = False
+        mode = None
+        identity = None
+    if mode == _IMMUTABLE_FILE_MODE:
+        if identity is None:
+            raise RuntimeError
+        return _accept_existing_immutable(parent, name, raw, identity)
+    if mode == 0o600:
+        if identity is None:
+            raise RuntimeError
+        return _resume_direct_final(parent, name, raw, identity)
     try:
         descriptor = os.open(
-            temporary,
+            name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o600,
             dir_fd=parent,
         )
-        offset = 0
-        while offset < len(raw):
-            written = os.write(descriptor, raw[offset:])
-            if written <= 0:
-                raise RuntimeError
-            offset += written
+    except FileExistsError:
+        mode, identity = _admit_final_name(parent, name, len(raw))
+        if mode == _IMMUTABLE_FILE_MODE:
+            return _accept_existing_immutable(parent, name, raw, identity)
+        return _resume_direct_final(parent, name, raw, identity)
+    try:
+        identity = _assert_final_descriptor(
+            parent, name, descriptor, mode=0o600, size=0
+        )
+        _write_all(descriptor, raw)
         os.fchmod(descriptor, _IMMUTABLE_FILE_MODE)
+        _assert_final_descriptor(
+            parent,
+            name,
+            descriptor,
+            mode=_IMMUTABLE_FILE_MODE,
+            size=len(raw),
+            identity=identity,
+        )
         os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        try:
-            os.link(
-                temporary,
-                name,
-                src_dir_fd=parent,
-                dst_dir_fd=parent,
-                follow_symlinks=False,
-            )
-            linked = True
-        except FileExistsError:
-            pass
-        os.unlink(temporary, dir_fd=parent)
-        os.fsync(parent)
-        if _read_object(parent, name, len(raw)) != raw:
-            raise RuntimeError
-        return linked
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent)
+        os.close(descriptor)
+    os.fsync(parent)
+    if _read_object(parent, name, len(raw), identity) != raw:
+        raise RuntimeError
+    return True
+
+
+def _initial_root_allows_hierarchy(root: int) -> bool:
+    entries = set(os.listdir(root))
+    return entries in (
+        {".ingestion.lock"},
+        {".ingestion.lock", _ROOT_DIRECTORY},
+    )
+
+
+def _assert_hierarchy_live(
+    operation: StorageRootLeaseOperation,
+    root: int,
+    profile: int,
+    version: int,
+    objects: int,
+    revisions: int,
+) -> None:
+    operation.ensure_live()
+    _assert_directory_edge(operation.descriptor, _ROOT_DIRECTORY, root)
+    _assert_directory_edge(root, _PROFILE_DIRECTORY, profile)
+    _assert_directory_edge(profile, _SCHEMA_DIRECTORY, version)
+    _assert_directory_edge(version, _OBJECT_DIRECTORY, objects)
+    _assert_directory_edge(version, _REVISION_DIRECTORY, revisions)
+
+
+def _storage_root_is_exact(root: int) -> bool:
+    return set(os.listdir(root)) == {".ingestion.lock", _ROOT_DIRECTORY}
+
+
+def _initial_hierarchy_is_exact(root: int, profile: int, version: int) -> bool:
+    return (
+        set(os.listdir(root)) == {_PROFILE_DIRECTORY}
+        and set(os.listdir(profile)) == {_SCHEMA_DIRECTORY}
+        and set(os.listdir(version)) == {_OBJECT_DIRECTORY, _REVISION_DIRECTORY}
+    )
+
+
+def _initial_exact_replay_objects_match(
+    objects: int,
+    revisions: int,
+    candidate_objects: tuple[tuple[str, bytes], ...],
+    revision_name: str,
+) -> bool:
+    expected = dict(candidate_objects)
+    return (
+        set(os.listdir(revisions)) == {revision_name}
+        and set(os.listdir(objects)) == set(expected)
+        and all(
+            _read_object(objects, name, len(raw)) == raw
+            for name, raw in expected.items()
+        )
+    )
 
 
 def _initial_partial_source_objects_match(
-    objects: int, revisions: int, candidate_objects: tuple[tuple[str, bytes], ...]
+    objects: int,
+    revisions: int,
+    candidate_objects: tuple[tuple[str, bytes], ...],
+    revision_name: str,
 ) -> bool:
-    if os.listdir(revisions):
-        return False
-    expected = dict(candidate_objects)
-    return all(
-        (raw := expected.get(name)) is not None
-        and _read_object(objects, name, len(raw)) == raw
-        for name in os.listdir(objects)
-    )
+    return set(os.listdir(revisions)) <= {revision_name} and set(
+        os.listdir(objects)
+    ) <= {name for name, _ in candidate_objects}
 
 
 @dataclass(frozen=True, slots=True)
@@ -3758,6 +3976,14 @@ class HistoricalOhlcvRevisionStoreV1:
                 lease.root_operation(self.storage_root) as operation,
             ):
                 _assert_owner_private_directory(operation.descriptor)
+                if request[
+                    "operation"
+                ] == "INITIAL" and not _initial_root_allows_hierarchy(
+                    operation.descriptor
+                ):
+                    return _result(
+                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                    )
                 root = _open_directory(operation.descriptor, _ROOT_DIRECTORY)
                 try:
                     profile = _open_directory(root, _PROFILE_DIRECTORY)
@@ -3771,6 +3997,26 @@ class HistoricalOhlcvRevisionStoreV1:
                                     version, _REVISION_DIRECTORY
                                 )
                                 directories.callback(os.close, revisions)
+                                if not _storage_root_is_exact(operation.descriptor):
+                                    return _result(
+                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                    )
+                                candidate_source_objects = (
+                                    (request["source_policy_sha256"], source_policy),
+                                    (
+                                        request["source_artifact_sha256"],
+                                        source_artifact,
+                                    ),
+                                    (request["receipt_sha256"], source_receipt),
+                                )
+                                if request[
+                                    "operation"
+                                ] == "INITIAL" and not _initial_hierarchy_is_exact(
+                                    root, profile, version
+                                ):
+                                    return _result(
+                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                    )
                                 if request["operation"] != "INITIAL":
                                     verified_parent = (
                                         self._read_stored_exact_from_directories(
@@ -3808,7 +4054,7 @@ class HistoricalOhlcvRevisionStoreV1:
                                         f"{revision_id}.json",
                                         _LIMITS["max_revision_bytes"],
                                     )
-                                except FileNotFoundError:
+                                except (FileNotFoundError, RuntimeError):
                                     existing_revision = None
                                 if (
                                     request["operation"] == "INITIAL"
@@ -3816,17 +4062,8 @@ class HistoricalOhlcvRevisionStoreV1:
                                     and not _initial_partial_source_objects_match(
                                         objects,
                                         revisions,
-                                        (
-                                            (
-                                                request["source_policy_sha256"],
-                                                source_policy,
-                                            ),
-                                            (
-                                                request["source_artifact_sha256"],
-                                                source_artifact,
-                                            ),
-                                            (request["receipt_sha256"], source_receipt),
-                                        ),
+                                        candidate_source_objects,
+                                        f"{revision_id}.json",
                                     )
                                 ):
                                     return _result(
@@ -3835,9 +4072,33 @@ class HistoricalOhlcvRevisionStoreV1:
                                 if existing_revision is not None:
                                     if existing_revision != revision_raw:
                                         raise RuntimeError
+                                    if (
+                                        request["operation"] == "INITIAL"
+                                        and not _initial_exact_replay_objects_match(
+                                            objects,
+                                            revisions,
+                                            candidate_source_objects,
+                                            f"{revision_id}.json",
+                                        )
+                                    ):
+                                        return _result(
+                                            HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                        )
                                     self._read_stored_exact_from_directories(
                                         revision_id, objects, revisions
                                     )
+                                if not _storage_root_is_exact(operation.descriptor):
+                                    return _result(
+                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                    )
+                                _assert_hierarchy_live(
+                                    operation,
+                                    root,
+                                    profile,
+                                    version,
+                                    objects,
+                                    revisions,
+                                )
                                 for name, raw in (
                                     (request["source_policy_sha256"], source_policy),
                                     (
@@ -3855,6 +4116,14 @@ class HistoricalOhlcvRevisionStoreV1:
                                         self._read_stored_exact_from_directories(
                                             revision_id, objects, revisions
                                         )
+                                    )
+                                    _assert_hierarchy_live(
+                                        operation,
+                                        root,
+                                        profile,
+                                        version,
+                                        objects,
+                                        revisions,
                                     )
                                     return HistoricalOhlcvImportResultV1(
                                         HistoricalOhlcvImportOutcomeV1.SUCCESS,
@@ -3918,7 +4187,16 @@ class HistoricalOhlcvRevisionStoreV1:
                                 current = self._validate_stored_revision_local(
                                     revision_id, objects, revisions
                                 )
-                                return self._artifact_for_revision(current, objects)
+                                artifact = self._artifact_for_revision(current, objects)
+                                _assert_hierarchy_live(
+                                    operation,
+                                    root,
+                                    profile,
+                                    version,
+                                    objects,
+                                    revisions,
+                                )
+                                return artifact
                         finally:
                             os.close(version)
                     finally:
@@ -3974,6 +4252,14 @@ class HistoricalOhlcvRevisionStoreV1:
                                 directories.callback(os.close, revisions)
                                 value = self._read_stored_exact_from_directories(
                                     revision_id, objects, revisions
+                                )
+                                _assert_hierarchy_live(
+                                    operation,
+                                    root,
+                                    profile,
+                                    version,
+                                    objects,
+                                    revisions,
                                 )
                                 return HistoricalOhlcvImportResultV1(
                                     HistoricalOhlcvImportOutcomeV1.SUCCESS,
