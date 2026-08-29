@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -402,6 +402,34 @@ def test_complete_point_in_time_profiles_approve_market_structure_start() -> Non
 def test_non_daily_evidence_revision_is_rejected_before_qualification() -> None:
     with pytest.raises(ValueError, match="historical evidence revision is invalid"):
         replace(_evidence(), interval="1m")
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("cohort", "sessions", "bars", "comparability_provenance"),
+)
+def test_evidence_revision_rejects_mutable_canonical_collections(
+    field_name: str,
+) -> None:
+    evidence = _evidence()
+    mutable_value = list(cast(tuple[object, ...], getattr(evidence, field_name)))
+
+    with pytest.raises(ValueError, match="historical evidence revision is invalid"):
+        replace(evidence, **{field_name: mutable_value})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("cohort", "decision_points", "studies", "availability_ledger"),
+)
+def test_validation_request_rejects_mutable_canonical_collections(
+    field_name: str,
+) -> None:
+    request = _request()
+    mutable_value = list(cast(tuple[object, ...], getattr(request, field_name)))
+
+    with pytest.raises(ValueError, match="validation request is invalid"):
+        replace(request, **{field_name: mutable_value})
 
 
 def test_request_grid_must_equal_the_complete_evidence_grid() -> None:

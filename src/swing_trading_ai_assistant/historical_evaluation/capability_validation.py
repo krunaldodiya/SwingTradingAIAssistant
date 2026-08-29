@@ -365,6 +365,20 @@ class HistoricalEvidenceRevisionV1:
     evidence_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
+        if (
+            type(self.cohort) is not tuple
+            or any(type(member) is not CanonicalEquityV1 for member in self.cohort)
+            or type(self.sessions) is not tuple
+            or any(type(session) is not date for session in self.sessions)
+            or type(self.bars) is not tuple
+            or any(type(bar) is not HistoricalBarKnowledgeV1 for bar in self.bars)
+            or type(self.comparability_provenance) is not tuple
+            or any(
+                type(provenance) is not HistoricalComparabilityProvenanceV1
+                for provenance in self.comparability_provenance
+            )
+        ):
+            raise ValueError("historical evidence revision is invalid")
         token_values = (
             self.revision_contract_version,
             self.interval,
@@ -740,6 +754,26 @@ class HistoricalValidationRequestV1:
     request_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:  # noqa: C901 - closed request boundary
+        if (
+            type(self.cohort) is not tuple
+            or any(type(member) is not CanonicalEquityV1 for member in self.cohort)
+            or type(self.decision_points) is not tuple
+            or any(
+                type(point) is not HistoricalDecisionPointV1
+                for point in self.decision_points
+            )
+            or type(self.studies) is not tuple
+            or any(
+                type(study) is not HistoricalStudyDeclarationV1
+                for study in self.studies
+            )
+            or type(self.availability_ledger) is not tuple
+            or any(
+                type(entry) is not HistoricalAvailabilityEntryV1
+                for entry in self.availability_ledger
+            )
+        ):
+            raise ValueError("validation request is invalid")
         if self.contract_version != CONTRACT_VERSION_V1:
             raise ValueError("validation request is invalid")
         evaluated = _utc(self.evaluated_at, "evaluated_at")
