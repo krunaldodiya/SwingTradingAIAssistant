@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import ast
 import re
+import runpy
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 LOCK_PATH = ROOT / "uv.lock"
+_APPROVED_PRIVATE_SOURCE_TESTS = {
+    "tests/market_data/test_historical_upstox_raw.py::test_real_retained_reliance_july_initial_and_exact_retry",
+    "tests/market_data/test_historical_upstox_raw.py::test_real_retained_reliance_append_is_source_backed_and_preserves_known_at",
+    "tests/market_data/test_historical_upstox_raw.py::test_real_current_august_provisional_partition_is_insufficient",
+    "tests/market_data/test_historical_upstox_raw.py::test_real_current_fifty_member_schedule_conflict_fails_closed",
+}
 _PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}(?:\s+#.*)?$")
 _FORBIDDEN_CI_ACTIVITY = ("upstox", "provider", "probe-upstox", "live")
 _ALWAYS_GATE = (
@@ -18,7 +28,7 @@ _ALWAYS_GATE = (
     "uv run --no-sync --extra dev ruff check .",
     "uv run --no-sync --extra dev pyright",
     "uv run --no-sync --extra dev vulture src --min-confidence 80",
-    "uv run --no-sync --extra dev pytest",
+    'uv run --no-sync --extra dev pytest -m "not private_source"',
 )
 _RELEASE_BUILD = "uv build --no-build-isolation --python .venv/bin/python"
 _CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "concurrency:", "jobs:")
@@ -78,8 +88,12 @@ _REQUIRED_CI_FRAGMENTS = (
     "          GITHUB_TOKEN: ${{ github.token }}",
     "          python3 .github/scripts/ci_admission.py verify",
     '          --output "$GITHUB_OUTPUT"',
-    "        if: steps.admission.outputs.admitted == 'true'",
-    "        if: steps.admission.outputs.admitted != 'true'",
+    "          steps.admission.outcome == 'success' &&",
+    "          steps.admission.outputs.admitted == 'true'",
+    "          steps.admission.outcome != 'success' ||",
+    "          steps.admission.outputs.admitted != 'true'",
+    '          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"',
+    '          uv run --no-sync --extra dev pytest -m "not private_source"',
 )
 
 
@@ -139,11 +153,22 @@ def validate_ci_workflow(text: str) -> None:
     jobs_text = "\n".join(job_lines)
     commands = _normalize(jobs_text)
     authoritative_gate = _normalize(" && ".join(_ALWAYS_GATE))
+    admitted_condition = _normalize(
+        "steps.admission.outcome == 'success' && "
+        "steps.admission.outputs.admitted == 'true'"
+    )
+    fallback_condition = _normalize(
+        "steps.admission.outcome != 'success' || "
+        "steps.admission.outputs.admitted != 'true'"
+    )
     if (
         commands.count(authoritative_gate) != 2
         or commands.count(_RELEASE_BUILD) != 2
         or any(fragment not in jobs_text for fragment in _REQUIRED_CI_FRAGMENTS)
         or jobs_text.count("continue-on-error: true") != 1
+        or commands.count(admitted_condition) != 1
+        or commands.count(fallback_condition) != 5
+        or jobs_text.count('PYTEST_XDIST_AUTO_NUM_WORKERS: "2"') != 2
     ):
         raise ValueError("CI admission, quality, or fallback contract is missing")
     if any(re.fullmatch(r"\s+[a-z-]+:\s+write", line) for line in job_lines):
@@ -186,9 +211,73 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
         f"{workflow}\njobs:\n  provider_probe:\n    runs-on: ubuntu-latest\n",
         workflow.replace("pull_request:", "pull_request:\n  workflow_dispatch:"),
         workflow.replace("      - main", "      - main\n      - release"),
+        workflow.replace(
+            "        if: >-\n"
+            "          steps.admission.outcome != 'success' ||\n"
+            "          steps.admission.outputs.admitted != 'true'",
+            "        if: steps.admission.outputs.admitted != 'true'",
+            1,
+        ),
     )
     for fixture in fixtures:
         _assert_rejected(validate_ci_workflow, fixture)
+
+
+def test_private_source_marker_is_closed_to_exact_owner_private_cases() -> None:
+    discovered: set[str] = set()
+    marker_attributes = 0
+    forbidden_scopes: list[str] = []
+    for path in sorted((ROOT / "tests").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        parents = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        marker_attributes += sum(
+            isinstance(node, ast.Attribute) and node.attr == "private_source"
+            for node in ast.walk(tree)
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            has_marker = any(
+                isinstance(part, ast.Attribute) and part.attr == "private_source"
+                for decorator in node.decorator_list
+                for part in ast.walk(decorator)
+            )
+            if not has_marker:
+                continue
+            if not isinstance(parents.get(node), ast.Module):
+                forbidden_scopes.append(f"{path.relative_to(ROOT)}::{node.name}")
+                continue
+            discovered.add(f"{path.relative_to(ROOT)}::{node.name}")
+
+    assert not forbidden_scopes
+    assert marker_attributes == len(_APPROVED_PRIVATE_SOURCE_TESTS)
+    assert discovered == _APPROVED_PRIVATE_SOURCE_TESTS
+
+
+class _MarkedItem:
+    def __init__(self, nodeid: str) -> None:
+        self.nodeid = nodeid
+
+    def iter_markers(self, name: str | None = None):
+        if name == "private_source":
+            return (object(),)
+        return ()
+
+
+def test_collected_private_source_hook_rejects_every_unapproved_marker() -> None:
+    contract = runpy.run_path(str(ROOT / "tests" / "conftest.py"))
+    approved_tests = contract["APPROVED_PRIVATE_SOURCE_TESTS"]
+    collection_hook = contract["pytest_collection_modifyitems"]
+    assert frozenset(_APPROVED_PRIVATE_SOURCE_TESTS) == approved_tests
+    approved = _MarkedItem(next(iter(_APPROVED_PRIVATE_SOURCE_TESTS)))
+    collection_hook([approved])
+
+    with pytest.raises(pytest.UsageError, match="unapproved private_source"):
+        collection_hook([_MarkedItem("tests/test_unrelated.py::test_hidden_failure")])
 
 
 def test_ci_classifier_fails_closed_for_non_markdown_to_markdown_rename() -> None:

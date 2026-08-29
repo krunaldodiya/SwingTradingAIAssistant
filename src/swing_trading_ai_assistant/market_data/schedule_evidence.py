@@ -308,6 +308,37 @@ class ScheduleEvidenceStore:
             _ensure_deadline_live(deadline)
             return _failure()
 
+    def _resolve_raw_history(
+        self,
+        digest: object,
+        *,
+        root: Path | None = None,
+        deadline: ScheduleDeadlinePortV1 | None = None,
+    ) -> tuple[ScheduleEvidenceResult, bool]:
+        result = self.resolve(digest, root=root, deadline=deadline)
+        if (
+            result.outcome is not ScheduleOutcome.FAILED
+            or type(digest) is not str
+            or _DIGEST_RE.fullmatch(digest) is None
+        ):
+            return result, False
+        target_root = self._storage_root if root is None else root
+        try:
+            with self._lease.read_operation(target_root) as operation:
+                parent = _open_parent(operation, create=False)
+                if parent is None:
+                    return result, True
+                try:
+                    try:
+                        os.stat(f"{digest}.json", dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        return result, True
+                    return result, False
+                finally:
+                    os.close(parent)
+        except Exception:
+            return result, False
+
     def _retain_or_resolve(
         self,
         digest: str,

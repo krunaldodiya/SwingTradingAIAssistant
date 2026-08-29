@@ -116,6 +116,49 @@ create every independent labelled tab
   -> close only completed idle/done tabs
 ```
 
+### Goal-mode implementation agents
+
+An implementation agent may use the harness's persistent goal mode only after
+the coordinator has completed steps 1–4 and the assignment satisfies
+`AGENTS.md`'s goal-mode entry conditions. The goal objective is the agent's one
+complete work assignment: it must carry the full assignment contract below,
+forbid nested delegation, limit the agent to focused owned validation, and leave
+shared integration, repository-wide gates, review, tracker, and delivery actions
+with the coordinator unless those actions and their authority are explicitly
+assigned.
+
+Route a decision-dominant goal to `openai-codex/gpt-5.6-sol` with high
+thinking, and an implementation-ready goal with frozen contracts to
+`openai-codex/gpt-5.6-terra` with high thinking. A Terra goal that encounters a
+consequential architecture, market-logic, source/provider, evidence-policy,
+security, acceptance, or authority decision must pause. The coordinator starts
+a fresh bounded Sol decision agent, captures the decision and its evidence,
+updates the governing record, revalidates the shared tree and remaining
+assignment, and only then resumes or restarts Terra. A mid-goal model switch is
+not a substitute for that decision boundary or an independent review.
+
+For R3/R4 goals that introduce a new evidence, persistence, revision, security,
+or state-transition contract, the Sol decision assignment must return the
+adversarial acceptance matrix before Terra starts. The matrix includes positive,
+negative, failure-precedence, boundary, interruption/retry/rollback, provenance
+substitution, concurrency when applicable, compatibility, and external
+authority/temporal rows, each with expected result, prohibited effects, and
+evidence. Terra's first implementation responsibility is to add or identify the
+discriminating failing checks. A missing consequential row is a pause-and-route
+condition, not an implementation choice.
+
+Goal lifecycle state takes precedence over a superficial idle/done detection.
+While the harness still reports an active or paused goal, treat the agent as
+active: inspect its pane and persisted session control state, do not close its
+tab, and do not reuse its mutation boundary. A paused goal may resume only after
+the coordinator revalidates the governing Issue/specification, shared-tree and
+branch state, dependencies, decisions, authority, and remaining WIP.
+
+Before exact-byte review, the goal must finish or be deliberately stopped at a
+safe completed boundary, its full result must be captured, and the agent must be
+settled with no future mutation assignment. Resuming that goal or changing any
+reviewed byte invalidates the review and requires a fresh stable candidate.
+
 ### Create and start the independent wave
 
 Run the environment check once. For each independent assignment, repeat the tab

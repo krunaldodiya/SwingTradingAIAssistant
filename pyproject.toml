@@ -39,6 +39,9 @@ packages = ["src/swing_trading_ai_assistant"]
 addopts = "-ra --strict-config --strict-markers --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87 -n auto --dist=worksteal"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "private_source: requires owner-private retained source evidence unavailable on hosted CI",
+]
 
 [tool.coverage.run]
 branch = true

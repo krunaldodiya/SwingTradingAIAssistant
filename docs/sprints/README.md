@@ -142,10 +142,12 @@ remediation are in
   migrations remain separate. Sprint 12 subsequently closed under Issue #117;
   the Sprint 11 closeout itself granted no Sprint 12 completion evidence.
 
-  Historical work is deferred: Plan 18 supports Sprints 15–16 (#120/#122);
-  historical news/events/sectors are not-yet-evaluated, not permanently
-  removed. Sprint 15 owns only the supplied fixed-cohort historical daily OHLCV
-  store and makes no inferred historical index-membership claim. Sprint 16 owns
+  Historical work is active in Sprint 15: Plan 18 remains its downstream
+  historical-evaluation contract, while [Plan 28](../plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
+  owns the strict source-backed retained-Upstox raw completion/revision-store first
+  slice for #120. Historical news/events/sectors are not-yet-evaluated, not
+  permanently removed. Sprint 15 owns only supplied fixed-cohort historical daily
+  OHLCV and makes no inferred historical index-membership claim. Sprint 16 owns
   capability-aware validation over supplied immutable evidence and the
   pre-Market-Structure gate. Neither sprint automatically owns point-in-time
   membership, sector/classification, news, event, or corporate-action snapshot
@@ -335,13 +337,17 @@ Industry/Packet URL attribution; late
   IRCTC negative. The two positive modes remain separate; neither substitutes
   for the other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
-- Sprint 15 — supplied fixed-cohort historical daily OHLCV store /
+- Sprint 15 — source-backed fixed-cohort historical daily raw OHLCV store /
   [Issue #120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120)
-  is **Todo**. It owns bounded download/import, validation before publication,
-  immutable revisions, incremental sessions, correction lineage, and bound
-  cohort/date-range/source/price-basis evidence. It does not infer historical
-  index membership or construct point-in-time membership, sector, news, event,
-  or corporate-action snapshots. Historical validation remains Sprint 16.
+  is **In Progress**. [Plan 28](../plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
+  fixes the first-working slice to one closed `UPSTOX_RAW` retained-source
+  profile with complete raw daily projections, immutable exact revisions, and
+  `INITIAL`/`APPEND`/`CORRECTION` lineage/readback. Provider-backed download,
+  credentials, yfinance, adjustment/comparability, historical context
+  acquisition, and automatic old-manifest revalidation remain outside the slice.
+  The store does not infer historical index membership or construct point-in-time
+  membership, sector, news, event, or corporate-action snapshots. Historical
+  validation remains Sprint 16.
 
 - Sprint 16 — capability-aware historical validation and pre-structure gate /
   [Issue #122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)

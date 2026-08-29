@@ -77,6 +77,78 @@ monitor implementation or repeatedly remind the agent to preserve MVP-first
 sequencing. Keep verified useful work when it cleanly supports the bounded slice;
 do not retain harmful complexity merely because effort was spent.
 
+### Goal-mode autonomous execution
+
+When the active AI harness provides a persistent goal or continuous-execution
+mode, use it by default for implementation-ready work that benefits from
+uninterrupted progress. For OMP, this is `/goal`. Start goal mode only after the
+governing Issue and sources are resolved, the first working slice and later
+improvements are separated, cross-slice contracts and file ownership are frozen,
+the risk controls and acceptance evidence are named, and the work is small
+enough to finish through the normal feedback boundary.
+
+The goal objective must bind the active Issue and accepted specification, exact
+current scope and non-goals, authority and effect boundaries, dependencies,
+owned files or interfaces, focused verification, review and delivery ownership,
+and explicit pause or stop conditions. Goal mode counts as active WIP. Resuming
+a goal requires rechecking the tracker state, branch and working tree, material
+decisions, external prerequisites, and whether earlier evidence still applies;
+never continue from stale state merely because the harness restored a session.
+
+Goal mode grants execution continuity, not additional authority. Pause it at the
+next safe boundary for an owner decision, source or provider adoption,
+credentials or protected external effects, destructive or irreversible action,
+an unavailable market/evidence window, a scope-expansion circuit breaker,
+conflicting shared-tree work, or an exact-byte review or release boundary.
+Preserve completed evidence and state the exact prerequisite before pausing.
+Use the harness's native pause/resume controls; pausing must not be represented
+as completion or used to abort unsafe partial work.
+
+One coordinator remains the mutation and integration owner. A goal-running
+implementation agent in the shared Herdr tree must obey its assigned files and
+interfaces, must not spawn agents or expand scope, and must leave repository-wide
+gates, exact-byte review, tracker transitions, and delivery claims to the
+coordinator unless the accepted goal explicitly assigns those actions and their
+authority. If goal mode is unavailable or cannot preserve these controls, use
+the ordinary bounded workflow instead.
+
+Route goal work by its dominant responsibility. Use
+`openai-codex/gpt-5.6-sol` with high thinking for goal framing, architecture or
+market-logic decisions, source/provider or evidence-policy decisions, security
+analysis, acceptance design, and independent review. Use
+`openai-codex/gpt-5.6-terra` with high thinking for an implementation-ready goal
+whose contracts, ownership, failure rules, and tests are already frozen. If a
+Terra implementation goal reaches a consequential ambiguity or decision, it
+must pause rather than decide implicitly; the coordinator routes that bounded
+decision to a fresh Sol agent, records the result in the governing work, then
+revalidates and resumes or restarts the implementation goal. Do not switch
+models mid-goal merely to avoid a required pause or independent review.
+
+Before starting an R3/R4 implementation goal for a new evidence, persistence,
+revision, security, or state-transition contract, a Sol decision pass must
+freeze the adversarial acceptance matrix. It covers positive behavior,
+malformed/unsupported/insufficient/conflicting outcomes, bounds and
+limit-plus-one, combined-failure precedence, interruption/retry/rollback,
+identity or provenance substitution, concurrency when applicable, historical
+compatibility, and external temporal or authority gates. Every row names the
+observable result, prohibited effects, and evidence method. Terra begins with
+discriminating failing checks for that matrix. A newly discovered consequential
+case pauses Terra and returns to Sol/coordinator decision; do not defer ordinary
+failure semantics to post-implementation review.
+
+Real-time smoke gates are feature-specific acceptance evidence, never a default
+requirement for every sprint. Require a market-hours smoke only when the current
+slice claims behavior that can be falsified only during an open session, and an
+after-close smoke only when it claims a completed current-session close.
+Historical import, immutable storage, deterministic calculation, replay,
+validation, documentation, and release-path work use time-independent evidence
+unless their own accepted contract states otherwise. Every Issue/specification
+with a temporal gate must name the exact market state, why another test cannot
+prove it, the earliest valid observation point, and the scope it blocks. While
+waiting for that external window, finish every independent task and gate; never
+idle the delivery system, fabricate the observation, or make the temporal gate
+block unrelated work or later-slice planning.
+
 ### Herdr multi-agent workflow
 
 When work requires multiple visible agents or independent R3/R4 review, follow
