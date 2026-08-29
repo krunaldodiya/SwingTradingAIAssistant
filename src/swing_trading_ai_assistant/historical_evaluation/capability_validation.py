@@ -46,6 +46,7 @@ class AvailabilityStateV1(StrEnum):
     SOURCE_GAP = "SOURCE_GAP"
     STALE = "STALE"
     CONFLICTED = "CONFLICTED"
+    UNSUPPORTED = "UNSUPPORTED"
     UNLICENSED = "UNLICENSED"
 
 
@@ -72,6 +73,7 @@ class HistoricalStudyRegionV1(StrEnum):
 class ProfileQualificationOutcomeV1(StrEnum):
     QUALIFIED = "QUALIFIED"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    UNSUPPORTED_CAPABILITY = "UNSUPPORTED_CAPABILITY"
 
 
 class MarketStructureReadinessGateV1(StrEnum):
@@ -90,6 +92,7 @@ class HistoricalValidationReasonV1(StrEnum):
     EVIDENCE_REVISION_SUBSTITUTION = "EVIDENCE_REVISION_SUBSTITUTION"
     BAR_KNOWN_TIME_MISMATCH = "BAR_KNOWN_TIME_MISMATCH"
     AVAILABILITY_LEDGER_INCOMPLETE = "AVAILABILITY_LEDGER_INCOMPLETE"
+    EVIDENCE_CAPABILITY_UNSUPPORTED = "EVIDENCE_CAPABILITY_UNSUPPORTED"
     EVIDENCE_UNLICENSED = "EVIDENCE_UNLICENSED"
     EVIDENCE_CONFLICTED = "EVIDENCE_CONFLICTED"
     EVIDENCE_STALE = "EVIDENCE_STALE"
@@ -125,6 +128,9 @@ _STATE_REASON: Final = {
     AvailabilityStateV1.SOURCE_GAP: HistoricalValidationReasonV1.EVIDENCE_SOURCE_GAP,
     AvailabilityStateV1.STALE: HistoricalValidationReasonV1.EVIDENCE_STALE,
     AvailabilityStateV1.CONFLICTED: HistoricalValidationReasonV1.EVIDENCE_CONFLICTED,
+    AvailabilityStateV1.UNSUPPORTED: (
+        HistoricalValidationReasonV1.EVIDENCE_CAPABILITY_UNSUPPORTED
+    ),
     AvailabilityStateV1.UNLICENSED: HistoricalValidationReasonV1.EVIDENCE_UNLICENSED,
 }
 _FATAL_PROFILE_REASONS: Final = frozenset(
@@ -135,6 +141,7 @@ _FATAL_PROFILE_REASONS: Final = frozenset(
         HistoricalValidationReasonV1.EVIDENCE_REVISION_SUBSTITUTION,
         HistoricalValidationReasonV1.BAR_KNOWN_TIME_MISMATCH,
         HistoricalValidationReasonV1.AVAILABILITY_LEDGER_INCOMPLETE,
+        HistoricalValidationReasonV1.EVIDENCE_CAPABILITY_UNSUPPORTED,
         HistoricalValidationReasonV1.EVIDENCE_UNLICENSED,
         HistoricalValidationReasonV1.EVIDENCE_CONFLICTED,
     }
@@ -219,15 +226,29 @@ def _reason_tuple(
 class CanonicalEquityV1:
     isin: str
     exchange: str
+    effective_symbol: str
+    symbol_history_identity_sha256: str
+    provider_mapping_identity_sha256: str
 
     def __post_init__(self) -> None:
-        if type(self.isin) is not str or _ISIN.fullmatch(self.isin) is None:
-            raise ValueError("canonical equity is invalid")
-        if not _valid_token(self.exchange):
+        if (
+            type(self.isin) is not str
+            or _ISIN.fullmatch(self.isin) is None
+            or not _valid_token(self.exchange)
+            or not _valid_token(self.effective_symbol)
+            or not _valid_digest(self.symbol_history_identity_sha256)
+            or not _valid_digest(self.provider_mapping_identity_sha256)
+        ):
             raise ValueError("canonical equity is invalid")
 
     def canonical_value(self) -> dict[str, str]:
-        return {"exchange": self.exchange, "isin": self.isin}
+        return {
+            "effective_symbol": self.effective_symbol,
+            "exchange": self.exchange,
+            "isin": self.isin,
+            "provider_mapping_identity_sha256": (self.provider_mapping_identity_sha256),
+            "symbol_history_identity_sha256": self.symbol_history_identity_sha256,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,6 +620,13 @@ _SCHEMA_IDENTITY_SHA256: Final = _sha(
                     "affected_identity_sha256",
                     "entry_identity_sha256",
                 ],
+                "canonical_equity": [
+                    "isin",
+                    "exchange",
+                    "effective_symbol",
+                    "symbol_history_identity_sha256",
+                    "provider_mapping_identity_sha256",
+                ],
                 "decision_point": ["session", "decision_cutoff", "region"],
                 "study": [
                     "profile",
@@ -847,6 +875,30 @@ def _optional_instant(value: object) -> datetime | None:
     return None if value is None else _instant(value)
 
 
+_CANONICAL_EQUITY_FIELDS: Final = frozenset(
+    {
+        "effective_symbol",
+        "exchange",
+        "isin",
+        "provider_mapping_identity_sha256",
+        "symbol_history_identity_sha256",
+    }
+)
+
+
+def _canonical_equity_from_row(value: object) -> CanonicalEquityV1:
+    row = _closed_object(value, _CANONICAL_EQUITY_FIELDS)
+    return CanonicalEquityV1(
+        isin=cast(str, row["isin"]),
+        exchange=cast(str, row["exchange"]),
+        effective_symbol=cast(str, row["effective_symbol"]),
+        symbol_history_identity_sha256=cast(str, row["symbol_history_identity_sha256"]),
+        provider_mapping_identity_sha256=cast(
+            str, row["provider_mapping_identity_sha256"]
+        ),
+    )
+
+
 def parse_historical_validation_request_v1(
     raw: object,
 ) -> HistoricalValidationRequestV1:
@@ -884,16 +936,7 @@ def parse_historical_validation_request_v1(
             ),
         )
         cohort = tuple(
-            CanonicalEquityV1(
-                cast(
-                    str,
-                    _closed_object(row, frozenset({"exchange", "isin"}))["isin"],
-                ),
-                cast(
-                    str,
-                    _closed_object(row, frozenset({"exchange", "isin"}))["exchange"],
-                ),
-            )
+            _canonical_equity_from_row(row)
             for row in _json_rows(request_row["cohort"], MAX_MEMBERS_V1)
         )
         points: list[HistoricalDecisionPointV1] = []
@@ -957,15 +1000,10 @@ def parse_historical_validation_request_v1(
             request_row["availability_ledger"], MAX_LEDGER_ENTRIES_V1
         ):
             entry_row = _closed_object(raw_entry, entry_fields)
-            member_row = _closed_object(
-                entry_row["member"], frozenset({"exchange", "isin"})
-            )
+            member = _canonical_equity_from_row(entry_row["member"])
             entry = HistoricalAvailabilityEntryV1(
                 feature=HistoricalEvidenceFeatureV1(entry_row["feature"]),
-                member=CanonicalEquityV1(
-                    cast(str, member_row["isin"]),
-                    cast(str, member_row["exchange"]),
-                ),
+                member=member,
                 session=_date(entry_row["session"]),
                 interval=cast(str, entry_row["interval"]),
                 decision_cutoff=_instant(entry_row["decision_cutoff"]),
@@ -1312,8 +1350,11 @@ def _evaluate_profile(  # noqa: C901 - closed qualification reducer
     if coverage < declaration.minimum_coverage_bps:
         reasons.add(HistoricalValidationReasonV1.COVERAGE_BELOW_PREDECLARED_THRESHOLD)
     fatal = any(reason in _FATAL_PROFILE_REASONS for reason in reasons)
+    unsupported = counts[AvailabilityStateV1.UNSUPPORTED] > 0
     outcome = (
-        ProfileQualificationOutcomeV1.QUALIFIED
+        ProfileQualificationOutcomeV1.UNSUPPORTED_CAPABILITY
+        if unsupported
+        else ProfileQualificationOutcomeV1.QUALIFIED
         if coverage >= declaration.minimum_coverage_bps and not fatal
         else ProfileQualificationOutcomeV1.INSUFFICIENT_EVIDENCE
     )
@@ -1468,6 +1509,29 @@ def evaluate_capability_aware_historical_validation_v1(
     )
 
 
+def _sprint15_canonical_equity(row: Mapping[str, Any]) -> CanonicalEquityV1:
+    mapping_value: object = row["provider_mapping"]
+    if type(mapping_value) is not dict:
+        raise ValueError
+    mapping = cast(dict[str, object], mapping_value)
+    symbol_history: dict[str, object] = {
+        "effective_symbol": row["effective_symbol"],
+        "symbol_effective_from": row["symbol_effective_from"],
+        "symbol_effective_to": row["symbol_effective_to"],
+    }
+    provider_mapping: dict[str, object] = {
+        "contract_version": "sprint15-provider-mapping-projection@v1",
+        "mapping": mapping,
+    }
+    return CanonicalEquityV1(
+        isin=cast(str, row["isin"]),
+        exchange=cast(str, row["exchange"]),
+        effective_symbol=cast(str, row["effective_symbol"]),
+        symbol_history_identity_sha256=_sha(_canonical(symbol_history)),
+        provider_mapping_identity_sha256=_sha(_canonical(provider_mapping)),
+    )
+
+
 def historical_evidence_from_sprint15_revision_v1(
     revision: Mapping[str, Any],
 ) -> HistoricalEvidenceRevisionV1:
@@ -1499,18 +1563,16 @@ def historical_evidence_from_sprint15_revision_v1(
         ):
             raise ValueError
         cohort_rows = cast(list[dict[str, Any]], value["cohort"])
-        cohort = tuple(
-            CanonicalEquityV1(cast(str, row["isin"]), cast(str, row["exchange"]))
-            for row in cohort_rows
-        )
+        cohort = tuple(_sprint15_canonical_equity(row) for row in cohort_rows)
+        member_by_key = {(member.isin, member.exchange): member for member in cohort}
         sessions = tuple(
             _date(item) for item in cast(list[object], value["expected_sessions"])
         )
         bars = tuple(
             HistoricalBarKnowledgeV1(
-                member=CanonicalEquityV1(
-                    cast(str, row["isin"]), cast(str, row["exchange"])
-                ),
+                member=member_by_key[
+                    (cast(str, row["isin"]), cast(str, row["exchange"]))
+                ],
                 session=_date(row["session"]),
                 known_at=_instant(row["known_at"]),
             )

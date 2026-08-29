@@ -55,8 +55,45 @@ from swing_trading_ai_assistant.market_data.historical_revision_store import (
     HistoricalOhlcvImportResultV1,
 )
 
-_MEMBER = CanonicalEquityV1("INE002A01018", "NSE")
-_OTHER_MEMBER = CanonicalEquityV1("INE062A01020", "NSE")
+
+def _sha(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+_SPRINT15_SYMBOL_HISTORY = {
+    "effective_symbol": "RELIANCE",
+    "symbol_effective_from": "2020-01-01",
+    "symbol_effective_to": None,
+}
+_SPRINT15_PROVIDER_MAPPING = {
+    "provider": "UPSTOX",
+    "provider_instrument_id": "NSE_EQ|INE002A01018",
+    "mapping_effective_from": "2020-01-01",
+    "mapping_effective_to": None,
+    "mapping_evidence_known_at": "2025-01-01T09:00:00.000000Z",
+    "mapping_evidence_sha256": "8" * 64,
+}
+_MEMBER = CanonicalEquityV1(
+    "INE002A01018",
+    "NSE",
+    "RELIANCE",
+    _sha(_SPRINT15_SYMBOL_HISTORY),
+    _sha(
+        {
+            "contract_version": "sprint15-provider-mapping-projection@v1",
+            "mapping": _SPRINT15_PROVIDER_MAPPING,
+        }
+    ),
+)
+_OTHER_MEMBER = CanonicalEquityV1(
+    "INE062A01020",
+    "NSE",
+    "SBIN",
+    "9" * 64,
+    "a" * 64,
+)
 _REVISION = "1" * 64
 _SOURCE = "2" * 64
 _CONTEXT_REVISION = "3" * 64
@@ -65,12 +102,6 @@ _SCHEMA = "5" * 64
 _EVIDENCE_RUNTIME = "6" * 64
 _EVIDENCE_CONFIGURATION = "7" * 64
 _BASE = datetime(2025, 1, 1, 10, tzinfo=UTC)
-
-
-def _sha(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def _points() -> tuple[HistoricalDecisionPointV1, ...]:
@@ -379,6 +410,63 @@ def test_missing_context_evidence_blocks_only_its_profile(
 
 
 @pytest.mark.parametrize(
+    ("unsupported_feature", "blocked_profile", "unaffected_profile"),
+    (
+        (
+            HistoricalEvidenceFeatureV1.SECTOR_CLASSIFICATION,
+            HistoricalStudyProfileV1.OHLCV_PLUS_SECTOR,
+            HistoricalStudyProfileV1.OHLCV_PLUS_NEWS_EVENTS,
+        ),
+        (
+            HistoricalEvidenceFeatureV1.NEWS_EVENTS,
+            HistoricalStudyProfileV1.OHLCV_PLUS_NEWS_EVENTS,
+            HistoricalStudyProfileV1.OHLCV_PLUS_SECTOR,
+        ),
+    ),
+)
+def test_unsupported_context_capability_is_a_first_class_profile_outcome(
+    unsupported_feature: HistoricalEvidenceFeatureV1,
+    blocked_profile: HistoricalStudyProfileV1,
+    unaffected_profile: HistoricalStudyProfileV1,
+) -> None:
+    entries = tuple(
+        _entry(
+            point,
+            feature,
+            state=(
+                AvailabilityStateV1.UNSUPPORTED
+                if feature is unsupported_feature
+                else AvailabilityStateV1.AVAILABLE
+            ),
+        )
+        for point in _points()
+        for feature in HistoricalEvidenceFeatureV1
+    )
+
+    report = evaluate_capability_aware_historical_validation_v1(
+        _request(entries=entries), _evidence()
+    )
+
+    blocked = _result_for_profile(report, blocked_profile)
+    assert blocked.outcome is ProfileQualificationOutcomeV1.UNSUPPORTED_CAPABILITY
+    assert blocked.state_counts[AvailabilityStateV1.UNSUPPORTED] == 4
+    assert (
+        HistoricalValidationReasonV1.EVIDENCE_CAPABILITY_UNSUPPORTED in blocked.reasons
+    )
+    assert (
+        _result_for_profile(report, HistoricalStudyProfileV1.OHLCV_ONLY).outcome
+        is ProfileQualificationOutcomeV1.QUALIFIED
+    )
+    assert (
+        _result_for_profile(report, unaffected_profile).outcome
+        is ProfileQualificationOutcomeV1.QUALIFIED
+    )
+    assert (
+        report.gate is MarketStructureReadinessGateV1.APPROVED_TO_START_MARKET_STRUCTURE
+    )
+
+
+@pytest.mark.parametrize(
     ("state", "expected_reason"),
     (
         (
@@ -397,6 +485,10 @@ def test_missing_context_evidence_blocks_only_its_profile(
         (
             AvailabilityStateV1.CONFLICTED,
             HistoricalValidationReasonV1.EVIDENCE_CONFLICTED,
+        ),
+        (
+            AvailabilityStateV1.UNSUPPORTED,
+            HistoricalValidationReasonV1.EVIDENCE_CAPABILITY_UNSUPPORTED,
         ),
         (
             AvailabilityStateV1.UNLICENSED,
@@ -427,7 +519,11 @@ def test_each_nonavailable_state_remains_in_denominator(
     )
     result = _result_for_profile(report, HistoricalStudyProfileV1.OHLCV_ONLY)
 
-    assert result.outcome is ProfileQualificationOutcomeV1.INSUFFICIENT_EVIDENCE
+    assert result.outcome is (
+        ProfileQualificationOutcomeV1.UNSUPPORTED_CAPABILITY
+        if state is AvailabilityStateV1.UNSUPPORTED
+        else ProfileQualificationOutcomeV1.INSUFFICIENT_EVIDENCE
+    )
     assert result.total_required_cells == 8
     assert result.available_cells == 7
     assert result.coverage_bps == 8_750
@@ -574,6 +670,18 @@ def test_region_and_cohort_substitution_are_rejected() -> None:
         )
 
 
+def test_canonical_equity_identity_binds_symbol_and_provider_mapping_histories() -> (
+    None
+):
+    for substituted in (
+        replace(_MEMBER, effective_symbol="OTHER"),
+        replace(_MEMBER, symbol_history_identity_sha256="b" * 64),
+        replace(_MEMBER, provider_mapping_identity_sha256="c" * 64),
+    ):
+        with pytest.raises(ValueError, match="cohort identity mismatch"):
+            replace(_request(), cohort=(substituted,))
+
+
 def test_sprint15_raw_revision_preserves_non_pit_and_comparability_limits() -> None:
     revision: dict[str, Any] = {
         "contract_version": "fixed-cohort-historical-ohlcv-upstox-raw-revision-store@v1",
@@ -584,10 +692,8 @@ def test_sprint15_raw_revision_preserves_non_pit_and_comparability_limits() -> N
                 "isin": _MEMBER.isin,
                 "exchange": _MEMBER.exchange,
                 "listed_equity_segment": "EQUITY",
-                "effective_symbol": "RELIANCE",
-                "symbol_effective_from": "2020-01-01",
-                "symbol_effective_to": None,
-                "provider_mapping": {},
+                **_SPRINT15_SYMBOL_HISTORY,
+                "provider_mapping": _SPRINT15_PROVIDER_MAPPING,
             }
         ],
         "from_session": "2025-01-01",
@@ -620,6 +726,8 @@ def test_sprint15_raw_revision_preserves_non_pit_and_comparability_limits() -> N
     }
     revision["revision_sha256"] = _sha(revision)
     evidence = historical_evidence_from_sprint15_revision_v1(revision)
+
+    assert evidence.cohort == (_MEMBER,)
     entries = tuple(
         _entry(point, feature, state=AvailabilityStateV1.NOT_RETAINED)
         for point in _points()
@@ -1128,7 +1236,16 @@ def test_bounds_and_temporal_order_fail_before_reduction(
     with pytest.raises(ValueError, match="historical evidence revision is invalid"):
         replace(_evidence(), cohort=())
 
-    members = tuple(CanonicalEquityV1(f"INE{index:09d}", "NSE") for index in range(51))
+    members = tuple(
+        CanonicalEquityV1(
+            f"INE{index:09d}",
+            "NSE",
+            f"SYM{index:02d}",
+            f"{index:064x}",
+            f"{index + 51:064x}",
+        )
+        for index in range(51)
+    )
     with pytest.raises(ValueError, match="historical evidence revision is invalid"):
         replace(
             _evidence(),

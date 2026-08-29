@@ -49,7 +49,7 @@ older Plan-18 adjusted-price assumption.
 
 ### Remaining required Sprint-16 completion
 
-- all seven availability states and all three profiles;
+- all eight availability states and all three profiles;
 - cutoff, coverage, region, cohort, revision, identity, and no-dropped-date rules;
 - positive generic point-in-time behavior plus malformed, unsupported,
   insufficient, conflicting, limit-plus-one, combined-failure, replay, and
@@ -105,7 +105,7 @@ local Sprint-16 boundary, not the cross-module migration deferred to Issue #145.
 ```text
 AvailabilityStateV1 =
   AVAILABLE | NOT_PUBLISHED | NOT_RETAINED | SOURCE_GAP |
-  STALE | CONFLICTED | UNLICENSED
+  STALE | CONFLICTED | UNSUPPORTED | UNLICENSED
 
 HistoricalStudyProfileV1 =
   OHLCV_ONLY | OHLCV_PLUS_SECTOR | OHLCV_PLUS_NEWS_EVENTS
@@ -118,7 +118,7 @@ HistoricalStudyRegionV1 =
   DEVELOPMENT | OUT_OF_SAMPLE | UNTOUCHED_TEST | WALK_FORWARD
 
 ProfileQualificationOutcomeV1 =
-  QUALIFIED | INSUFFICIENT_EVIDENCE
+  QUALIFIED | INSUFFICIENT_EVIDENCE | UNSUPPORTED_CAPABILITY
 
 MarketStructureReadinessGateV1 =
   APPROVED_TO_START_MARKET_STRUCTURE | BLOCKED
@@ -138,7 +138,9 @@ profile. It blocks only the profile that requires it.
 
 ## Bounds and canonical types
 
-- cohort: `1..50` unique canonical `(ISIN, exchange)` members, strictly sorted;
+- cohort: `1..50` unique canonical `(ISIN, exchange, effective_symbol,
+  symbol_history_identity_sha256, provider_mapping_identity_sha256)` members,
+  strictly sorted;
 - decision sessions: `4..366`, unique and strictly increasing;
 - study profiles: exactly the three closed profiles, sorted in enum order;
 - regions: each of the four closed regions appears in one nonempty contiguous
@@ -148,6 +150,11 @@ profile. It blocks only the profile that requires it.
 - identifiers: printable bounded tokens or lowercase 64-character SHA-256;
 - dates: canonical `YYYY-MM-DD`; instants: aware UTC rendered with `Z`;
 - coverage: integer basis points in `1..10,000`, never float or rounded tolerance;
+- symbol-history identity: SHA-256 of the canonical complete effective-symbol
+  descriptor, including its effective range;
+- provider-mapping identity: SHA-256 of the canonical versioned provider-mapping
+  descriptor, including its provider instrument, effective range, evidence time,
+  and evidence identity;
 - input JSON: canonical UTF-8, sorted keys, compact separators, no duplicate or
   unknown fields, floats, NaN/infinity, or nesting beyond the closed limit.
 
@@ -160,9 +167,11 @@ that identity is computed. The report's canonical bytes exclude only its own
 `HistoricalEvidenceRevisionV1` binds:
 
 - revision contract and revision SHA-256;
-- explicit supplied cohort and its independently computed cohort SHA-256;
+- explicit supplied cohort and its independently computed cohort SHA-256, binding
+  ISIN, exchange, effective symbol, symbol-history identity, and versioned
+  provider-mapping identity;
 - exact ordered decision-session-capable grid and daily-bar knowledge time for
-  each `(ISIN, exchange, session)`;
+  each `(canonical member, session)`;
 - interval, source profile, price basis, temporal status, corporate-action status,
   comparability status, permitted use, source/schema/runtime/config identities,
   and fixed-cohort retrospective limitation;
@@ -170,7 +179,10 @@ that identity is computed. The report's canonical bytes exclude only its own
 
 The Sprint-15 adapter accepts only an exact successful store read whose embedded
 `revision_sha256` equals the requested name and whose request/cohort/grid/bar
-projection remains internally valid. It preserves:
+projection remains internally valid. It derives the symbol-history and
+provider-mapping identities from the exact complete Sprint-15 cohort descriptors.
+It never projects only ISIN and exchange or accepts a symbol/mapping substitution
+under an unchanged cohort identity. It preserves:
 
 ```text
 research_scope = FIXED_COHORT_RETROSPECTIVE
@@ -207,7 +219,7 @@ must not claim that an already exposed historical period is untouched.
 `HistoricalAvailabilityEntryV1` is one exact cell keyed by:
 
 ```text
-(feature, ISIN, exchange, session, interval)
+(feature, canonical member, session, interval)
 ```
 
 It binds the matching decision cutoff, availability state, affected-cell identity,
@@ -225,6 +237,9 @@ State invariants:
   predeclared freshness requirement.
 - `CONFLICTED`: source and a digest of the exact conflicting revision set are
   present; no candidate is selected.
+- `UNSUPPORTED`: the canonical member or source cannot supply the required
+  feature; it never carries a selected usable revision and yields the distinct
+  `UNSUPPORTED_CAPABILITY` profile outcome.
 - `NOT_PUBLISHED`, `NOT_RETAINED`, `SOURCE_GAP`, and `UNLICENSED`: remain explicit
   limitations and never carry a selected usable revision.
 
@@ -252,8 +267,8 @@ Every profile is reduced independently over its exact required cell set.
 - total required cells;
 - available cells;
 - exact coverage basis points using integer floor division;
-- counts for all seven availability states, including zeroes;
-- `QUALIFIED` or `INSUFFICIENT_EVIDENCE`;
+- counts for all eight availability states, including zeroes;
+- `QUALIFIED`, `INSUFFICIENT_EVIDENCE`, or `UNSUPPORTED_CAPABILITY`;
 - a closed ordered reason tuple;
 - result identity.
 
@@ -262,16 +277,21 @@ threshold and every `AVAILABLE` cell passes cutoff, identity, and revision
 binding. Any nonavailable cell remains counted. A threshold below 100% may produce
 a qualified descriptive profile if predeclared, but it cannot authorize Market
 Structure.
+If any required cell is `UNSUPPORTED`, the profile outcome is
+`UNSUPPORTED_CAPABILITY`, including when other insufficiency reasons are also
+present. This distinguishes a capability that cannot be supplied from remediable
+missing evidence. It does not contaminate profiles that do not require that
+feature.
 
-An insufficient profile has no partial market claim, feature values, labels,
+A nonqualified profile has no partial market claim, feature values, labels,
 counts of advances/declines, returns, scores, or recommendations. Availability
 accounting is evidence about the limitation, not a partial research result.
 
 ## Final readiness gate
 
 The final gate depends only on the `OHLCV_ONLY` result. Sector and news/event
-insufficiency cannot block a module whose declared core profile does not require
-those facts.
+insufficiency or unsupported capability cannot block a module whose declared
+core profile does not require those facts.
 
 `APPROVED_TO_START_MARKET_STRUCTURE` requires all of the following:
 
@@ -306,15 +326,16 @@ structural admission, report reasons are ordered:
 6. evidence-revision substitution;
 7. bar known-time mismatch;
 8. ledger incomplete;
-9. `UNLICENSED`;
-10. `CONFLICTED`;
-11. `STALE`;
-12. `NOT_PUBLISHED`;
-13. `NOT_RETAINED`;
-14. `SOURCE_GAP`;
-15. coverage below the predeclared threshold;
-16. gate threshold below 100%;
-17. OHLCV-only profile not qualified.
+9. `UNSUPPORTED`;
+10. `UNLICENSED`;
+11. `CONFLICTED`;
+12. `STALE`;
+13. `NOT_PUBLISHED`;
+14. `NOT_RETAINED`;
+15. `SOURCE_GAP`;
+16. coverage below the predeclared threshold;
+17. gate threshold below 100%;
+18. OHLCV-only profile not qualified.
 
 Public reports expose aggregate state counts, bounded reason codes, and identities.
 They never expose paths, symbols, ISINs, source payloads, bars, context facts,
@@ -342,12 +363,12 @@ quarantine, rename, delete, or publish storage objects.
 |---|---|---|
 | Generic PIT revision; exact complete ledger; three profiles; four regions; OHLCV threshold 100% | all applicable profiles qualified; exact aggregate accounting; gate approved; canonical retry bytes | no market calculation, provider, clock, write, or private cell leakage |
 | Exact Sprint-15 `UPSTOX_RAW` revision with truthful unavailable PIT/comparability cells | affected profiles insufficient; gate blocked with exact reasons; survivorship/raw limitations retained | no PIT, adjustment, continuity, membership, or approval relabel |
-| Sector or news/events unavailable with OHLCV complete | only requiring profile insufficient; OHLCV-only and final gate unaffected | no neutral context or cross-profile contamination |
+| Sector or news/events unavailable or unsupported with OHLCV complete | only requiring profile insufficient or `UNSUPPORTED_CAPABILITY` respectively; OHLCV-only and final gate unaffected | no unsupported-to-missing relabel, neutral context, or cross-profile contamination |
 | Zero/51 members; 3/367 decision points; missing region; reordered/overlapping region; zero/10,001 threshold; 73,201 cells; oversized/deep/noncanonical JSON | structural rejection and CLI `request_invalid` | no store read beyond admitted request, report, or provider effect |
 | Missing, duplicate, or extra ledger cell; wrong feature interval; cell/cohort/cutoff/affected identity mismatch | exact invalid/insufficient precedence; no dropped denominator | no nearest cell, dedupe, inferred cutoff, or partial claim |
 | `AVAILABLE` without required provenance; publication after known; known after cutoff; bar known-time mismatch | future-known or invalid evidence; profile insufficient or structural rejection as frozen | no timestamp clipping, state rewrite, or substitution |
 | Every nonavailable state at first/middle/last decision session and in each region | exact state count and reason; unchanged total denominator and region | no date migration or available-only selection |
-| Revision/cohort/source/receipt/code/config substitution; later correction under old request; legacy adjusted assumption applied to raw | blocked or rejected before claim; changed identities remain visible | no fallback, alias, old-report overwrite, or mixed basis |
+| Revision/cohort/effective-symbol/symbol-history/provider-mapping/source/receipt/code/config substitution; later correction under old request; legacy adjusted assumption applied to raw | blocked or rejected before claim; changed identities remain visible | no fallback, alias, old-report overwrite, or mixed basis |
 | Combined revision, future-known, conflict, stale, missing, and coverage failures | exact global and profile reason order | no first-observed nondeterminism or swallowed failure |
 | Missing/unsafe/held/corrupt store; interrupted exact read; exact retry | blocked unavailable or sanitized internal outcome; retry is byte-identical when evidence is restored | no storage mutation, latest discovery, repair, or misleading success |
 | Unknown exception at CLI boundary | exit 2, stdout empty, stderr exactly `internal_error` | no stack, path, secret, raw exception, or evidence misclassification |
@@ -356,9 +377,10 @@ quarantine, rename, delete, or publish storage objects.
 
 ## Acceptance evidence
 
-- focused contract tests defend positive behavior, all seven states, three profiles,
-  four regions, bounds and limit-plus-one, combined precedence, cutoff and identity
-  substitution, replay, exact Sprint-15 adaptation, sanitized CLI behavior, and
+- focused contract tests defend positive behavior, all eight states, three profiles,
+  four regions, bounds and limit-plus-one, combined precedence, cutoff and complete
+  canonical-equity identity substitution, replay, exact Sprint-15 adaptation,
+  sanitized CLI behavior, and
   zero provider/storage mutation;
 - one current retained Sprint-15 revision is evaluated without provider activity;
   its truthful gate result is retained even when `BLOCKED`;
