@@ -1866,6 +1866,9 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
             assert type(result) is module.CurrentSamePassArchiveFailureV1
             assert provider.calls == expected_plan22_calls
             assert tuple(effects) == expected_effects
+            if capture is not None:
+                capture["candidate"] = archive.candidate
+                capture["retained"] = result
             return
 
         assert type(result) is module.RetainedCurrentSamePassMarketContextV3
