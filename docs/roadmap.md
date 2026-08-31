@@ -368,7 +368,7 @@ and [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md)
 own only the bounded source decision, complete nonpublishing benchmark, and
 implementation contract for efficient current Nifty 50 plus Nifty Next 50
 adjusted capture. The measured two-cohort, eight-worker acquisition completed
-100/100 members over 21 sessions in 5.992 seconds. Issue #154 changes no
+100/100 members over 21 sessions in 25.942 seconds on the fixed-cadence bounded path. Issue #154 changes no
 runtime, scheduler, store, provider profile, or historical qualification;
 production implementation requires a separate bounded Issue.
 
