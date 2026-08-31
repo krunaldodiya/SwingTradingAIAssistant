@@ -52,14 +52,17 @@ below remain intact. The owner has changed delivery priority only:
 
 This ordering removes no feature or gate. Historical work is deferred, not
 deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
-current Sprint 10–18 dependency sequence; it does not change the module order
-or authorize autonomous signals, recommendations, or broker execution.
-Sprint 15 / #120 and Sprint 16 / #122 are closed/completed. Sprint 17 /
-#147 is an open waiting historical lane whose four future-session captures do
-not block current/live work. Sprint 18 / #148 is the sole active implementation
-under Plan 31. After #148, Price Action remains the next locked module, but it
-requires its own GitHub Issue and accepted contract; open maintenance Issue
-#145 does not start automatically without explicit owner prioritization.
+current delivery sequence; it does not change the module order or authorize
+autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
+Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
+closed/completed. Sprint 17 / #147 is an open waiting historical lane at
+`1/4`; its three unavailable future-session captures do not block
+current/live work. Sprint 19 Price Action delivered through PR #153. Issue
+#154 and Plan 33 own only the bounded source decision, benchmark, and contract
+for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; they change
+no runtime, and production implementation requires a separate Issue. Open
+maintenance Issue #145 does not start automatically without explicit owner
+prioritization.
 For current/live Market Regime, raw completed-close comparison is allowed only
 when its versioned comparability contract states the evidence basis and limits.
 [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)
