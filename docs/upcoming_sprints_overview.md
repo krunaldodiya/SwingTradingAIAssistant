@@ -71,21 +71,23 @@ missing prospective envelopes is not a current reason or historical backfill.
 Optional `PARTIAL_CURRENT_SESSION` context is separately labelled and excluded
 from completed facts, Market Regime/Industry direction, signals, and orders.
 
-This is sequencing only. Sprint 15 / Issue #120 is **In Progress** on the
-[Plan 28](plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
-closed `UPSTOX_RAW` first slice: retained verified Upstox one-minute partitions
-projected into complete daily raw OHLCV with pre-effect source admission,
-immutable revisions, and exact `INITIAL`/`APPEND`/`CORRECTION` readback.
-Provider download, credentials, yfinance, adjustment, and automatic old-manifest
-revalidation remain outside the slice and fail closed. The store makes no
-inferred historical index-membership claim.
-Sprint 16 / Issue #122 owns capability-aware validation
-of explicit study profiles over the supplied cohort and immutable evidence
-revisions, including availability-ledger checks and the pre-Market-Structure
-gate. It validates only evidence already proven for the requested profile and
-cutoff.
+Sprint 15 / Issue #120 and Sprint 16 / Issue #122 are **closed/completed** and
+their Delivery Project items are **Done**. Plan 28 delivered the bounded
+source-backed fixed-cohort raw daily revision store, and Plan 29 preserved the
+capability-aware historical validation boundary. Sprint 17 / Issue #147 has a
+complete reviewed implementable slice under Plan 30 but remains open in
+**Todo** while four distinct future completed-session captures accrue. That
+temporal lane qualifies only later historical point-in-time/backtest claims and
+does not consume active current/live WIP.
 
-Neither sprint automatically owns point-in-time membership, sector or
+Sprint 18 / Issue #148 is the sole **In Progress** item. Its accepted Plan 31
+first working slice consumes the exact current same-pass Upstox raw daily grid
+and Plan-21 screen to produce deterministic current/live Market Structure
+facts. The local candidate is implemented and reviewed but is not delivered,
+merged, closed, or Project **Done** until its remaining applicable smoke, PR,
+hosted, and merge gates pass.
+
+Sprints 15–18 do not automatically own point-in-time membership, sector or
 classification, news, event, or corporate-action snapshot construction or
 acquisition. Missing historical evidence remains explicit and is neither
 fabricated nor treated as neutral. Broader bounded per-decision-date as-of
@@ -115,8 +117,10 @@ OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 | 12 | [#117](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/117) — Closed/completed; Project **Done**; High priority/risk | Current exact supplied-cohort Industry classification and deterministic aggregate Industry Participation from one operator-acquired official NSE Indices Nifty 100 CSV. | [Plan 24](plans/24-current-supplied-cohort-sector-analysis-contract.md); [PR #135](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/135) merged reviewed head `b8c416709ebae82879c5dceae603b141b0dd1fa8` as `4dfa8ecd1854aec4b4b2181cf2d0310072f65b49`; quality **APPROVE**, security **PASS**; 2,991 tests / 90.82%, Ruff/Pyright/Vulture/build, hosted Quality/build, and GitGuardian passed. The 100-row / 6,610-byte parser smoke at SHA-256 `5d9a01187c02ace7837f1e2c9fb636458cf33bae6d39c6a7d815acc06e93ab85` is provenance only. | Automated acquisition, alternate sources, official Sector taxonomy or mapping, historical classification, index-membership claim, live participation/effectiveness claim, recommendation, raw/member publication, or broker order placement. |
 | 13 | [#118](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/118) — Closed/completed; Project **Done**; Sprint 13 milestone; High priority/risk | Delivered current owner-private supplied-cohort event notices from one operator-acquired official NSE Equity unfiltered `1D` corporate-announcement CSV. | [Plan 25](plans/25-current-supplied-cohort-event-notice-contract.md); [PR #137](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/137) merged independently reviewed head `2b65aa46f3f67552bf600675c6f1a5c09d363e12` as `75ca9c3d3302f6d0a46ac772099c7b4d65e041c3`; independent functional **APPROVE** and security **PASS**; exact committed Ruff format/check, Pyright 0/0, Vulture 80, `uv build`, `git diff --check`, 3,038 tests at 90.68% coverage; hosted Quality/build and GitGuardian passed on the reviewed head; exact 8,016-byte, 20-row artifact SHA-256 `a395f454dd39b3befd14ac2f1b3e0dce312c8ba0441098b80e596be172749210`; exact cohort/provenance, typed failures, immutable archive-owned `known_at`, retain-before-return; production parse/project/real `StorageRootLease` archive-and-retry: `GODREJCP` / `INE102D01028` one notice, `TCS` / `INE467B01029` `NO_MATCHING_NOTICE_IN_SNAPSHOT`. Parser/projection/retention evidence only. | Automated collection/attachment fetch/redistribution; source completeness, live participation, historical coverage, commercial permission, publisher correction lineage, sentiment/ranking, recommendation, signal, order, effectiveness; automated/licensed acquisition, general news, other providers/types/surfaces, semantic correction graph, external attestation, licensed history, Sprint 14 packet integration. |
 | 14 | [#119](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119) — **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED; ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE, ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**; High priority/risk | Owner-private current same-pass raw grid `@v1`, Market Regime V3, Industry Participation V2, and clean-cutover Packet V2; latest completed official S20, optional separately labelled partial context, facts-only same-owner local AI research, or mandatory insufficient information / `NO_TRADE`. | [Plan 27](plans/27-current-same-pass-market-regime-contract.md); ten review blockers fixed without a new subsystem, including both PR #140 P2 blockers; all required current smokes passed, including the mandatory Aug-27 market-hours `RELIANCE` positive rerun on exact current source candidate 66-path fingerprint `3940ffe433887360c2744507c4075ac2404ffcd1482b2799380d26776623229e`; 852-test focused portfolio and 3,400-test full suite at 89.53% coverage recorded; all exact-current local gates passed, including Ruff format/check 275, Pyright 0/0, Vulture 80, diff, build, wheel, and clean installed-wheel imports/runtime; PR #140 merged exact reviewed head `0236942ced7127bc7220282d71e2cc35f0ff0c05` as `893c2127fac6ab7a2f3f416e315aee26d8b06b4f`; exact reviews returned APPROVE/PASS; hosted Quality/build and GitGuardian passed; Issue #119 closed/completed; Delivery Project item Done; Sprint 14 milestone delivered/closed as research-only with no autonomous-trading or advice claim. | Historical replay/backfill, polling, generic provider framework, additional providers/fallback, attachments, general news, Sector mapping, signals, recommendations, orders, hosted/shared/public delivery. |
-| 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — **In Progress**; High priority/risk | Source-backed fixed-cohort historical daily raw OHLCV completion from retained verified Upstox one-minute evidence, with immutable exact revisions and `INITIAL`/`APPEND`/`CORRECTION` lineage under Plan 28. | Current/live Sprints 10–14 usable; explicit cohort/date range/daily interval/resource ceilings/source/price basis; pre-publication complete-grid validation; immutable lineage and exact readback. A real approved-source smoke remains fail-closed. | Provider-backed download, inferred historical index membership; point-in-time membership/sector/news/event/corporate-action snapshot construction; historical validation; Market Structure implementation; Price Action; Liquidity/SMC; recommendation; broker execution; guaranteed outcomes. |
-| 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Todo; High priority/risk | Capability-aware historical validation and pre-structure gate over supplied immutable evidence. | Sprint 15 store; explicit supplied cohort; study profile (`OHLCV_ONLY`, `OHLCV_PLUS_SECTOR`, or `OHLCV_PLUS_NEWS_EVENTS`); required availability-ledger entries; development/walk-forward/out-of-sample/untouched-test separation; reproducible identities and independent review. | Evidence acquisition or point-in-time membership/sector/news/event/corporate-action snapshot construction; Market Structure implementation; Price Action; Liquidity/SMC; recommendation; broker execution; guaranteed outcomes. |
+| 15 | [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) — Closed/completed; Project **Done**; High priority/risk | Source-backed fixed-cohort historical daily raw OHLCV revisions under Plan 28. | Complete retained Upstox one-minute source evidence projected to immutable daily `INITIAL`/`APPEND`/`CORRECTION` revisions. | Provider download, adjustment, historical validation, Market Structure, signals, or orders. |
+| 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Closed/completed; Project **Done**; High priority/risk | Capability-aware historical validation under unchanged Plan 29. | Explicit study profile, cutoff-valid evidence, availability ledger, reproducible identities, and separated evaluation regions. | Evidence acquisition, fabricated historical context, Market Structure implementation, recommendations, or orders. |
+| 17 | [#147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147) — Open; Project **Todo**; High priority; estimate 1 | Capture-forward adjusted OHLC historical qualification under Plan 30. | Implementable slice complete/reviewed; four distinct genuinely completed future-session captures and unchanged Plan 29 remain mandatory for the historical claim. | Blocking current/live work, retrospective point-in-time relabelling, raw/adjusted mixing, Market Structure implementation, or orders. |
+| 18 | [#148](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/148) — Open; Project **In Progress**; High priority; estimate 1 | Current supplied-cohort Market Structure under Plan 31. | Exact 21 completed-session Upstox raw daily grid, exact Plan-21 screen, causal pivots, HH/HL/LH/LL, trend, BOS/CHoCH, fail-closed evidence, exact review, smoke, PR, hosted, and merge gates. | Historical/backtest qualification, adjusted-price mixing, Price Action, SMC, signals, recommendations, API/UI, or orders. |
 
 Sprint 11 is closed after all three dependencies and PR #124 merged. Sprint 12 /
 Issue #117 is **closed/completed** under Plan 24 after PR #135 merged exact
@@ -287,14 +291,22 @@ unless the owner later changes ordering. It requires a separate accepted
 contract and does not automatically expand either Sprint 15 / #120 or Sprint 16
 / #122.
 
-## Market Structure boundary
+## Market Structure and post-Sprint-18 boundary
 
-Market Structure is **earliest Sprint 17** and is not specified or started by
-this overview. Sprint 16 returns only `APPROVED_TO_START_MARKET_STRUCTURE` or
-`BLOCKED` with exact reasons; failure adds a replacement sprint. This is a gate,
-not a promise. Any later Market Structure contract must choose one complete raw
-OHLC basis or one complete adjusted OHLC basis for its whole window; a yfinance
-adjusted close cannot be mixed with Upstox raw open/high/low values.
+Current/live Market Structure is Sprint 18 / Issue #148 under accepted
+[Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md). It
+uses one complete Upstox raw OHLC basis for the exact 21-session window; a
+yfinance adjusted close never fills or changes an Upstox candle. The local
+candidate is implemented and exact-byte reviewed, but Issue #148 remains open
+and **In Progress** until its delivery gates pass.
+
+Sprint 17 / Issue #147 remains a separate open **Todo** lane waiting for four
+valid future captures. After Sprint 18, those captures proceed when their real
+sessions become available without blocking current/live work. Issue #145 is
+open **Todo** but has no assigned priority, estimate, or sprint. Price Action is
+the next locked module, but no Price Action Issue exists. Neither #145 nor
+Price Action starts automatically: the owner must explicitly prioritize #145
+or approve a bounded Price Action Issue and first working slice after #148.
 
 ## Future packaging outside current WIP
 
@@ -302,7 +314,7 @@ adjusted close cannot be mixed with Upstox raw open/high/low values.
 is future low-priority work for a standalone `swing-trading-market-data` PyPI
 distribution while the full application remains installable. Both distributions
 must consume one authoritative market-data codebase with no copied provider
-logic. This packaging outcome is not part of Sprints 11–16 and must not reopen
+logic. This packaging outcome is not part of Sprints 11–18 and must not reopen
 completed Issues #125/#127/#132, Sprint 11, Sprint 12, or Sprint 13, alter
 future Plan-23 migrations, or expand the delivered Sprint 14 scope.
 

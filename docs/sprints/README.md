@@ -142,18 +142,17 @@ remediation are in
   migrations remain separate. Sprint 12 subsequently closed under Issue #117;
   the Sprint 11 closeout itself granted no Sprint 12 completion evidence.
 
-  Historical work is active in Sprint 15: Plan 18 remains its downstream
-  historical-evaluation contract, while [Plan 28](../plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
-  owns the strict source-backed retained-Upstox raw completion/revision-store first
-  slice for #120. Historical news/events/sectors are not-yet-evaluated, not
-  permanently removed. Sprint 15 owns only supplied fixed-cohort historical daily
-  OHLCV and makes no inferred historical index-membership claim. Sprint 16 owns
-  capability-aware validation over supplied immutable evidence and the
-  pre-Market-Structure gate. Neither sprint automatically owns point-in-time
-  membership, sector/classification, news, event, or corporate-action snapshot
-  construction or acquisition. Missing evidence remains explicit at each
-  cutoff, without fabrication, later backfill, silent neutralization, or dropped
-  dates.
+  Historical Sprints 15 and 16 are closed/completed. Plan 28 delivered the
+  bounded source-backed retained-Upstox raw daily revision store for #120, and
+  Plan 29 preserved capability-aware validation over supplied immutable
+  evidence for #122. Historical news/events/sectors remain not-yet-evaluated,
+  not permanently removed. Neither sprint inferred historical index membership
+  or automatically owned point-in-time membership, sector/classification,
+  news, event, or corporate-action snapshot construction or acquisition.
+  Missing evidence remains explicit at each cutoff, without fabrication, later
+  backfill, silent neutralization, or dropped dates. Sprint 17 / #147 remains a
+  separate waiting historical qualification lane, while Sprint 18 / #148 owns
+  the active current/live Market Structure slice.
 
   Broader bounded per-decision-date as-of research snapshot construction belongs
   to Issue #139 and a separate accepted contract; it depends on #120/#122 unless
@@ -339,34 +338,35 @@ Industry/Packet URL attribution; late
 
 - Sprint 15 — source-backed fixed-cohort historical daily raw OHLCV store /
   [Issue #120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120)
-  is **In Progress**. [Plan 28](../plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
-  fixes the first-working slice to one closed `UPSTOX_RAW` retained-source
-  profile with complete raw daily projections, immutable exact revisions, and
-  `INITIAL`/`APPEND`/`CORRECTION` lineage/readback. Provider-backed download,
-  credentials, yfinance, adjustment/comparability, historical context
-  acquisition, and automatic old-manifest revalidation remain outside the slice.
-  The store does not infer historical index membership or construct point-in-time
-  membership, sector, news, event, or corporate-action snapshots. Historical
-  validation remains Sprint 16.
+  is **closed/completed** with Project status **Done**.
+  [Plan 28](../plans/28-fixed-cohort-historical-ohlcv-revision-store-contract.md)
+  delivered the bounded retained-source `UPSTOX_RAW` daily revision-store slice.
 
 - Sprint 16 — capability-aware historical validation and pre-structure gate /
   [Issue #122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
-  is **Todo**. It validates explicit study profiles over the supplied cohort and
-  immutable evidence revisions, requires cutoff-valid availability-ledger
-  entries, preserves development/walk-forward/out-of-sample/untouched-test
-  separation, and returns `APPROVED_TO_START_MARKET_STRUCTURE` or `BLOCKED`.
-  It does not acquire or construct missing point-in-time membership,
-  sector/classification, news, event, or corporate-action evidence and does not
-  implement Market Structure.
+  is **closed/completed** with Project status **Done**. Plan 29 retains its
+  fail-closed study-profile, availability-ledger, identity, cutoff, and
+  separated evaluation-region controls.
 
-- Future bounded per-decision-date as-of research snapshot construction —
-  [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
-  is unassigned and depends on
-  [#120](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/120) and
-  [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
-  unless the owner later changes ordering. It requires a separate accepted
-  contract and does not automatically expand either Sprint 15 / #120 or Sprint
-  16 / #122.
+- Sprint 17 — capture-forward adjusted OHLC historical qualification /
+  [Issue #147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147)
+  is open in Project **Todo**, High priority, estimate 1. The implementable
+  Plan-30 slice is complete and reviewed; four distinct future completed-session
+  captures remain mandatory for the later historical point-in-time claim and
+  do not block current/live work.
+
+- Sprint 18 — current supplied-cohort Market Structure /
+  [Issue #148](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/148)
+  is open and is the sole Project **In Progress** item, High priority, estimate
+  1. [Plan 31](../plans/31-current-supplied-cohort-market-structure-contract.md)
+  owns the implemented, exact-byte-reviewed local candidate. It is not
+  delivered until its applicable smoke, PR, hosted, and merge gates pass.
+
+- Post-Sprint-18 selection is not implicit. Issue #145 is open Project **Todo**
+  without assigned priority, estimate, or sprint. Price Action is the next
+  locked product module but has no GitHub Issue or accepted contract. The owner
+  must explicitly prioritize #145 or approve the bounded Price Action first
+  working slice after #148.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)

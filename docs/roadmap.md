@@ -294,6 +294,39 @@ verified retained one-minute Upstox partitions, immutable revisions, and exact
 continuity, cross-session comparability, provider-download, or inferred
 historical-index-membership claim.
 
+### Swing-research timeframe acquisition and retention policy
+
+For the default five-to-ten-session swing horizon, validated daily OHLCV is the
+full-history research dataset. Daily evidence is sufficient for end-of-day
+Market Regime, Industry Participation, Market Structure, and strategies whose
+decision is made after a completed session and whose execution rule uses a
+later explicitly available price. Realistic evaluation still requires gaps,
+costs, slippage, liquidity, corporate actions, and conservative handling when a
+daily bar cannot establish the order of two intraday events.
+
+Lower-timeframe retention is capability-driven rather than universal:
+
+- retain validated daily OHLCV for the full declared cohort and research range;
+- acquire or retain 15-minute evidence only for bounded execution-sensitive
+  studies, such as resolving same-session stop/target ordering or explicitly
+  timed entries and exits;
+- acquire or retain one-minute evidence only for bounded recent windows,
+  shortlisted entry/exit sessions, current-session monitoring, source-quality
+  audits, or separately accepted execution/slippage research; and
+- do not treat a one-minute backtest as tick-accurate execution evidence:
+  minute candles do not prove within-minute price order, queue position,
+  available quantity, or bid/ask fills.
+
+Existing verified retained Upstox one-minute partitions remain valid source
+evidence and are not destructively removed or reinterpreted. Plan 28 and the
+current/live Market Structure slice may continue deriving complete raw daily
+bars from those partitions. Changing future downloader cadence, retention
+windows, compaction, or archive policy is a separate bounded optimization: it
+must compare acquisition time, stored bytes, daily aggregate equivalence,
+auditability, and observable backtest differences before replacing the current
+source path. Hourly, five-minute, or other intervals are adopted only when an
+accepted study declares why daily or 15-minute evidence is insufficient.
+
 Sprint 16 /
 [Issue #122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122)
 owns capability-aware validation over the supplied cohort and immutable evidence
@@ -311,6 +344,24 @@ and data-snooping controls; development, walk-forward, out-of-sample, and
 untouched-test separation; forward/paper validation; and realistic costs and
 slippage remain required where applicable. Market Structure remains after the
 Sprint 16 gate, preserving the locked architecture sequence.
+
+The live tracker has advanced beyond that dependency statement. Sprint 15 /
+#120 and Sprint 16 / #122 are closed/completed with Project status **Done**.
+Sprint 17 / #147 has a complete reviewed implementable slice but remains open
+in **Todo** until four distinct future completed-session captures exist; that
+historical qualification lane does not block current/live delivery. Sprint 18 /
+#148 is the sole **In Progress** item under accepted
+[Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md). Its
+local current/live Market Structure candidate is implemented and reviewed but
+remains undelivered until the applicable smoke, PR, hosted, and merge gates
+pass.
+
+No post-Sprint-18 implementation starts implicitly. Issue #145 is open
+**Todo** without assigned priority, estimate, or sprint. Price Action remains
+the next locked product module, but it has no GitHub Issue or accepted contract.
+After #148, the owner must either prioritize #145 or approve a bounded Price
+Action Issue and first working slice. Sprint 17 captures continue separately
+when their genuinely completed sessions become available.
 
 Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
 separately owns the broader bounded per-decision-date as-of research snapshot
@@ -428,7 +479,7 @@ planning context remains in
 [Issue #112](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/112).
 No provider access, acquisition, or historical runtime implementation started.
 This historical blocked record grants no authority and is not the active Sprint
-10 direction. The current Sprint 10–16 sequence is the one stated at the top of
+10 direction. The current Sprint 10–18 sequence is the one stated at the top of
 this roadmap and in the Upcoming Sprints Overview.
 
 ## Phase 3: Second module — Sector Analysis
