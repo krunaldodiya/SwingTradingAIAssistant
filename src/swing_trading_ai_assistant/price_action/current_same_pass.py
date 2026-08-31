@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import types
+from dataclasses import fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from enum import Enum
+from functools import cache
+from typing import (
+    Annotated,
+    Any,
+    Final,
+    Literal,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
     PublishedCurrentCorporateActionScreenV1,
@@ -25,17 +39,214 @@ from swing_trading_ai_assistant.market_structure.current_same_pass import (
     evaluate_current_same_pass_market_structure_v1,
 )
 from swing_trading_ai_assistant.price_action.current_live import (
+    _EXPECTED_SESSIONS,  # pyright: ignore[reportPrivateUsage]
     CurrentPriceActionMemberV1,
     CurrentPriceActionReportV1,
     _absolute_exact_difference,  # pyright: ignore[reportPrivateUsage]
     _direction,  # pyright: ignore[reportPrivateUsage]
     _exact_difference,  # pyright: ignore[reportPrivateUsage]
+    _finite_decimal_parts,  # pyright: ignore[reportPrivateUsage]
     _mint_current_price_action_report_v1,  # pyright: ignore[reportPrivateUsage]
     _positive_finite_decimal,  # pyright: ignore[reportPrivateUsage]
     ordered_price_action_reasons_v1,
 )
 
-_EXPECTED_SESSIONS = 21
+_MAX_GRAPH_DEPTH = 32
+_MAX_GRAPH_NODES = 200_000
+_MAX_TUPLE_ITEMS = 1_050
+_MAX_STRING_BYTES = 4_096
+_MAX_BYTES = 4_194_304
+_MAX_INTEGER_BITS = 256
+_MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER = 34
+_MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER = 20
+
+
+@cache
+def _resolved_type_hints(expected_type: type[Any]) -> dict[str, Any]:
+    return get_type_hints(expected_type)
+
+
+def _safe_typed_value(  # noqa: C901
+    value: object,
+    expected_type: Any,
+    *,
+    depth: int,
+    remaining: list[int],
+) -> bool:
+    if depth > _MAX_GRAPH_DEPTH or remaining[0] <= 0:
+        return False
+    remaining[0] -= 1
+    origin = get_origin(expected_type)
+    arguments = get_args(expected_type)
+    if origin is Literal:
+        return any(
+            type(value) is type(option) and value == option for option in arguments
+        )
+    if origin in (Annotated, Final):
+        return _safe_typed_value(
+            value,
+            arguments[0],
+            depth=depth + 1,
+            remaining=remaining,
+        )
+    if origin in (Union, types.UnionType):
+        return any(
+            _safe_typed_value(
+                value,
+                option,
+                depth=depth + 1,
+                remaining=remaining,
+            )
+            for option in arguments
+        )
+    if origin is tuple:
+        if type(value) is not tuple:
+            return False
+        tuple_value = cast(tuple[object, ...], value)
+        if len(tuple_value) > _MAX_TUPLE_ITEMS:
+            return False
+        if len(arguments) == 2 and arguments[1] is Ellipsis:
+            return all(
+                _safe_typed_value(
+                    item,
+                    arguments[0],
+                    depth=depth + 1,
+                    remaining=remaining,
+                )
+                for item in tuple_value
+            )
+        return len(tuple_value) == len(arguments) and all(
+            _safe_typed_value(
+                item,
+                item_type,
+                depth=depth + 1,
+                remaining=remaining,
+            )
+            for item, item_type in zip(tuple_value, arguments, strict=True)
+        )
+    if origin is list:
+        if type(value) is not list:
+            return False
+        list_value = cast(list[object], value)
+        return len(list_value) <= _MAX_TUPLE_ITEMS and all(
+            _safe_typed_value(
+                item,
+                arguments[0],
+                depth=depth + 1,
+                remaining=remaining,
+            )
+            for item in list_value
+        )
+    if origin is dict:
+        if type(value) is not dict:
+            return False
+        dict_value = cast(dict[object, object], value)
+        return len(dict_value) <= _MAX_TUPLE_ITEMS and all(
+            _safe_typed_value(
+                key,
+                arguments[0],
+                depth=depth + 1,
+                remaining=remaining,
+            )
+            and _safe_typed_value(
+                item,
+                arguments[1],
+                depth=depth + 1,
+                remaining=remaining,
+            )
+            for key, item in dict_value.items()
+        )
+    if expected_type is type(None):
+        return value is None
+    if expected_type is Any:
+        return False
+    if expected_type is object:
+        return type(value) is object
+    if expected_type is str:
+        return type(value) is str and len(value.encode("utf-8")) <= _MAX_STRING_BYTES
+    if expected_type is bytes:
+        return type(value) is bytes and len(value) <= _MAX_BYTES
+    if expected_type is bool:
+        return type(value) is bool
+    if expected_type is int:
+        return type(value) is int and value.bit_length() <= _MAX_INTEGER_BITS
+    if expected_type is float:
+        return type(value) is float and value == value and abs(value) != float("inf")
+    if expected_type is Decimal:
+        if type(value) is not Decimal:
+            return False
+        try:
+            _finite_decimal_parts(value)
+        except ValueError:
+            return False
+        return True
+    if expected_type is datetime:
+        return type(value) is datetime
+    if expected_type is date:
+        return type(value) is date
+    if isinstance(expected_type, type) and issubclass(expected_type, Enum):
+        return type(value) is expected_type
+    if not (
+        isinstance(expected_type, type)
+        and is_dataclass(expected_type)
+        and type(value) is expected_type
+    ):
+        return False
+    hints = _resolved_type_hints(expected_type)
+    return all(
+        field.name in hints
+        and _safe_typed_value(
+            object.__getattribute__(value, field.name),
+            hints[field.name],
+            depth=depth + 1,
+            remaining=remaining,
+        )
+        for field in fields(expected_type)
+    )
+
+
+def _bounded_caller_objects(
+    request: CurrentSamePassMarketRegimeRequestV3,
+    raw: PrivateCurrentSamePassRawDailyResultV1,
+    screen: PublishedCurrentCorporateActionScreenV1,
+    market_structure: CurrentMarketStructureReportV1,
+) -> bool:
+    remaining: list[int] = [_MAX_GRAPH_NODES]
+    if not all(
+        _safe_typed_value(
+            value,
+            expected_type,
+            depth=0,
+            remaining=remaining,
+        )
+        for value, expected_type in (
+            (request, CurrentSamePassMarketRegimeRequestV3),
+            (raw, PrivateCurrentSamePassRawDailyResultV1),
+            (screen, PublishedCurrentCorporateActionScreenV1),
+            (market_structure, CurrentMarketStructureReportV1),
+        )
+    ):
+        return False
+    if (
+        not 1 <= len(request.members) <= 50
+        or len(raw.resolved_sessions) != _EXPECTED_SESSIONS
+    ):
+        return False
+    grid = raw.raw_grid
+    if grid is not None and (
+        len(grid.sessions) != _EXPECTED_SESSIONS
+        or len(grid.bars) > 50 * _EXPECTED_SESSIONS
+        or len(grid.source_rows) > 50 * _EXPECTED_SESSIONS
+    ):
+        return False
+    members = market_structure.members
+    if members is None:
+        return True
+    return 1 <= len(members) <= 50 and all(
+        len(member.pivots) <= _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
+        and len(member.events) <= _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
+        for member in members
+    )
 
 
 def _is_digest(value: object) -> bool:
@@ -318,6 +529,14 @@ def evaluate_current_same_pass_price_action_v1(
     market_structure: CurrentMarketStructureReportV1,
 ) -> CurrentPriceActionReportV1:
     """Return exact S19/S20 Price Action facts without external effects."""
+    if (
+        type(request) is not CurrentSamePassMarketRegimeRequestV3
+        or type(raw) is not PrivateCurrentSamePassRawDailyResultV1
+        or type(screen) is not PublishedCurrentCorporateActionScreenV1
+        or type(market_structure) is not CurrentMarketStructureReportV1
+        or not _bounded_caller_objects(request, raw, screen, market_structure)
+    ):
+        raise ValueError("invalid Price Action caller objects")
 
     expected = evaluate_current_same_pass_market_structure_v1(request, raw, screen)
     if not _safe_market_structure_report(market_structure):

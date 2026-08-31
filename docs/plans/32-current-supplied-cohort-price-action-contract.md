@@ -194,6 +194,8 @@ The contract calls the open-to-previous-close value a relation and distance, not
 ### Exact Decimal arithmetic
 
 No float conversion, division, ratio, percentage, tolerance, quantization, rounding, or ambient `decimal.Context` operation is permitted.
+Accepted Decimals are bounded before scaling or fixed-point rendering: at most 128 coefficient digits, exponent in `[-128, 128]`, and at most 258 canonical fixed-point characters including sign and decimal point. Any value outside those limits is malformed and raises `ValueError` before integer powers, zero padding, identity serialization, or the Market Structure delegate can run.
+
 
 Every difference uses integer-scaled base-10 arithmetic:
 
@@ -280,7 +282,7 @@ The schema identity binds every public and private closed field, enum, unit, nul
 
 The runtime identity follows the delivered closed nonrecursive reviewed source-manifest pattern. It covers the new Price Action core, exact boundary, package export, runtime verifier, and exact delivered raw/screen/Market Structure source boundaries on which this result depends. Verification occurs once at import; evaluation copies the verified digest and performs no runtime filesystem rediscovery. Runtime manifest-byte substitution remains an exact-byte review and delivery concern; Sprint 19 does not add external signatures or dependency-byte attestation.
 
-The cohort is exactly `1..50`; sessions are exactly 21. Calculation performs one existing bounded Market Structure evaluation plus constant S19/S20 work per member. It creates no cache, lock, mutable singleton, background task, retry counter, or persistent state. Equal explicit inputs yield byte-identical output independent of wall clock, prior runs, current directory, locale, thread, and ambient Decimal precision.
+The cohort is exactly `1..50`; sessions are exactly 21. Callback-safe intrinsic preflight is bounded to depth 32, 200,000 typed graph nodes, 1,050 items in any tuple, 4,096 UTF-8 bytes per string, 4,194,304 bytes per byte string, and 256 bits per integer. A supplied Market Structure member has at most 34 pivots and 20 events. These limits are configuration-identity inputs and reject malformed caller memory before iteration, comparison, scaling, serialization, or delegation. Calculation then performs one existing bounded Market Structure evaluation plus constant S19/S20 work per member. It creates no cache, lock, mutable singleton, background task, retry counter, or persistent state. Equal explicit inputs yield byte-identical output independent of wall clock, prior runs, current directory, locale, thread, and ambient Decimal precision.
 
 This is an additive v1 contract. It does not rename, alias, reinterpret, mutate, migrate, or dual-write delivered Market Structure, Market Regime, raw-grid, screen, Industry, packet, historical, Sprint 17, Plan 29, or Plan 30 types or bytes. There is no persisted Price Action representation to migrate or roll back.
 
@@ -297,6 +299,7 @@ This is an additive v1 contract. It does not rename, alias, reinterpret, mutate,
 | Validly shaped nonidentical Market Structure report | `MARKET_STRUCTURE_BINDING_MISMATCH`; no members | no alias, display-text match, or partial acceptance | cross-context and byte-substitution tests |
 | Wrong top-level or nested type, broken intrinsic seal, invalid enum or identity | `ValueError`; no report | no sealed insufficiency for malformed caller memory | malformed-object tests |
 | Hostile scalar, timezone, comparison object, mapping, or callback | `ValueError` without invoking caller-controlled behavior | no arbitrary method execution | hostile-object sentinels |
+| Decimal, string, integer, byte, graph, tuple, pivot, or event value at its fixed bound / limit plus one | bound accepted when otherwise exact / `ValueError` before expansion or delegation | no unbounded scaling, padding, traversal, serialization, or callback | bound and limit-plus-one tests |
 | Foreign contract revision or unsupported provider input type | `ValueError` | no implicit adapter, fallback, or latest discovery | foreign-type/version tests |
 | Valid raw evidence insufficiency | ordered `RAW_EVIDENCE_INSUFFICIENT`; no members | no inferred capability or cached repair | upstream-insufficiency test |
 | Raw acquisition unavailable or mapping/bar conflict | ordered raw insufficiency | no arbitrary winner, stale value, or provider fallback | unavailable/conflict integration tests |
@@ -317,7 +320,8 @@ This is an additive v1 contract. It does not rename, alias, reinterpret, mutate,
 | S20 open equals close with a nonflat range | `UNCHANGED`; zero body and exact wick sizes | no named candlestick classification | equality-boundary test |
 | Open or close equals S19 close | `UNCHANGED` and exact zero distance | no epsilon or forced direction | equality tests |
 | Numerically equal Decimals with different stored scales | identical facts, bytes, and identities | no scale-sensitive tie break | canonical-scale test |
-| Very large/small exponents, long coefficients, trailing zeros, changed ambient precision | identical exact values, bytes, and identities | no context rounding or exponent-form output | Decimal-context metamorphic tests |
+| Large/small exponents and long coefficients within fixed bounds, trailing zeros, changed ambient precision | identical exact values, bytes, and identities | no context rounding or exponent-form output | bounded Decimal-context metamorphic tests |
+| Decimal coefficient, exponent, or fixed-point output beyond its fixed bound | `ValueError` before scaling or serialization | no oversized integer power, zero padding, or partial output | numeric limit-plus-one tests |
 | Zero/negative/nonfinite price or invalid OHLC ordering | `ValueError` as malformed upstream evidence | no sanitization or plausible replacement | Decimal/OHLC invariant tests |
 | Member and source permutations with equal exact semantics | canonical byte-identical output | no dictionary or source-order dependence | permutation test |
 | Combined raw, grid, future, screen, Market Structure insufficiency and mismatch | every applicable reason once in frozen order | no first-exception precedence | combined-failure test |

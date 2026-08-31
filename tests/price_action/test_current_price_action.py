@@ -8,6 +8,7 @@ from dataclasses import replace
 from decimal import Decimal, localcontext
 from importlib import util
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -136,6 +137,76 @@ def test_exact_boundary_projects_only_hand_computed_s19_s20_facts(
     assert b'"pivots":' not in report.canonical_json_bytes()
 
 
+def test_asymmetric_down_candle_and_prior_close_relations_are_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, fixture = _exact_context(tmp_path, monkeypatch)
+    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    assert context.raw_result.raw_grid is not None
+    grid = context.raw_result.raw_grid
+    previous = raw_test._rehashed(
+        type(grid.bars[-2]),
+        grid.bars[-2],
+        "raw_bar_identity_sha256",
+        open=Decimal("100"),
+        high=Decimal("100"),
+        low=Decimal("100"),
+        close=Decimal("100"),
+    )
+    current = raw_test._rehashed(
+        type(grid.bars[-1]),
+        grid.bars[-1],
+        "raw_bar_identity_sha256",
+        open=Decimal("107"),
+        high=Decimal("113"),
+        low=Decimal("91"),
+        close=Decimal("95"),
+    )
+    changed_grid = raw_test._rehashed(
+        type(grid),
+        grid,
+        "raw_grid_identity_sha256",
+        bars=(*grid.bars[:-2], previous, current),
+    )
+    changed_raw = raw_test._rehashed(
+        type(context.raw_result),
+        context.raw_result,
+        "raw_result_identity_sha256",
+        raw_grid=changed_grid,
+    )
+
+    report = same_pass.evaluate_current_same_pass_price_action_v1(
+        context.request,
+        changed_raw,
+        context.corporate_action_screen,
+        evaluate_current_same_pass_market_structure_v1(
+            context.request,
+            changed_raw,
+            context.corporate_action_screen,
+        ),
+    )
+
+    assert report.members is not None
+    member = report.members[0]
+    assert member.candle_direction == "DOWN"
+    assert member.session_range_state == "NON_FLAT"
+    assert (
+        member.range_size,
+        member.body_size,
+        member.upper_wick_size,
+        member.lower_wick_size,
+    ) == (
+        Decimal("22"),
+        Decimal("12"),
+        Decimal("6"),
+        Decimal("4"),
+    )
+    assert member.open_vs_previous_close == "UP"
+    assert member.open_to_previous_close_distance == Decimal("7")
+    assert member.close_vs_previous_close == "DOWN"
+    assert member.close_to_previous_close_distance == Decimal("5")
+
+
 def test_flat_and_equality_facts_remain_observed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -247,6 +318,22 @@ def test_public_member_enforces_canonical_equity_identity(
     with pytest.raises(ValueError):
         replace(member, effective_symbol="X" * 65)
 
+    class CallerExchange:
+        invoked = False
+
+        def __ne__(self, other: object) -> bool:
+            del other
+            type(self).invoked = True
+            raise RuntimeError("caller comparison must not run")
+
+    with pytest.raises(ValueError, match="member fields"):
+        replace(member, exchange=cast(Any, CallerExchange()))
+    assert not CallerExchange.invoked
+    with pytest.raises(ValueError, match="bounded representation"):
+        replace(member, range_size=Decimal("1e129"))
+    with pytest.raises(ValueError, match="bounded representation"):
+        replace(member, range_size=Decimal("1" * 129))
+
 
 def test_decimal_context_does_not_change_report_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -262,6 +349,22 @@ def test_decimal_context_does_not_change_report_bytes(
 
     assert first.canonical_json_bytes() == second.canonical_json_bytes()
     assert first.report_identity_sha256 == second.report_identity_sha256
+
+
+def test_configuration_identity_binds_session_count_and_numeric_bounds() -> None:
+    preimage = current_live._configuration_identity_preimage_v1()  # pyright: ignore[reportPrivateUsage]
+    assert preimage["session_count"] == 21
+    assert preimage["decimal_bounds"] == {
+        "coefficient_digits_max": 128,
+        "exponent_min": -128,
+        "exponent_max": 128,
+        "canonical_characters_max": 258,
+    }
+    mutated = {**preimage, "session_count": 22}
+    assert (
+        current_live.current_price_action_identity_sha256_v1(mutated, omit=frozenset())
+        != current_live.CONFIGURATION_IDENTITY_SHA256_V1
+    )
 
 
 def test_exact_market_structure_is_required_and_natural_insufficiency_is_admissible(
@@ -323,7 +426,7 @@ def test_hostile_supplied_market_structure_is_rejected_without_callback(
     hostile = deepcopy(_expected_market_structure(context))
     object.__setattr__(hostile, "evidence_state", CallerScalar())
 
-    with pytest.raises(ValueError, match="Market Structure caller object"):
+    with pytest.raises(ValueError, match="Price Action caller objects"):
         same_pass.evaluate_current_same_pass_price_action_v1(
             context.request,
             context.raw_result,
@@ -408,6 +511,25 @@ def test_upstream_insufficiency_maps_to_closed_precedence_without_partial_output
     )
 
 
+def test_complete_upstream_reason_projection_and_price_action_precedence() -> None:
+    upstream = current_live.PRICE_ACTION_REASON_ORDER_V1[:-2]
+    report = SimpleNamespace(reasons=upstream)
+
+    assert same_pass._market_structure_reasons(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, report)
+    ) == set(upstream)
+    assert (
+        current_live.ordered_price_action_reasons_v1(
+            {
+                *upstream,
+                "MARKET_STRUCTURE_INSUFFICIENT",
+                "MARKET_STRUCTURE_BINDING_MISMATCH",
+            }
+        )
+        == current_live.PRICE_ACTION_REASON_ORDER_V1
+    )
+
+
 def test_boundary_rejects_malformed_and_hostile_caller_values() -> None:
     class CallerValue:
         invoked = False
@@ -426,6 +548,56 @@ def test_boundary_rejects_malformed_and_hostile_caller_values() -> None:
             cast(Any, object()),
         )
     assert not CallerValue.invoked
+
+
+def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CallerIterable:
+        invoked = False
+
+        def __iter__(self) -> Any:
+            type(self).invoked = True
+            raise RuntimeError("caller iteration must not run")
+
+    context, _ = _exact_context(tmp_path, monkeypatch)
+    exact = _expected_market_structure(context)
+    invalid = deepcopy(context.raw_result)
+    object.__setattr__(invalid, "resolved_sessions", CallerIterable())
+    delegated = False
+
+    def forbidden_delegate(*arguments: object, **keywords: object) -> Any:
+        nonlocal delegated
+        del arguments, keywords
+        delegated = True
+        raise AssertionError("Market Structure delegate must not run")
+
+    monkeypatch.setattr(
+        same_pass,
+        "evaluate_current_same_pass_market_structure_v1",
+        forbidden_delegate,
+    )
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            context.request,
+            invalid,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not CallerIterable.invoked
+    assert not delegated
+
+    unbounded = deepcopy(context.raw_result)
+    assert unbounded.raw_grid is not None
+    object.__setattr__(unbounded.raw_grid.bars[-1], "open", Decimal("1e1000000"))
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            context.request,
+            unbounded,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not delegated
 
 
 def test_partial_current_session_is_metamorphically_ignored(

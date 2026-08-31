@@ -28,6 +28,18 @@ SessionRangeStateV1: TypeAlias = Literal["FLAT", "NON_FLAT"]
 CONTRACT_VERSION_V1: Final = "current-supplied-cohort-price-action@v1"
 _EXPECTED_SESSIONS: Final = 21
 _MAX_COHORT_SIZE: Final = 50
+_MAX_DECIMAL_COEFFICIENT_DIGITS: Final = 128
+_MIN_DECIMAL_EXPONENT: Final = -128
+_MAX_DECIMAL_EXPONENT: Final = 128
+_MAX_CANONICAL_DECIMAL_CHARACTERS: Final = 258
+_MAX_GRAPH_DEPTH: Final = 32
+_MAX_GRAPH_NODES: Final = 200_000
+_MAX_TUPLE_ITEMS: Final = 1_050
+_MAX_STRING_BYTES: Final = 4_096
+_MAX_BYTES: Final = 4_194_304
+_MAX_INTEGER_BITS: Final = 256
+_MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER: Final = 34
+_MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER: Final = 20
 _DIGEST_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _RUNTIME_MANIFEST_MODULE: Final = (
     "swing_trading_ai_assistant.price_action.current_live_runtime_identity_manifest"
@@ -92,8 +104,21 @@ def _finite_decimal_parts(value: Decimal) -> tuple[int, tuple[int, ...], int]:
     if type(value) is not Decimal or not value.is_finite():
         raise ValueError("exact Decimal must be finite")
     sign, digits, exponent = value.as_tuple()
-    if type(exponent) is not int:
-        raise ValueError("finite Decimal exponent must be an integer")
+    if (
+        type(exponent) is not int
+        or len(digits) > _MAX_DECIMAL_COEFFICIENT_DIGITS
+        or not _MIN_DECIMAL_EXPONENT <= exponent <= _MAX_DECIMAL_EXPONENT
+    ):
+        raise ValueError("exact Decimal exceeds the bounded representation")
+    fixed_characters = (
+        len(digits) + exponent
+        if exponent >= 0
+        else len(digits) + 1
+        if -exponent < len(digits)
+        else 2 - exponent
+    ) + sign
+    if fixed_characters > _MAX_CANONICAL_DECIMAL_CHARACTERS:
+        raise ValueError("exact Decimal fixed-point representation is too large")
     return sign, digits, exponent
 
 
@@ -304,6 +329,26 @@ def _schema_identity_preimage_v1() -> dict[str, object]:
         },
         "reason_order": list(PRICE_ACTION_REASON_ORDER_V1),
         "cohort_size": [1, _MAX_COHORT_SIZE],
+        "decimal_bounds": {
+            "coefficient_digits_max": _MAX_DECIMAL_COEFFICIENT_DIGITS,
+            "exponent_min": _MIN_DECIMAL_EXPONENT,
+            "exponent_max": _MAX_DECIMAL_EXPONENT,
+            "canonical_characters_max": _MAX_CANONICAL_DECIMAL_CHARACTERS,
+        },
+        "caller_bounds": {
+            "graph_depth_max": _MAX_GRAPH_DEPTH,
+            "graph_nodes_max": _MAX_GRAPH_NODES,
+            "tuple_items_max": _MAX_TUPLE_ITEMS,
+            "string_bytes_max": _MAX_STRING_BYTES,
+            "bytes_max": _MAX_BYTES,
+            "integer_bits_max": _MAX_INTEGER_BITS,
+            "market_structure_pivots_per_member_max": (
+                _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
+            ),
+            "market_structure_events_per_member_max": (
+                _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
+            ),
+        },
         "session_count": _EXPECTED_SESSIONS,
     }
 
@@ -336,8 +381,18 @@ def _calculation_identity_preimage_v1() -> dict[str, object]:
 CALCULATION_IDENTITY_SHA256_V1: Final = current_price_action_identity_sha256_v1(
     _calculation_identity_preimage_v1(), omit=frozenset()
 )
-CONFIGURATION_IDENTITY_SHA256_V1: Final = current_price_action_identity_sha256_v1(
-    {
+
+
+def _configuration_identity_preimage_v1() -> dict[str, object]:
+    return {
+        "session_count": _EXPECTED_SESSIONS,
+        "cohort_size_max": _MAX_COHORT_SIZE,
+        "decimal_bounds": {
+            "coefficient_digits_max": _MAX_DECIMAL_COEFFICIENT_DIGITS,
+            "exponent_min": _MIN_DECIMAL_EXPONENT,
+            "exponent_max": _MAX_DECIMAL_EXPONENT,
+            "canonical_characters_max": _MAX_CANONICAL_DECIMAL_CHARACTERS,
+        },
         "request_contract": "current-supplied-cohort-market-regime@v3",
         "raw_grid_contract": "current-same-pass-raw-daily-grid@v1",
         "screen_contract": "current-supplied-cohort-corporate-action-screen@v1",
@@ -347,7 +402,25 @@ CONFIGURATION_IDENTITY_SHA256_V1: Final = current_price_action_identity_sha256_v
         "interval": "1d-derived-from-retained-1m",
         "temporal_scope": "CURRENT_SAME_PASS_ONLY",
         "partial_current_session": "IGNORED",
-    },
+        "caller_bounds": {
+            "graph_depth_max": _MAX_GRAPH_DEPTH,
+            "graph_nodes_max": _MAX_GRAPH_NODES,
+            "tuple_items_max": _MAX_TUPLE_ITEMS,
+            "string_bytes_max": _MAX_STRING_BYTES,
+            "bytes_max": _MAX_BYTES,
+            "integer_bits_max": _MAX_INTEGER_BITS,
+            "market_structure_pivots_per_member_max": (
+                _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
+            ),
+            "market_structure_events_per_member_max": (
+                _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
+            ),
+        },
+    }
+
+
+CONFIGURATION_IDENTITY_SHA256_V1: Final = current_price_action_identity_sha256_v1(
+    _configuration_identity_preimage_v1(),
     omit=frozenset(),
 )
 
@@ -446,6 +519,7 @@ class CurrentPriceActionMemberV1:
     def __post_init__(self) -> None:
         if (
             not _valid_isin(self.isin)
+            or type(self.exchange) is not str
             or self.exchange != "NSE"
             or _valid_effective_symbol(self.effective_symbol) is False
             or type(self.previous_session) is not date
@@ -480,6 +554,8 @@ class CurrentPriceActionMemberV1:
             for value in values
         ):
             raise ValueError("Price Action sizes must be finite nonnegative Decimals")
+        for value in values:
+            _finite_decimal_parts(value)
         if not _geometry_is_exact(
             self.range_size,
             self.upper_wick_size,
