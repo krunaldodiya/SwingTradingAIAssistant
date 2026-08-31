@@ -36,6 +36,38 @@ Evaluate only proposed new modules, data sources, or scoring factors before buil
 lines state expected value, scope fit, material data/research risk, the smallest alternative, and `accepted`,
 `deferred`, or `rejected`. Ordinary implementation choices need no such ritual.
 
+## Mandatory execution preflight
+
+The following controls apply to every task, including resumed work and work that
+appears routine. Prior-session familiarity does not substitute for repeating the
+preflight. The agent must complete it before planning, editing, delegation, or
+delivery:
+
+1. Read the software-engineering handbook index and every primary chapter
+   relevant to the task, then apply them as binding process requirements.
+2. When work needs multiple agents or independent R3/R4 review, use Herdr and
+   `docs/herdr-multi-agent-workflow.md`; never substitute an invisible or generic
+   subagent launcher. Keep one coordinator, freeze contracts and file ownership,
+   prohibit nested delegation, and close completed tabs after capturing results.
+   If Herdr is unavailable, continue single-agent where adequate or pause the
+   exact work that requires independent agents.
+3. Enforce working-feature-first sequencing proactively. Freeze the smallest
+   safe, honest, usable end-to-end slice, separate later improvements, and keep
+   external temporal or evidence gates from blocking unrelated current work.
+4. Rebuild context from current evidence: inspect the live GitHub Issue and
+   Project state, all relevant repository authority and module documents,
+   durable memories, and useful prior-conversation history. Resolve conflicts in
+   favor of current authoritative evidence; never continue from a stale summary.
+5. When the harness exposes `/goal` or equivalent persistent execution, attempt
+   to use it by default for an implementation-ready bounded slice. First freeze
+   the Issue, working/later boundary, contracts, ownership, risk matrix,
+   acceptance evidence, review ownership, and pause conditions. Goal mode grants
+   continuity, not more authority, and must pause at the boundaries defined
+   below.
+
+Record an unavailable handbook source, Herdr runtime, context source, or goal
+facility as an explicit constraint; do not silently skip the applicable control.
+
 ## Development workflow
 
 GitHub is the sole active tracker for new work. Create repository Issues through the issue forms and manage

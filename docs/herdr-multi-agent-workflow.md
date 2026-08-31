@@ -7,6 +7,12 @@ safe in the shared SwingTradingAIAssistant working tree. It complements
 `AGENTS.md`; repository, product, issue, plan, authorization, and executable-gate
 requirements remain authoritative.
 
+Before any Herdr control command, complete the five-part mandatory execution
+preflight in `AGENTS.md`: handbook, Herdr routing, working-feature-first
+sequencing, current-context reconstruction, and `/goal` use when available.
+Repeat it when resuming a session or changing the active task; stale familiarity
+is not evidence.
+
 ## Applicability
 
 Use Herdr when work genuinely decomposes into independent implementation,
