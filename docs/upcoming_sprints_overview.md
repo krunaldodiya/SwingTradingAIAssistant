@@ -82,11 +82,12 @@ qualifies only later historical point-in-time and backtest claims and does not
 consume active current/live WIP.
 
 Sprint 18 / Issue #148 delivered current supplied-cohort Market Structure
-under Plan 31 through merged PR #149. The Issue is closed/completed and its
-Delivery Project item is **Done**. Sprint 19 / Issue #152 is the sole
-**In Progress** item. Its accepted Plan 32 first working slice consumes the
-exact current same-pass Upstox raw daily grid, Plan-21 screen, and exact
-Market Structure result to produce threshold-free current Price Action facts.
+under Plan 31 through merged PR #149. Sprint 19 / Issue #152 delivered
+current supplied-cohort Price Action under Plan 32 through merged PR #153.
+Both Issues are closed/completed and their Delivery Project items are
+**Done**. Issue #154 is a bounded planning and benchmark record under Plan 33;
+it changes no runtime and leaves production implementation to a separate
+Issue.
 
 Sprints 15–19 do not automatically own point-in-time membership, sector or
 classification, news, event, or corporate-action snapshot construction or
@@ -122,7 +123,8 @@ OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
 | 16 | [#122](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/122) — Closed/completed; Project **Done**; High priority/risk | Capability-aware historical validation under unchanged Plan 29. | Explicit study profile, cutoff-valid evidence, availability ledger, reproducible identities, and separated evaluation regions. | Evidence acquisition, fabricated historical context, Market Structure implementation, recommendations, or orders. |
 | 17 | [#147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147) — Open; Project **Todo**; High priority; estimate 1 | Capture-forward adjusted OHLC historical qualification under Plan 30. | Implementable slice complete/reviewed; four distinct genuinely completed future-session captures and unchanged Plan 29 remain mandatory for the historical claim. | Blocking current/live work, retrospective point-in-time relabelling, raw/adjusted mixing, Market Structure implementation, or orders. |
 | 18 | [#148](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/148) — Closed/completed; Project **Done**; High priority/risk; estimate 1 | Delivered current supplied-cohort Market Structure under Plan 31. | [PR #149](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/149) merged exact reviewed head `981b387f30f154be2ce837227132d16a48df4cb9` as `fa999408ae1318ea40e38ab566b728bec286438f`; exact 21-session raw grid, Plan-21 screen, pivots, HH/HL/LH/LL, trend, BOS/CHoCH, retained-current smoke, hosted and security gates passed. | Historical/backtest qualification, adjusted-price mixing, Price Action, SMC, signals, recommendations, API/UI, or orders. |
-| 19 | [#152](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/152) — Open; Project **In Progress**; High priority/risk; estimate 1 | Current supplied-cohort Price Action under Plan 32. | Exact completed S19/S20 facts over the admitted 21-session Upstox RAW grid, exact Plan-21 screen and exact observed Market Structure; threshold-free arithmetic, fail-closed evidence, exact review, retained-current smoke, PR, hosted and merge gates. | Named patterns, thresholds, historical/backtest claims, adjusted-price mixing, Liquidity/SMC, Volume, Relative Strength, signals, recommendations, delivery surfaces, or orders. |
+| 19 | [#152](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/152) — Closed/completed; Project **Done**; High priority/risk; estimate 1 | Delivered current supplied-cohort Price Action under Plan 32. | [PR #153](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/153) merged exact reviewed head `aaaade762b1b633cd67fd0ab7c5e8fec55deebac` as `80efbec7b8af3fad125312ef919a18137840d3df`; exact S19/S20 facts, retained-current smoke, independent reviews, local/hosted gates, and GitGuardian passed. | Named patterns, thresholds, historical/backtest claims, adjusted-price mixing, Liquidity/SMC, Volume, Relative Strength, signals, recommendations, delivery surfaces, or orders. |
+| Planning | [#154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154) — open; no Sprint milestone assigned | Accepted Plan 33 source decision, benchmark, and closed implementation contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture. | Source-verified yfinance execution; named eight-permit pool before yfinance import; fixed 125-millisecond request-start cadence and bounded session; 100/100 members over 21 sessions in 25.942 seconds; functional **APPROVE** and security **PASS**; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) then bounded implementation [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156), both open Project **Todo**. | Runtime/store/scheduler implementation in #154, historical membership relabelling, raw/adjusted mixing, provider fallback, public payloads, signals, recommendations, or orders. |
 
 Sprint 11 is closed after all three dependencies and PR #124 merged. Sprint 12 /
 Issue #117 is **closed/completed** under Plan 24 after PR #135 merged exact
@@ -293,7 +295,7 @@ unless the owner later changes ordering. It requires a separate accepted
 contract and does not automatically expand either Sprint 15 / #120 or Sprint 16
 / #122.
 
-## Delivered Market Structure and Sprint 19 boundary
+## Delivered Market Structure and Price Action boundaries
 
 Current/live Market Structure was delivered by Sprint 18 / Issue #148 under
 [Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md) and
@@ -301,17 +303,20 @@ merged PR #149. It uses one complete Upstox raw OHLC basis for the exact
 21-session window; a yfinance adjusted close never fills or changes an Upstox
 candle.
 
-Sprint 19 / Issue #152 is now **In Progress** under accepted
-[Plan 32](plans/32-current-supplied-cohort-price-action-contract.md). It is
-limited to threshold-free S19/S20 completed-bar geometry and preceding-close
-movement over the exact current raw grid, Plan-21 screen, and observed Market
-Structure result. Liquidity/SMC, Volume, Relative Strength, named patterns,
-signals, historical qualification, and delivery surfaces remain outside it.
+Sprint 19 / Issue #152 delivered threshold-free S19/S20 Price Action under
+[Plan 32](plans/32-current-supplied-cohort-price-action-contract.md) and
+merged PR #153. Liquidity/SMC, Volume, Relative Strength, named patterns,
+signals, historical qualification, and delivery surfaces remain outside that
+delivered slice.
 
-Sprint 17 / Issue #147 remains a separate open **Todo** lane at `1/4`, waiting
-for three valid future captures without blocking Sprint 19. Issue #145 remains
-open **Todo** without assigned priority, estimate, or sprint and likewise does
-not block the accepted Price Action slice.
+Issue #154 and
+[Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md) own only
+the efficient current Nifty 50 plus Nifty Next 50 adjusted-capture source
+decision, benchmark, and implementation contract. Production runtime remains
+a separate bounded Issue. Sprint 17 / Issue #147 remains a separate open
+**Todo** lane at `1/4`, waiting for three valid future captures without
+blocking this work. Issue #145 remains open **Todo** without assigned priority,
+estimate, or sprint.
 
 ## Future packaging outside current WIP
 

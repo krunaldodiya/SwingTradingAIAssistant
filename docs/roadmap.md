@@ -355,14 +355,30 @@ delivery. Sprint 18 / #148 delivered current/live Market Structure through
 [Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md) and
 merged PR #149; the Issue is closed/completed and its Project item is **Done**.
 
-Sprint 19 / #152 is the sole **In Progress** item under accepted
-[Plan 32](plans/32-current-supplied-cohort-price-action-contract.md). It owns
-only the bounded current supplied-cohort Price Action first working slice.
+Sprint 19 / #152 delivered the bounded current supplied-cohort Price Action
+first working slice under
+[Plan 32](plans/32-current-supplied-cohort-price-action-contract.md).
+[PR #153](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/153)
+merged exact reviewed head `aaaade762b1b633cd67fd0ab7c5e8fec55deebac`
+as `80efbec7b8af3fad125312ef919a18137840d3df`; the Issue is
+closed/completed and its Project item is **Done**.
+
+[Issue #154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154)
+and [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md)
+own only the bounded source decision, complete nonpublishing benchmark, and
+implementation contract for efficient current Nifty 50 plus Nifty Next 50
+adjusted capture. The measured two-cohort, eight-worker acquisition completed
+100/100 members over 21 sessions in 25.942 seconds on the fixed-cadence bounded path. Issue #154 changes no
+runtime, scheduler, store, provider profile, or historical qualification.
+[Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
+owns the reviewed Plan 30 runtime delivery prerequisite without closing #147;
+[Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
+owns the separately bounded Plan 33 implementation.
+
 Issue #145 remains open **Todo** without assigned priority, estimate, or
-sprint and does not block Sprint 19. Sprint 17 captures continue separately
-when their genuinely completed sessions become available. Liquidity/SMC,
-Volume, and Relative Strength remain separate later modules and are not
-bundled into Price Action.
+sprint and does not block this planning slice. Sprint 17 captures continue
+separately when their genuinely completed sessions become available.
+Liquidity/SMC, Volume, and Relative Strength remain separate later modules.
 
 Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
 separately owns the broader bounded per-decision-date as-of research snapshot
