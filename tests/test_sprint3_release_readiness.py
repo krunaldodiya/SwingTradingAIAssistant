@@ -497,3 +497,76 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     assert re.search(r"current Plan-27 authorized\s+amendment", plan24)
     assert "historical delivered file set" in plan25.lower()
     assert re.search(r"current Plan-27 authorized\s+amendment", plan25)
+
+
+def test_mandatory_execution_preflight_remains_repository_authority() -> None:
+    agents = " ".join((ROOT / "AGENTS.md").read_text().split())
+    for required in (
+        "## Mandatory execution preflight",
+        (
+            "The following controls apply to every task, including resumed "
+            "work and work that appears routine"
+        ),
+        (
+            "The agent must complete it before planning, editing, delegation, "
+            "or delivery"
+        ),
+        (
+            "Read the software-engineering handbook index and every primary "
+            "chapter relevant to the task"
+        ),
+        ("When work needs multiple agents or independent R3/R4 review, use Herdr"),
+        ("external temporal or evidence gates from blocking unrelated current work"),
+        (
+            "Freeze the smallest safe, honest, usable end-to-end slice, "
+            "separate later improvements"
+        ),
+        (
+            "inspect the live GitHub Issue and Project state, all relevant "
+            "repository authority and module documents, durable memories, "
+            "and useful prior-conversation history"
+        ),
+        (
+            "When the harness exposes `/goal` or equivalent persistent "
+            "execution, attempt to use it by default"
+        ),
+        (
+            "Goal mode grants continuity, not more authority, and must pause "
+            "at the boundaries defined below"
+        ),
+        (
+            "First freeze the Issue, working/later boundary, contracts, "
+            "ownership, risk matrix, acceptance evidence, review ownership, "
+            "and pause conditions"
+        ),
+        (
+            "Start goal mode only after the governing Issue and sources are "
+            "resolved, the first working slice and later improvements are "
+            "separated, cross-slice contracts and file ownership are frozen, "
+            "the risk controls and acceptance evidence are named"
+        ),
+        (
+            "Pause it at the next safe boundary for an owner decision, source "
+            "or provider adoption, credentials or protected external effects, "
+            "destructive or irreversible action, an unavailable market/evidence "
+            "window, a scope-expansion circuit breaker, conflicting shared-tree "
+            "work, or an exact-byte review or release boundary"
+        ),
+        (
+            "Resuming a goal requires rechecking the tracker state, branch and "
+            "working tree, material decisions, external prerequisites, and "
+            "whether earlier evidence still applies; never continue from stale "
+            "state merely because the harness restored a session"
+        ),
+        "Prior-session familiarity does not substitute",
+    ):
+        assert required in agents
+
+    herdr_workflow = " ".join(
+        (ROOT / "docs/herdr-multi-agent-workflow.md").read_text().split()
+    )
+    assert "five-part mandatory execution" in herdr_workflow
+    assert (
+        "Repeat it when resuming a session or changing the active task"
+        in herdr_workflow
+    )
