@@ -145,6 +145,9 @@ def test_exact_boundary_projects_only_hand_computed_s19_s20_facts(
     )
     assert b'"open":' not in report.canonical_json_bytes()
     assert b'"high":' not in report.canonical_json_bytes()
+    assert b'"low":' not in report.canonical_json_bytes()
+    assert b'"close":' not in report.canonical_json_bytes()
+    assert b'"volume":' not in report.canonical_json_bytes()
     assert b'"pivots":' not in report.canonical_json_bytes()
 
 
@@ -414,6 +417,32 @@ def test_public_member_enforces_canonical_equity_identity(
         replace(member, range_size=Decimal("1e129"))
     with pytest.raises(ValueError, match="bounded representation"):
         replace(member, range_size=Decimal("1" * 129))
+
+
+def test_exact_decimal_coefficient_and_exponent_bounds_are_accepted() -> None:
+    accepted = (
+        Decimal("9" * 128),
+        Decimal("1e128"),
+        Decimal("1e-128"),
+    )
+    for value in accepted:
+        current_live._finite_decimal_parts(value)  # pyright: ignore[reportPrivateUsage]
+        assert (
+            sys.getsizeof(value)
+            <= current_live.PRICE_ACTION_DECIMAL_OBJECT_BYTES_MAX_V1
+        )
+    assert current_live._positive_exact_difference_is_bounded(  # pyright: ignore[reportPrivateUsage]
+        Decimal("9" * 128),
+        Decimal("1"),
+    )
+
+    for value in (
+        Decimal("1" * 129),
+        Decimal("1e129"),
+        Decimal("1e-129"),
+    ):
+        with pytest.raises(ValueError, match="bounded representation"):
+            current_live._finite_decimal_parts(value)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_decimal_context_does_not_change_report_bytes(
@@ -1149,6 +1178,11 @@ def test_report_constructor_and_evaluator_effect_boundary(
 
     with pytest.raises(ValueError, match="exact evidence boundary"):
         CurrentPriceActionReportV1()
+    monkeypatch.setattr(
+        raw_test.raw_daily._DefaultCurrentSamePassRawEvidencePortV1,
+        "download_under_lease",
+        forbidden,
+    )
     monkeypatch.setattr(Path, "open", forbidden)
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     monkeypatch.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
