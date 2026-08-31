@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import socket
+import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, tzinfo
@@ -17,6 +22,11 @@ import pytest
 import swing_trading_ai_assistant.price_action as price_action_package
 import swing_trading_ai_assistant.price_action.current_live as current_live
 import swing_trading_ai_assistant.price_action.current_same_pass as same_pass
+from swing_trading_ai_assistant.market_structure.current_live import (
+    MarketStructureEventV1,
+    MarketStructurePivotV1,
+    current_market_structure_identity_sha256_v1,
+)
 from swing_trading_ai_assistant.market_structure.current_same_pass import (
     evaluate_current_same_pass_market_structure_v1,
 )
@@ -206,6 +216,76 @@ def test_asymmetric_down_candle_and_prior_close_relations_are_exact(
     assert member.open_to_previous_close_distance == Decimal("7")
     assert member.close_vs_previous_close == "DOWN"
     assert member.close_to_previous_close_distance == Decimal("5")
+
+
+def test_asymmetric_up_candle_uses_maximum_and_minimum_body_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, fixture = _exact_context(tmp_path, monkeypatch)
+    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    assert context.raw_result.raw_grid is not None
+    grid = context.raw_result.raw_grid
+    previous = raw_test._rehashed(
+        type(grid.bars[-2]),
+        grid.bars[-2],
+        "raw_bar_identity_sha256",
+        open=Decimal("100"),
+        high=Decimal("100"),
+        low=Decimal("100"),
+        close=Decimal("100"),
+    )
+    current = raw_test._rehashed(
+        type(grid.bars[-1]),
+        grid.bars[-1],
+        "raw_bar_identity_sha256",
+        open=Decimal("95"),
+        high=Decimal("113"),
+        low=Decimal("91"),
+        close=Decimal("107"),
+    )
+    changed_grid = raw_test._rehashed(
+        type(grid),
+        grid,
+        "raw_grid_identity_sha256",
+        bars=(*grid.bars[:-2], previous, current),
+    )
+    changed_raw = raw_test._rehashed(
+        type(context.raw_result),
+        context.raw_result,
+        "raw_result_identity_sha256",
+        raw_grid=changed_grid,
+    )
+
+    report = same_pass.evaluate_current_same_pass_price_action_v1(
+        context.request,
+        changed_raw,
+        context.corporate_action_screen,
+        evaluate_current_same_pass_market_structure_v1(
+            context.request,
+            changed_raw,
+            context.corporate_action_screen,
+        ),
+    )
+
+    assert report.members is not None
+    member = report.members[0]
+    assert member.candle_direction == "UP"
+    assert member.session_range_state == "NON_FLAT"
+    assert (
+        member.range_size,
+        member.body_size,
+        member.upper_wick_size,
+        member.lower_wick_size,
+    ) == (
+        Decimal("22"),
+        Decimal("12"),
+        Decimal("6"),
+        Decimal("4"),
+    )
+    assert member.open_vs_previous_close == "DOWN"
+    assert member.open_to_previous_close_distance == Decimal("5")
+    assert member.close_vs_previous_close == "UP"
+    assert member.close_to_previous_close_distance == Decimal("7")
 
 
 def test_flat_and_equality_facts_remain_observed(
@@ -529,6 +609,7 @@ def test_upstream_insufficiency_maps_to_closed_precedence_without_partial_output
 def test_complete_upstream_reason_projection_and_price_action_precedence() -> None:
     upstream = (
         "RAW_EVIDENCE_INSUFFICIENT",
+        "RAW_RESULT_BINDING_MISMATCH",
         "RAW_GRID_BINDING_MISMATCH",
         "SESSION_WINDOW_INVALID",
         "MEMBER_GRID_INCOMPLETE",
@@ -551,6 +632,7 @@ def test_complete_upstream_reason_projection_and_price_action_precedence() -> No
         == expected
         == (
             "RAW_EVIDENCE_INSUFFICIENT",
+            "RAW_RESULT_BINDING_MISMATCH",
             "RAW_GRID_BINDING_MISMATCH",
             "SESSION_WINDOW_INVALID",
             "MEMBER_GRID_INCOMPLETE",
@@ -702,10 +784,46 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
 def test_preflight_resource_limits_and_no_cache_state_are_discriminating() -> None:
     safe = same_pass._safe_typed_value  # pyright: ignore[reportPrivateUsage]
     remaining = [current_live.PRICE_ACTION_GRAPH_NODES_MAX_V1]
+    assert safe(
+        (0,) * current_live.PRICE_ACTION_TUPLE_ITEMS_MAX_V1,
+        tuple[int, ...],
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert safe(
+        "x" * current_live.PRICE_ACTION_STRING_CHARACTERS_MAX_V1,
+        str,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert safe(
+        "é" * (current_live.PRICE_ACTION_STRING_BYTES_MAX_V1 // 2),
+        str,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert safe(
+        b"x" * current_live.PRICE_ACTION_BYTES_MAX_V1,
+        bytes,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert safe(
+        1 << (current_live.PRICE_ACTION_INTEGER_BITS_MAX_V1 - 1),
+        int,
+        depth=0,
+        remaining=remaining.copy(),
+    )
 
     assert not safe(
         (0,) * (current_live.PRICE_ACTION_TUPLE_ITEMS_MAX_V1 + 1),
         tuple[int, ...],
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert not safe(
+        "x" * (current_live.PRICE_ACTION_STRING_CHARACTERS_MAX_V1 + 1),
+        str,
         depth=0,
         remaining=remaining.copy(),
     )
@@ -730,12 +848,35 @@ def test_preflight_resource_limits_and_no_cache_state_are_discriminating() -> No
 
     nested_value: object = 0
     nested_type: Any = int
-    for _ in range(current_live.PRICE_ACTION_GRAPH_DEPTH_MAX_V1 + 1):
+    for _ in range(current_live.PRICE_ACTION_GRAPH_DEPTH_MAX_V1):
         nested_value = [nested_value]
         nested_type = list[nested_type]
+    assert safe(
+        nested_value,
+        nested_type,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    nested_value = [nested_value]
+    nested_type = list[nested_type]
     assert not safe(
         nested_value,
         nested_type,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+
+    exact_node_limit = [
+        *([[0] * 446 for _ in range(191)]),
+        *([[0] * 445 for _ in range(257)]),
+    ]
+    assert (
+        1 + len(exact_node_limit) + sum(len(row) for row in exact_node_limit)
+        == current_live.PRICE_ACTION_GRAPH_NODES_MAX_V1
+    )
+    assert safe(
+        exact_node_limit,
+        list[list[int]],
         depth=0,
         remaining=remaining.copy(),
     )
@@ -749,6 +890,16 @@ def test_preflight_resource_limits_and_no_cache_state_are_discriminating() -> No
         remaining=remaining.copy(),
     )
     assert not hasattr(same_pass._resolved_type_hints, "cache_info")  # pyright: ignore[reportPrivateUsage]
+
+    exact_member_resources = SimpleNamespace(
+        pivots=(None,)
+        * current_live.PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1,
+        events=(None,)
+        * current_live.PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1,
+    )
+    assert same_pass._market_structure_member_resources_are_bounded(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, (exact_member_resources,))
+    )
 
     pivot_overflow = SimpleNamespace(
         pivots=(None,)
@@ -766,6 +917,126 @@ def test_preflight_resource_limits_and_no_cache_state_are_discriminating() -> No
     assert not same_pass._market_structure_member_resources_are_bounded(  # pyright: ignore[reportPrivateUsage]
         cast(Any, (event_overflow,))
     )
+
+
+def test_public_boundary_accepts_exact_pivot_event_bounds_and_rejects_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, _ = _exact_context(tmp_path, monkeypatch)
+    exact = _expected_market_structure(context)
+    assert exact.members is not None
+    assert context.raw_result.raw_grid is not None
+    sessions = context.raw_result.resolved_sessions
+    source_digest = context.raw_result.raw_grid.bars[0].raw_bar_identity_sha256
+    pivot = MarketStructurePivotV1(
+        kind="SWING_HIGH",
+        position=2,
+        confirmation_position=4,
+        session=sessions[2].session,
+        confirmation_session=sessions[4].session,
+        price=Decimal("100"),
+        relation=None,
+        unclassified_reason="INITIAL",
+        source_bar_identity_sha256=source_digest,
+        comparison_bar_identities_sha256=(source_digest,) * 4,
+    )
+    event = MarketStructureEventV1(
+        event="BOS",
+        direction="UP",
+        position=5,
+        session=sessions[5].session,
+        close=Decimal("101"),
+        broken_pivot_identity_sha256=pivot.pivot_identity_sha256,
+        broken_level=Decimal("100"),
+        prior_trend="UPTREND",
+        previous_close_bar_identity_sha256=source_digest,
+        current_close_bar_identity_sha256=source_digest,
+    )
+    bound_member = replace(
+        exact.members[0],
+        pivots=(pivot,)
+        * current_live.PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1,
+        events=(event,)
+        * current_live.PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1,
+    )
+    bound_report = deepcopy(exact)
+    object.__setattr__(bound_report, "members", (bound_member,))
+    object.__setattr__(
+        bound_report,
+        "report_identity_sha256",
+        current_market_structure_identity_sha256_v1(
+            bound_report, omit=frozenset({"report_identity_sha256"})
+        ),
+    )
+    delegations = 0
+
+    def exact_delegate(*arguments: object, **keywords: object) -> Any:
+        nonlocal delegations
+        del arguments, keywords
+        delegations += 1
+        return bound_report
+
+    with monkeypatch.context() as isolated:
+        isolated.setattr(
+            same_pass,
+            "evaluate_current_same_pass_market_structure_v1",
+            exact_delegate,
+        )
+        observed = same_pass.evaluate_current_same_pass_price_action_v1(
+            context.request,
+            context.raw_result,
+            context.corporate_action_screen,
+            bound_report,
+        )
+        assert observed.evidence_state == "OBSERVED"
+        assert delegations == 1
+
+        pivot_overflow_report = deepcopy(bound_report)
+        object.__setattr__(
+            pivot_overflow_report,
+            "members",
+            (
+                replace(
+                    bound_member,
+                    pivots=(pivot,)
+                    * (
+                        current_live.PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1
+                        + 1
+                    ),
+                ),
+            ),
+        )
+        with pytest.raises(ValueError, match="caller objects"):
+            same_pass.evaluate_current_same_pass_price_action_v1(
+                context.request,
+                context.raw_result,
+                context.corporate_action_screen,
+                pivot_overflow_report,
+            )
+
+        event_overflow_report = deepcopy(bound_report)
+        object.__setattr__(
+            event_overflow_report,
+            "members",
+            (
+                replace(
+                    bound_member,
+                    events=(event,)
+                    * (
+                        current_live.PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1
+                        + 1
+                    ),
+                ),
+            ),
+        )
+        with pytest.raises(ValueError, match="caller objects"):
+            same_pass.evaluate_current_same_pass_price_action_v1(
+                context.request,
+                context.raw_result,
+                context.corporate_action_screen,
+                event_overflow_report,
+            )
+        assert delegations == 1
 
 
 def test_interrupted_delegate_leaves_no_cross_call_state(
@@ -791,6 +1062,49 @@ def test_interrupted_delegate_leaves_no_cross_call_state(
     recovered = _evaluate(context)
     assert recovered.canonical_json_bytes() == baseline.canonical_json_bytes()
     assert recovered.report_identity_sha256 == baseline.report_identity_sha256
+
+
+def test_late_member_interruption_and_concurrent_calls_leave_no_shared_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, _ = _exact_context(
+        tmp_path,
+        monkeypatch,
+        raw_directions=("UNCHANGED", "UNCHANGED"),
+        adjusted_directions=("UNCHANGED", "UNCHANGED"),
+    )
+    baseline = _evaluate(context)
+    original_member = same_pass._member  # pyright: ignore[reportPrivateUsage]
+    calculated = 0
+
+    with monkeypatch.context() as isolated:
+
+        def interrupted_after_calculation(
+            *arguments: object, **keywords: object
+        ) -> Any:
+            nonlocal calculated
+            result = original_member(*arguments, **keywords)
+            calculated += 1
+            if calculated == 2:
+                raise RuntimeError("injected late member interruption")
+            return result
+
+        isolated.setattr(same_pass, "_member", interrupted_after_calculation)
+        with pytest.raises(RuntimeError, match="late member interruption"):
+            _evaluate(context)
+
+    assert calculated == 2
+    recovered = _evaluate(context)
+    assert recovered.canonical_json_bytes() == baseline.canonical_json_bytes()
+    assert recovered.report_identity_sha256 == baseline.report_identity_sha256
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        concurrent = tuple(executor.map(lambda _: _evaluate(context), range(4)))
+    assert all(
+        report.canonical_json_bytes() == baseline.canonical_json_bytes()
+        and report.report_identity_sha256 == baseline.report_identity_sha256
+        for report in concurrent
+    )
 
 
 def test_partial_current_session_is_metamorphically_ignored(
@@ -838,6 +1152,15 @@ def test_report_constructor_and_evaluator_effect_boundary(
     monkeypatch.setattr(Path, "open", forbidden)
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     monkeypatch.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
+    monkeypatch.setattr(os, "getenv", forbidden)
+    monkeypatch.setattr(type(os.environ), "__getitem__", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(time, "monotonic", forbidden)
+    monkeypatch.setattr(time, "time", forbidden)
 
     assert _evaluate(context).evidence_state == "OBSERVED"
 
