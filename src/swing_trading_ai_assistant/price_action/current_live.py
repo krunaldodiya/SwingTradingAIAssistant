@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import json
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
@@ -26,20 +27,23 @@ DirectionV1: TypeAlias = Literal["UP", "DOWN", "UNCHANGED"]
 SessionRangeStateV1: TypeAlias = Literal["FLAT", "NON_FLAT"]
 
 CONTRACT_VERSION_V1: Final = "current-supplied-cohort-price-action@v1"
-_EXPECTED_SESSIONS: Final = 21
-_MAX_COHORT_SIZE: Final = 50
+PRICE_ACTION_SESSION_COUNT_V1: Final = 21
+PRICE_ACTION_COHORT_SIZE_MIN_V1: Final = 1
+PRICE_ACTION_COHORT_SIZE_MAX_V1: Final = 50
 _MAX_DECIMAL_COEFFICIENT_DIGITS: Final = 128
 _MIN_DECIMAL_EXPONENT: Final = -128
 _MAX_DECIMAL_EXPONENT: Final = 128
 _MAX_CANONICAL_DECIMAL_CHARACTERS: Final = 258
-_MAX_GRAPH_DEPTH: Final = 32
-_MAX_GRAPH_NODES: Final = 200_000
-_MAX_TUPLE_ITEMS: Final = 1_050
-_MAX_STRING_BYTES: Final = 4_096
-_MAX_BYTES: Final = 4_194_304
-_MAX_INTEGER_BITS: Final = 256
-_MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER: Final = 34
-_MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER: Final = 20
+PRICE_ACTION_DECIMAL_OBJECT_BYTES_MAX_V1: Final = 192
+PRICE_ACTION_GRAPH_DEPTH_MAX_V1: Final = 32
+PRICE_ACTION_GRAPH_NODES_MAX_V1: Final = 200_000
+PRICE_ACTION_TUPLE_ITEMS_MAX_V1: Final = 1_050
+PRICE_ACTION_STRING_BYTES_MAX_V1: Final = 4_096
+PRICE_ACTION_STRING_CHARACTERS_MAX_V1: Final = 4_096
+PRICE_ACTION_BYTES_MAX_V1: Final = 4_194_304
+PRICE_ACTION_INTEGER_BITS_MAX_V1: Final = 256
+PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1: Final = 34
+PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1: Final = 20
 _DIGEST_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _RUNTIME_MANIFEST_MODULE: Final = (
     "swing_trading_ai_assistant.price_action.current_live_runtime_identity_manifest"
@@ -97,12 +101,20 @@ def _valid_isin(value: object) -> bool:
 
 
 def _valid_effective_symbol(value: object) -> bool:
-    return type(value) is str and 1 <= len(value.encode("utf-8")) <= 64
+    return (
+        type(value) is str
+        and 1 <= len(value) <= 64
+        and len(value.encode("utf-8")) <= 64
+    )
 
 
 def _finite_decimal_parts(value: Decimal) -> tuple[int, tuple[int, ...], int]:
-    if type(value) is not Decimal or not value.is_finite():
-        raise ValueError("exact Decimal must be finite")
+    if (
+        type(value) is not Decimal
+        or sys.getsizeof(value) > PRICE_ACTION_DECIMAL_OBJECT_BYTES_MAX_V1
+        or not value.is_finite()
+    ):
+        raise ValueError("exact Decimal must be finite and storage-bounded")
     sign, digits, exponent = value.as_tuple()
     if (
         type(exponent) is not int
@@ -120,6 +132,37 @@ def _finite_decimal_parts(value: Decimal) -> tuple[int, tuple[int, ...], int]:
     if fixed_characters > _MAX_CANONICAL_DECIMAL_CHARACTERS:
         raise ValueError("exact Decimal fixed-point representation is too large")
     return sign, digits, exponent
+
+
+def _scaled_coefficient_digit_count(
+    parts: tuple[int, tuple[int, ...], int], target_exponent: int
+) -> int:
+    _, digits, exponent = parts
+    first_nonzero = next(
+        (position for position, digit in enumerate(digits) if digit), len(digits)
+    )
+    if first_nonzero == len(digits):
+        return 1
+    return len(digits) - first_nonzero + exponent - target_exponent
+
+
+def _positive_exact_difference_is_bounded(  # pyright: ignore[reportUnusedFunction]
+    left: Decimal, right: Decimal
+) -> bool:
+    try:
+        left_parts = _finite_decimal_parts(left)
+        right_parts = _finite_decimal_parts(right)
+        if left <= 0 or right <= 0:
+            return False
+        target_exponent = min(left_parts[2], right_parts[2])
+        return (
+            _scaled_coefficient_digit_count(left_parts, target_exponent)
+            <= _MAX_DECIMAL_COEFFICIENT_DIGITS
+            and _scaled_coefficient_digit_count(right_parts, target_exponent)
+            <= _MAX_DECIMAL_COEFFICIENT_DIGITS
+        )
+    except ValueError:
+        return False
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -328,7 +371,7 @@ def _schema_identity_preimage_v1() -> dict[str, object]:
             "member_identity_sha256": "sha256",
         },
         "reason_order": list(PRICE_ACTION_REASON_ORDER_V1),
-        "cohort_size": [1, _MAX_COHORT_SIZE],
+        "cohort_size": [1, PRICE_ACTION_COHORT_SIZE_MAX_V1],
         "decimal_bounds": {
             "coefficient_digits_max": _MAX_DECIMAL_COEFFICIENT_DIGITS,
             "exponent_min": _MIN_DECIMAL_EXPONENT,
@@ -336,20 +379,22 @@ def _schema_identity_preimage_v1() -> dict[str, object]:
             "canonical_characters_max": _MAX_CANONICAL_DECIMAL_CHARACTERS,
         },
         "caller_bounds": {
-            "graph_depth_max": _MAX_GRAPH_DEPTH,
-            "graph_nodes_max": _MAX_GRAPH_NODES,
-            "tuple_items_max": _MAX_TUPLE_ITEMS,
-            "string_bytes_max": _MAX_STRING_BYTES,
-            "bytes_max": _MAX_BYTES,
-            "integer_bits_max": _MAX_INTEGER_BITS,
+            "cohort_size_min": PRICE_ACTION_COHORT_SIZE_MIN_V1,
+            "cohort_size_max": PRICE_ACTION_COHORT_SIZE_MAX_V1,
+            "graph_depth_max": PRICE_ACTION_GRAPH_DEPTH_MAX_V1,
+            "graph_nodes_max": PRICE_ACTION_GRAPH_NODES_MAX_V1,
+            "tuple_items_max": PRICE_ACTION_TUPLE_ITEMS_MAX_V1,
+            "string_bytes_max": PRICE_ACTION_STRING_BYTES_MAX_V1,
+            "bytes_max": PRICE_ACTION_BYTES_MAX_V1,
+            "integer_bits_max": PRICE_ACTION_INTEGER_BITS_MAX_V1,
             "market_structure_pivots_per_member_max": (
-                _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
+                PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1
             ),
             "market_structure_events_per_member_max": (
-                _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
+                PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1
             ),
         },
-        "session_count": _EXPECTED_SESSIONS,
+        "session_count": PRICE_ACTION_SESSION_COUNT_V1,
     }
 
 
@@ -385,13 +430,15 @@ CALCULATION_IDENTITY_SHA256_V1: Final = current_price_action_identity_sha256_v1(
 
 def _configuration_identity_preimage_v1() -> dict[str, object]:
     return {
-        "session_count": _EXPECTED_SESSIONS,
-        "cohort_size_max": _MAX_COHORT_SIZE,
+        "session_count": PRICE_ACTION_SESSION_COUNT_V1,
+        "cohort_size_min": PRICE_ACTION_COHORT_SIZE_MIN_V1,
+        "cohort_size_max": PRICE_ACTION_COHORT_SIZE_MAX_V1,
         "decimal_bounds": {
             "coefficient_digits_max": _MAX_DECIMAL_COEFFICIENT_DIGITS,
             "exponent_min": _MIN_DECIMAL_EXPONENT,
             "exponent_max": _MAX_DECIMAL_EXPONENT,
             "canonical_characters_max": _MAX_CANONICAL_DECIMAL_CHARACTERS,
+            "object_bytes_max": PRICE_ACTION_DECIMAL_OBJECT_BYTES_MAX_V1,
         },
         "request_contract": "current-supplied-cohort-market-regime@v3",
         "raw_grid_contract": "current-same-pass-raw-daily-grid@v1",
@@ -403,17 +450,18 @@ def _configuration_identity_preimage_v1() -> dict[str, object]:
         "temporal_scope": "CURRENT_SAME_PASS_ONLY",
         "partial_current_session": "IGNORED",
         "caller_bounds": {
-            "graph_depth_max": _MAX_GRAPH_DEPTH,
-            "graph_nodes_max": _MAX_GRAPH_NODES,
-            "tuple_items_max": _MAX_TUPLE_ITEMS,
-            "string_bytes_max": _MAX_STRING_BYTES,
-            "bytes_max": _MAX_BYTES,
-            "integer_bits_max": _MAX_INTEGER_BITS,
+            "graph_depth_max": PRICE_ACTION_GRAPH_DEPTH_MAX_V1,
+            "graph_nodes_max": PRICE_ACTION_GRAPH_NODES_MAX_V1,
+            "tuple_items_max": PRICE_ACTION_TUPLE_ITEMS_MAX_V1,
+            "string_characters_max": PRICE_ACTION_STRING_CHARACTERS_MAX_V1,
+            "string_bytes_max": PRICE_ACTION_STRING_BYTES_MAX_V1,
+            "bytes_max": PRICE_ACTION_BYTES_MAX_V1,
+            "integer_bits_max": PRICE_ACTION_INTEGER_BITS_MAX_V1,
             "market_structure_pivots_per_member_max": (
-                _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
+                PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1
             ),
             "market_structure_events_per_member_max": (
-                _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
+                PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1
             ),
         },
     }
@@ -618,7 +666,9 @@ class CurrentPriceActionReportV1:
         if self.evidence_state == "OBSERVED":
             if (
                 type(self.members) is not tuple
-                or not 1 <= len(self.members) <= _MAX_COHORT_SIZE
+                or not PRICE_ACTION_COHORT_SIZE_MIN_V1
+                <= len(self.members)
+                <= PRICE_ACTION_COHORT_SIZE_MAX_V1
                 or any(
                     type(member) is not CurrentPriceActionMemberV1
                     for member in self.members

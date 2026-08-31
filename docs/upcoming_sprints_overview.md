@@ -76,9 +76,10 @@ their Delivery Project items are **Done**. Plan 28 delivered the bounded
 source-backed fixed-cohort raw daily revision store, and Plan 29 preserved the
 capability-aware historical validation boundary. Sprint 17 / Issue #147 has a
 complete reviewed implementable slice under Plan 30 but remains open in
-**Todo** at `0/4` while four distinct future completed-session captures
-accrue. That temporal lane qualifies only later historical point-in-time and
-backtest claims and does not consume active current/live WIP.
+**Todo** at `1/4` after the valid 2026-08-31 completed-session capture;
+three distinct future completed-session captures remain. That temporal lane
+qualifies only later historical point-in-time and backtest claims and does not
+consume active current/live WIP.
 
 Sprint 18 / Issue #148 delivered current supplied-cohort Market Structure
 under Plan 31 through merged PR #149. The Issue is closed/completed and its
@@ -307,8 +308,8 @@ movement over the exact current raw grid, Plan-21 screen, and observed Market
 Structure result. Liquidity/SMC, Volume, Relative Strength, named patterns,
 signals, historical qualification, and delivery surfaces remain outside it.
 
-Sprint 17 / Issue #147 remains a separate open **Todo** lane at `0/4`, waiting
-for four valid future captures without blocking Sprint 19. Issue #145 remains
+Sprint 17 / Issue #147 remains a separate open **Todo** lane at `1/4`, waiting
+for three valid future captures without blocking Sprint 19. Issue #145 remains
 open **Todo** without assigned priority, estimate, or sprint and likewise does
 not block the accepted Price Action slice.
 

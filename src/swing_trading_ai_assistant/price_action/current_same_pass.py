@@ -7,7 +7,6 @@ from dataclasses import fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from functools import cache
 from typing import (
     Annotated,
     Any,
@@ -39,7 +38,18 @@ from swing_trading_ai_assistant.market_structure.current_same_pass import (
     evaluate_current_same_pass_market_structure_v1,
 )
 from swing_trading_ai_assistant.price_action.current_live import (
-    _EXPECTED_SESSIONS,  # pyright: ignore[reportPrivateUsage]
+    PRICE_ACTION_BYTES_MAX_V1,
+    PRICE_ACTION_COHORT_SIZE_MAX_V1,
+    PRICE_ACTION_COHORT_SIZE_MIN_V1,
+    PRICE_ACTION_GRAPH_DEPTH_MAX_V1,
+    PRICE_ACTION_GRAPH_NODES_MAX_V1,
+    PRICE_ACTION_INTEGER_BITS_MAX_V1,
+    PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1,
+    PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1,
+    PRICE_ACTION_SESSION_COUNT_V1,  # pyright: ignore[reportPrivateUsage]
+    PRICE_ACTION_STRING_BYTES_MAX_V1,
+    PRICE_ACTION_STRING_CHARACTERS_MAX_V1,
+    PRICE_ACTION_TUPLE_ITEMS_MAX_V1,
     CurrentPriceActionMemberV1,
     CurrentPriceActionReportV1,
     _absolute_exact_difference,  # pyright: ignore[reportPrivateUsage]
@@ -47,21 +57,12 @@ from swing_trading_ai_assistant.price_action.current_live import (
     _exact_difference,  # pyright: ignore[reportPrivateUsage]
     _finite_decimal_parts,  # pyright: ignore[reportPrivateUsage]
     _mint_current_price_action_report_v1,  # pyright: ignore[reportPrivateUsage]
+    _positive_exact_difference_is_bounded,  # pyright: ignore[reportPrivateUsage]
     _positive_finite_decimal,  # pyright: ignore[reportPrivateUsage]
     ordered_price_action_reasons_v1,
 )
 
-_MAX_GRAPH_DEPTH = 32
-_MAX_GRAPH_NODES = 200_000
-_MAX_TUPLE_ITEMS = 1_050
-_MAX_STRING_BYTES = 4_096
-_MAX_BYTES = 4_194_304
-_MAX_INTEGER_BITS = 256
-_MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER = 34
-_MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER = 20
 
-
-@cache
 def _resolved_type_hints(expected_type: type[Any]) -> dict[str, Any]:
     return get_type_hints(expected_type)
 
@@ -73,7 +74,7 @@ def _safe_typed_value(  # noqa: C901
     depth: int,
     remaining: list[int],
 ) -> bool:
-    if depth > _MAX_GRAPH_DEPTH or remaining[0] <= 0:
+    if depth > PRICE_ACTION_GRAPH_DEPTH_MAX_V1 or remaining[0] <= 0:
         return False
     remaining[0] -= 1
     origin = get_origin(expected_type)
@@ -103,7 +104,7 @@ def _safe_typed_value(  # noqa: C901
         if type(value) is not tuple:
             return False
         tuple_value = cast(tuple[object, ...], value)
-        if len(tuple_value) > _MAX_TUPLE_ITEMS:
+        if len(tuple_value) > PRICE_ACTION_TUPLE_ITEMS_MAX_V1:
             return False
         if len(arguments) == 2 and arguments[1] is Ellipsis:
             return all(
@@ -128,7 +129,7 @@ def _safe_typed_value(  # noqa: C901
         if type(value) is not list:
             return False
         list_value = cast(list[object], value)
-        return len(list_value) <= _MAX_TUPLE_ITEMS and all(
+        return len(list_value) <= PRICE_ACTION_TUPLE_ITEMS_MAX_V1 and all(
             _safe_typed_value(
                 item,
                 arguments[0],
@@ -141,7 +142,7 @@ def _safe_typed_value(  # noqa: C901
         if type(value) is not dict:
             return False
         dict_value = cast(dict[object, object], value)
-        return len(dict_value) <= _MAX_TUPLE_ITEMS and all(
+        return len(dict_value) <= PRICE_ACTION_TUPLE_ITEMS_MAX_V1 and all(
             _safe_typed_value(
                 key,
                 arguments[0],
@@ -163,13 +164,20 @@ def _safe_typed_value(  # noqa: C901
     if expected_type is object:
         return type(value) is object
     if expected_type is str:
-        return type(value) is str and len(value.encode("utf-8")) <= _MAX_STRING_BYTES
+        return (
+            type(value) is str
+            and len(value) <= PRICE_ACTION_STRING_CHARACTERS_MAX_V1
+            and len(value.encode("utf-8")) <= PRICE_ACTION_STRING_BYTES_MAX_V1
+        )
     if expected_type is bytes:
-        return type(value) is bytes and len(value) <= _MAX_BYTES
+        return type(value) is bytes and len(value) <= PRICE_ACTION_BYTES_MAX_V1
     if expected_type is bool:
         return type(value) is bool
     if expected_type is int:
-        return type(value) is int and value.bit_length() <= _MAX_INTEGER_BITS
+        return (
+            type(value) is int
+            and value.bit_length() <= PRICE_ACTION_INTEGER_BITS_MAX_V1
+        )
     if expected_type is float:
         return type(value) is float and value == value and abs(value) != float("inf")
     if expected_type is Decimal:
@@ -181,7 +189,9 @@ def _safe_typed_value(  # noqa: C901
             return False
         return True
     if expected_type is datetime:
-        return type(value) is datetime
+        return (
+            type(value) is datetime and object.__getattribute__(value, "tzinfo") is UTC
+        )
     if expected_type is date:
         return type(value) is date
     if isinstance(expected_type, type) and issubclass(expected_type, Enum):
@@ -205,13 +215,54 @@ def _safe_typed_value(  # noqa: C901
     )
 
 
+def _derived_price_action_values_are_bounded(
+    request: CurrentSamePassMarketRegimeRequestV3,
+    raw: PrivateCurrentSamePassRawDailyResultV1,
+) -> bool:
+    grid = raw.raw_grid
+    if grid is None:
+        return True
+    for member in request.members:
+        bars = tuple(bar for bar in grid.bars if bar.isin == member.isin)
+        if len(bars) != PRICE_ACTION_SESSION_COUNT_V1:
+            return False
+        previous, current = bars[-2:]
+        pairs = (
+            (current.high, current.low),
+            (current.high, current.open),
+            (current.high, current.close),
+            (current.close, current.open),
+            (current.open, current.low),
+            (current.close, current.low),
+            (current.open, previous.close),
+            (current.close, previous.close),
+        )
+        if not all(
+            _positive_exact_difference_is_bounded(left, right) for left, right in pairs
+        ):
+            return False
+    return True
+
+
+def _market_structure_member_resources_are_bounded(
+    members: tuple[CurrentMarketStructureMemberV1, ...],
+) -> bool:
+    return PRICE_ACTION_COHORT_SIZE_MIN_V1 <= len(
+        members
+    ) <= PRICE_ACTION_COHORT_SIZE_MAX_V1 and all(
+        len(member.pivots) <= PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1
+        and len(member.events) <= PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1
+        for member in members
+    )
+
+
 def _bounded_caller_objects(
     request: CurrentSamePassMarketRegimeRequestV3,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: PublishedCurrentCorporateActionScreenV1,
     market_structure: CurrentMarketStructureReportV1,
 ) -> bool:
-    remaining: list[int] = [_MAX_GRAPH_NODES]
+    remaining: list[int] = [PRICE_ACTION_GRAPH_NODES_MAX_V1]
     if not all(
         _safe_typed_value(
             value,
@@ -228,25 +279,26 @@ def _bounded_caller_objects(
     ):
         return False
     if (
-        not 1 <= len(request.members) <= 50
-        or len(raw.resolved_sessions) != _EXPECTED_SESSIONS
+        not PRICE_ACTION_COHORT_SIZE_MIN_V1
+        <= len(request.members)
+        <= PRICE_ACTION_COHORT_SIZE_MAX_V1
+        or len(raw.resolved_sessions) != PRICE_ACTION_SESSION_COUNT_V1
+        or not _derived_price_action_values_are_bounded(request, raw)
     ):
         return False
     grid = raw.raw_grid
     if grid is not None and (
-        len(grid.sessions) != _EXPECTED_SESSIONS
-        or len(grid.bars) > 50 * _EXPECTED_SESSIONS
-        or len(grid.source_rows) > 50 * _EXPECTED_SESSIONS
+        len(grid.sessions) != PRICE_ACTION_SESSION_COUNT_V1
+        or len(grid.bars)
+        > PRICE_ACTION_COHORT_SIZE_MAX_V1 * PRICE_ACTION_SESSION_COUNT_V1
+        or len(grid.source_rows)
+        > PRICE_ACTION_COHORT_SIZE_MAX_V1 * PRICE_ACTION_SESSION_COUNT_V1
     ):
         return False
     members = market_structure.members
     if members is None:
         return True
-    return 1 <= len(members) <= 50 and all(
-        len(member.pivots) <= _MAX_MARKET_STRUCTURE_PIVOTS_PER_MEMBER
-        and len(member.events) <= _MAX_MARKET_STRUCTURE_EVENTS_PER_MEMBER
-        for member in members
-    )
+    return _market_structure_member_resources_are_bounded(members)
 
 
 def _is_digest(value: object) -> bool:
@@ -333,7 +385,7 @@ def _safe_member(value: object) -> bool:
             for item in (value.isin, value.exchange, value.effective_symbol)
         )
         and type(value.input_bar_identities_sha256) is tuple
-        and len(value.input_bar_identities_sha256) == _EXPECTED_SESSIONS
+        and len(value.input_bar_identities_sha256) == PRICE_ACTION_SESSION_COUNT_V1
         and all(_is_digest(digest) for digest in value.input_bar_identities_sha256)
         and type(value.structure_state) is str
         and value.structure_state in ("CONFIRMED", "INSUFFICIENT_STRUCTURE")
@@ -443,7 +495,7 @@ def _insufficient(
 ) -> CurrentPriceActionReportV1:
     if (
         type(raw.resolved_sessions) is not tuple
-        or len(raw.resolved_sessions) != _EXPECTED_SESSIONS
+        or len(raw.resolved_sessions) != PRICE_ACTION_SESSION_COUNT_V1
         or type(raw.resolved_sessions[19].session) is not date
     ):
         raise ValueError("validated raw sessions are malformed")
@@ -479,7 +531,7 @@ def _bar_by_member(
 def _member(
     raw_bars: tuple[Any, ...], market_structure_member: CurrentMarketStructureMemberV1
 ) -> CurrentPriceActionMemberV1:
-    if len(raw_bars) != _EXPECTED_SESSIONS:
+    if len(raw_bars) != PRICE_ACTION_SESSION_COUNT_V1:
         raise ValueError("validated raw member has an invalid session count")
     previous, current = raw_bars[19], raw_bars[20]
     for name in ("open", "high", "low", "close"):
@@ -560,7 +612,12 @@ def evaluate_current_same_pass_price_action_v1(
     members = tuple(
         _member(by_isin[member.isin], member) for member in expected.members
     )
-    if len(members) != len(expected.members) or not 1 <= len(members) <= 50:
+    if (
+        len(members) != len(expected.members)
+        or not PRICE_ACTION_COHORT_SIZE_MIN_V1
+        <= len(members)
+        <= PRICE_ACTION_COHORT_SIZE_MAX_V1
+    ):
         raise ValueError("validated Price Action cohort is invalid")
     ordered = tuple(
         sorted(

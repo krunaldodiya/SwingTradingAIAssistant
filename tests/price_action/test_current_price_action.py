@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timedelta, tzinfo
 from decimal import Decimal, localcontext
 from importlib import util
 from pathlib import Path
@@ -354,11 +355,25 @@ def test_decimal_context_does_not_change_report_bytes(
 def test_configuration_identity_binds_session_count_and_numeric_bounds() -> None:
     preimage = current_live._configuration_identity_preimage_v1()  # pyright: ignore[reportPrivateUsage]
     assert preimage["session_count"] == 21
+    assert preimage["cohort_size_min"] == 1
+    assert preimage["cohort_size_max"] == 50
     assert preimage["decimal_bounds"] == {
         "coefficient_digits_max": 128,
         "exponent_min": -128,
         "exponent_max": 128,
         "canonical_characters_max": 258,
+        "object_bytes_max": 192,
+    }
+    assert preimage["caller_bounds"] == {
+        "graph_depth_max": 32,
+        "graph_nodes_max": 200_000,
+        "tuple_items_max": 1_050,
+        "string_characters_max": 4_096,
+        "string_bytes_max": 4_096,
+        "bytes_max": 4_194_304,
+        "integer_bits_max": 256,
+        "market_structure_pivots_per_member_max": 34,
+        "market_structure_events_per_member_max": 20,
     }
     mutated = {**preimage, "session_count": 22}
     assert (
@@ -512,21 +527,39 @@ def test_upstream_insufficiency_maps_to_closed_precedence_without_partial_output
 
 
 def test_complete_upstream_reason_projection_and_price_action_precedence() -> None:
-    upstream = current_live.PRICE_ACTION_REASON_ORDER_V1[:-2]
-    report = SimpleNamespace(reasons=upstream)
+    upstream = (
+        "RAW_EVIDENCE_INSUFFICIENT",
+        "RAW_GRID_BINDING_MISMATCH",
+        "SESSION_WINDOW_INVALID",
+        "MEMBER_GRID_INCOMPLETE",
+        "RAW_BAR_FUTURE_KNOWN",
+        "CORPORATE_ACTION_SCREEN_INSUFFICIENT",
+        "CORPORATE_ACTION_SCREEN_BINDING_MISMATCH",
+    )
+    expected = (
+        *upstream,
+        "MARKET_STRUCTURE_INSUFFICIENT",
+        "MARKET_STRUCTURE_BINDING_MISMATCH",
+    )
+    report = SimpleNamespace(reasons=tuple(reversed(upstream)))
 
     assert same_pass._market_structure_reasons(  # pyright: ignore[reportPrivateUsage]
         cast(Any, report)
     ) == set(upstream)
     assert (
-        current_live.ordered_price_action_reasons_v1(
-            {
-                *upstream,
-                "MARKET_STRUCTURE_INSUFFICIENT",
-                "MARKET_STRUCTURE_BINDING_MISMATCH",
-            }
+        current_live.ordered_price_action_reasons_v1(set(expected))
+        == expected
+        == (
+            "RAW_EVIDENCE_INSUFFICIENT",
+            "RAW_GRID_BINDING_MISMATCH",
+            "SESSION_WINDOW_INVALID",
+            "MEMBER_GRID_INCOMPLETE",
+            "RAW_BAR_FUTURE_KNOWN",
+            "CORPORATE_ACTION_SCREEN_INSUFFICIENT",
+            "CORPORATE_ACTION_SCREEN_BINDING_MISMATCH",
+            "MARKET_STRUCTURE_INSUFFICIENT",
+            "MARKET_STRUCTURE_BINDING_MISMATCH",
         )
-        == current_live.PRICE_ACTION_REASON_ORDER_V1
     )
 
 
@@ -598,6 +631,166 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
             exact,
         )
     assert not delegated
+
+    huge_coefficient = deepcopy(context.raw_result)
+    assert huge_coefficient.raw_grid is not None
+    object.__setattr__(
+        huge_coefficient.raw_grid.bars[-1], "open", Decimal("1" * 100_000)
+    )
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            context.request,
+            huge_coefficient,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not delegated
+
+    cross_exponent = deepcopy(context.raw_result)
+    assert cross_exponent.raw_grid is not None
+    current = cross_exponent.raw_grid.bars[-1]
+    object.__setattr__(current, "open", Decimal("1e128"))
+    object.__setattr__(current, "high", Decimal("1e128"))
+    object.__setattr__(current, "low", Decimal("1e-128"))
+    object.__setattr__(current, "close", Decimal("1e-128"))
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            context.request,
+            cross_exponent,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not delegated
+
+    oversized_text = deepcopy(context.request)
+    member = oversized_text.members[0]
+    object.__setattr__(member, "effective_symbol", "é" * 4_097)
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            oversized_text,
+            context.raw_result,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not delegated
+
+    class CallerTimezone(tzinfo):
+        invoked = False
+
+        def utcoffset(self, value: datetime | None) -> timedelta:
+            del value
+            type(self).invoked = True
+            raise RuntimeError("caller timezone callback must not run")
+
+    hostile_time = deepcopy(context.request)
+    object.__setattr__(
+        hostile_time,
+        "decision_cutoff",
+        datetime(2026, 8, 31, tzinfo=CallerTimezone()),
+    )
+    with pytest.raises(ValueError, match="caller objects"):
+        same_pass.evaluate_current_same_pass_price_action_v1(
+            hostile_time,
+            context.raw_result,
+            context.corporate_action_screen,
+            exact,
+        )
+    assert not CallerTimezone.invoked
+    assert not delegated
+
+
+def test_preflight_resource_limits_and_no_cache_state_are_discriminating() -> None:
+    safe = same_pass._safe_typed_value  # pyright: ignore[reportPrivateUsage]
+    remaining = [current_live.PRICE_ACTION_GRAPH_NODES_MAX_V1]
+
+    assert not safe(
+        (0,) * (current_live.PRICE_ACTION_TUPLE_ITEMS_MAX_V1 + 1),
+        tuple[int, ...],
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert not safe(
+        "é" * 2_049,
+        str,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert not safe(
+        b"x" * (current_live.PRICE_ACTION_BYTES_MAX_V1 + 1),
+        bytes,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert not safe(
+        1 << current_live.PRICE_ACTION_INTEGER_BITS_MAX_V1,
+        int,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+
+    nested_value: object = 0
+    nested_type: Any = int
+    for _ in range(current_live.PRICE_ACTION_GRAPH_DEPTH_MAX_V1 + 1):
+        nested_value = [nested_value]
+        nested_type = list[nested_type]
+    assert not safe(
+        nested_value,
+        nested_type,
+        depth=0,
+        remaining=remaining.copy(),
+    )
+
+    side = 448
+    over_node_limit = [[0] * side for _ in range(side)]
+    assert not safe(
+        over_node_limit,
+        list[list[int]],
+        depth=0,
+        remaining=remaining.copy(),
+    )
+    assert not hasattr(same_pass._resolved_type_hints, "cache_info")  # pyright: ignore[reportPrivateUsage]
+
+    pivot_overflow = SimpleNamespace(
+        pivots=(None,)
+        * (current_live.PRICE_ACTION_MARKET_STRUCTURE_PIVOTS_PER_MEMBER_MAX_V1 + 1),
+        events=(),
+    )
+    event_overflow = SimpleNamespace(
+        pivots=(),
+        events=(None,)
+        * (current_live.PRICE_ACTION_MARKET_STRUCTURE_EVENTS_PER_MEMBER_MAX_V1 + 1),
+    )
+    assert not same_pass._market_structure_member_resources_are_bounded(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, (pivot_overflow,))
+    )
+    assert not same_pass._market_structure_member_resources_are_bounded(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, (event_overflow,))
+    )
+
+
+def test_interrupted_delegate_leaves_no_cross_call_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, _ = _exact_context(tmp_path, monkeypatch)
+    baseline = _evaluate(context)
+
+    with monkeypatch.context() as isolated:
+
+        def interrupted(*arguments: object, **keywords: object) -> Any:
+            del arguments, keywords
+            raise RuntimeError("injected interruption")
+
+        isolated.setattr(
+            same_pass,
+            "evaluate_current_same_pass_market_structure_v1",
+            interrupted,
+        )
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            _evaluate(context)
+
+    recovered = _evaluate(context)
+    assert recovered.canonical_json_bytes() == baseline.canonical_json_bytes()
+    assert recovered.report_identity_sha256 == baseline.report_identity_sha256
 
 
 def test_partial_current_session_is_metamorphically_ignored(
