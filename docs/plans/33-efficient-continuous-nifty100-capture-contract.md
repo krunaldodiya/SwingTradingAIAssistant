@@ -1,8 +1,8 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
-**Issue:** [#154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154)  
+**Issue:** [#154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154)
 **Status:** accepted implementation contract
-**Risk:** R3  
+**Risk:** R3
 **Contract:** `efficient-current-nifty100-adjusted-capture@v1`
 
 ## Authority and outcome
