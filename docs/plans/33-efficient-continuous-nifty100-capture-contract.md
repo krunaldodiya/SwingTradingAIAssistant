@@ -1,7 +1,7 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
 **Issue:** [#154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154)  
-**Status:** decision candidate  
+**Status:** accepted implementation contract
 **Risk:** R3  
 **Contract:** `efficient-current-nifty100-adjusted-capture@v1`
 
@@ -19,7 +19,7 @@ The public NSE Indices constituent CSVs establish only the exact current bytes k
 2. **Scope fit:** composes two existing `1..50` adjusted-capture cohorts for the default current Nifty 50 plus Nifty Next 50 focus without changing reusable feature cores.
 3. **Material risk:** yfinance is an unofficial per-ticker Yahoo client with no published batch/rate guarantee; unbounded threads, missing mappings, current-list relabelling, partial publication, or raw/adjusted mixing would make the result unsafe or misleading.
 4. **Smallest alternative:** two sequential 50-ticker yfinance calls with eight internal workers, one fixed-cadence bounded curl-cffi session, existing adjusted settings, existing immutable cohort retention, and a read-time complete-union check; no provider framework, queue, scheduler, database, adaptive rate controller, or cross-cohort transaction subsystem.
-5. **Decision:** **accepted as the Plan 33 candidate** for independent exact review; production implementation remains a separate bounded Issue.
+5. **Decision:** **accepted** as the Plan 33 implementation contract after fresh functional/domain/temporal **APPROVE** and security/privacy/provenance **PASS** review; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) and bounded implementation [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156) remain separate Todo Issues.
 
 ## Source verification and decision
 
@@ -223,8 +223,7 @@ Issue #154 completes only:
 
 It makes no production provider call after the benchmark, implements no runtime, and changes no existing market-data semantics.
 
-### Separately tracked implementation slice
-
+### Separately tracked implementation slices
 The first implementation Issue may deliver only one repeatable operator-triggered completed-session capture:
 
 1. enforce the exact enabled configuration and per-invocation owner-private
@@ -256,12 +255,13 @@ cadence, and byte-bound configuration rather than weakening or silently
 mutating the delivered `threads=False` contract.
 
 The reviewed Plan 30 capture-forward runtime candidate is not present on the
-current main branch. The implementation Issue must make that dependency
-explicit: it may target a separately merged equivalent capture runtime or own
-an authorized delivery split of the already reviewed actionable Plan 30
-runtime while leaving #147 open for its three remaining temporal observations.
-It must not wait for those future sessions, copy unreviewed quarantine bytes,
-or imply that #147's historical qualification has passed.
+current main branch. [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
+owns the ordered delivery-only prerequisite: port the exact reviewed actionable
+runtime onto current main without changing or closing #147's historical lane.
+[Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
+then owns only this bounded Plan 33 implementation. Neither may wait for the
+three unavailable future sessions, copy unreviewed quarantine bytes, or imply
+that #147's historical qualification has passed.
 
 ### Later improvements
 

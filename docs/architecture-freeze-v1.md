@@ -58,9 +58,11 @@ Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
 closed/completed. Sprint 17 / #147 is an open waiting historical lane at
 `1/4`; its three unavailable future-session captures do not block
 current/live work. Sprint 19 Price Action delivered through PR #153. Issue
-#154 and Plan 33 own only the bounded source decision, benchmark, and contract
-for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; they change
-no runtime, and production implementation requires a separate Issue. Open
+#154 and accepted Plan 33 own only the bounded source decision, benchmark, and
+contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
+they change no runtime. Open Project **Todo** Issue #155 owns the reviewed
+Plan 30 runtime delivery prerequisite without closing #147, then open Project
+**Todo** Issue #156 owns the separately bounded Plan 33 implementation. Open
 maintenance Issue #145 does not start automatically without explicit owner
 prioritization.
 For current/live Market Regime, raw completed-close comparison is allowed only

@@ -369,8 +369,11 @@ own only the bounded source decision, complete nonpublishing benchmark, and
 implementation contract for efficient current Nifty 50 plus Nifty Next 50
 adjusted capture. The measured two-cohort, eight-worker acquisition completed
 100/100 members over 21 sessions in 25.942 seconds on the fixed-cadence bounded path. Issue #154 changes no
-runtime, scheduler, store, provider profile, or historical qualification;
-production implementation requires a separate bounded Issue.
+runtime, scheduler, store, provider profile, or historical qualification.
+[Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
+owns the reviewed Plan 30 runtime delivery prerequisite without closing #147;
+[Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
+owns the separately bounded Plan 33 implementation.
 
 Issue #145 remains open **Todo** without assigned priority, estimate, or
 sprint and does not block this planning slice. Sprint 17 captures continue
