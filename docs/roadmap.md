@@ -348,20 +348,20 @@ Sprint 16 gate, preserving the locked architecture sequence.
 The live tracker has advanced beyond that dependency statement. Sprint 15 /
 #120 and Sprint 16 / #122 are closed/completed with Project status **Done**.
 Sprint 17 / #147 has a complete reviewed implementable slice but remains open
-in **Todo** until four distinct future completed-session captures exist; that
-historical qualification lane does not block current/live delivery. Sprint 18 /
-#148 is the sole **In Progress** item under accepted
-[Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md). Its
-local current/live Market Structure candidate is implemented and reviewed but
-remains undelivered until the applicable smoke, PR, hosted, and merge gates
-pass.
+in **Todo** at `0/4` until four distinct future completed-session captures
+exist; that historical qualification lane does not block current/live
+delivery. Sprint 18 / #148 delivered current/live Market Structure through
+[Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md) and
+merged PR #149; the Issue is closed/completed and its Project item is **Done**.
 
-No post-Sprint-18 implementation starts implicitly. Issue #145 is open
-**Todo** without assigned priority, estimate, or sprint. Price Action remains
-the next locked product module, but it has no GitHub Issue or accepted contract.
-After #148, the owner must either prioritize #145 or approve a bounded Price
-Action Issue and first working slice. Sprint 17 captures continue separately
-when their genuinely completed sessions become available.
+Sprint 19 / #152 is the sole **In Progress** item under accepted
+[Plan 32](plans/32-current-supplied-cohort-price-action-contract.md). It owns
+only the bounded current supplied-cohort Price Action first working slice.
+Issue #145 remains open **Todo** without assigned priority, estimate, or
+sprint and does not block Sprint 19. Sprint 17 captures continue separately
+when their genuinely completed sessions become available. Liquidity/SMC,
+Volume, and Relative Strength remain separate later modules and are not
+bundled into Price Action.
 
 Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
 separately owns the broader bounded per-decision-date as-of research snapshot
