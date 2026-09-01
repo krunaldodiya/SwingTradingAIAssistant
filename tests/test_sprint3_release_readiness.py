@@ -663,7 +663,7 @@ def _normalized_instruction_text(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
-_MIN_CANONICAL_PROSE_BLOCK_CHARS = 120
+_MIN_CANONICAL_PROSE_BLOCK_CHARS = 40
 
 
 def _canonical_prose_blocks(text: str) -> set[str]:
@@ -764,11 +764,16 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
         "and immutable candidate evidence—not approval prompts. Every reviewer targets "
         "a clean committed candidate."
     )
+    ownership_instruction = (
+        "Only this file owns project-wide agent behavior. Other sources retain the "
+        "narrower authority below."
+    )
     files = {
         _CANONICAL_INSTRUCTION_PATH: (
             "Status: **CANONICAL PROJECT ADAPTER**\n"
             f"{controls}\n"
             f"\n{permissions_instruction}\n\n"
+            f"{ownership_instruction}\n\n"
             "## Instruction-source register\n"
             "| Source | Classification | Authority |\n"
             "|---|---|---|\n"
@@ -801,6 +806,9 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
         "docs/copied-permissions.md": permissions_instruction.upper().replace(
             " ASSIGNMENT ", "\nassignment\n"
         ),
+        "docs/copied-ownership.md": ownership_instruction.upper().replace(
+            " PROJECT-WIDE ", "\nproject-wide\n"
+        ),
     }
     errors = _instruction_consistency_errors(files)
     for expected in (
@@ -818,6 +826,7 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
     assert "contradictory authority in docs/owner-role-conflict.md" in errors
     assert "contradictory authority in docs/non-role-prefix.md" not in errors
     assert "duplicate instruction prose in docs/copied-permissions.md" in errors
+    assert "duplicate instruction prose in docs/copied-ownership.md" in errors
 
 
 def test_read_only_review_requires_immutable_candidate_checks() -> None:
