@@ -425,7 +425,10 @@ def test_open_month_is_rejected_before_lease_or_provider_activity(
         "nse-equity-month@v1",
         max_total_provider_attempts=1,
     )
-    coordinator = IngestionCoordinator(lease_acquirer=acquire)
+    coordinator = IngestionCoordinator(
+        clock=SimpleNamespace(now=lambda: datetime(2026, 8, 8, tzinfo=UTC)),
+        lease_acquirer=acquire,
+    )
 
     report = coordinator.run(command)
 
