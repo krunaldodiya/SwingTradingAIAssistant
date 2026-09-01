@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from swing_trading_ai_assistant.market_data import cli
 
@@ -503,74 +504,262 @@ def test_plan27_and_sprint14_freeze_identical_exact_file_sets() -> None:
     assert re.search(r"current Plan-27 authorized\s+amendment", plan25)
 
 
-def test_mandatory_execution_preflight_remains_repository_authority() -> None:
-    agents = " ".join((ROOT / "AGENTS.md").read_text().split())
+def test_mandatory_agent_instructions_are_canonical_and_discoverable() -> None:
+    canonical_path = ROOT / "docs/mandatory-agent-instructions.md"
+    assert canonical_path.is_file()
+
+    agents_raw = (ROOT / "AGENTS.md").read_text()
+    agents = " ".join(agents_raw.split())
+    assert "docs/mandatory-agent-instructions.md" in agents
+    assert "MUST read and follow" in agents
+    assert "before planning, editing, delegation, or delivery" in agents
+    assert "## Mandatory execution preflight" not in agents_raw
+    assert "### Goal-mode autonomous execution" not in agents_raw
+    assert len(agents_raw.splitlines()) <= 8
+
+    canonical = " ".join(canonical_path.read_text().split())
     for required in (
-        "## Mandatory execution preflight",
-        (
-            "The following controls apply to every task, including resumed "
-            "work and work that appears routine"
-        ),
-        (
-            "The agent must complete it before planning, editing, delegation, "
-            "or delivery"
-        ),
-        (
-            "Read the software-engineering handbook index and every primary "
-            "chapter relevant to the task"
-        ),
-        ("When work needs multiple agents or independent R3/R4 review, use Herdr"),
-        ("external temporal or evidence gates from blocking unrelated current work"),
-        (
-            "Freeze the smallest safe, honest, usable end-to-end slice, "
-            "separate later improvements"
-        ),
-        (
-            "inspect the live GitHub Issue and Project state, all relevant "
-            "repository authority and module documents, durable memories, "
-            "and useful prior-conversation history"
-        ),
-        (
-            "When the harness exposes `/goal` or equivalent persistent "
-            "execution, attempt to use it by default"
-        ),
-        (
-            "Goal mode grants continuity, not more authority, and must pause "
-            "at the boundaries defined below"
-        ),
-        (
-            "First freeze the Issue, working/later boundary, contracts, "
-            "ownership, risk matrix, acceptance evidence, review ownership, "
-            "and pause conditions"
-        ),
-        (
-            "Start goal mode only after the governing Issue and sources are "
-            "resolved, the first working slice and later improvements are "
-            "separated, cross-slice contracts and file ownership are frozen, "
-            "the risk controls and acceptance evidence are named"
-        ),
-        (
-            "Pause it at the next safe boundary for an owner decision, source "
-            "or provider adoption, credentials or protected external effects, "
-            "destructive or irreversible action, an unavailable market/evidence "
-            "window, a scope-expansion circuit breaker, conflicting shared-tree "
-            "work, or an exact-byte review or release boundary"
-        ),
-        (
-            "Resuming a goal requires rechecking the tracker state, branch and "
-            "working tree, material decisions, external prerequisites, and "
-            "whether earlier evidence still applies; never continue from stale "
-            "state merely because the harness restored a session"
-        ),
-        "Prior-session familiarity does not substitute",
+        "# Mandatory agent instructions",
+        "Status: **CANONICAL PROJECT ADAPTER**",
+        "These instructions apply to every task",
+        "## Six standing execution controls",
+        "Validate before creating execution artifacts",
+        "Apply the software-engineering handbook",
+        "Use Herdr for multi-agent work and independent R3/R4 review",
+        "Enforce working-feature-first delivery",
+        "Rebuild context from current authoritative evidence",
+        "Use bounded goal mode when available",
+        "Start every spawned agent and reviewer with routine permissions pre-approved",
+        "## Additional standing owner instructions",
+        "Use one OMP session per sprint",
+        "Keep general discussion out of sprint delivery todos",
+        "Explain progress, blockers, failures, and bottlenecks in plain language",
+        "Automate evidence acquisition when the tool or agent can perform it",
+        "Do not use Orca for this repository unless the owner explicitly reverses this instruction",
+        "Ask the owner only for a material direction or scope decision",
+        "GitHub is the sole active tracker",
+        "Existing Linear records are read-only historical evidence",
+        "## Instruction-source register",
+        "## Updating these instructions",
+        "Project-specific instructions MUST NOT be copied into the global handbook",
     ):
-        assert required in agents
+        assert required in canonical
+
+
+def test_instruction_sources_have_one_owner_and_scoped_procedures() -> None:
+    canonical = " ".join(
+        (ROOT / "docs/mandatory-agent-instructions.md").read_text().split()
+    )
+    for required in (
+        "`AGENTS.md` | Bootstrap only",
+        "`docs/mandatory-agent-instructions.md` | Canonical project adapter",
+        "`docs/herdr-multi-agent-workflow.md` | Specialized Herdr procedure",
+        "`docs/architecture-freeze-v1.md` | Product architecture authority",
+        "`docs/roadmap.md` and `docs/upcoming_sprints_overview.md` | Delivery sequencing",
+        "`docs/plans/` and `docs/sprints/` | Scoped contracts and historical records",
+        "`docs/notes/README.md` | Notes authority",
+        "Software-engineering handbook | Global project-agnostic defaults",
+    ):
+        assert required in canonical
 
     herdr_workflow = " ".join(
         (ROOT / "docs/herdr-multi-agent-workflow.md").read_text().split()
     )
-    assert "five-part mandatory execution" in herdr_workflow
-    assert (
-        "Repeat it when resuming a session or changing the active task"
-        in herdr_workflow
+    assert "mandatory-agent-instructions.md" in herdr_workflow
+    assert "six standing execution controls" in herdr_workflow
+    assert "five-part mandatory execution" not in herdr_workflow
+    assert "`AGENTS.md`'s goal-mode entry conditions" not in herdr_workflow
+    assert "--approval-mode yolo" in herdr_workflow
+
+
+_CANONICAL_INSTRUCTION_PATH = "docs/mandatory-agent-instructions.md"
+_CANONICAL_OWNER_CLAIM = re.compile(
+    r"^Status:\s*(?:\*\*)?CANONICAL PROJECT ADAPTER(?:\*\*)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_LINK_SOURCES = (
+    "AGENTS.md",
+    _CANONICAL_INSTRUCTION_PATH,
+    "docs/herdr-multi-agent-workflow.md",
+)
+_REQUIRED_LINK_TARGETS = {
+    "AGENTS.md": {_CANONICAL_INSTRUCTION_PATH},
+    _CANONICAL_INSTRUCTION_PATH: {"docs/herdr-multi-agent-workflow.md"},
+    "docs/herdr-multi-agent-workflow.md": {_CANONICAL_INSTRUCTION_PATH},
+}
+_MARKDOWN_LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
+_CONTROL_HEADING = re.compile(r"^### (\d+)\. (.+)$", re.MULTILINE)
+_CONTRADICTORY_AUTHORITY = re.compile(
+    r"(?:overrides|supersedes|takes precedence over).{0,100}"
+    r"(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter)"
+    r"|(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter)"
+    r".{0,100}(?:is\s+)?(?:overridden|superseded|lower priority)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CANONICAL_EXCLUSIVE_PHRASES = (
+    "Before creating a plan, todo, branch, worktree, Issue, specification, code, or delivery artifact",
+    "Read the global software-engineering handbook index and every primary chapter relevant to the task",
+    "Freeze the smallest safe, honest, usable end-to-end slice before implementation",
+    "When work genuinely needs multiple agents or independent R3/R4 review, use Herdr",
+    "Attempt the harness's persistent `/goal` or equivalent by default",
+    "Start OMP workers and reviewers in full-permission/yolo autonomous mode",
+)
+
+
+def _local_link_targets(source: str, text: str) -> set[str]:
+    targets: set[str] = set()
+    for target in _MARKDOWN_LINK.findall(text):
+        path_target = target.split("#", maxsplit=1)[0]
+        if not path_target or "://" in path_target or path_target.startswith("mailto:"):
+            continue
+        targets.add(posixpath.normpath(str(PurePosixPath(source).parent / path_target)))
+    return targets
+
+
+def _registered_local_sources(canonical: str) -> set[str]:
+    register = canonical.split("## Instruction-source register", maxsplit=1)[1]
+    register = register.split("## Updating these instructions", maxsplit=1)[0]
+    sources: set[str] = set()
+    for line in register.splitlines():
+        if not line.startswith("|"):
+            continue
+        source_cell = line.strip("|").split("|", maxsplit=1)[0]
+        sources.update(re.findall(r"`([^`]+)`", source_cell))
+    return sources
+
+
+def _registered_source_exists(source: str, files: dict[str, str]) -> bool:
+    if source.endswith("/"):
+        return any(path.startswith(source) for path in files)
+    return source in files
+
+
+def _normalized_instruction_text(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _instruction_authority_errors(files: dict[str, str]) -> tuple[str, ...]:
+    errors: list[str] = []
+    owners = sorted(
+        path for path, text in files.items() if _CANONICAL_OWNER_CLAIM.search(text)
     )
+    if owners != [_CANONICAL_INSTRUCTION_PATH]:
+        errors.append(f"canonical owners: {owners}")
+
+    canonical = files.get(_CANONICAL_INSTRUCTION_PATH, "")
+    controls = _CONTROL_HEADING.findall(canonical)
+    if [number for number, _ in controls] != ["1", "2", "3", "4", "5", "6"]:
+        errors.append(f"canonical control numbers: {controls}")
+    control_titles = {title for _, title in controls}
+    for path, text in files.items():
+        if path == _CANONICAL_INSTRUCTION_PATH:
+            continue
+        normalized_text = _normalized_instruction_text(text)
+        duplicate_titles = control_titles.intersection(
+            title for _, title in _CONTROL_HEADING.findall(text)
+        )
+        if duplicate_titles:
+            errors.append(f"duplicate controls in {path}: {sorted(duplicate_titles)}")
+        if any(
+            _normalized_instruction_text(phrase) in normalized_text
+            for phrase in _CANONICAL_EXCLUSIVE_PHRASES
+        ):
+            errors.append(f"duplicate instruction prose in {path}")
+        if _CONTRADICTORY_AUTHORITY.search(text):
+            errors.append(f"contradictory authority in {path}")
+    return tuple(errors)
+
+
+def _instruction_link_errors(files: dict[str, str]) -> tuple[str, ...]:
+    errors: list[str] = []
+    for source in _LINK_SOURCES:
+        text = files.get(source)
+        if text is None:
+            errors.append(f"missing instruction source: {source}")
+            continue
+        targets = _local_link_targets(source, text)
+        errors.extend(
+            f"missing link from {source}: {target}"
+            for target in targets
+            if target not in files
+        )
+        missing_required = _REQUIRED_LINK_TARGETS[source] - targets
+        if missing_required:
+            errors.append(
+                f"missing required link from {source}: {sorted(missing_required)}"
+            )
+    return tuple(errors)
+
+
+def _instruction_register_errors(files: dict[str, str]) -> tuple[str, ...]:
+    canonical = files.get(_CANONICAL_INSTRUCTION_PATH, "")
+    if not canonical:
+        return ()
+    return tuple(
+        f"missing registered source: {source}"
+        for source in _registered_local_sources(canonical)
+        if not _registered_source_exists(source, files)
+    )
+
+
+def _instruction_consistency_errors(files: dict[str, str]) -> tuple[str, ...]:
+    return (
+        *_instruction_authority_errors(files),
+        *_instruction_link_errors(files),
+        *_instruction_register_errors(files),
+    )
+
+
+def test_instruction_authority_graph_is_fail_closed() -> None:
+    files = {
+        path.relative_to(ROOT).as_posix(): path.read_text()
+        for path in ROOT.rglob("*.md")
+    }
+    assert not _instruction_consistency_errors(files)
+
+
+def test_instruction_authority_graph_rejects_competing_sources() -> None:
+    controls = "\n".join(f"### {number}. control {number}" for number in range(1, 8))
+    files = {
+        _CANONICAL_INSTRUCTION_PATH: (
+            "Status: **CANONICAL PROJECT ADAPTER**\n"
+            f"{controls}\n"
+            "## Instruction-source register\n"
+            "| Source | Classification | Authority |\n"
+            "|---|---|---|\n"
+            "| `AGENTS.md` | Bootstrap | Canonical entry |\n"
+            "| `docs/missing.md` | Procedure | Missing |\n"
+            "## Updating these instructions\n"
+        ),
+        "AGENTS.md": "docs/mandatory-agent-instructions.md\n",
+        "docs/herdr-multi-agent-workflow.md": (
+            "Status: CANONICAL PROJECT ADAPTER\n"
+            "This procedure takes precedence over the canonical project adapter.\n"
+            "## Renamed validation rule\n"
+            + _CANONICAL_EXCLUSIVE_PHRASES[0].replace(", todo,", ",\ntodo,")
+            + "; validate authority.\n"
+        ),
+    }
+    errors = _instruction_consistency_errors(files)
+    for expected in (
+        "canonical owners:",
+        "canonical control numbers:",
+        "duplicate instruction prose in",
+        "contradictory authority in",
+        "missing required link from AGENTS.md",
+        "missing registered source: docs/missing.md",
+    ):
+        assert any(error.startswith(expected) for error in errors)
+
+
+def test_read_only_review_requires_immutable_candidate_checks() -> None:
+    canonical = (ROOT / _CANONICAL_INSTRUCTION_PATH).read_text()
+    workflow = (ROOT / "docs" / "herdr-multi-agent-workflow.md").read_text()
+    for required in (
+        "clean committed candidate",
+        "pre-review and post-review",
+        "full commit SHA",
+        "tree identity",
+        "git status --porcelain",
+    ):
+        assert required in canonical or required in workflow

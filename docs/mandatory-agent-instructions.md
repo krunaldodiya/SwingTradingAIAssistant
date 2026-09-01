@@ -1,0 +1,240 @@
+# Mandatory agent instructions
+
+Status: **CANONICAL PROJECT ADAPTER**
+
+Owner: repository owner and product direction authority
+Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
+
+These instructions apply to every task in this repository, including resumed work, discussion that becomes delivery work, and work that appears routine. Every agent MUST read and follow this file before planning, editing, delegation, or delivery. Prior-session familiarity, summaries, memories, and restored harness state do not substitute for the current file.
+
+`AGENTS.md` is only the bootstrap that points here. This file is the one canonical project-level source for agent behavior. Specialized procedures and scoped product contracts remain authoritative only within the boundaries listed in the instruction-source register.
+
+## Precedence and conflicts
+
+Apply instructions in this order:
+
+1. applicable law, safety constraints, and higher-authority system or current owner instructions;
+2. current explicit product, domain, contractual, repository, and executable-gate requirements;
+3. this canonical project adapter;
+4. specialized procedures within the authority this adapter or a current scoped contract delegates to them;
+5. the global software-engineering handbook; then
+6. non-normative examples, historical records, and preferences within their stated scope.
+
+A narrower current Issue, accepted specification, module contract, or executable gate may strengthen or concretize this file. It MUST NOT silently weaken safety, authorization, privacy, security, evidence integrity, or research integrity. Equally authoritative conflicts MUST be surfaced and resolved by the owner before the affected action; safe independent work continues.
+
+Durable memories and prior conversations are context, not delivery authority. GitHub Issues, approved repository documents, merged code, and current executable evidence govern when they conflict with memory or stale summaries.
+
+## Six standing execution controls
+
+The following six controls are mandatory before and throughout every task.
+
+### 1. Validate before creating execution artifacts
+
+Before creating a plan, todo, branch, worktree, Issue, specification, code, or delivery artifact:
+
+- identify the real observable goal and whether the request is discussion, research, planning, or delivery;
+- inspect the live GitHub Issue and Project state, relevant repository authority, affected module contracts, current branch and working tree, durable memories, and useful prior-conversation history;
+- confirm prerequisites, scope fit, blockers, evidence, risk, feasibility, the smallest correct approach, and any owner or external authority gate;
+- Rebuild context from current authoritative evidence whenever work resumes, the task changes, or material evidence changes; and
+- resolve conflicts in favor of the most current authorized source without rewriting prior history.
+
+Validation and reversible research may precede full implementation detail. Implementation, tracking mutation, release, destructive action, provider adoption, protected external effects, or risk acceptance MUST NOT begin without the required authority.
+
+### 2. Apply the software-engineering handbook
+
+Read the global software-engineering handbook index and every primary chapter relevant to the task, then apply them as binding global defaults. Record an unavailable source explicitly; never silently skip it.
+
+This repository file is the handbook project adapter. Project-specific instructions MUST NOT be copied into the global handbook. A handbook improvement is appropriate only when it is reusable, project-agnostic, owned by the handbook repository, reviewed there, and does not import SwingTradingAIAssistant-specific market, tracker, provider, evidence, or release policy.
+
+### 3. Enforce working-feature-first delivery
+
+Freeze the smallest safe, honest, usable end-to-end slice before implementation. Separate:
+
+- the first working slice needed now for safety, stated-scope correctness, usability, authorization, evidence integrity, explicit acceptance criteria, and the applicable risk tier; and
+- later improvements such as generalized replay, attestation, new providers, broader resilience, new delivery surfaces, abstractions, optimization, and future threat models.
+
+Starting a sprint or broad Issue does not authorize implementing both sets in one expanding change. Split an oversized Issue into ordered vertical slices before ordinary implementation. After each review, classify every finding against the current slice before editing: a blocker must cite a violated current acceptance condition or concrete current safety, correctness, usability, or evidence-integrity failure. Otherwise record it separately and defer it.
+
+MVP-first changes implementation order, not accepted scope. After the first working path runs, complete every remaining accepted Issue criterion unless it is an explicit non-goal, belongs to a separately governed Issue, or the owner approves a scope change.
+
+External temporal windows, future-session captures, retrospective point-in-time evidence, unavailable providers, and other deferred prerequisites block only the exact claim that depends on them. Continue every authorized independent implementation, adversarial check, documentation, review-preparation, delivery, activation, and next vertical slice without fabricating evidence.
+
+Stop at the scope-expansion circuit breaker before adding an unplanned subsystem, persistence or replay model, attestation mechanism, provider, generalized abstraction, delivery surface, or threat model. Resume only when it is the least costly adequate correction for a current blocker or the owner explicitly changes scope.
+
+### 4. Use Herdr for multi-agent work and independent R3/R4 review
+
+When work genuinely needs multiple agents or independent R3/R4 review, use Herdr and follow [`docs/herdr-multi-agent-workflow.md`](herdr-multi-agent-workflow.md). Never substitute an invisible or generic subagent launcher.
+
+One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them.
+
+After a complete result is captured and checked, close that reviewer or worker tab immediately when it is `idle` or `done`. Never close, interrupt, or replace an active `working`, `blocked`, or `unknown` agent for cleanup or timeboxing.
+
+If Herdr is unavailable, continue single-agent work where proportionate and pause only the exact work whose risk tier requires unavailable independent agents.
+
+### 5. Use bounded goal mode when available
+
+Attempt the harness's persistent `/goal` or equivalent by default for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
+
+Goal mode grants continuity, not authority. It MUST pause at the next safe boundary for:
+
+- an owner decision or consequential ambiguity;
+- source or provider adoption;
+- credentials or protected external effects;
+- destructive or irreversible action;
+- an unavailable market or evidence window;
+- a scope-expansion circuit breaker;
+- conflicting shared-tree work; or
+- exact-byte review, release, merge, or residual-risk acceptance.
+
+Resuming a goal requires rechecking tracker state, branch and working tree, material decisions, external prerequisites, and whether earlier evidence still applies. Never continue merely because the harness restored a session.
+
+Route goal work by responsibility:
+
+- Sol/high owns framing, architecture, market/source/evidence/security decisions, adversarial acceptance, and independent review.
+- Terra/high may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
+
+For R3/R4 evidence, persistence, revision, security, or state-transition contracts, freeze the adversarial matrix before implementation. Cover positive behavior, malformed/unsupported/insufficient/conflicting outcomes, bounds and limit-plus-one, combined-failure precedence, interruption/retry/rollback, provenance substitution, concurrency where applicable, historical compatibility, and external temporal or authority gates.
+
+If goal mode is unavailable or cannot preserve these controls, record the constraint and use the ordinary bounded workflow.
+
+### 6. Start every spawned agent and reviewer with routine permissions pre-approved
+
+Start OMP workers and reviewers in full-permission/yolo autonomous mode. Do not override the normal yolo mode with `write` or `always-ask` approval modes. Routine reads, searches, scoped edits, commands, tests, hashes, and read-only review MUST NOT stall on permission dialogs.
+
+Permissions do not enlarge authority. Enforce read-only review through the assignment contract, any available reviewer-specific capability restriction, and immutable candidate evidence—not approval prompts. Every reviewer targets a clean committed candidate. The coordinator MUST perform pre-review and post-review checks of the full commit SHA, tree identity, and clean worktree; any mismatch or unexpected mutation invalidates the review and requires a fresh review after repair.
+
+Agents pause only for genuine blockers: unresolved owner decisions, credentials or protected effects, destructive or irreversible actions, scope expansion, release authority, unavailable external evidence, or another boundary named above.
+
+## Additional standing owner instructions
+
+These active owner instructions exist beyond the six execution controls.
+
+### Owner and agent responsibilities
+
+- The owner supplies product vision, goals, rough ideas, priorities, and epic-level direction; the agent validates, specifies, implements, verifies, and delivers within approved direction.
+- Ask the owner only for a material direction or scope decision, credentials or live-provider authority, a destructive or irreversible action, release or residual-risk authority, or a genuine product tradeoff that current evidence cannot resolve.
+- Default to informed action. Do not assign the owner manual work that repository tools, deterministic automation, or the agent can perform safely.
+- Automate evidence acquisition when the tool or agent can perform it. Never ask the owner to collect files or operate a workflow merely for agent convenience.
+
+### Communication and task tracking
+
+- Explain progress, blockers, failures, and bottlenecks in plain language. Translate necessary engineering or market jargon immediately; lead with the concrete effect.
+- Keep general discussion out of sprint delivery todos. Only work needed to build, test, review, publish, or close the active delivery belongs there.
+- When a discussion becomes authorized delivery, create or update its own governed Issue and delivery tasks at that point.
+- Use one OMP session per sprint: run `/new` before starting a new sprint, use `/compact` only within the active sprint when needed, and otherwise allow automatic compaction.
+- Do not use Orca for this repository unless the owner explicitly reverses this instruction. Use repository tools, direct GitHub integration, and Herdr where required.
+
+### Tracker and lifecycle
+
+- GitHub is the sole active tracker. Create work through repository Issue forms and manage it in the private SwingTradingAIAssistant Delivery Project.
+- Existing Linear records are read-only historical evidence. Do not copy, reopen, mutate, delete, or treat them as the active backlog; preserve ARK references in historical records.
+- Project fields own status, priority, estimate, work type, and risk. Milestones own sprint assignment.
+- Every material change links to a GitHub Issue, closes through a pull request, passes repository and hosted gates, and records the exact reviewed revision.
+- Lifecycle claims MUST match live Issue, Project, milestone, PR, and hosted-gate state. A successful implementation or build does not authorize a stale completion claim.
+- Owner-approved scope changes are recorded without erasing prior decisions. Unexpected repository changes are treated as the owner's work and preserved.
+
+## Product mission and scope
+
+Build a trustworthy, agent-agnostic research tool for listed-equity swing trading. Product research, qualification, and default workflows focus on the point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an autonomous trading bot.
+
+- Reusable feature cores accept an explicit bounded list of canonical listed-equity instruments independently of index membership.
+- Point-in-time index membership and universe selection are separate higher-level policies.
+- Canonical equity identity is ISIN plus exchange, effective symbol, and versioned provider mappings.
+- Each feature declares required data capabilities and returns explicit unsupported or insufficient-evidence outcomes instead of embedding an index-membership check.
+- Explicitly supplied supported stocks outside the Nifty 100 may use the same capabilities when canonical identity and required evidence exist; they are not the primary roadmap or qualification focus.
+- Use an explicit swing horizon and bar frequency. Exclude intraday trading, futures, options, crypto, long-term investing, generic multi-asset features, unsupported evidence, and broker order placement.
+- Never use guaranteed-return, certainty, or financial-adviser language.
+- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient data as first-class outcomes.
+
+## Direction and repository authority
+
+The owner approves direction at the epic boundary. Within an approved epic, the agent writes the implementation specification and proceeds.
+
+Before changing architecture or market logic, read the relevant sections of:
+
+- `docs/architecture-freeze-v1.md`;
+- `docs/roadmap.md` and `docs/upcoming_sprints_overview.md`;
+- the affected accepted Plan or module specification;
+- `docs/reference-repositories.md` when studying prior work; and
+- the live GitHub Issue and Project item.
+
+Surface conflicts; never silently redefine rules or ownership.
+
+Evaluate only proposed new modules, data sources, or scoring factors before building them. In at most five lines state expected value, scope fit, material data/research risk, the smallest alternative, and `accepted`, `deferred`, or `rejected`. Ordinary implementation choices need no separate ritual.
+
+Reference repositories are read-only idea sources. Do not modify them or copy-paste their implementations. Independently specify, implement, test, and record provenance for any adopted concept.
+
+## Delivery and evidence controls
+
+- Prefer the smallest implementation that preserves complete required behavior and evidence.
+- Use tests-first for changed permanent observable contracts. Tests must be deterministic, isolated, behavior-based, and point-in-time faithful where applicable.
+- A bug fix requires a discriminating reproduction before repair and confirmation after repair.
+- UI changes require verification on the actual surface; CLI/TUI changes require launching the actual program and observing the changed path.
+- Focused checks do not replace applicable full repository gates.
+- Runtime-source edits are formatted before every directly and transitively bound source-at-rest manifest is refreshed.
+- R3/R4 review is independent, exact-byte, non-mutating, and blocker-only for the current accepted slice. Review drift or a later commit invalidates the verdict.
+- Release is PR-based. Direct push to `main` is prohibited. Hosted CI, security checks, exact merge ancestry, and main admission must pass where configured.
+- Built packages require both sdist and wheel plus a clean installed-wheel import/runtime smoke when package or runtime identity behavior changes.
+- Failures, skipped checks, unavailable windows, and residual boundaries remain explicit. Never inflate narrower evidence into a broader pass.
+- Cleanup follows successful behavioral proof: remove generated artifacts and obsolete scaffolding without deleting unrelated owner work.
+
+## Temporal and real-evidence gates
+
+Real-time smoke gates are feature-specific evidence, not a default for every change.
+
+A temporal gate MUST name the exact market state, why deterministic or historical evidence cannot prove the claim, the earliest valid observation point, and the exact scope blocked. While waiting, finish all independent work and continue the next authorized slice. Never fabricate the observation or relabel later-acquired evidence as historically known.
+
+Current/live prioritization MUST NOT delete, weaken, bypass, or misrepresent existing historical research implementations, immutable revisions, point-in-time tests, backtests, bias controls, or explicit unsupported/insufficient outcomes.
+
+## Deterministic tool and AI boundary
+
+- The deterministic tool owns data access, calculations, validation, backtests, market facts, timestamps, and provenance.
+- The consuming AI owns contextual reasoning over supplied structured facts.
+- The tool MUST NOT impersonate an LLM or emit unsupported opinions.
+- The AI MUST NOT invent missing values or recompute market facts from raw OHLC.
+- Domain contracts remain vendor-independent; CLI, API, and MCP surfaces wrap the same versioned contracts.
+
+## Research integrity
+
+- Use point-in-time constituent membership and sector classification.
+- Handle corporate actions, symbol changes, missing or stale bars, and exchange calendars explicitly.
+- Prevent look-ahead, survivorship, selection, and data-snooping bias.
+- Do not fill at a signal close unless execution there is genuinely possible and justified.
+- Include realistic costs and slippage whenever performance is evaluated.
+- Separate in-sample research from out-of-sample and walk-forward validation.
+- Make results reproducible with source provenance and data, configuration, and code versions.
+- Reject stale mappings, provider fallback, raw/adjusted mixing, unresolved conflicts, and later-acquired data presented as historically known.
+- Prefer `NO_TRADE`, unsupported, or insufficient evidence over speculative completion.
+
+## Instruction-source register
+
+Only this file owns project-wide agent behavior. Other sources retain the narrower authority below.
+
+| Source | Classification | Authority and boundary |
+|---|---|---|
+| `AGENTS.md` | Bootstrap only | Requires this file before work; MUST NOT duplicate the canonical rules. |
+| `docs/mandatory-agent-instructions.md` | Canonical project adapter | Owns active project-wide agent instructions, precedence, and update rules. |
+| `docs/herdr-multi-agent-workflow.md` | Specialized Herdr procedure | Owns current Herdr commands, assignment format, coordination mechanics, and tab lifecycle under this file's Herdr policy. |
+| `docs/architecture-freeze-v1.md` | Product architecture authority | Owns accepted product and architecture boundaries; process-history passages are records, not a second agent policy. |
+| `docs/roadmap.md` and `docs/upcoming_sprints_overview.md` | Delivery sequencing | Own current roadmap dependencies and lifecycle summaries; they do not define general agent behavior. |
+| `docs/plans/` and `docs/sprints/` | Scoped contracts and historical records | Accepted Plans govern their feature scope; Sprint records preserve evidence and decisions. Repeated workflow wording is historical unless incorporated here. |
+| `docs/notes/README.md` | Notes authority | Defines notes as non-authoritative reasoning unless promoted into an approved source. |
+| `docs/reference-repositories.md` | Reference-source policy | Owns the approved read-only reference inventory and provenance context. |
+| GitHub Issues, Project, milestones, and PRs | Active delivery state | Own live work, status, priority, sprint assignment, acceptance, review, and merge evidence. |
+| Software-engineering handbook | Global project-agnostic defaults | Supplies shared risk-scaled engineering rules. This file is the repository adapter and overrides only within authorized project scope. |
+| Durable memory and conversation history | Context only | Useful for discovery; never overrides current authoritative evidence. |
+
+## Updating these instructions
+
+Deterministic consistency checks enforce the machine-observable boundary: one canonical owner, required authority links, registered local source existence, exactly six standing controls, explicit precedence conflicts, and copied canonical prose after case and whitespace normalization. Arbitrary semantic paraphrases are prohibited but require independent exact-byte review; deterministic tools MUST NOT use an LLM or pretend that lexical matching proves semantic equivalence.
+
+1. The owner authorizes a project-level instruction addition, change, or removal.
+2. Update this file first in a dedicated governed change. Do not add a competing normative copy elsewhere.
+3. Update `AGENTS.md` only when the bootstrap path or read requirement changes.
+4. Update specialized documents only when their narrower procedure or cross-reference changes.
+5. Preserve historical Plan and Sprint wording unless it falsely claims current authority; add a supersession reference rather than rewriting evidence history.
+6. Update deterministic consistency checks and the instruction-source register in the same change.
+7. Obtain risk-proportionate independent review on exact bytes and deliver through the normal PR path.
+8. If a reusable handbook improvement is warranted, change it through the handbook repository's own governed Issue/PR. Project-specific instructions MUST NOT be copied into the global handbook.
+
+A rule removed here is not active merely because an old Sprint, Plan, memory, or conversation still contains it. A scoped product requirement remains active within its own accepted contract even when it is not repeated here.
