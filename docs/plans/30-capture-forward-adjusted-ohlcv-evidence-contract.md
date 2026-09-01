@@ -7,11 +7,15 @@
 
 ## Delivery provenance
 
-Issue #155 ports the actionable runtime from exact independently reviewed source
-candidate `54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current-main base
-`5147292fca2d6d2faf0bc7ca83b0fbfe308f7ea0`. Added runtime and test files use
-the reviewed candidate blobs; changes to shared current-main files use the exact
-candidate delta reconciled onto that base and require fresh exact-byte review.
+Issue #155 ports the actionable runtime from exact independently reviewed
+baseline candidate `54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current-main
+base `5147292fca2d6d2faf0bc7ca83b0fbfe308f7ea0`. The current candidate consists
+of that baseline port plus lifecycle-wording corrections in
+`5d1052c6cbed327811a15e71db5d36656c9120ac`, bounded FIFO no-hang fixes,
+regressions, and transitive runtime-manifest refresh in
+`00d32406f6684c378aad68cdb986ec5562c8ef64`, and this provenance
+clarification. These post-baseline bytes require fresh exact-byte review before
+merge and are not attributed to the baseline candidate review.
 
 This is a delivery-only provenance record. It authorizes no provider call or new
 temporal capture, does not relabel later-acquired values as historical
