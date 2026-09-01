@@ -151,8 +151,8 @@ remediation are in
   news, event, or corporate-action snapshot construction or acquisition.
   Missing evidence remains explicit at each cutoff, without fabrication, later
   backfill, silent neutralization, or dropped dates. Sprint 17 / #147 remains a
-  separate waiting historical qualification lane, while Sprint 18 / #148 owns
-  the active current/live Market Structure slice.
+  separate parallel waiting historical qualification lane. Sprint 18 / #148
+  and Sprint 19 / #152 are closed/completed current/live deliveries.
 
   Broader bounded per-decision-date as-of research snapshot construction belongs
   to Issue #139 and a separate accepted contract; it depends on #120/#122 unless
@@ -351,22 +351,27 @@ Industry/Packet URL attribution; late
 - Sprint 17 — capture-forward adjusted OHLC historical qualification /
   [Issue #147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147)
   is open in Project **Todo**, High priority, estimate 1. The implementable
-  Plan-30 slice is complete and reviewed; four distinct future completed-session
-  captures remain mandatory for the later historical point-in-time claim and
-  do not block current/live work.
+  Plan-30 slice is complete and reviewed. One of four distinct completed-session
+  captures is retained; three future captures and unchanged Plan 29 remain
+  mandatory for the later historical point-in-time claim and do not block
+  current/live work.
 
 - Sprint 18 — current supplied-cohort Market Structure /
   [Issue #148](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/148)
-  is open and is the sole Project **In Progress** item, High priority, estimate
-  1. [Plan 31](../plans/31-current-supplied-cohort-market-structure-contract.md)
-  owns the implemented, exact-byte-reviewed local candidate. It is not
-  delivered until its applicable smoke, PR, hosted, and merge gates pass.
+  is closed/completed with Project status **Done**. Plan 31 was delivered through
+  merged PR #149.
 
-- Post-Sprint-18 selection is not implicit. Issue #145 is open Project **Todo**
-  without assigned priority, estimate, or sprint. Price Action is the next
-  locked product module but has no GitHub Issue or accepted contract. The owner
-  must explicitly prioritize #145 or approve the bounded Price Action first
-  working slice after #148.
+- Sprint 19 — current supplied-cohort Price Action /
+  [Issue #152](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/152)
+  is closed/completed with Project status **Done**. Plan 32 was delivered through
+  merged PR #153.
+
+- The current ordered lane is Issue #155, then Issue #156, then
+  owner-prioritized maintenance Issue #145 before another product module starts.
+  Issue #147 remains a parallel `1/4` temporal-evidence lane.
+  [Plan 34](../plans/34-swing-research-feature-map.md) records the necessary-only
+  gate for any later swing-research feature; no named pattern, Volume, Relative
+  Strength, or Liquidity/SMC possibility is an automatic backlog commitment.
 
 - Future packaging outside the sprint/WIP-one sequence —
   [Issue #126](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/126)

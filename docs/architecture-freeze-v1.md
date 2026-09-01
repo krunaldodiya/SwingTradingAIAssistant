@@ -57,14 +57,22 @@ autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
 Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
 closed/completed. Sprint 17 / #147 is an open waiting historical lane at
 `1/4`; its three unavailable future-session captures do not block
-current/live work. Sprint 19 Price Action delivered through PR #153. Issue
-#154 and accepted Plan 33 own only the bounded source decision, benchmark, and
-contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
-they change no runtime. Open Project **Todo** Issue #155 owns the reviewed
-Plan 30 runtime delivery prerequisite without closing #147, then open Project
-**Todo** Issue #156 owns the separately bounded Plan 33 implementation. Open
-maintenance Issue #145 does not start automatically without explicit owner
-prioritization.
+current/live work. Sprint 19 Price Action delivered through PR #153. Closed
+Issue #154 and accepted Plan 33 own only the bounded source decision, benchmark,
+and contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
+PR #157 merged that planning record without changing runtime. Open Project
+**Todo** Issue #155 owns the reviewed Plan 30 runtime delivery prerequisite
+without closing #147, then open Project **Todo** Issue #156 owns the separately
+bounded Plan 33 implementation. Owner-prioritized maintenance Issue #145 follows
+#156 before another product module starts. Issue #147 remains a parallel `1/4`
+temporal-evidence lane. [Plan 34](plans/34-swing-research-feature-map.md)
+freezes the necessary-only feature taxonomy: no later Price Action, Volume,
+Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
+required swing-research use through a separate owner-prioritized Issue.
+Optional analytical facts are additive by default and never form a hidden
+all-feature `NO_TRADE` conjunction. Safety and required-evidence failures remain
+fail-closed; a later strategy may make a fact mandatory only after its accepted
+contract measures the benefit against lost candidate coverage.
 For current/live Market Regime, raw completed-close comparison is allowed only
 when its versioned comparability contract states the evidence basis and limits.
 [Issue #125](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/125)

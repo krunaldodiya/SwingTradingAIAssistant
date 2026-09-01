@@ -368,17 +368,36 @@ and [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md)
 own only the bounded source decision, complete nonpublishing benchmark, and
 implementation contract for efficient current Nifty 50 plus Nifty Next 50
 adjusted capture. The measured two-cohort, eight-worker acquisition completed
-100/100 members over 21 sessions in 25.942 seconds on the fixed-cadence bounded path. Issue #154 changes no
-runtime, scheduler, store, provider profile, or historical qualification.
+100/100 members over 21 sessions in 25.942 seconds on the fixed-cadence bounded
+path. Issue #154 closed through merged PR #157 and its Delivery Project item is
+**Done**. It changed no runtime, scheduler, store, provider profile, or
+historical qualification.
 [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
 owns the reviewed Plan 30 runtime delivery prerequisite without closing #147;
 [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
 owns the separately bounded Plan 33 implementation.
 
-Issue #145 remains open **Todo** without assigned priority, estimate, or
-sprint and does not block this planning slice. Sprint 17 captures continue
-separately when their genuinely completed sessions become available.
-Liquidity/SMC, Volume, and Relative Strength remain separate later modules.
+Owner-prioritized Issue #145 remains open **Todo** and follows #156 before
+another product module starts. Sprint 17 / Issue #147 remains a parallel `1/4`
+temporal-evidence lane and captures continue when genuinely completed sessions
+become available.
+
+[Plan 34](plans/34-swing-research-feature-map.md) owns the necessary-only future
+feature taxonomy. Delivered Market Structure and Price Action remain separate
+from possible Volume, Relative Strength, and Liquidity/SMC facts. Named patterns,
+levels, breakouts/retests, lines, channels, formations, zones, and SMC labels are
+not promised backlog features. A possible fact advances only when a separate
+owner-prioritized Issue proves a concrete unmet swing-research, analysis,
+scanning, or screening need; establishes distinct practical value beyond
+delivered facts; and accepts the smallest deterministic causal working slice.
+Otherwise the default decision is not to build it.
+Possible analytical facts are additive context by default, not hidden mandatory
+filters. Safety and required-evidence failures remain fail-closed, but an
+optional neutral, unsupported, or insufficient fact does not become `NO_TRADE`
+without an accepted strategy contract. Every proposed hard filter must compare
+its marginal benefit with candidate coverage, retained opportunities, no-trade
+frequency, and out-of-sample behavior; 100% accuracy on no useful signals is not
+an objective.
 
 Future [Issue #139](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/139)
 separately owns the broader bounded per-decision-date as-of research snapshot
