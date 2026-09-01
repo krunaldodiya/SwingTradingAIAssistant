@@ -350,9 +350,10 @@ Industry/Packet URL attribution; late
 
 - Sprint 17 — capture-forward adjusted OHLC historical qualification /
   [Issue #147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147)
-  is open in Project **Todo**, High priority, estimate 1. The implementable
-  Plan-30 slice is complete and reviewed. One of four distinct completed-session
-  captures is retained; three future captures and unchanged Plan 29 remain
+  is open with Project status **In Progress**, High priority, estimate 1. The
+  implementable Plan-30 slice is complete and reviewed. One of four distinct
+  completed-session captures is retained; three future captures and unchanged
+  Plan 29 remain
   mandatory for the later historical point-in-time claim and do not block
   current/live work.
 
