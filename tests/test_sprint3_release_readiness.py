@@ -663,6 +663,18 @@ def _normalized_instruction_text(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+_MIN_CANONICAL_PROSE_BLOCK_CHARS = 120
+
+
+def _canonical_prose_blocks(text: str) -> set[str]:
+    return {
+        normalized
+        for block in re.split(r"\n\s*\n", text)
+        if len(normalized := _normalized_instruction_text(block))
+        >= _MIN_CANONICAL_PROSE_BLOCK_CHARS
+    }
+
+
 def _instruction_authority_errors(files: dict[str, str]) -> tuple[str, ...]:
     errors: list[str] = []
     owners = sorted(
@@ -676,6 +688,7 @@ def _instruction_authority_errors(files: dict[str, str]) -> tuple[str, ...]:
     if [number for number, _ in controls] != ["1", "2", "3", "4", "5", "6"]:
         errors.append(f"canonical control numbers: {controls}")
     control_titles = {title for _, title in controls}
+    canonical_prose_blocks = _canonical_prose_blocks(canonical)
     for path, text in files.items():
         if path == _CANONICAL_INSTRUCTION_PATH:
             continue
@@ -688,7 +701,7 @@ def _instruction_authority_errors(files: dict[str, str]) -> tuple[str, ...]:
         if any(
             _normalized_instruction_text(phrase) in normalized_text
             for phrase in _CANONICAL_EXCLUSIVE_PHRASES
-        ):
+        ) or any(block in normalized_text for block in canonical_prose_blocks):
             errors.append(f"duplicate instruction prose in {path}")
         if _CONTRADICTORY_AUTHORITY.search(text):
             errors.append(f"contradictory authority in {path}")
@@ -745,10 +758,17 @@ def test_instruction_authority_graph_is_fail_closed() -> None:
 
 def test_instruction_authority_graph_rejects_competing_sources() -> None:
     controls = "\n".join(f"### {number}. control {number}" for number in range(1, 8))
+    permissions_instruction = (
+        "Permissions do not enlarge authority. Enforce read-only review through the "
+        "assignment contract, any available reviewer-specific capability restriction, "
+        "and immutable candidate evidence—not approval prompts. Every reviewer targets "
+        "a clean committed candidate."
+    )
     files = {
         _CANONICAL_INSTRUCTION_PATH: (
             "Status: **CANONICAL PROJECT ADAPTER**\n"
             f"{controls}\n"
+            f"\n{permissions_instruction}\n\n"
             "## Instruction-source register\n"
             "| Source | Classification | Authority |\n"
             "|---|---|---|\n"
@@ -778,6 +798,9 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
             "The coordinator overrides the repository owner.\n"
         ),
         "docs/non-role-prefix.md": ("The coordinator overrides the username field.\n"),
+        "docs/copied-permissions.md": permissions_instruction.upper().replace(
+            " ASSIGNMENT ", "\nassignment\n"
+        ),
     }
     errors = _instruction_consistency_errors(files)
     for expected in (
@@ -794,6 +817,7 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
     assert "duplicate instruction prose in docs/copied-owner-question.md" in errors
     assert "contradictory authority in docs/owner-role-conflict.md" in errors
     assert "contradictory authority in docs/non-role-prefix.md" not in errors
+    assert "duplicate instruction prose in docs/copied-permissions.md" in errors
 
 
 def test_read_only_review_requires_immutable_candidate_checks() -> None:
