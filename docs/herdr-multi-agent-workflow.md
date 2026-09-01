@@ -3,23 +3,21 @@
 Status: **ACTIVE REPOSITORY OPERATING PROCEDURE**
 
 This procedure makes multi-agent work visible, bounded, evidence-bearing, and
-safe in the shared SwingTradingAIAssistant working tree. It complements
-`AGENTS.md`; repository, product, issue, plan, authorization, and executable-gate
-requirements remain authoritative.
+safe in the shared SwingTradingAIAssistant working tree. It is subordinate to the
+canonical project adapter in
+[docs/mandatory-agent-instructions.md](mandatory-agent-instructions.md);
+repository, product, Issue, Plan, authorization, and executable-gate requirements
+retain their stated authority.
 
-Before any Herdr control command, complete the five-part mandatory execution
-preflight in `AGENTS.md`: handbook, Herdr routing, working-feature-first
-sequencing, current-context reconstruction, and `/goal` use when available.
-Repeat it when resuming a session or changing the active task; stale familiarity
-is not evidence.
+Before any Herdr control command, complete the six standing execution controls in
+the canonical project adapter. Repeat them when resuming a session or changing
+the active task; stale familiarity is not evidence.
 
 ## Applicability
 
-Use Herdr when work genuinely decomposes into independent implementation,
-research, or review slices, or when an R3/R4 change requires independent
-functional and specialist review. Do not create agents merely to add ceremony.
-The coordinator retains interpretation, architecture, scope, tracker, and final
-delivery ownership.
+The canonical project adapter decides whether this procedure applies. Once
+selected, use this procedure for the assigned multi-agent or independent-review
+work without expanding its scope.
 
 All agents share the current working tree. A separate tab is visibility, not
 filesystem isolation.
@@ -40,13 +38,14 @@ filesystem isolation.
 - **Mechanical work:** keep with the coordinator unless it is a large,
   exact, non-overlapping transformation with explicit acceptance evidence.
 
-An assigned agent MUST NOT spawn subagents, use hidden delegation, or negotiate
-product direction. It reports to the coordinator.
+Agent authority and delegation boundaries come from the canonical project
+adapter; an assignment may narrow them further.
 
 ## Required sequence
 
-1. **Resolve authority.** Read `AGENTS.md`, the active GitHub Issue, architecture
-   freeze, roadmap dependency record, affected plan, and delivered interfaces.
+1. **Resolve authority.** Read `docs/mandatory-agent-instructions.md`, the active
+   GitHub Issue, architecture freeze, roadmap dependency record, affected Plan,
+   and delivered interfaces.
 2. **Partition first working slice.** Separate current acceptance and concrete
    blockers from later hardening, generalized systems, additional providers,
    surfaces, or threat models.
@@ -88,36 +87,42 @@ product direction. It reports to the coordinator.
     artifact references are captured, claims are checked, and the agent is
     `idle` or `done` with no remaining assignment, close its tab.
 12. **Freeze candidate bytes before review.** Refresh runtime manifests after
-    final formatting. Functional and security reviews start together against
-    the same stable bytes.
-13. **Treat invalid reviews as no evidence.** An interrupted, network-failed,
-    safety-filtered, stale-byte, or partially completed review has no verdict.
-    Repair first, then start fresh reviewers from scratch.
-14. **Repair only current blockers.** A blocker must cite a violated active
+    final formatting and commit the exact candidate. Record the full commit SHA,
+    tree identity, and an empty `git status --porcelain`. Functional and security
+    reviews start together against that same clean committed candidate.
+13. **Verify review immutability.** After each result, recheck the full commit SHA,
+    tree identity, and empty `git status --porcelain` before accepting the verdict.
+    Any mismatch or unexpected mutation invalidates the review; restore or repair
+    the candidate, then obtain a fresh review from scratch.
+14. **Treat invalid reviews as no evidence.** An interrupted, network-failed,
+    safety-filtered, stale-byte, partially completed, or mutation-invalidated
+    review has no verdict. Repair first, then start fresh reviewers from scratch.
+15. **Repair only current blockers.** A blocker must cite a violated active
     acceptance condition or concrete current safety, correctness, usability, or
     evidence-integrity failure. Re-review every changed exact candidate.
-15. **Keep validation ownership bounded.** Siblings may run only focused checks
+16. **Keep validation ownership bounded.** Siblings may run only focused checks
     for their owned behavior. They never integrate the final candidate or run
     repository-wide formatters, linters, builds, or full suites.
-16. **Run final integration and gates once.** The coordinator alone integrates
+17. **Run final integration and gates once.** The coordinator alone integrates
     results, runs focused integrated behavior checks, and runs the complete
     repository gates on stable bytes.
-17. **Deliver truthfully.** Local implementation, focused tests, independent
+18. **Deliver truthfully.** Local implementation, focused tests, independent
     review, full gates, real smokes, exact SHA, PR, hosted checks, merge, and
     tracker closeout are distinct states.
 
 ## Tab lifecycle
 
 Use a paired open/close lifecycle for each agent:
-
 ```text
-create every independent labelled tab
+record the clean committed candidate SHA, tree, and worktree state
+  -> create every independent labelled tab
   -> start every explicitly routed agent
   -> verify each OMP session's initial model/thinking records
   -> submit every complete independent assignment without waiting
   -> wait for default settled states
   -> inspect each agent state
   -> read and capture the complete result
+  -> recheck the candidate SHA, tree, and clean worktree state
   -> verify accepted evidence
   -> close only completed idle/done tabs
 ```
@@ -126,7 +131,8 @@ create every independent labelled tab
 
 An implementation agent may use the harness's persistent goal mode only after
 the coordinator has completed steps 1–4 and the assignment satisfies
-`AGENTS.md`'s goal-mode entry conditions. The goal objective is the agent's one
+`docs/mandatory-agent-instructions.md` goal-mode entry conditions. The goal
+objective is the agent's one
 complete work assignment: it must carry the full assignment contract below,
 forbid nested delegation, limit the agent to focused owned validation, and leave
 shared integration, repository-wide gates, review, tracker, and delivery actions
@@ -180,7 +186,8 @@ TAB_ID="$(printf '%s\n' "$TAB_JSON" | jq -er '.result.tab.tab_id')"
 PANE_ID="$(printf '%s\n' "$TAB_JSON" | jq -er '.result.root_pane.pane_id')"
 
 herdr agent start "$AGENT_NAME" --kind omp --pane "$PANE_ID" \
-  --timeout 60000 -- --model "$APPROVED_MODEL" --thinking high
+  --timeout 60000 -- --model "$APPROVED_MODEL" --thinking high \
+  --approval-mode yolo
 ```
 
 Do not derive IDs from labels or sidebar order. Agent names must be unique and
