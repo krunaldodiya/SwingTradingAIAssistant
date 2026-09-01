@@ -301,6 +301,97 @@ workflows require provenance-complete supplied NSE schedule evidence and fail
 closed when it is unavailable. Strategy rules, recommendations, and broker
 execution are not implemented.
 
+## Structured daily OHLCV downloader
+
+The installed distribution exposes one `equity_data_downloader` implementation
+for bounded daily yfinance acquisition. Its CLI and Python API are adapters over
+the same core; they do not create separate data sources. Parquet is the sole
+persisted OHLCV source of truth. Persistent output never uses `Downloads` or an
+arbitrary caller-selected file. Every invocation writes beneath one configured
+structured-data root, whose default is:
+
+```text
+~/SwingTradingAIAssistantData
+```
+
+The derived layout is:
+
+```text
+adjusted_daily/provider=yfinance/request=<request-sha256>/data.parquet
+```
+
+DuckDB is the SQL query engine over those Parquet files; it is not a second
+OHLCV copy. PyArrow is only the Parquet reader/writer library. Feather is not
+used. yfinance's internal cookie/timezone SQLite cache is redirected beneath
+`<storage-root>/.cache/yfinance`; it is auxiliary provider state, never an OHLCV
+source or research input. The utility accepts between 1 and 100
+explicit provider symbols and one inclusive date range in a multi-ticker
+request. It does not infer exchange calendars, canonical mappings, decision
+cutoffs, capture revisions, or project evidence, so the resulting dataset
+remains transport/research data rather than automatically qualified
+capture-forward evidence.
+
+Dataset publication is direct and mode-gated: the canonical `data.parquet` name
+is created without replacement as mode 0600, written and validated through its
+held descriptor, file- and directory-synced, then committed to immutable mode
+0400. Reuse rejects mode-0600 content unless the complete Parquet schema,
+schema and field metadata, rows, and request identity validate exactly.
+Successful recovery syncs and commits that same held inode, then rereads and
+revalidates its exact physical digest and full table before returning.
+Publication never renames or unlinks a path, so canonical-name substitution
+fails without moving or deleting another file.
+
+Install from PyPI:
+
+```bash
+python -m pip install swing-trading-ai-assistant
+```
+
+Download one or several stocks. Repeat `--symbol` for each provider symbol:
+
+```bash
+equity-data-download \
+  --symbol SBIN.NS \
+  --symbol RELIANCE.NS \
+  --start 2026-08-01 \
+  --end 2026-08-28
+```
+
+Use `--storage-root /absolute/path` to configure a different single structured
+data root. The selected root must be an existing absolute directory owned by the
+invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
+storage is rejected before any provider call. The complete derived dataset
+remains under that root; there is no arbitrary output-file option.
+
+Prices use yfinance's auto-adjusted OHLC semantics, while volume remains the
+source-reported volume. The exact request identity binds normalized symbols and
+dates, adjusted basis, yfinance release, fixed provider-call configuration, and
+the exact Parquet schema/contract version. An existing dataset is reused only
+after its owner, permissions, singleton identity, metadata, complete schema, and
+all OHLCV values pass validation; `REUSED` performs zero provider requests and
+zero file writes. A different or expanded request, provider version, call
+configuration, or schema is a new coherent adjusted-price snapshot; the
+downloader never appends a new adjustment vintage to old rows.
+
+The same behavior is available as a Python API:
+
+```python
+from datetime import date
+
+from equity_data_downloader import download_daily_ohlcv
+
+receipt = download_daily_ohlcv(
+    ("SBIN.NS", "RELIANCE.NS"),
+    date(2026, 8, 1),
+    date(2026, 8, 28),
+)
+```
+
+The receipt reports the normalized symbols, request identity, requested period,
+row count, per-symbol row counts, provider version, retrieval time, and derived
+Parquet path under the shared root.
+
+
 
 ## Sprint 4 historical evidence census
 

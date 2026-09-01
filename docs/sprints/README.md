@@ -366,9 +366,10 @@ Industry/Packet URL attribution; late
   is closed/completed with Project status **Done**. Plan 32 was delivered through
   merged PR #153.
 
-- The current ordered lane is Issue #155, then Issue #156, then
-  owner-prioritized maintenance Issue #145 before another product module starts.
-  Issue #147 remains a parallel `1/4` temporal-evidence lane.
+- Issue #155's governing merge delivers the reviewed Plan 30 runtime
+  prerequisite. The remaining ordered lane is Issue #156, then owner-prioritized
+  maintenance Issue #145 before another product module starts. Issue #147
+  remains a parallel `1/4` temporal-evidence lane.
   [Plan 34](../plans/34-swing-research-feature-map.md) records the necessary-only
   gate for any later swing-research feature; no named pattern, Volume, Relative
   Strength, or Liquidity/SMC possibility is an automatic backlog commitment.

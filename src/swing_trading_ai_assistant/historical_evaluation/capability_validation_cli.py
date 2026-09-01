@@ -42,7 +42,7 @@ def _directory_metadata(value: os.stat_result) -> tuple[int, ...]:
     return value.st_dev, value.st_ino, value.st_mode, value.st_uid
 
 
-def _read_private_request(path: str, maximum_bytes: int) -> bytes:
+def read_private_request(path: str, maximum_bytes: int) -> bytes:
     components = path.split("/")
     if (
         not path.startswith("/")
@@ -145,7 +145,7 @@ def _run(argv: list[str] | None) -> int:
         if not storage_root.is_absolute():
             raise ValueError("invalid arguments")
         request = parse_historical_validation_request_v1(
-            _read_private_request(request_file, MAX_REQUEST_BYTES_V1)
+            read_private_request(request_file, MAX_REQUEST_BYTES_V1)
         )
     except (ValueError, OSError):
         sys.stderr.write("request_invalid\n")

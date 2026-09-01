@@ -19,7 +19,7 @@ The public NSE Indices constituent CSVs establish only the exact current bytes k
 2. **Scope fit:** composes two existing `1..50` adjusted-capture cohorts for the default current Nifty 50 plus Nifty Next 50 focus without changing reusable feature cores.
 3. **Material risk:** yfinance is an unofficial per-ticker Yahoo client with no published batch/rate guarantee; unbounded threads, missing mappings, current-list relabelling, partial publication, or raw/adjusted mixing would make the result unsafe or misleading.
 4. **Smallest alternative:** two sequential 50-ticker yfinance calls with eight internal workers, one fixed-cadence bounded curl-cffi session, existing adjusted settings, existing immutable cohort retention, and a read-time complete-union check; no provider framework, queue, scheduler, database, adaptive rate controller, or cross-cohort transaction subsystem.
-5. **Decision:** **accepted** as the Plan 33 implementation contract after fresh functional/domain/temporal **APPROVE** and security/privacy/provenance **PASS** review; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) and bounded implementation [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156) remain separate Todo Issues.
+5. **Decision:** **accepted** as the Plan 33 implementation contract after fresh functional/domain/temporal **APPROVE** and security/privacy/provenance **PASS** review; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) is delivered by its governing merge, while bounded implementation [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156) remains a separate Todo Issue.
 
 ## Source verification and decision
 
@@ -254,14 +254,14 @@ immutable capture rules. It versions the changed pool, supplied session,
 cadence, and byte-bound configuration rather than weakening or silently
 mutating the delivered `threads=False` contract.
 
-The reviewed Plan 30 capture-forward runtime candidate is not present on the
-current main branch. [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
-owns the ordered delivery-only prerequisite: port the exact reviewed actionable
-runtime onto current main without changing or closing #147's historical lane.
+The governing [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
+merge ports the exact reviewed actionable Plan 30 runtime from source candidate
+`54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main without changing
+or closing #147's historical lane.
 [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-then owns only this bounded Plan 33 implementation. Neither may wait for the
-three unavailable future sessions, copy unreviewed quarantine bytes, or imply
-that #147's historical qualification has passed.
+then owns only this bounded Plan 33 implementation. It may not wait for the three
+unavailable future sessions, copy unreviewed quarantine bytes, or imply that
+#147's historical qualification has passed.
 
 ### Later improvements
 

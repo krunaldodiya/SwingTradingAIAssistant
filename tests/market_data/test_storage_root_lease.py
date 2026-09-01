@@ -35,6 +35,7 @@ def _stat_with(result: os.stat_result, **overrides: int) -> object:
         "st_ino": result.st_ino,
         "st_mode": result.st_mode,
         "st_uid": result.st_uid,
+        "st_nlink": result.st_nlink,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -161,6 +162,27 @@ def test_read_admission_rejects_absent_or_unsafe_lock_without_mutation(
 
     assert rejected.outcome is LeaseOutcome.FAILED
     assert (lock.stat().st_ino, lock.stat().st_mode, lock.read_bytes()) == original
+
+
+def test_read_admission_rejects_hardlinked_lock_without_cleanup(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "hardlinked-lock"
+    root.mkdir()
+    seeded = StorageRootLease.try_acquire(root)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    lock = root / ".ingestion.lock"
+    sibling = tmp_path / "lock-sibling"
+    os.link(lock, sibling)
+
+    rejected = StorageRootLease.try_admit_read_existing(root)
+
+    assert rejected.outcome is LeaseOutcome.FAILED
+    assert rejected.failure_code is LeaseFailureCode.STORAGE_UNSAFE
+    assert rejected.lease is None
+    assert lock.is_file()
+    assert sibling.is_file()
 
 
 def test_read_admission_rejects_root_swap_after_descriptor_open(
@@ -300,7 +322,7 @@ def test_private_empty_admission_creates_only_locked_private_file(
     result.lease.close()
 
 
-def test_private_empty_admission_rolls_back_its_lock_on_concurrent_entry(
+def test_private_empty_failure_preserves_its_lock_and_concurrent_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "root"
@@ -317,59 +339,42 @@ def test_private_empty_admission_rolls_back_its_lock_on_concurrent_entry(
 
     assert result.outcome is LeaseOutcome.FAILED
     assert result.lease is None
-    assert tuple(item.name for item in root.iterdir()) == ("user-owned.txt",)
+    assert {item.name for item in root.iterdir()} == {
+        ".ingestion.lock",
+        "user-owned.txt",
+    }
+    assert (root / ".ingestion.lock").is_file()
     assert (root / "user-owned.txt").read_bytes() == b"concurrent"
 
 
-def test_private_empty_rollback_preserves_final_window_lock_substitution(
+def test_private_empty_failure_never_renames_or_unlinks_siblings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "root"
     root.mkdir(mode=0o700)
     original_acquire = lease_module._acquire_lock
-    original_rename = lease_module.os.rename
+    mutation_attempted = False
 
     def inject_entry(*args: object, **kwargs: object):
         (root / "user-owned.txt").write_bytes(b"concurrent")
         return original_acquire(*args, **kwargs)  # type: ignore[arg-type]
 
-    def substitute_before_quarantine(
-        source: object,
-        target: object,
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
-    ) -> None:
-        if source == ".ingestion.lock" and str(target).endswith(".rollback"):
-            original_rename(
-                source,
-                ".attacker-held-lock",
-                src_dir_fd=src_dir_fd,
-                dst_dir_fd=dst_dir_fd,
-            )
-            descriptor = os.open(
-                ".ingestion.lock",
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
-                0o600,
-                dir_fd=src_dir_fd,
-            )
-            os.write(descriptor, b"foreign-lock")
-            os.close(descriptor)
-        original_rename(
-            source,
-            target,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
-        )
+    def record_mutation(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        nonlocal mutation_attempted
+        mutation_attempted = True
+        raise AssertionError("rollback must not mutate directory entries")
 
     monkeypatch.setattr(lease_module, "_acquire_lock", inject_entry)
-    monkeypatch.setattr(lease_module.os, "rename", substitute_before_quarantine)
+    monkeypatch.setattr(lease_module.os, "rename", record_mutation)
+    monkeypatch.setattr(lease_module.os, "unlink", record_mutation)
 
     result = StorageRootLease.try_acquire_private_empty(root)
 
     assert result.outcome is LeaseOutcome.FAILED
-    assert (root / ".ingestion.lock").read_bytes() == b"foreign-lock"
-    assert (root / ".attacker-held-lock").exists()
+    assert result.lease is None
+    assert mutation_attempted is False
+    assert (root / ".ingestion.lock").is_file()
     assert (root / "user-owned.txt").read_bytes() == b"concurrent"
 
 

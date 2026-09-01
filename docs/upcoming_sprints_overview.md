@@ -86,8 +86,9 @@ under Plan 31 through merged PR #149. Sprint 19 / Issue #152 delivered
 current supplied-cohort Price Action under Plan 32 through merged PR #153.
 Both Issues are closed/completed and their Delivery Project items are
 **Done**. Issue #154 closed/completed through merged PR #157 as a bounded
-planning and benchmark record under Plan 33; it changed no runtime and leaves
-production implementation to Issues #155 and #156.
+planning and benchmark record under Plan 33; it changed no runtime. Issue #155's
+governing merge delivers the runtime prerequisite, while Issue #156 retains the
+separate bounded Plan 33 production implementation.
 
 Sprints 15–19 do not automatically own point-in-time membership, sector or
 classification, news, event, or corporate-action snapshot construction or
@@ -311,10 +312,10 @@ delivery surfaces remain outside that delivered slice.
 
 Issue #154 closed/completed through PR #157 after accepting
 [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md). The
-ordered current/live lane is Issue #155, then Issue #156, then owner-prioritized
-maintenance Issue #145 before another product module starts. Sprint 17 / Issue
-#147 remains a separate parallel **Todo** lane at `1/4`, waiting for three
-valid future captures without blocking current/live work.
+ordered current/live lane after the Issue #155 delivery is Issue #156, then
+owner-prioritized maintenance Issue #145 before another product module starts.
+Sprint 17 / Issue #147 remains a separate parallel **Todo** lane at `1/4`,
+waiting for three valid future captures without blocking current/live work.
 
 [Plan 34](plans/34-swing-research-feature-map.md) records the necessary-only
 future-feature gate. A possible Price Action, Volume, Relative Strength, or

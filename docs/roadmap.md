@@ -373,9 +373,9 @@ path. Issue #154 closed through merged PR #157 and its Delivery Project item is
 **Done**. It changed no runtime, scheduler, store, provider profile, or
 historical qualification.
 [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
-owns the reviewed Plan 30 runtime delivery prerequisite without closing #147;
-[Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-owns the separately bounded Plan 33 implementation.
+delivers the reviewed Plan 30 runtime prerequisite through its governing merge
+without closing #147. [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
+then owns the separately bounded Plan 33 implementation.
 
 Owner-prioritized Issue #145 remains open **Todo** and follows #156 before
 another product module starts. Sprint 17 / Issue #147 remains a parallel `1/4`
