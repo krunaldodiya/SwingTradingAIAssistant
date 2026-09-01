@@ -44,7 +44,7 @@ _SCHEMA_VERSION: Final = "2"
 _CONTRACT_VERSION: Final = "equity-data-downloader@v2"
 _MAX_VOLUME: Final = (1 << 63) - 1
 _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-_FILE_READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+_FILE_READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 _FILE_CREATE_FLAGS: Final = (
     os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 )

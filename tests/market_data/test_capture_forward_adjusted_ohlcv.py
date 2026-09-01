@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -1184,6 +1186,100 @@ def test_interrupted_uncommitted_prepared_publication_recovers_without_provider_
         for directory in ("prepared", "revisions", "requests")
         for item in (tmp_path / directory).glob("*.json")
     )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_recovery_fifo_fails_promptly_without_provider_or_storage_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    schedule_root = _retain_schedule(tmp_path, _expected_schedule())
+    original_commit = cast(  # pyright: ignore[reportPrivateUsage]
+        Callable[..., None],
+        core._commit_held_publication,  # pyright: ignore[reportPrivateUsage]
+    )
+    interrupted_commit = False
+
+    def interrupt_first_commit(
+        directory: object,
+        name: str,
+        descriptor: int,
+        content: bytes,
+    ) -> None:
+        del directory, name, descriptor, content
+        nonlocal interrupted_commit
+        interrupted_commit = True
+        raise OSError("publication interrupted before mode commit")
+
+    monkeypatch.setattr(core, "_commit_held_publication", interrupt_first_commit)
+    interrupted = _invoke(request, provider, tmp_path, schedule_root=schedule_root)
+    monkeypatch.setattr(core, "_commit_held_publication", original_commit)
+    assert interrupted == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+    )
+    assert interrupted_commit is True
+    assert provider.calls == 1
+
+    prepared = next((tmp_path / "prepared").glob("*.json"))
+    displaced = prepared.with_name("displaced.json")
+    prepared.rename(displaced)
+    original = displaced.read_bytes()
+    os.mkfifo(prepared, mode=0o600)
+
+    script = """
+from datetime import timedelta
+from pathlib import Path
+import runpy
+import sys
+
+namespace = runpy.run_path(sys.argv[1])
+request = namespace["_request"]()
+provider = namespace["_Provider"](
+    retrieved_at=request.schedule.decision_session_official_close_at
+    + timedelta(hours=1)
+)
+result = namespace["_invoke"](
+    request,
+    provider,
+    Path(sys.argv[2]),
+    schedule_root=Path(sys.argv[3]),
+)
+expected = namespace["CaptureForwardAdjustedOhlcvFailureV1"](
+    code="STORE_UNAVAILABLE",
+    reason="STORAGE_OPERATION_FAILED",
+)
+if result != expected:
+    raise AssertionError(result)
+if provider.calls != 0:
+    raise AssertionError("provider was called")
+"""
+    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(Path(__file__)),
+            str(tmp_path),
+            str(schedule_root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=3,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert stat.S_ISFIFO(prepared.lstat().st_mode)
+    assert displaced.read_bytes() == original
+    assert set((tmp_path / "prepared").iterdir()) == {prepared, displaced}
+    assert tuple((tmp_path / "revisions").iterdir()) == ()
+    assert tuple((tmp_path / "requests").iterdir()) == ()
 
 
 def test_publication_readback_rejects_final_name_substitution(

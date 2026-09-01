@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -288,6 +290,73 @@ def test_invalid_existing_dataset_fails_closed_without_provider_call(
 
     assert calls == 1
     assert inserted.destination.read_bytes() == b"not parquet"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_existing_fifo_fails_promptly_without_provider_or_storage_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_download(**_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _frame(("SBIN.NS",), ("2026-08-28",))
+
+    _use_provider(monkeypatch, fake_download)
+    inserted = download_daily_ohlcv(
+        ("SBIN.NS",),
+        date(2026, 8, 28),
+        date(2026, 8, 28),
+        tmp_path,
+    )
+    displaced = inserted.destination.with_name("displaced.parquet")
+    inserted.destination.rename(displaced)
+    original = displaced.read_bytes()
+    os.mkfifo(inserted.destination, mode=0o600)
+
+    script = """
+from datetime import date
+from pathlib import Path
+import sys
+
+from equity_data_downloader import PersistenceError, core, download_daily_ohlcv
+
+def provider_forbidden(**_kwargs: object) -> object:
+    raise AssertionError("provider must not be called")
+
+core._public_download = provider_forbidden
+try:
+    download_daily_ohlcv(
+        ("SBIN.NS",),
+        date(2026, 8, 28),
+        date(2026, 8, 28),
+        Path(sys.argv[1]),
+    )
+except PersistenceError as error:
+    if str(error) != "existing dataset is invalid":
+        raise
+else:
+    raise AssertionError("FIFO dataset was accepted")
+"""
+    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+        [sys.executable, "-c", script, str(tmp_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=3,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert calls == 1
+    assert stat.S_ISFIFO(inserted.destination.lstat().st_mode)
+    assert displaced.read_bytes() == original
+    assert set(inserted.destination.parent.iterdir()) == {
+        inserted.destination,
+        displaced,
+    }
 
 
 def test_semantically_invalid_existing_parquet_fails_closed_without_provider_call(

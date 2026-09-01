@@ -348,7 +348,8 @@ Sprint 16 gate, preserving the locked architecture sequence.
 The live tracker has advanced beyond that dependency statement. Sprint 15 /
 #120 and Sprint 16 / #122 are closed/completed with Project status **Done**.
 Sprint 17 / #147 has a complete reviewed implementable slice but remains open
-in **Todo** at `1/4` after the valid 2026-08-31 completed-session capture;
+with Project status **In Progress** at `1/4` after the valid 2026-08-31
+completed-session capture;
 three distinct future completed-session captures remain. That historical
 qualification lane does not block current/live
 delivery. Sprint 18 / #148 delivered current/live Market Structure through

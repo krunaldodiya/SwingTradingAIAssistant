@@ -1803,7 +1803,7 @@ def _open_recoverable_publication(
     directory.ensure_live()
     descriptor = os.open(
         name,
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
         dir_fd=directory.descriptor,
     )
     try:
