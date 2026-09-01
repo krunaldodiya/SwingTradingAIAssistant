@@ -574,7 +574,7 @@ def test_instruction_sources_have_one_owner_and_scoped_procedures() -> None:
 
 _CANONICAL_INSTRUCTION_PATH = "docs/mandatory-agent-instructions.md"
 _CANONICAL_OWNER_CLAIM = re.compile(
-    r"^Status:\s*(?:\*\*)?CANONICAL PROJECT ADAPTER(?:\*\*)?\s*$",
+    r"^Status:\s*(?:\*\*)?CANONICAL\s+PROJECT\s+ADAPTER(?:\*\*)?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _LINK_SOURCES = (
@@ -589,11 +589,18 @@ _REQUIRED_LINK_TARGETS = {
 }
 _MARKDOWN_LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
 _CONTROL_HEADING = re.compile(r"^### (\d+)\. (.+)$", re.MULTILINE)
+_AUTHORITY_ROLE = (
+    r"(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter|"
+    r"coordinator|(?:functional|domain|security|privacy|provenance)?\s*reviewer|"
+    r"worker|implementation\s+agent|(?:software-engineering|global)\s+handbook|"
+    r"(?:specialized\s+)?procedure)"
+)
 _CONTRADICTORY_AUTHORITY = re.compile(
-    r"(?:overrides|supersedes|takes precedence over).{0,100}"
-    r"(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter)"
-    r"|(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter)"
-    r".{0,100}(?:is\s+)?(?:overridden|superseded|lower priority)",
+    rf"{_AUTHORITY_ROLE}.{{0,100}}"
+    rf"(?:overrides|supersedes|takes\s+precedence\s+over)\s+(?:the\s+)?{_AUTHORITY_ROLE}"
+    rf"|{_AUTHORITY_ROLE}.{{0,100}}"
+    rf"(?:(?:is\s+)?(?:overridden|superseded)|has\s+lower\s+priority)"
+    rf".{{0,40}}(?:the\s+)?{_AUTHORITY_ROLE}",
     re.IGNORECASE | re.DOTALL,
 )
 _CANONICAL_EXCLUSIVE_PHRASES = (
@@ -603,6 +610,20 @@ _CANONICAL_EXCLUSIVE_PHRASES = (
     "When work genuinely needs multiple agents or independent R3/R4 review, use Herdr",
     "Attempt the harness's persistent `/goal` or equivalent by default",
     "Start OMP workers and reviewers in full-permission/yolo autonomous mode",
+    "The owner supplies product vision, goals, rough ideas, priorities, and epic-level direction",
+    "Default to informed action. Do not assign the owner manual work",
+    "Automate evidence acquisition when the tool or agent can perform it",
+    "Explain progress, blockers, failures, and bottlenecks in plain language",
+    "Keep general discussion out of sprint delivery todos",
+    "When a discussion becomes authorized delivery, create or update its own governed Issue",
+    "Use one OMP session per sprint",
+    "Do not use Orca for this repository unless the owner explicitly reverses this instruction",
+    "GitHub is the sole active tracker. Create work through repository Issue forms",
+    "Existing Linear records are read-only historical evidence",
+    "Project fields own status, priority, estimate, work type, and risk",
+    "Every change links to a GitHub Issue, closes through a pull request",
+    "Lifecycle claims MUST match live Issue, Project, milestone, PR, and hosted-gate state",
+    "Owner-approved scope changes are recorded without erasing prior decisions",
 )
 
 
@@ -733,11 +754,17 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
         ),
         "AGENTS.md": "docs/mandatory-agent-instructions.md\n",
         "docs/herdr-multi-agent-workflow.md": (
-            "Status: CANONICAL PROJECT ADAPTER\n"
-            "This procedure takes precedence over the canonical project adapter.\n"
+            "Status: **CANONICAL\nPROJECT ADAPTER**\n"
             "## Renamed validation rule\n"
             + _CANONICAL_EXCLUSIVE_PHRASES[0].replace(", todo,", ",\ntodo,")
             + "; validate authority.\n"
+        ),
+        "docs/role-conflict.md": (
+            "A security reviewer takes precedence over the coordinator.\n"
+        ),
+        "docs/copied-tracker.md": (
+            "GitHub is the sole active tracker. Create work through repository Issue forms "
+            "and manage it in the private SwingTradingAIAssistant Delivery Project.\n"
         ),
     }
     errors = _instruction_consistency_errors(files)
@@ -750,6 +777,8 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
         "missing registered source: docs/missing.md",
     ):
         assert any(error.startswith(expected) for error in errors)
+    assert "contradictory authority in docs/role-conflict.md" in errors
+    assert "duplicate instruction prose in docs/copied-tracker.md" in errors
 
 
 def test_read_only_review_requires_immutable_candidate_checks() -> None:

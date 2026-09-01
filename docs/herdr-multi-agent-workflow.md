@@ -15,11 +15,9 @@ the active task; stale familiarity is not evidence.
 
 ## Applicability
 
-Use Herdr when work genuinely decomposes into independent implementation,
-research, or review slices, or when an R3/R4 change requires independent
-functional and specialist review. Do not create agents merely to add ceremony.
-The coordinator retains interpretation, architecture, scope, tracker, and final
-delivery ownership.
+The canonical project adapter decides whether this procedure applies. Once
+selected, use this procedure for the assigned multi-agent or independent-review
+work without expanding its scope.
 
 All agents share the current working tree. A separate tab is visibility, not
 filesystem isolation.
@@ -40,8 +38,8 @@ filesystem isolation.
 - **Mechanical work:** keep with the coordinator unless it is a large,
   exact, non-overlapping transformation with explicit acceptance evidence.
 
-An assigned agent MUST NOT spawn subagents, use hidden delegation, or negotiate
-product direction. It reports to the coordinator.
+Agent authority and delegation boundaries come from the canonical project
+adapter; an assignment may narrow them further.
 
 ## Required sequence
 

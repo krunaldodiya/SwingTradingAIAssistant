@@ -129,7 +129,7 @@ These active owner instructions exist beyond the six execution controls.
 - GitHub is the sole active tracker. Create work through repository Issue forms and manage it in the private SwingTradingAIAssistant Delivery Project.
 - Existing Linear records are read-only historical evidence. Do not copy, reopen, mutate, delete, or treat them as the active backlog; preserve ARK references in historical records.
 - Project fields own status, priority, estimate, work type, and risk. Milestones own sprint assignment.
-- Every material change links to a GitHub Issue, closes through a pull request, passes repository and hosted gates, and records the exact reviewed revision.
+- Every change links to a GitHub Issue, closes through a pull request, passes repository and hosted gates, and records the exact reviewed revision.
 - Lifecycle claims MUST match live Issue, Project, milestone, PR, and hosted-gate state. A successful implementation or build does not authorize a stale completion claim.
 - Owner-approved scope changes are recorded without erasing prior decisions. Unexpected repository changes are treated as the owner's work and preserved.
 
