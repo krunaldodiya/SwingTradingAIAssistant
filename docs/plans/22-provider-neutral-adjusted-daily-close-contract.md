@@ -600,7 +600,7 @@ authorized backlog or implementation target:
 | Upstox raw endpoints | composition fixture retains exact existing `S[0]`/`S[20]` identities and `RAW` basis; Plan 22 never writes or adjusts them | Delivered PR #124 boundary |
 | Extended Plan-22 adjusted endpoints | handoff concept with adjusted facts and observation/receipt/mapping/dependency/policy/schema/runtime identities | Unassigned; requires an owner-authorized successor later than `@v2` |
 | raw/adjusted disagreement | adjusted/raw separation remains mandatory | Delivered PR #124 computes `RAW_ADJUSTED_DIRECTION_CONFLICT` |
-| Market Structure | no field, import, calculation, or test | Earliest after the separate Sprint-16 gate and an approved contract |
+| Market Structure | no field, import, calculation, or test | Historical qualification remains separate; current/live work requires its own accepted contract and is not gated by Sprint 16 |
 
 The former pre-merge wording that called PR #124 paused, Issue #116 future, and
 Sprint 12 not started is historical only and no longer describes repository

@@ -32,12 +32,14 @@ historical-census = "swing_trading_ai_assistant.historical_evaluation.cli:main"
 evidence-readiness = "swing_trading_ai_assistant.historical_evaluation.prospective_cli:main"
 market-regime-acquisition-decision = "swing_trading_ai_assistant.historical_evaluation.acquisition_decision_cli:main"
 historical-validation-gate = "swing_trading_ai_assistant.entrypoints.historical_validation_gate:main"
+capture-forward-adjusted-ohlcv = "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
+equity-data-download = "equity_data_downloader.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/swing_trading_ai_assistant"]
+packages = ["src/equity_data_downloader", "src/swing_trading_ai_assistant"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-config --strict-markers --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87 -n auto --dist=worksteal"
+addopts = "-ra --strict-config --strict-markers --cov=equity_data_downloader --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87 -n auto --dist=worksteal"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
@@ -46,7 +48,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["swing_trading_ai_assistant"]
+source = ["equity_data_downloader", "swing_trading_ai_assistant"]
 
 [tool.coverage.report]
 show_missing = true

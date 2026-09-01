@@ -1,4 +1,4 @@
-"""Capability-aware historical validation and pre-Market-Structure gate V1."""
+"""Capability-aware historical validation and historical qualification gate V1."""
 
 from __future__ import annotations
 

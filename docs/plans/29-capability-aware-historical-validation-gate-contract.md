@@ -1,28 +1,30 @@
-# Capability-aware historical validation and pre-structure gate contract
+# Capability-aware historical validation contract
 
-Status: **ACCEPTED CONTRACT — Sprint 16 / Issue #122 in progress**
+Status: **DELIVERED HISTORICAL CONTRACT — Sprint 16 / Issue #122 closed**
 Contract revision: `capability-aware-historical-validation-gate@v1`
 Risk: **R3** — financial-research integrity, point-in-time evidence admission,
-holdout protection, reproducibility, and authorization of later market logic.
+holdout protection, reproducibility, and historical profile qualification.
 
 ## Decision and authority
 
 1. **Expected value:** determine exactly which historical study claims the retained
-evidence supports and whether Market Structure may begin as a separate later sprint.
+evidence supports.
 2. **Scope fit:** one explicit supplied cohort, immutable evidence revisions, a
-closed availability ledger, versioned study profiles, and one fail-closed gate.
+closed availability ledger, versioned study profiles, and one fail-closed
+historical qualification result.
 3. **Material risk:** look-ahead, survivorship, available-only selection, raw-price
 comparability, late context, or exposed holdouts could create false research claims.
 4. **Smallest alternative:** reduce already-supplied immutable evidence without
 provider, acquisition, market-calculation, recommendation, or execution authority.
-5. **Decision:** **accepted** — implement the closed reducer and one operator CLI;
-missing evidence remains explicit and a blocked gate creates replacement work.
+5. **Decision:** **accepted and delivered** — the closed reducer and one operator
+CLI preserve missing evidence explicitly and return a blocked historical result
+when qualification evidence is absent.
 
-The owner-authorized governing work is GitHub Issue #122 in the Sprint 16
-milestone. Sprint 15 / Issue #120 is completed and supplies the first exact-read
-adapter. The final gate authorizes only the start of separately governed Market
-Structure work. It never approves a trading strategy, recommendation, execution,
-or financial outcome.
+GitHub Issue #122 in the Sprint 16 milestone governed the delivered work. Sprint
+15 / Issue #120 supplied the first exact-read adapter. The result qualifies only
+the historical profile represented by its supplied evidence; its legacy outcome
+name does not authorize or gate current/live Market Structure work, a trading
+strategy, recommendation, execution, or financial outcome.
 
 ## Current source decision
 
@@ -42,7 +44,7 @@ older Plan-18 adjusted-price assumption.
 - one canonical request containing the declared decision grid, four protected
   research regions, three required study profiles, and the complete availability
   ledger;
-- complete profile reports and the exact pre-Market-Structure gate;
+- complete profile reports and the exact historical qualification result;
 - one sanitized zero-provider operator CLI;
 - a real Sprint-15 `UPSTOX_RAW` path that truthfully returns `BLOCKED` when its
   point-in-time or comparability evidence is not proven.
@@ -275,8 +277,8 @@ Every profile is reduced independently over its exact required cell set.
 A profile is `QUALIFIED` only when available coverage meets its predeclared
 threshold and every `AVAILABLE` cell passes cutoff, identity, and revision
 binding. Any nonavailable cell remains counted. A threshold below 100% may produce
-a qualified descriptive profile if predeclared, but it cannot authorize Market
-Structure.
+a qualified descriptive profile if predeclared, but it cannot qualify the
+protected 100% historical profile.
 If any required cell is `UNSUPPORTED`, the profile outcome is
 `UNSUPPORTED_CAPABILITY`, including when other insufficiency reasons are also
 present. This distinguishes a capability that cannot be supplied from remediable
@@ -287,11 +289,15 @@ A nonqualified profile has no partial market claim, feature values, labels,
 counts of advances/declines, returns, scores, or recommendations. Availability
 accounting is evidence about the limitation, not a partial research result.
 
-## Final readiness gate
+## Historical qualification result
 
-The final gate depends only on the `OHLCV_ONLY` result. Sector and news/event
-insufficiency or unsupported capability cannot block a module whose declared
-core profile does not require those facts.
+The historical result depends only on the `OHLCV_ONLY` profile. Sector and
+news/event insufficiency or unsupported capability cannot block a historical
+profile whose declared core does not require those facts.
+
+The unchanged V1 enum `APPROVED_TO_START_MARKET_STRUCTURE` is a legacy result
+label. It now means only that the supplied historical profile is qualified; it
+grants no current/live module authorization.
 
 `APPROVED_TO_START_MARKET_STRUCTURE` requires all of the following:
 
@@ -308,9 +314,12 @@ core profile does not require those facts.
 
 Otherwise the gate is `BLOCKED` with exact ordered reasons. Failure adds a
 replacement sprint or prospective/paper-validation path; it never weakens the
-criteria or fabricates evidence. Approval permits only a new Market Structure
-Issue/specification and does not transfer this contract's evidence to that future
-implementation without exact identity checks.
+criteria or fabricates evidence. Following the owner's 2026-08-30 priority
+correction, this gate qualifies only historical point-in-time/backtest evidence.
+Its historical result name does not gate planning, implementation, delivery,
+activation, or use of a current/live Market Structure module. Current/live
+Market Structure requires a separate accepted contract and truthful current
+same-pass inputs; it makes no inherited historical qualification claim.
 
 ## Failure precedence and privacy
 

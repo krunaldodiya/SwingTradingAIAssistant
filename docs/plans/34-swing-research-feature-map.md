@@ -82,13 +82,13 @@ simpler rule is adequate, keep it simple and reject the extra filter.
 
 ## Current delivery lanes
 
-The ordered current/live delivery lane is:
+Issue #155's governing merge completes the reviewed adjusted-capture runtime
+delivery prerequisite without claiming historical closure. The remaining
+ordered current/live delivery lane is:
 
-1. Issue #155 — deliver the exact reviewed adjusted-capture runtime without
-   claiming historical closure;
-2. Issue #156 — implement bounded current-at-retrieval Nifty 100 adjusted
+1. Issue #156 — implement bounded current-at-retrieval Nifty 100 adjusted
    capture under Plan 33; and
-3. Issue #145 — define the cross-module internal-error taxonomy and privacy-safe
+2. Issue #145 — define the cross-module internal-error taxonomy and privacy-safe
    operator diagnostics before another product module starts.
 
 Issue #147 remains a separate parallel temporal-evidence lane at `1/4`. Its

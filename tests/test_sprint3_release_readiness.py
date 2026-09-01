@@ -145,9 +145,13 @@ def test_distribution_ci_secrets_and_future_scope_are_release_bounded() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         project = tomllib.load(file)["project"]
     assert project["scripts"] == {
+        "capture-forward-adjusted-ohlcv": (
+            "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
+        ),
         "evidence-readiness": (
             "swing_trading_ai_assistant.historical_evaluation.prospective_cli:main"
         ),
+        "equity-data-download": "equity_data_downloader.cli:main",
         "historical-census": "swing_trading_ai_assistant.historical_evaluation.cli:main",
         "historical-validation-gate": (
             "swing_trading_ai_assistant.entrypoints.historical_validation_gate:main"

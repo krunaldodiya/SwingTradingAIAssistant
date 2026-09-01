@@ -18,5 +18,5 @@ HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "0abde4536d131e04d21534b1688c8aa1640bb80e1dc2700d650fd28b1c9d3ff2",
     "src/swing_trading_ai_assistant/market_data/schemas.py": "157ef71c7b0e04e0a5038ded4ca486a2b42391ec2219679d1a5cd766a96e6397",
-    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "b8164dcba4d7cadc73a173d668be61f3d17aa447af8379b926aeeabc288982f7",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "a20d2e4e68b0788bcd3118a8ffb3e15b53b99e181a800c353a1e3a4b7b5ae942",
 }
