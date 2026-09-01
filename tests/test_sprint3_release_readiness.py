@@ -611,6 +611,7 @@ _CANONICAL_EXCLUSIVE_PHRASES = (
     "Attempt the harness's persistent `/goal` or equivalent by default",
     "Start OMP workers and reviewers in full-permission/yolo autonomous mode",
     "The owner supplies product vision, goals, rough ideas, priorities, and epic-level direction",
+    "Ask the owner only for a material direction or scope decision",
     "Default to informed action. Do not assign the owner manual work",
     "Automate evidence acquisition when the tool or agent can perform it",
     "Explain progress, blockers, failures, and bottlenecks in plain language",
@@ -766,6 +767,10 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
             "GitHub is the sole active tracker. Create work through repository Issue forms "
             "and manage it in the private SwingTradingAIAssistant Delivery Project.\n"
         ),
+        "docs/copied-owner-question.md": (
+            "ASK THE OWNER ONLY FOR A MATERIAL DIRECTION OR\n"
+            "scope decision, then proceed.\n"
+        ),
     }
     errors = _instruction_consistency_errors(files)
     for expected in (
@@ -779,6 +784,7 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
         assert any(error.startswith(expected) for error in errors)
     assert "contradictory authority in docs/role-conflict.md" in errors
     assert "duplicate instruction prose in docs/copied-tracker.md" in errors
+    assert "duplicate instruction prose in docs/copied-owner-question.md" in errors
 
 
 def test_read_only_review_requires_immutable_candidate_checks() -> None:
