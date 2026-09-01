@@ -591,8 +591,11 @@ _MARKDOWN_LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
 _CONTROL_HEADING = re.compile(r"^### (\d+)\. (.+)$", re.MULTILINE)
 _AUTHORITY_ROLE = (
     r"(?:mandatory-agent-instructions\.md|canonical\s+project\s+adapter|"
-    r"coordinator|(?:functional|domain|security|privacy|provenance)?\s*reviewer|"
-    r"worker|implementation\s+agent|(?:software-engineering|global)\s+handbook|"
+    r"law|system|user|owner|(?:current|repository|product)\s+owner|"
+    r"(?:product|domain|repository)\s+(?:direction\s+)?authority|"
+    r"(?:executable|repository|domain|product)\s+gates?|coordinator|"
+    r"(?:functional|domain|security|privacy|provenance)?\s*reviewer|worker|"
+    r"implementation\s+agent|(?:software-engineering|global)\s+handbook|"
     r"(?:specialized\s+)?procedure)"
 )
 _CONTRADICTORY_AUTHORITY = re.compile(
@@ -771,6 +774,9 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
             "ASK THE OWNER ONLY FOR A MATERIAL DIRECTION OR\n"
             "scope decision, then proceed.\n"
         ),
+        "docs/owner-role-conflict.md": (
+            "The coordinator overrides the repository owner.\n"
+        ),
     }
     errors = _instruction_consistency_errors(files)
     for expected in (
@@ -785,6 +791,7 @@ def test_instruction_authority_graph_rejects_competing_sources() -> None:
     assert "contradictory authority in docs/role-conflict.md" in errors
     assert "duplicate instruction prose in docs/copied-tracker.md" in errors
     assert "duplicate instruction prose in docs/copied-owner-question.md" in errors
+    assert "contradictory authority in docs/owner-role-conflict.md" in errors
 
 
 def test_read_only_review_requires_immutable_candidate_checks() -> None:
