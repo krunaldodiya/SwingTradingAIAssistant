@@ -368,9 +368,12 @@ def test_all_member_query_smoke_is_bounded_to_eight_read_workers(
 
 
 def test_cli_coverage_accepts_explicit_symbol_list_and_returns_safe_aggregate(
-    tmp_path: Path, capsys
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed(tmp_path)
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.cli._SystemClock", _Clock
+    )
 
     exit_code = main(
         [
