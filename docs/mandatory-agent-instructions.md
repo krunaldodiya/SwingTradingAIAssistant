@@ -168,6 +168,9 @@ Reference repositories are read-only idea sources. Do not modify them or copy-pa
 
 - Prefer the smallest implementation that preserves complete required behavior and evidence.
 - Use tests-first for changed permanent observable contracts. Tests must be deterministic, isolated, behavior-based, and point-in-time faithful where applicable.
+- Classify changed paths before selecting verification. A pure Markdown or documentation-only change—including workflow prose, planning/status records, and handbook or project-adapter text—MUST run exactly `git diff --check`; it MUST NOT run test suites, Ruff, Pyright, Vulture, builds, installed-artifact smokes, CI/CD pipelines, GitHub Actions, or GitGuardian.
+- Do not add or modify an executable regression merely to turn documentation wording into a code-gated change. Tests and broader automated gates are permitted only when the diff changes executable behavior, test behavior, build/CI behavior, dependencies, package/runtime artifacts, or other codebase mechanics that those gates can meaningfully falsify.
+- Do not silently trigger hosted checks for a pure documentation change. If repository protection makes a prohibited hosted check unavoidable, surface that exact policy conflict to the owner instead of broadening verification by default.
 - A bug fix requires a discriminating reproduction before repair and confirmation after repair.
 - UI changes require verification on the actual surface; CLI/TUI changes require launching the actual program and observing the changed path.
 - Focused checks do not replace applicable full repository gates.
@@ -226,7 +229,7 @@ Only this file owns project-wide agent behavior. Other sources retain the narrow
 
 ## Updating these instructions
 
-Deterministic consistency checks enforce the machine-observable boundary: one canonical owner, required authority links, registered local source existence, exactly six standing controls, explicit precedence conflicts, and copied canonical prose after case and whitespace normalization. Arbitrary semantic paraphrases are prohibited but require independent exact-byte review; deterministic tools MUST NOT use an LLM or pretend that lexical matching proves semantic equivalence.
+Documentation-only instruction consistency is verified by direct inspection, proportionate independent review when the change risk requires it, and `git diff --check`. Do not add executable tests merely to enforce wording, copied prose, links, headings, or instruction-source structure.
 
 1. The owner authorizes a project-level instruction addition, change, or removal.
 2. Update this file first in a dedicated governed change. Do not add a competing normative copy elsewhere.
