@@ -33,6 +33,7 @@ evidence-readiness = "swing_trading_ai_assistant.historical_evaluation.prospecti
 market-regime-acquisition-decision = "swing_trading_ai_assistant.historical_evaluation.acquisition_decision_cli:main"
 historical-validation-gate = "swing_trading_ai_assistant.entrypoints.historical_validation_gate:main"
 capture-forward-adjusted-ohlcv = "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
+efficient-current-nifty100-adjusted-capture = "swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture:main"
 equity-data-download = "equity_data_downloader.cli:main"
 
 [tool.hatch.build.targets.wheel]

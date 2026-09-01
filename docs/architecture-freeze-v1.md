@@ -63,7 +63,7 @@ Issue #154 and accepted Plan 33 own only the bounded source decision, benchmark,
 and contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
 PR #157 merged that planning record without changing runtime. Issue #155 owns
 the exact reviewed Plan 30 runtime delivery; its governing merge installs that
-prerequisite without closing #147. Open Project **Todo** Issue #156 then owns
+prerequisite without closing #147. Open Project **In Progress** Issue #156 then owns
 the separately bounded Plan 33 implementation. Owner-prioritized maintenance
 Issue #145 follows #156 before another product module starts. Issue #147's
 four-session historical qualification remains a separate parallel lane.

@@ -240,7 +240,8 @@ The first implementation Issue may deliver only one repeatable operator-triggere
 8. resolve valid existing revisions for both cohorts;
 9. acquire, validate, and retain/reuse every unresolved cohort in fixed
    `NIFTY_50`, `NIFTY_NEXT_50` order, continuing after provider/frame failure
-   but stopping new effects after a retention failure;
+   but stopping new effects after a retention failure or immutable-evidence
+   conflict;
 10. return complete Nifty 100 only when both revisions bind the same selection,
     schedule, decision session, source profile, configuration, and compatible
     retrieval boundary; and
@@ -250,9 +251,16 @@ The first implementation Issue may deliver only one repeatable operator-triggere
     dependency logs.
 
 The implementation reuses the existing yfinance/curl-cffi source boundary and
-immutable capture rules. It versions the changed pool, supplied session,
-cadence, and byte-bound configuration rather than weakening or silently
-mutating the delivered `threads=False` contract.
+immutable capture rules. Each Plan 33 receipt key binds the selection identity,
+low-level request identity, cohort, and high-level configuration so a valid
+official-source transition preserves both old and new receipts. A newly captured
+low-level revision publishes one immutable receipt binding its selection,
+request, schedule, revision, source, and retrieval time. An exact reused
+low-level revision may recover a missing receipt only after every bound identity
+and the immutable revision are revalidated; conflicting bytes fail closed before
+provider work. The changed pool, supplied session, cadence, and byte-bound
+configuration is versioned rather than weakening or silently mutating the
+delivered `threads=False` contract.
 
 The governing [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
 merge ports the exact reviewed actionable Plan 30 runtime from source candidate
@@ -288,7 +296,8 @@ Shared admission returns exactly one of:
   mapping capability; or
 - `INSUFFICIENT_EVIDENCE` with exactly one of
   `CONSTITUENT_SOURCE_INVALID`, `CONSTITUENT_SOURCE_CONFLICT`,
-  `MAPPING_EVIDENCE_INVALID`, `SCHEDULE_INVALID`, or `EVIDENCE_CONFLICT`.
+  `MAPPING_EVIDENCE_INVALID`, `SCHEDULE_INVALID`, `EVIDENCE_CONFLICT`, or
+  `RETENTION_FAILED`.
 
 After shared admission, each cohort returns exactly one ordered outcome:
 

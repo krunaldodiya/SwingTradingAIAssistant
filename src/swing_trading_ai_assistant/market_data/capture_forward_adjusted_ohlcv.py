@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -18,8 +19,8 @@ from types import ModuleType
 from typing import Final, NoReturn, Protocol, cast
 
 import pandas as pd
-import yfinance  # pyright: ignore[reportMissingImports]
 
+# pyright: ignore[reportMissingImports]
 from swing_trading_ai_assistant.historical_evaluation.capability_validation import (
     CONTRACT_VERSION_V1 as PLAN29_CONTRACT_VERSION_V1,
 )
@@ -59,7 +60,7 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     StorageRootLeaseOperation,
 )
 
-_YFINANCE_MODULE: Final[ModuleType] = cast(ModuleType, yfinance)
+_yfinance_modules: list[ModuleType] = []
 
 CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv@v1"
 REVISION_CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv-revision@v1"
@@ -141,6 +142,14 @@ def _utc(value: datetime, name: str) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+class MappingEvidenceInvalid(ValueError):
+    """Canonical provider mapping evidence is invalid."""
+
+
+class ScheduleEvidenceInvalid(ValueError):
+    """Composed schedule evidence is invalid."""
 
 
 def mapping_identity_v1(
@@ -518,6 +527,7 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "720baa3615e1cf42efd0e73cec83f3cb524f48f8103cee6a34d71d23569b9e68",
         "84591e7c04f06227430d1511e0008e8136a0d2a83a30325c3ba9e2ef58e7e149",
         "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "7a620872d3b70684811912c46a5c1ef776383d18871ee63e5840a0a423ab020e",
     }
 )
 
@@ -647,16 +657,46 @@ def parse_capture_forward_request_v1(
         if type(value) is not dict:
             raise ValueError
         row = cast(dict[str, object], value)
-        cohort = tuple(
-            _member_from_value(member)
-            for member in cast(list[dict[str, object]], row["cohort"])
-        )
+        try:
+            cohort = tuple(
+                _member_from_value(member)
+                for member in cast(list[dict[str, object]], row["cohort"])
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise MappingEvidenceInvalid from None
+        try:
+            schedule = _schedule_from_value(cast(dict[str, object], row["schedule"]))
+            decision_session = date.fromisoformat(cast(str, row["decision_session"]))
+            decision_cutoff = _parse_instant(row["decision_cutoff"])
+            evaluated_at = _parse_instant(row["evaluated_at"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise ScheduleEvidenceInvalid from None
+        if (
+            len({(member.isin, member.exchange) for member in cohort}) != len(cohort)
+            or len({member.provider_symbol for member in cohort}) != len(cohort)
+            or any(
+                schedule.sessions[0] < member.mapping_valid_from
+                or (
+                    member.mapping_valid_through is not None
+                    and decision_session > member.mapping_valid_through
+                )
+                for member in cohort
+            )
+        ):
+            raise MappingEvidenceInvalid
+        if (
+            decision_session != schedule.sessions[-1]
+            or schedule.decision_session_official_close_at > evaluated_at
+            or decision_cutoff < schedule.decision_session_official_close_at
+            or decision_cutoff > evaluated_at
+        ):
+            raise ScheduleEvidenceInvalid
         request = CaptureForwardAdjustedOhlcvRequestV1(
             cohort=cohort,
-            schedule=_schedule_from_value(cast(dict[str, object], row["schedule"])),
-            decision_session=date.fromisoformat(cast(str, row["decision_session"])),
-            decision_cutoff=_parse_instant(row["decision_cutoff"]),
-            evaluated_at=_parse_instant(row["evaluated_at"]),
+            schedule=schedule,
+            decision_session=decision_session,
+            decision_cutoff=decision_cutoff,
+            evaluated_at=evaluated_at,
             parent_revision_sha256=cast(str | None, row["parent_revision_sha256"]),
             schema_identity_sha256=cast(str, row["schema_identity_sha256"]),
             runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
@@ -672,6 +712,8 @@ def parse_capture_forward_request_v1(
         ):
             raise ValueError
         return request
+    except (MappingEvidenceInvalid, ScheduleEvidenceInvalid):
+        raise
     except (
         json.JSONDecodeError,
         KeyError,
@@ -865,6 +907,10 @@ CaptureForwardAdjustedOhlcvResultV1 = (
 )
 
 
+class _ImmutableEvidenceConflict(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CaptureForwardPlan29QualificationV1:
     evidence: HistoricalEvidenceRevisionV1
@@ -883,11 +929,13 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
                 "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
             )
         tickers = cast(tuple[str, ...], tickers_value)
-        response = _public_yfinance_download(**kwargs)
-        if _YFINANCE_MODULE.__dict__.get("__version__") != "1.6.0":
+        try:
+            _load_yfinance_module()
+        except (ImportError, RuntimeError):
             return CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "PROVIDER_IDENTITY_MISMATCH"
             )
+        response = _public_yfinance_download(**kwargs)
         if response is None:
             return CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "PROVIDER_EMPTY"
@@ -913,17 +961,11 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
                 "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
             )
         fields = ("Open", "High", "Low", "Close", "Volume")
-        expected_columns = tuple(
-            (ticker, field) for ticker in tickers for field in fields
-        )
-        actual_columns = tuple(cast(Iterable[tuple[str, str]], response.columns))
-        if set(actual_columns) != set(expected_columns):
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-            )
+        expected_columns = {(ticker, field) for ticker in tickers for field in fields}
+        actual_columns = set(cast(Iterable[tuple[str, str]], response.columns))
         if actual_columns != expected_columns:
             return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
+                "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
             )
         timezone = getattr(response.index.tz, "key", None) or getattr(
             response.index.tz, "zone", None
@@ -962,8 +1004,19 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
         }
 
 
+def _load_yfinance_module() -> ModuleType:
+    if importlib.metadata.version("yfinance") != "1.6.0":
+        raise RuntimeError("yfinance distribution identity mismatch")
+    if not _yfinance_modules:
+        _yfinance_modules.append(cast(ModuleType, __import__("yfinance")))
+    module = _yfinance_modules[0]
+    if module.__dict__.get("__version__") != "1.6.0":
+        raise RuntimeError("yfinance module identity mismatch")
+    return module
+
+
 def _public_yfinance_download(**kwargs: object) -> object:
-    download = _YFINANCE_MODULE.__dict__.get("download")
+    download = _load_yfinance_module().__dict__.get("download")
     if not callable(download):
         raise RuntimeError("yfinance.download unavailable")
     return download(**kwargs)
@@ -1043,7 +1096,7 @@ def _retained_schedule_matches_request(
             and retained_sessions[-1].close_at
             == request.schedule.decision_session_official_close_at
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, _ImmutableEvidenceConflict):
         return False
     finally:
         lease.close()
@@ -1094,7 +1147,7 @@ def _ensure_capture_state(
         parent.revision_sha256,
     )
     if admitted != parent or not _valid_correction_parent(request, admitted):
-        raise OSError(errno.EINVAL, "correction parent is no longer admitted")
+        raise _ImmutableEvidenceConflict("correction parent is no longer admitted")
 
 
 def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
@@ -1371,6 +1424,10 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
                     requests.close()
                 if revisions is not None:
                     revisions.close()
+    except _ImmutableEvidenceConflict:
+        return CaptureForwardAdjustedOhlcvFailureV1(
+            "STORE_UNAVAILABLE", "EVIDENCE_CONFLICT"
+        )
     except (OSError, RuntimeError):
         return CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
@@ -1697,7 +1754,7 @@ def _open_exact_file(
             or metadata.st_size <= 0
             or metadata.st_size > maximum
         ):
-            raise OSError(errno.EPERM, "unsafe immutable file")
+            raise _ImmutableEvidenceConflict("unsafe immutable file")
         chunks: list[bytes] = []
         remaining = metadata.st_size
         while remaining:
@@ -1718,7 +1775,7 @@ def _open_exact_file(
             )
             != identity
         ):
-            raise OSError(errno.EBUSY, "immutable file changed")
+            raise _ImmutableEvidenceConflict("immutable file changed")
         directory.ensure_live()
         return descriptor, b"".join(chunks)
     except Exception:
@@ -1758,7 +1815,7 @@ def _require_publication_name(
         or held.st_nlink != 1
         or held.st_size != expected_size
     ):
-        raise OSError(errno.EBUSY, "publication identity changed")
+        raise _ImmutableEvidenceConflict("publication identity changed")
 
 
 def _read_held_exact_file(
@@ -1817,7 +1874,7 @@ def _open_recoverable_publication(
             or held.st_nlink != 1
             or not 1 <= held.st_size <= maximum
         ):
-            raise OSError(errno.EBUSY, "publication is unsafe")
+            raise _ImmutableEvidenceConflict("publication is unsafe")
         raw = _read_held_exact_file(
             directory,
             name,
@@ -1852,7 +1909,7 @@ class _HeldRecoverablePublication:
             expected_mode=self.mode,
         )
         if exact != self.content:
-            raise OSError(errno.EIO, "publication readback failed")
+            raise _ImmutableEvidenceConflict("publication readback failed")
 
     def commit(self) -> None:
         if self.mode == 0o600:
@@ -1907,7 +1964,7 @@ def _commit_held_publication(
         expected_mode=0o600,
     )
     if exact != content:
-        raise OSError(errno.EIO, "publication readback failed")
+        raise _ImmutableEvidenceConflict("publication readback failed")
     os.fchmod(descriptor, 0o400)
     os.fsync(descriptor)
     directory.ensure_live()
@@ -1919,7 +1976,7 @@ def _commit_held_publication(
         len(content),
     )
     if exact != content:
-        raise OSError(errno.EIO, "publication commit readback failed")
+        raise _ImmutableEvidenceConflict("publication commit readback failed")
 
 
 def _recover_publication(
@@ -1937,7 +1994,7 @@ def _recover_publication(
         return False
     try:
         if existing != content:
-            raise OSError(errno.EEXIST, "immutable content conflict")
+            raise _ImmutableEvidenceConflict("immutable content conflict")
         if mode == 0o600:
             _commit_held_publication(directory, name, descriptor, content)
         else:
@@ -1952,7 +2009,7 @@ def _recover_publication(
                 len(content),
             )
             if exact != content:
-                raise OSError(errno.EIO, "publication recovery readback failed")
+                raise _ImmutableEvidenceConflict("publication recovery readback failed")
         return True
     finally:
         os.close(descriptor)
@@ -1998,7 +2055,7 @@ def _prepare_publication(
             raise
     if held.content != content:
         held.close()
-        raise OSError(errno.EEXIST, "immutable content conflict")
+        raise _ImmutableEvidenceConflict("immutable content conflict")
     return held
 
 
@@ -2112,7 +2169,7 @@ def _publish_request_pointer(
     )
     try:
         if admitted != revision or not _revision_matches_request(request, admitted):
-            raise OSError(errno.EINVAL, "request pointer invalid")
+            raise _ImmutableEvidenceConflict("request pointer invalid")
         operation.ensure_live()
         requests.ensure_live()
         revisions.ensure_live()
@@ -2142,7 +2199,7 @@ def _revalidate_request_pointer(
     descriptor, raw = _open_exact_file(requests, name, len(expected))
     try:
         if raw != expected:
-            raise OSError(errno.EBUSY, "request pointer changed")
+            raise _ImmutableEvidenceConflict("request pointer changed")
     finally:
         os.close(descriptor)
 
@@ -2178,7 +2235,7 @@ def _open_pointer_revision(
         return cast(str, revision_sha256), held
     except (json.JSONDecodeError, TypeError, ValueError):
         held.close()
-        raise OSError(errno.EINVAL, "request pointer invalid") from None
+        raise _ImmutableEvidenceConflict("request pointer invalid") from None
     except Exception:
         held.close()
         raise
@@ -2187,7 +2244,7 @@ def _open_pointer_revision(
 def _raise_admission_failure(is_requested: bool, message: str) -> NoReturn:
     if not is_requested:
         raise _CorrectionAncestorUnavailable
-    raise OSError(errno.EINVAL, message)
+    raise _ImmutableEvidenceConflict(message)
 
 
 def _open_admission_pointer(
@@ -2332,7 +2389,7 @@ def _read_request_revision(
     )
     try:
         if not _revision_matches_request(request, revision):
-            raise OSError(errno.EINVAL, "request pointer invalid")
+            raise _ImmutableEvidenceConflict("request pointer invalid")
         operation.ensure_live()
         requests.ensure_live()
         revisions.ensure_live()
@@ -2378,7 +2435,7 @@ def _read_prepared_revision(
         return revision, held
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         held.close()
-        raise OSError(errno.EINVAL, "prepared revision invalid") from None
+        raise _ImmutableEvidenceConflict("prepared revision invalid") from None
     except Exception:
         held.close()
         raise
@@ -2446,7 +2503,7 @@ def read_capture_forward_revision_v1(
                 if requests is not None:
                     requests.close()
                 revisions.close()
-    except OSError:
+    except (OSError, _ImmutableEvidenceConflict):
         raise ValueError("capture revision unavailable") from None
     finally:
         lease.close()
@@ -2475,7 +2532,7 @@ def _hold_revision_descriptor(
         return revision, held
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         held.close()
-        raise OSError(errno.EINVAL, "capture revision invalid") from None
+        raise _ImmutableEvidenceConflict("capture revision invalid") from None
     except Exception:
         held.close()
         raise
@@ -2637,7 +2694,7 @@ def compose_capture_forward_plan29_v1(
                 if requests is not None:
                     requests.close()
                 revisions.close()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, _ImmutableEvidenceConflict):
         raise ValueError("capture-forward composition is invalid") from None
     finally:
         lease.close()

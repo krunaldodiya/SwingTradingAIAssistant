@@ -920,7 +920,7 @@ def test_provider_failure_does_not_hide_correction_parent_admission_loss(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert not (root / "requests" / f"{request.request_identity_sha256}.json").exists()
@@ -957,7 +957,7 @@ def test_correction_parent_is_readmitted_between_publication_effects(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert not (root / "requests" / f"{request.request_identity_sha256}.json").exists()
@@ -1276,7 +1276,7 @@ result = namespace["_invoke"](
 )
 expected = namespace["CaptureForwardAdjustedOhlcvFailureV1"](
     code="STORE_UNAVAILABLE",
-    reason="STORAGE_OPERATION_FAILED",
+    reason="EVIDENCE_CONFLICT",
 )
 if result != expected:
     raise AssertionError(result)
@@ -1352,7 +1352,7 @@ def test_publication_readback_rejects_final_name_substitution(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert substituted is True
     assert (root / "prepared" / "displaced-owned-final").is_file()
@@ -1916,7 +1916,6 @@ def _strict_yfinance_frame(
         ("flat", "FRAME_SCHEMA_INVALID"),
         ("inverted", "FRAME_SCHEMA_INVALID"),
         ("extra", "FRAME_COVERAGE_INCOMPLETE"),
-        ("reordered", "FRAME_SCHEMA_INVALID"),
         ("duplicate", "FRAME_SCHEMA_INVALID"),
     ],
 )
@@ -1943,8 +1942,6 @@ def test_yfinance_adapter_rejects_non_exact_dataframe_schema(
         )
     elif variant == "extra":
         frame = _strict_yfinance_frame((*columns, ("UNEXPECTED.NS", "Open")))
-    elif variant == "reordered":
-        frame = _strict_yfinance_frame(tuple(reversed(columns)))
     else:
         frame = _strict_yfinance_frame((*columns[:-1], columns[0]))
 
@@ -1988,6 +1985,26 @@ def test_yfinance_adapter_accepts_only_exact_ticker_price_orientation(
     assert tuple(cast(dict[str, object], result["ohlcv"])) == ("RELIANCE.NS",)
 
 
+def test_yfinance_adapter_accepts_exact_multi_ticker_provider_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = ("TCS.NS", "RELIANCE.NS")
+    frame = _strict_yfinance_frame(tuple(reversed(_strict_yfinance_columns(tickers))))
+
+    def download(**kwargs: object) -> pd.DataFrame:
+        del kwargs
+        return frame
+
+    monkeypatch.setattr(core, "_public_yfinance_download", download)
+    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+        tickers=tickers,
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+
+    assert isinstance(result, dict)
+    assert tuple(cast(dict[str, object], result["ohlcv"])) == tickers
+
+
 def test_provider_identity_precedes_malformed_dataframe_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1999,7 +2016,7 @@ def test_provider_identity_precedes_malformed_dataframe_schema(
 
     monkeypatch.setattr(core, "_public_yfinance_download", download)
     monkeypatch.setitem(
-        core._YFINANCE_MODULE.__dict__,  # pyright: ignore[reportPrivateUsage]
+        core._load_yfinance_module().__dict__,  # pyright: ignore[reportPrivateUsage]
         "__version__",
         "0.0.0",
     )
@@ -2013,6 +2030,38 @@ def test_provider_identity_precedes_malformed_dataframe_schema(
         code="INSUFFICIENT_EVIDENCE",
         reason="PROVIDER_IDENTITY_MISMATCH",
     )
+
+
+def test_yfinance_distribution_mismatch_precedes_import_and_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imported = False
+    provider_called = False
+
+    def forbidden_import(_name: str) -> object:
+        nonlocal imported
+        imported = True
+        return object()
+
+    def forbidden_provider(**_kwargs: object) -> object:
+        nonlocal provider_called
+        provider_called = True
+        return object()
+
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+    monkeypatch.setattr(core.importlib.metadata, "version", lambda _package: "1.5.0")
+    monkeypatch.setattr(core, "__import__", forbidden_import, raising=False)
+    monkeypatch.setattr(core, "_public_yfinance_download", forbidden_provider)
+    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+        tickers=("RELIANCE.NS",),
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="INSUFFICIENT_EVIDENCE",
+        reason="PROVIDER_IDENTITY_MISMATCH",
+    )
+    assert imported is False
+    assert provider_called is False
 
 
 def test_retained_schedule_substitution_fails_before_store_and_provider(
@@ -2583,7 +2632,7 @@ def test_fresh_pointer_stays_uncommitted_when_held_revision_name_changes(
 
     pointer = root / "requests" / f"{request.request_identity_sha256}.json"
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert substituted is True
     assert provider.calls == 1
@@ -2643,7 +2692,7 @@ def test_recovered_pointer_stays_uncommitted_when_held_revision_name_changes(
     retry = _invoke(request, provider, root)
 
     assert retry == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert stat.S_IMODE(pointer.stat().st_mode) == 0o600
@@ -2684,11 +2733,32 @@ def test_pointer_success_revalidates_held_revision_after_mode_commit(
 
     pointer = root / "requests" / f"{request.request_identity_sha256}.json"
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert stat.S_IMODE(pointer.stat().st_mode) == 0o400
     assert (root / "revisions" / "displaced-revision").is_file()
+
+
+def test_corrupted_request_pointer_is_evidence_conflict_before_provider(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    captured = _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+    pointer.write_bytes(b"{}")
+    pointer.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=captured.revision.retrieved_at + timedelta(minutes=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
 
 
 def test_reused_revision_must_match_complete_current_request(
@@ -2754,7 +2824,7 @@ def test_prepared_correction_recovery_requires_admitted_parent(
         code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
     )
     assert retry == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="PARENT_REVISION_UNAVAILABLE"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
 
