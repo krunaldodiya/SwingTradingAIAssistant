@@ -1746,7 +1746,7 @@ def _selection_bound_low_request_v1(
         schedule=request.schedule,
         decision_session=request.decision_session,
         decision_cutoff=request.decision_cutoff,
-        evaluated_at=selection.retrieved_at,
+        evaluated_at=max(request.evaluated_at, selection.retrieved_at),
         parent_revision_sha256=request.parent_revision_sha256,
         schema_identity_sha256=request.schema_identity_sha256,
         runtime_code_identity_sha256=request.runtime_code_identity_sha256,

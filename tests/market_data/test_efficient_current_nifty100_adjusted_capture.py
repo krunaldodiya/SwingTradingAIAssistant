@@ -1861,29 +1861,54 @@ def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
         assert len(tuple((root / "plan33_bindings").iterdir())) == 2
 
 
-def test_selection_retrieval_time_always_binds_the_low_request() -> None:
+def test_selection_retrieval_time_never_moves_evaluation_backward() -> None:
     request, selection = _admitted()
     original = core.low.parse_capture_forward_request_v1(
         core._canonical(request.cohorts[0].request) + b"\n"
     )
-    first = replace(
+    early = replace(
         selection,
         retrieved_at=original.evaluated_at - timedelta(minutes=2),
         selection_identity_sha256="e" * 64,
     )
-    second = replace(
+    late = replace(
         selection,
-        retrieved_at=original.evaluated_at - timedelta(minutes=1),
+        retrieved_at=original.evaluated_at + timedelta(minutes=1),
         selection_identity_sha256="f" * 64,
     )
 
-    first_bound = core._selection_bound_low_request_v1(original, first)
-    second_bound = core._selection_bound_low_request_v1(original, second)
+    early_bound = core._selection_bound_low_request_v1(original, early)
+    late_bound = core._selection_bound_low_request_v1(original, late)
 
-    assert first_bound.evaluated_at == first.retrieved_at
-    assert second_bound.evaluated_at == second.retrieved_at
-    assert first_bound.request_identity_sha256 != second_bound.request_identity_sha256
-    assert core._selection_bound_low_request_v1(first_bound, first) == first_bound
+    assert early_bound.evaluated_at == original.evaluated_at
+    assert late_bound.evaluated_at == late.retrieved_at
+    assert early_bound.request_identity_sha256 != late_bound.request_identity_sha256
+    assert core._selection_bound_low_request_v1(early_bound, early) == early_bound
+
+
+def test_selection_bound_request_is_accepted_by_low_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    original = core.low.parse_capture_forward_request_v1(
+        core._canonical(request.cohorts[0].request) + b"\n"
+    )
+    bound = core._selection_bound_low_request_v1(original, selection)
+    root = tmp_path / "low"
+    schedule_root = tmp_path / "schedule"
+    root.mkdir(mode=0o700)
+    schedule_root.mkdir(mode=0o700)
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_args: True
+    )
+
+    result = core.low._capture_forward_adjusted_ohlcv_with_provider_v1(
+        bound, core._UnresolvedProbeV1(), root, schedule_root
+    )
+
+    assert isinstance(result, core.low.CaptureForwardAdjustedOhlcvFailureV1)
+    assert result.reason == "PROVIDER_CALL_FAILED"
+    assert core.low.read_capture_forward_request_revision_v1(root, bound) is None
 
 
 def test_binding_io_failure_is_retention_failure(

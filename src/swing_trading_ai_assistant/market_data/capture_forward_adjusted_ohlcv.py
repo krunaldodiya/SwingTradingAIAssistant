@@ -1168,11 +1168,7 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
     store_root: Path,
     schedule_root: Path,
 ) -> CaptureForwardAdjustedOhlcvResultV1:
-    if (
-        type(request) is not CaptureForwardAdjustedOhlcvRequestV1
-        or not _valid_absolute_path(store_root)
-        or not _valid_absolute_path(schedule_root)
-    ):
+    if not _valid_absolute_path(store_root) or not _valid_absolute_path(schedule_root):
         raise ValueError("capture invocation is invalid")
     if (
         request.schema_identity_sha256,
@@ -2518,11 +2514,7 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
     """Read-validate one request's immutable store state without creating it."""
 
-    if type(
-        request
-    ) is not CaptureForwardAdjustedOhlcvRequestV1 or not _valid_absolute_path(
-        store_root
-    ):
+    if not _valid_absolute_path(store_root):
         raise ValueError("request revision read is invalid")
     lease = _acquire_existing_private_lease(store_root)
     if lease is None:
