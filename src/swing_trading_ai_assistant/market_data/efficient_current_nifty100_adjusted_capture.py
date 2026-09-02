@@ -10,16 +10,19 @@ import io
 import json
 import logging
 import os
+import stat
 import sys
 import threading
 import time
 from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout, suppress
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
+from shutil import rmtree
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Final, Protocol, cast
 from urllib.request import HTTPRedirectHandler, build_opener
 
@@ -260,6 +263,7 @@ class CohortOutcomeV1:
     selection_identity_sha256: str | None = None
     schedule_identity_sha256: str | None = None
     decision_session: str | None = None
+    decision_cutoff: str | None = None
     configuration_identity_sha256: str | None = None
     retrieved_at: datetime | None = None
     source_identity_sha256: str | None = None
@@ -302,6 +306,29 @@ def _digest(value: bytes) -> str:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionBoundLowRequestV1(low.CaptureForwardAdjustedOhlcvRequestV1):
+    selection_identity_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if len(self.selection_identity_sha256) != 64 or any(
+            value not in "0123456789abcdef" for value in self.selection_identity_sha256
+        ):
+            raise ValueError("selection-bound request is invalid")
+        low.CaptureForwardAdjustedOhlcvRequestV1.__post_init__(self)
+
+    def canonical_value(
+        self, *, include_request_identity: bool = True
+    ) -> dict[str, object]:
+        value = low.CaptureForwardAdjustedOhlcvRequestV1.canonical_value(
+            self, include_request_identity=False
+        )
+        value["selection_identity_sha256"] = self.selection_identity_sha256
+        if include_request_identity:
+            value["request_identity_sha256"] = self.request_identity_sha256
+        return value
 
 
 def _runtime_code_identity_v1() -> str:
@@ -757,10 +784,12 @@ class BoundedYahooSessionV1(CurlSession):
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         owns_provider_admission: bool = False,
+        cache_authority: _ProviderCacheAuthorityV1 | None = None,
     ) -> None:
         super().__init__(impersonate="chrome", retry=0)
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission
+        self._cache_authority = cache_authority
 
     def begin_cohort(self) -> None:
         self._ledger.begin_cohort()
@@ -823,9 +852,15 @@ class BoundedYahooSessionV1(CurlSession):
         try:
             super().close()
         finally:
-            if self._owns_provider_admission:
-                self._owns_provider_admission = False
-                _PROVIDER_ADMISSION_LOCK.release()
+            try:
+                if self._cache_authority is not None:
+                    cache = self._cache_authority
+                    self._cache_authority = None
+                    cache.close()
+            finally:
+                if self._owns_provider_admission:
+                    self._owns_provider_admission = False
+                    _PROVIDER_ADMISSION_LOCK.release()
 
 
 def _is_success(row: CohortOutcomeV1) -> bool:
@@ -855,6 +890,7 @@ def _result_v1(
         and first.decision_session
         == second.decision_session
         == request.decision_session
+        and first.decision_cutoff == second.decision_cutoff == request.decision_cutoff
         and first.configuration_identity_sha256
         == second.configuration_identity_sha256
         == CONFIGURATION_IDENTITY_SHA256_V1
@@ -1117,17 +1153,50 @@ def _read_retained_selection_v1(
         lease.close()
 
 
+def _create_private_root_v1(root: Path) -> None:
+    if (
+        not root.is_absolute()
+        or len(root.parts) < 2
+        or any(part in {".", ".."} for part in root.parts)
+    ):
+        raise ValueError("selection root must be absolute")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    parent = os.open(os.sep, flags)
+    descriptor: int | None = None
+    try:
+        for component in root.parts[1:-1]:
+            opened = os.open(component, flags, dir_fd=parent)
+            os.close(parent)
+            parent = opened
+        try:
+            os.mkdir(root.name, mode=0o700, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError:
+            pass
+        descriptor = os.open(root.name, flags, dir_fd=parent)
+        held = os.fstat(descriptor)
+        named = os.stat(root.name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(held.st_mode)
+            or held.st_uid != os.geteuid()
+            or stat.S_IMODE(held.st_mode) != 0o700
+            or (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise OSError("selection store unavailable")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
 def resolve_selection_v1(
     selection: SelectionRevisionV1, root: Path
 ) -> tuple[str, SelectionRevisionV1]:
     """Insert new selection bytes or return the exact previously retained revision."""
 
-    if not root.is_absolute():
-        raise ValueError("selection root must be absolute")
+    _create_private_root_v1(root)
     payload = selection_revision_bytes_v1(selection)
     name = f"{selection.selection_identity_sha256}.json"
-    with suppress(FileExistsError):
-        root.mkdir(mode=0o700)
     lease_result = StorageRootLease.try_acquire_private_empty(root)
     if lease_result.outcome is not LeaseOutcome.ACQUIRED:
         identity = StorageRootLease.admit_existing_private_identity(root)
@@ -1199,7 +1268,115 @@ class _DiscardOutputV1:
         return None
 
 
-def prepare_yfinance_runtime_v1() -> BoundedYahooSessionV1:
+def _descriptor_directory_path_v1(descriptor: int) -> Path:
+    held = os.fstat(descriptor)
+    if sys.platform == "darwin":
+        location = Path(f"/.vol/{held.st_dev}/{held.st_ino}")
+    elif sys.platform.startswith("linux"):
+        location = Path(f"/proc/self/fd/{descriptor}")
+    else:
+        raise RuntimeError("provider runtime configuration invalid")
+    resolved = os.stat(location)
+    if not stat.S_ISDIR(held.st_mode) or (resolved.st_dev, resolved.st_ino) != (
+        held.st_dev,
+        held.st_ino,
+    ):
+        raise RuntimeError("provider runtime configuration invalid")
+    return location
+
+
+@dataclass(slots=True)
+class _ProviderCacheAuthorityV1:
+    lease: StorageRootLease
+    operation: StorageRootLeaseOperation
+    descriptor: int
+    name: str
+    location: Path
+    identity: tuple[int, int, int, int]
+
+    def ensure_live(self) -> None:
+        self.operation.ensure_live()
+        held = os.fstat(self.descriptor)
+        named = os.stat(
+            self.name,
+            dir_fd=self.operation.descriptor,
+            follow_symlinks=False,
+        )
+        actual = (held.st_dev, held.st_ino, held.st_mode, held.st_uid)
+        if (
+            actual != self.identity
+            or actual != (named.st_dev, named.st_ino, named.st_mode, named.st_uid)
+            or not stat.S_ISDIR(held.st_mode)
+            or stat.S_IMODE(held.st_mode) != 0o700
+            or held.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("provider runtime configuration invalid")
+
+    def close(self) -> None:
+        safe_to_remove = False
+        try:
+            self.ensure_live()
+            safe_to_remove = True
+        finally:
+            os.close(self.descriptor)
+            try:
+                if safe_to_remove:
+                    rmtree(self.location)
+                    self.operation.ensure_live()
+            finally:
+                try:
+                    self.operation.__exit__(None, None, None)
+                finally:
+                    self.lease.close()
+
+
+def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    if identity is None:
+        raise RuntimeError("provider runtime configuration invalid")
+    result = StorageRootLease.try_acquire_existing_identity(root, identity)
+    if result.outcome is not LeaseOutcome.ACQUIRED or result.lease is None:
+        raise RuntimeError("provider runtime configuration invalid")
+    lease = result.lease
+    operation = lease.root_operation(root)
+    descriptor: int | None = None
+    location: Path | None = None
+    entered = False
+    try:
+        operation.__enter__()
+        entered = True
+        assert_private_storage_operation(operation)
+        parent = _descriptor_directory_path_v1(operation.descriptor)
+        location = Path(mkdtemp(prefix=".plan33-yfinance-", dir=parent))
+        name = location.name
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=operation.descriptor,
+        )
+        held = os.fstat(descriptor)
+        authority = _ProviderCacheAuthorityV1(
+            lease,
+            operation,
+            descriptor,
+            name,
+            _descriptor_directory_path_v1(descriptor),
+            (held.st_dev, held.st_ino, held.st_mode, held.st_uid),
+        )
+        authority.ensure_live()
+        return authority
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        if location is not None:
+            rmtree(location, ignore_errors=True)
+        if entered:
+            operation.__exit__(None, None, None)
+        lease.close()
+        raise
+
+
+def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
     """Create and verify one exact exclusive runtime before importing yfinance."""
 
     if not _PROVIDER_ADMISSION_LOCK.acquire(blocking=False):
@@ -1220,7 +1397,11 @@ def prepare_yfinance_runtime_v1() -> BoundedYahooSessionV1:
         multitasking.createPool(name=POOL_NAME_V1, threads=8, engine="thread")
         if not _pool_is_exact_v1():
             raise RuntimeError("provider runtime configuration invalid")
-        session = BoundedYahooSessionV1(owns_provider_admission=True)
+        cache = _open_provider_cache_authority_v1(cache_root)
+        session = BoundedYahooSessionV1(
+            owns_provider_admission=True,
+            cache_authority=cache,
+        )
     except BaseException:
         _PROVIDER_ADMISSION_LOCK.release()
         raise
@@ -1232,6 +1413,10 @@ def prepare_yfinance_runtime_v1() -> BoundedYahooSessionV1:
             redirect_stderr(_DiscardOutputV1()),
         ):
             module = low._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+            set_cache = module.__dict__.get("set_tz_cache_location")
+            if not callable(set_cache):
+                raise RuntimeError("provider runtime configuration invalid")
+            set_cache(str(cache.location))
         if (
             module.__dict__.get("__version__") != "1.6.0"
             or not _pool_is_exact_v1()
@@ -1460,6 +1645,7 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
             ),
             schedule_identity_sha256=revision.schedule.schedule_identity_sha256,
             decision_session=revision.decision_session.isoformat(),
+            decision_cutoff=_timestamp(revision.decision_cutoff),
             configuration_identity_sha256=CONFIGURATION_IDENTITY_SHA256_V1,
             retrieved_at=revision.retrieved_at,
             source_identity_sha256=revision.source_identity_sha256,
@@ -1513,7 +1699,19 @@ def _selection_bound_low_request_v1(
     request: low.CaptureForwardAdjustedOhlcvRequestV1,
     selection: SelectionRevisionV1,
 ) -> low.CaptureForwardAdjustedOhlcvRequestV1:
-    return replace(request, evaluated_at=selection.retrieved_at)
+    return _SelectionBoundLowRequestV1(
+        cohort=request.cohort,
+        schedule=request.schedule,
+        decision_session=request.decision_session,
+        decision_cutoff=request.decision_cutoff,
+        evaluated_at=selection.retrieved_at,
+        parent_revision_sha256=request.parent_revision_sha256,
+        schema_identity_sha256=request.schema_identity_sha256,
+        runtime_code_identity_sha256=request.runtime_code_identity_sha256,
+        configuration_identity_sha256=request.configuration_identity_sha256,
+        contract_version=request.contract_version,
+        selection_identity_sha256=selection.selection_identity_sha256,
+    )
 
 
 def _validated_reuse_v1(
@@ -1717,7 +1915,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                     continue
                 if session is None:
                     try:
-                        session = prepare_yfinance_runtime_v1()
+                        session = prepare_yfinance_runtime_v1(selection_root)
                     except Exception:
                         runtime_unavailable = True
                         outcomes[index] = CohortOutcomeV1(

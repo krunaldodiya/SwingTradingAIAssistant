@@ -511,6 +511,7 @@ def test_complete_union_requires_two_compatible_revision_references(
             selection_identity_sha256=selection.selection_identity_sha256,
             schedule_identity_sha256=request.schedule_identity_sha256,
             decision_session=request.decision_session,
+            decision_cutoff=request.decision_cutoff,
             configuration_identity_sha256=core.CONFIGURATION_IDENTITY_SHA256_V1,
         )
 
@@ -540,6 +541,14 @@ def test_complete_union_requires_two_compatible_revision_references(
     result = core.execute_admitted_v1(request, selection, lambda _: next(calls))
     assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
     assert result.union_reason == "UNION_INCOMPATIBLE"
+    incompatible_cutoff = replace(
+        success(request.cohorts[1]),
+        decision_cutoff="2026-08-24T12:01:00.000000Z",
+    )
+    calls = iter((success(request.cohorts[0]), incompatible_cutoff))
+    result = core.execute_admitted_v1(request, selection, lambda _: next(calls))
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert result.union_reason == "UNION_INCOMPATIBLE"
 
 
 def test_cohort_compatibility_uses_retained_revision_provenance() -> None:
@@ -557,6 +566,9 @@ def test_cohort_compatibility_uses_retained_revision_provenance() -> None:
         cohort=members,
         schedule=schedule,
         decision_session=date.fromisoformat(request.decision_session),
+        decision_cutoff=datetime.fromisoformat(
+            request.decision_cutoff.replace("Z", "+00:00")
+        ),
         configuration_identity_sha256="d" * 64,
     )
     revision: Any = SimpleNamespace(
@@ -565,6 +577,7 @@ def test_cohort_compatibility_uses_retained_revision_provenance() -> None:
         cohort=members,
         schedule=schedule,
         decision_session=low_request.decision_session,
+        decision_cutoff=low_request.decision_cutoff,
         configuration_identity_sha256=low_request.configuration_identity_sha256,
         provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
         source_profile=core.low.SOURCE_PROFILE_V1,
@@ -654,6 +667,10 @@ def test_exact_source_retry_reuses_original_selection_without_timestamp_refresh(
     assert retained == first
     retry_bound = core._selection_bound_low_request_v1(low_request, retained)
     assert retry_bound.request_identity_sha256 == first_bound.request_identity_sha256
+    changed = replace(first, selection_identity_sha256="f" * 64)
+    changed_bound = core._selection_bound_low_request_v1(low_request, changed)
+    assert changed.retrieved_at == first.retrieved_at
+    assert changed_bound.request_identity_sha256 != first_bound.request_identity_sha256
     assert stored.stat().st_mtime_ns == modified
 
 
@@ -671,18 +688,47 @@ def test_selection_store_initializes_a_missing_private_root(tmp_path: Path) -> N
     ).read_bytes() == core.selection_revision_bytes_v1(selection)
 
 
+def test_selection_store_rejects_unsafe_missing_root_paths(tmp_path: Path) -> None:
+    _, selection = _admitted()
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        core.resolve_selection_v1(selection, linked_parent / "selection")
+    assert not (target / "selection").exists()
+
+    parent = tmp_path / "parent"
+    parent.mkdir(mode=0o700)
+    with pytest.raises(ValueError):
+        core.resolve_selection_v1(selection, parent / ".." / "selection")
+    assert not (tmp_path / "selection").exists()
+
+
 def test_pool_and_session_exist_before_yfinance_import() -> None:
 
     script = """
 import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
 assert 'yfinance' not in sys.modules
-session = core.prepare_yfinance_runtime_v1()
-assert 'yfinance' in sys.modules
-assert core._pool_is_exact_v1()
-from yfinance.data import is_supported_session
-assert is_supported_session(session)
-session.close()
+with TemporaryDirectory(dir=Path.home()) as temporary:
+    root = Path(temporary)
+    root.chmod(0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    session = core.prepare_yfinance_runtime_v1(root)
+    assert 'yfinance' in sys.modules
+    assert core._pool_is_exact_v1()
+    from yfinance.data import is_supported_session
+    assert is_supported_session(session)
+    cache = [path for path in root.iterdir() if path.name != '.ingestion.lock']
+    assert len(cache) == 1 and cache[0].is_dir()
+    session.close()
+    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
         [sys.executable, "-c", script],
@@ -854,7 +900,7 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
             return None
 
     session: Any = _Session()
-    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda: session)
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda _root: session)
     monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     nifty50_root = tmp_path / "nifty50"
@@ -918,7 +964,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
     )
     preparations = 0
 
-    def malformed_runtime() -> None:
+    def malformed_runtime(_root: Path) -> None:
         nonlocal preparations
         preparations += 1
         raise KeyError("POOL_NAME")
@@ -990,7 +1036,7 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch.setattr(
         core,
         "prepare_yfinance_runtime_v1",
-        lambda: (_ for _ in ()).throw(AssertionError("provider preparation")),
+        lambda _root: (_ for _ in ()).throw(AssertionError("provider preparation")),
     )
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -1207,12 +1253,21 @@ def noisy_import():
     print('S000.NS import output')
     print('private import error', file=sys.stderr)
     logging.getLogger('yfinance').error('provider URL')
-    return __import__('types').SimpleNamespace(__version__='1.6.0')
+    return __import__('types').SimpleNamespace(
+        __version__='1.6.0',
+        set_tz_cache_location=lambda _path: None,
+    )
 core._pool_is_exact_v1 = lambda: True
 
 core.low._load_yfinance_module = noisy_import
-session = core.prepare_yfinance_runtime_v1()
-session.close()
+with __import__('tempfile').TemporaryDirectory(dir=__import__('pathlib').Path.home()) as temporary:
+    root = __import__('pathlib').Path(temporary)
+    root.chmod(0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    session = core.prepare_yfinance_runtime_v1(root)
+    session.close()
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
         [sys.executable, "-c", script],
@@ -1251,6 +1306,7 @@ def test_public_result_contains_aggregate_bindings_and_timing() -> None:
             selection_identity_sha256=selection.selection_identity_sha256,
             schedule_identity_sha256=request.schedule_identity_sha256,
             decision_session=request.decision_session,
+            decision_cutoff=request.decision_cutoff,
             configuration_identity_sha256=core.CONFIGURATION_IDENTITY_SHA256_V1,
             retrieved_at=selection.retrieved_at + timedelta(seconds=1),
             source_identity_sha256="d" * 64,
@@ -1283,6 +1339,9 @@ def test_plan33_binding_recovery_requires_compatible_retrieval_boundary() -> Non
         cohort=members,
         schedule=schedule,
         decision_session=date.fromisoformat(request.decision_session),
+        decision_cutoff=datetime.fromisoformat(
+            request.decision_cutoff.replace("Z", "+00:00")
+        ),
         configuration_identity_sha256="d" * 64,
     )
     revision: Any = SimpleNamespace(
@@ -1291,6 +1350,7 @@ def test_plan33_binding_recovery_requires_compatible_retrieval_boundary() -> Non
         cohort=members,
         schedule=schedule,
         decision_session=low_request.decision_session,
+        decision_cutoff=low_request.decision_cutoff,
         configuration_identity_sha256=low_request.configuration_identity_sha256,
         provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
         source_profile=core.low.SOURCE_PROFILE_V1,
@@ -1621,7 +1681,7 @@ def test_yfinance_distribution_is_pinned_before_import(
     )
     monkeypatch.setattr(core.low, "_load_yfinance_module", forbidden_import)
     with pytest.raises(RuntimeError):
-        core.prepare_yfinance_runtime_v1()
+        core.prepare_yfinance_runtime_v1(Path("/"))
     assert imported is False
 
 
@@ -1639,7 +1699,7 @@ def test_same_process_provider_admission_is_exclusive() -> None:
     assert held.wait(5)
     try:
         with pytest.raises(RuntimeError):
-            core.prepare_yfinance_runtime_v1()
+            core.prepare_yfinance_runtime_v1(Path("/"))
     finally:
         release.set()
         thread.join(5)
@@ -1686,6 +1746,9 @@ def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
         cohort=members,
         schedule=schedule,
         decision_session=date.fromisoformat(request.decision_session),
+        decision_cutoff=datetime.fromisoformat(
+            request.decision_cutoff.replace("Z", "+00:00")
+        ),
         configuration_identity_sha256="d" * 64,
     )
     revision: Any = SimpleNamespace(
@@ -1694,6 +1757,7 @@ def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
         cohort=members,
         schedule=schedule,
         decision_session=low_request.decision_session,
+        decision_cutoff=low_request.decision_cutoff,
         configuration_identity_sha256=low_request.configuration_identity_sha256,
         provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
         source_profile=core.low.SOURCE_PROFILE_V1,
@@ -1847,6 +1911,7 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
             cohort=low_request.cohort,
             schedule=low_request.schedule,
             decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
             configuration_identity_sha256=low_request.configuration_identity_sha256,
             provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
             source_profile=core.low.SOURCE_PROFILE_V1,
@@ -1869,7 +1934,7 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", _Session)
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda _root: _Session())
     monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     selection_root = tmp_path / "selection"
@@ -1978,7 +2043,7 @@ def test_low_store_failure_stops_before_later_low_effect(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", fail_store
     )
 
-    def forbidden_provider() -> None:
+    def forbidden_provider(_root: Path) -> None:
         raise AssertionError("provider must not run after a low-store failure")
 
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
@@ -2022,6 +2087,7 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
             cohort=low_request.cohort,
             schedule=low_request.schedule,
             decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
             configuration_identity_sha256=low_request.configuration_identity_sha256,
             provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
             source_profile=core.low.SOURCE_PROFILE_V1,
@@ -2096,7 +2162,7 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
 
     monkeypatch.setattr(core, "_retain_plan33_binding_v1", fail_first_retain)
 
-    def forbidden_provider() -> None:
+    def forbidden_provider(_root: Path) -> None:
         raise AssertionError("validated reuse must not call the provider")
 
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
@@ -2199,6 +2265,7 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
             cohort=low_request.cohort,
             schedule=low_request.schedule,
             decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
             configuration_identity_sha256=low_request.configuration_identity_sha256,
             provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
             source_profile=core.low.SOURCE_PROFILE_V1,
