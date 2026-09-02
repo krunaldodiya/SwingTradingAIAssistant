@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import import_module
@@ -836,7 +836,12 @@ def _result_v1(
     request: CurrentNifty100RequestV1,
     selection: SelectionRevisionV1,
     outcomes: tuple[CohortOutcomeV1, CohortOutcomeV1],
+    *,
+    request_identities: tuple[str, str] | None = None,
 ) -> CurrentNifty100ResultV1:
+    expected_request_identities = request_identities or tuple(
+        cohort.request_identity_sha256 for cohort in request.cohorts
+    )
     first, second = outcomes
     compatible = (
         _is_success(first)
@@ -853,8 +858,8 @@ def _result_v1(
         and first.configuration_identity_sha256
         == second.configuration_identity_sha256
         == CONFIGURATION_IDENTITY_SHA256_V1
-        and first.request_identity_sha256 == request.cohorts[0].request_identity_sha256
-        and second.request_identity_sha256 == request.cohorts[1].request_identity_sha256
+        and first.request_identity_sha256 == expected_request_identities[0]
+        and second.request_identity_sha256 == expected_request_identities[1]
         and first.revision_sha256 is not None
         and second.revision_sha256 is not None
     )
@@ -1085,7 +1090,7 @@ def _read_retained_selection_v1(
         raise OSError("selection store unavailable")
     lease_result = StorageRootLease.try_acquire_existing_identity(root, identity)
     if lease_result.outcome is not LeaseOutcome.ACQUIRED or lease_result.lease is None:
-        raise OSError("selection store unavailable")
+        return None
     lease = lease_result.lease
     directory: int | None = None
     try:
@@ -1121,6 +1126,8 @@ def resolve_selection_v1(
         raise ValueError("selection root must be absolute")
     payload = selection_revision_bytes_v1(selection)
     name = f"{selection.selection_identity_sha256}.json"
+    with suppress(FileExistsError):
+        root.mkdir(mode=0o700)
     lease_result = StorageRootLease.try_acquire_private_empty(root)
     if lease_result.outcome is not LeaseOutcome.ACQUIRED:
         identity = StorageRootLease.admit_existing_private_identity(root)
@@ -1506,8 +1513,6 @@ def _selection_bound_low_request_v1(
     request: low.CaptureForwardAdjustedOhlcvRequestV1,
     selection: SelectionRevisionV1,
 ) -> low.CaptureForwardAdjustedOhlcvRequestV1:
-    if request.evaluated_at >= selection.retrieved_at:
-        return request
     return replace(request, evaluated_at=selection.retrieved_at)
 
 
@@ -1621,15 +1626,6 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     if len(low_requests) != len(request.cohorts):
         return SharedFailureV1("MALFORMED_INPUT", None)
 
-    first_low_request = low_requests[0]
-    if any(
-        item.schedule != first_low_request.schedule
-        or item.decision_session != first_low_request.decision_session
-        or item.decision_cutoff != first_low_request.decision_cutoff
-        for item in low_requests[1:]
-    ):
-        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
-
     if not all(
         low._retained_schedule_matches_request(item, schedule_root)  # pyright: ignore[reportPrivateUsage]
         for item in low_requests
@@ -1658,16 +1654,15 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
-
     try:
         _, selection = resolve_selection_v1(selection, selection_root)
     except EvidenceConflict:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     except (OSError, RuntimeError, ValueError):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
-
     if selection != expected_selection:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
     validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
     for index, (cohort, low_request) in enumerate(
@@ -1777,7 +1772,15 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
             )
     finalized = cast(tuple[CohortOutcomeV1, CohortOutcomeV1], tuple(outcomes))
-    return _result_v1(request, selection, finalized)
+    return _result_v1(
+        request,
+        selection,
+        finalized,
+        request_identities=cast(
+            tuple[str, str],
+            tuple(item.request_identity_sha256 for item in low_requests),
+        ),
+    )
 
 
 def serialize_capture_result_v1(
