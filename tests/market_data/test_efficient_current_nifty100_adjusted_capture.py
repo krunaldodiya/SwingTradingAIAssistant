@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -738,6 +739,28 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
         timeout=20,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_cache_cleanup_uses_parent_descriptor_while_child_is_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    authority = core._open_provider_cache_authority_v1(root)
+    original_rmtree = core.rmtree
+
+    def guarded_rmtree(path: str, *, dir_fd: int | None = None) -> None:
+        assert path == authority.name
+        assert dir_fd == authority.operation.descriptor
+        os.fstat(authority.descriptor)
+        original_rmtree(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(core, "rmtree", guarded_rmtree)
+    authority.close()
+    assert [path.name for path in root.iterdir()] == [".ingestion.lock"]
 
 
 def test_runtime_identity_drift_stops_before_official_source_effect(

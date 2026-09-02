@@ -1318,12 +1318,12 @@ class _ProviderCacheAuthorityV1:
             self.ensure_live()
             safe_to_remove = True
         finally:
-            os.close(self.descriptor)
             try:
                 if safe_to_remove:
-                    rmtree(self.location)
+                    rmtree(self.name, dir_fd=self.operation.descriptor)
                     self.operation.ensure_live()
             finally:
+                os.close(self.descriptor)
                 try:
                     self.operation.__exit__(None, None, None)
                 finally:
