@@ -175,6 +175,12 @@ def test_request_bound_and_exact_enablement_are_fail_closed() -> None:
     )
     with pytest.raises(ValueError):
         core.parse_request_v1(duplicate_enabled)
+    deeply_nested = b"[" * 10_000 + b"0" + b"]" * 10_000
+    assert len(deeply_nested) < core.MAX_REQUEST_BYTES_V1
+    assert core.preflight_request_v1(deeply_nested, acknowledged=True) == (
+        "MALFORMED_INPUT",
+        None,
+    )
     assert core.preflight_request_v1(_request(), acknowledged=False) == (
         "AUTHORIZATION_DENIED",
         "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
@@ -629,7 +635,11 @@ def test_selection_revision_is_immutable_and_exactly_reused() -> None:
         root.chmod(0o700)
         assert core.retain_selection_v1(selection, root) == "INSERTED"
         assert core.retain_selection_v1(selection, root) == "REUSED"
-        stored = root / "selections" / f"{selection.selection_identity_sha256}.json"
+        stored = (
+            root
+            / "selections"
+            / f"{core._selection_source_identity_v1(selection)}.json"
+        )
         assert stored.read_bytes() == core.selection_revision_bytes_v1(selection)
         assert stored.stat().st_mode & 0o777 == 0o400
 
@@ -647,7 +657,7 @@ def test_exact_source_retry_reuses_original_selection_without_timestamp_refresh(
 
     later = core.admit_selection_v1(request, _LaterFetcher())
     assert isinstance(later, core.SelectionRevisionV1)
-    assert later.selection_identity_sha256 == first.selection_identity_sha256
+    assert later.selection_identity_sha256 != first.selection_identity_sha256
     root = tmp_path / "selection"
     root.mkdir(mode=0o700)
     status, retained = core.resolve_selection_v1(first, root)
@@ -656,7 +666,7 @@ def test_exact_source_retry_reuses_original_selection_without_timestamp_refresh(
         tmp_path
         / "selection"
         / "selections"
-        / f"{first.selection_identity_sha256}.json"
+        / f"{core._selection_source_identity_v1(first)}.json"
     )
     modified = stored.stat().st_mtime_ns
     low_request = core.low.parse_capture_forward_request_v1(
@@ -675,6 +685,28 @@ def test_exact_source_retry_reuses_original_selection_without_timestamp_refresh(
     assert stored.stat().st_mtime_ns == modified
 
 
+def test_retained_selection_timestamps_are_identity_bound(tmp_path: Path) -> None:
+    _, selection = _admitted()
+    root = tmp_path / "selection"
+    root.mkdir(mode=0o700)
+    assert core.resolve_selection_v1(selection, root)[0] == "INSERTED"
+    stored = (
+        root / "selections" / f"{core._selection_source_identity_v1(selection)}.json"
+    )
+    payload = json.loads(stored.read_bytes())
+    forged = datetime(2000, 1, 1, tzinfo=UTC).isoformat()
+    payload["retrieved_at"] = forged
+    for cohort in payload["cohorts"]:
+        cohort["retrieved_at"] = forged
+    payload["witness"]["retrieved_at"] = forged
+    stored.chmod(0o600)
+    stored.write_bytes(core._canonical(payload) + b"\n")
+    stored.chmod(0o400)
+
+    with pytest.raises(core.EvidenceConflict):
+        core.resolve_selection_v1(selection, root)
+
+
 def test_selection_store_initializes_a_missing_private_root(tmp_path: Path) -> None:
     _, selection = _admitted()
     root = tmp_path / "selection"
@@ -685,7 +717,7 @@ def test_selection_store_initializes_a_missing_private_root(tmp_path: Path) -> N
     assert retained == selection
     assert root.stat().st_mode & 0o777 == 0o700
     assert (
-        root / "selections" / f"{selection.selection_identity_sha256}.json"
+        root / "selections" / f"{core._selection_source_identity_v1(selection)}.json"
     ).read_bytes() == core.selection_revision_bytes_v1(selection)
 
 
@@ -809,6 +841,43 @@ def test_cache_cleanup_clears_the_held_cache_before_name_validation(
         authority.close()
 
     assert (root / authority.name / "sentinel").read_text() == "keep"
+    assert list((root / "moved-cache").iterdir()) == []
+
+
+def test_cache_admission_rejects_preopen_name_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    retained = root / "retained"
+    retained.mkdir(mode=0o700)
+    (retained / "sentinel").write_text("keep")
+    original_open = core.os.open
+
+    def substitute_before_open(
+        path: str | bytes | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(path, str) and path.startswith(".plan33-yfinance-"):
+            assert dir_fd is not None
+            os.rename(path, "moved-cache", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.rename("retained", path, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(core.os, "open", substitute_before_open)
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        core._open_provider_cache_authority_v1(root)
+
+    assert (root / "retained").exists() is False
+    assert (
+        next(root.glob(".plan33-yfinance-*")).joinpath("sentinel").read_text() == "keep"
+    )
     assert list((root / "moved-cache").iterdir()) == []
 
 
@@ -1121,6 +1190,79 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         ("NIFTY_NEXT_50", "CONFIGURATION_INVALID"),
     ]
 
+    class _CloseSuccess:
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    attempts = 0
+
+    def runtime_drift(*_args: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts % 2:
+            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+            )
+        raise RuntimeError("capture runtime identity invalid")
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", runtime_drift
+    )
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseSuccess()
+    )
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection-runtime-drift",
+        nifty50_root=tmp_path / "nifty50-runtime-drift",
+        nifty_next50_root=tmp_path / "next50-runtime-drift",
+        schedule_root=tmp_path / "schedule-runtime-drift",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert [row.reason for row in result.cohorts] == [
+        "CONFIGURATION_INVALID",
+        "CONFIGURATION_INVALID",
+    ]
+
+    attempts = 0
+
+    def schedule_mismatch(*_args: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+            "INSUFFICIENT_EVIDENCE",
+            "PROVIDER_CALL_FAILED" if attempts % 2 else "SCHEDULE_EVIDENCE_MISMATCH",
+        )
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", schedule_mismatch
+    )
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseFailure()
+    )
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection-combined-failure",
+        nifty50_root=tmp_path / "nifty50-combined-failure",
+        nifty_next50_root=tmp_path / "next50-combined-failure",
+        schedule_root=tmp_path / "schedule-combined-failure",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert [row.reason for row in result.cohorts] == [
+        "CONFIGURATION_INVALID",
+        "CONFIGURATION_INVALID",
+    ]
+
 
 def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1292,6 +1434,41 @@ def test_cli_rejects_duplicate_or_missing_owner_private_acknowledgement(
         "contract_version": core.CONTRACT_VERSION_V1,
         "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
     }
+
+
+def test_deep_json_cli_is_malformed_without_internal_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    request = tmp_path / "request.json"
+    request.write_bytes(b"[" * 10_000 + b"0" + b"]" * 10_000)
+    request.chmod(0o600)
+    assert (
+        cli.main(
+            [
+                "--request-file",
+                str(request),
+                "--selection-root",
+                str(tmp_path / "selection"),
+                "--nifty50-storage-root",
+                str(tmp_path / "nifty50"),
+                "--nifty-next50-storage-root",
+                str(tmp_path / "next50"),
+                "--schedule-root",
+                str(tmp_path / "schedule"),
+                "--ack-owner-private-yfinance-research",
+                "--output",
+                "json",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "code": "MALFORMED_INPUT",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": None,
+    }
+    assert captured.err == ""
 
 
 def test_disabled_cli_returns_before_runtime_effects(
@@ -1682,7 +1859,7 @@ def test_real_selection_object_corruption_maps_to_evidence_conflict(
         retained = (
             selection_root
             / "selections"
-            / f"{selection.selection_identity_sha256}.json"
+            / f"{core._selection_source_identity_v1(selection)}.json"
         )
         retained.chmod(0o644)
         nifty50_root = root / "nifty50"

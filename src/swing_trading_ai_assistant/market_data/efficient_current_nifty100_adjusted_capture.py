@@ -363,7 +363,7 @@ def preflight_request_v1(
         return "MALFORMED_INPUT", None
     try:
         decoded: object = json.loads(raw, object_pairs_hook=_unique_json_object_v1)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
         return "MALFORMED_INPUT", None
     if type(decoded) is not dict:
         return "MALFORMED_INPUT", None
@@ -389,7 +389,12 @@ def parse_request_v1(  # noqa: C901 - closed untrusted request boundary
         raise ValueError("request is invalid")
     try:
         decoded: object = json.loads(raw, object_pairs_hook=_unique_json_object_v1)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as error:
         raise ValueError("request is invalid") from error
     if type(decoded) is not dict:
         raise ValueError("request is invalid")
@@ -590,6 +595,64 @@ def _parse_source(
     return tuple(sorted(admitted))
 
 
+def _selection_source_identity_v1(selection: SelectionRevisionV1) -> str:
+    sources = [
+        {
+            "url": cohort.source_url,
+            "response_url": cohort.response_url,
+            "status": cohort.status,
+            "sha256": cohort.source_sha256,
+            "byte_count": len(cohort.source_bytes),
+        }
+        for cohort in selection.cohorts
+    ]
+    sources.append(
+        {
+            "url": selection.witness_url,
+            "response_url": selection.witness_response_url,
+            "status": selection.witness_status,
+            "sha256": selection.witness_sha256,
+            "byte_count": len(selection.witness_bytes),
+        }
+    )
+    return _digest(
+        _canonical(
+            {
+                "contract_version": CONTRACT_VERSION_V1,
+                "label": selection.label,
+                "runtime_code_identity_sha256": _runtime_code_identity_v1(),
+                "sources": sources,
+                "cohorts": [
+                    {
+                        "name": cohort.name,
+                        "rows": [[row.isin, row.symbol] for row in cohort.rows],
+                    }
+                    for cohort in selection.cohorts
+                ],
+            }
+        )
+    )
+
+
+def _selection_identity_v1(selection: SelectionRevisionV1) -> str:
+    return _digest(
+        _canonical(
+            {
+                "contract_version": CONTRACT_VERSION_V1,
+                "source_identity_sha256": _selection_source_identity_v1(selection),
+                "retrieved_at": selection.retrieved_at.astimezone(UTC).isoformat(),
+                "cohort_retrieved_at": [
+                    cohort.retrieved_at.astimezone(UTC).isoformat()
+                    for cohort in selection.cohorts
+                ],
+                "witness_retrieved_at": selection.witness_retrieved_at.astimezone(
+                    UTC
+                ).isoformat(),
+            }
+        )
+    )
+
+
 def admit_selection_v1(
     request: CurrentNifty100RequestV1, fetcher: SourceFetcherV1
 ) -> SelectionRevisionV1 | SharedFailureV1:
@@ -625,32 +688,9 @@ def admit_selection_v1(
             return SharedFailureV1(
                 "INSUFFICIENT_EVIDENCE", "CONSTITUENT_SOURCE_CONFLICT"
             )
-    retrieved_at = max(response.retrieved_at for response in responses)
-    identity_value = {
-        "contract_version": CONTRACT_VERSION_V1,
-        "label": "CURRENT_OFFICIAL_LIST_AT_RETRIEVAL",
-        "runtime_code_identity_sha256": _runtime_code_identity_v1(),
-        "sources": [
-            {
-                "url": response.request_url,
-                "response_url": response.response_url,
-                "sha256": _digest(response.body),
-                "byte_count": len(response.body),
-            }
-            for response in responses
-        ],
-        "cohorts": [
-            {
-                "name": name,
-                "rows": [[row.isin, row.symbol] for row in rows],
-            }
-            for name, rows in zip(COHORT_NAMES_V1, (first, second), strict=True)
-        ],
-    }
-    selection_identity = _digest(_canonical(identity_value))
-    return SelectionRevisionV1(
+    selection = SelectionRevisionV1(
         "CURRENT_OFFICIAL_LIST_AT_RETRIEVAL",
-        retrieved_at,
+        max(response.retrieved_at for response in responses),
         (
             SelectionCohortV1(
                 "NIFTY_50",
@@ -679,7 +719,10 @@ def admit_selection_v1(
         responses[2].retrieved_at,
         _digest(responses[2].body),
         responses[2].body,
-        selection_identity,
+        "",
+    )
+    return replace(
+        selection, selection_identity_sha256=_selection_identity_v1(selection)
     )
 
 
@@ -1031,6 +1074,7 @@ def selection_revision_bytes_v1(selection: SelectionRevisionV1) -> bytes:
         "label": selection.label,
         "retrieved_at": selection.retrieved_at.astimezone(UTC).isoformat(),
         "selection_identity_sha256": selection.selection_identity_sha256,
+        "selection_source_identity_sha256": _selection_source_identity_v1(selection),
         "cohorts": [
             {
                 "name": cohort.name,
@@ -1073,24 +1117,20 @@ def _retained_selection_v1(
 ) -> SelectionRevisionV1:
     try:
         stored = json.loads(raw)
-        expected = json.loads(selection_revision_bytes_v1(current))
-        if type(stored) is not dict or type(expected) is not dict:
+        if type(stored) is not dict:
             raise ValueError
         stored_row = cast(dict[str, object], stored)
-        expected_row = cast(dict[str, object], expected)
-        stored_cohorts = cast(list[dict[str, object]], stored_row["cohorts"])
-        expected_cohorts = cast(list[dict[str, object]], expected_row["cohorts"])
-        stored_witness = cast(dict[str, object], stored_row["witness"])
-        expected_witness = cast(dict[str, object], expected_row["witness"])
-        if len(stored_cohorts) != 2 or len(expected_cohorts) != 2:
-            raise ValueError
-        expected_row["retrieved_at"] = stored_row["retrieved_at"]
-        for stored_cohort, expected_cohort in zip(
-            stored_cohorts, expected_cohorts, strict=True
+        if (
+            type(stored_row.get("cohorts")) is not list
+            or type(stored_row.get("witness")) is not dict
+            or type(stored_row.get("selection_identity_sha256")) is not str
         ):
-            expected_cohort["retrieved_at"] = stored_cohort["retrieved_at"]
-        expected_witness["retrieved_at"] = stored_witness["retrieved_at"]
-        if stored_row != expected_row or raw != _canonical(stored_row) + b"\n":
+            raise ValueError
+        stored_cohorts = cast(list[dict[str, object]], stored_row["cohorts"])
+        stored_witness = cast(dict[str, object], stored_row["witness"])
+        if len(stored_cohorts) != 2 or any(
+            type(row) is not dict for row in stored_cohorts
+        ):
             raise ValueError
         cohort_times = tuple(
             _retained_timestamp_v1(row["retrieved_at"]) for row in stored_cohorts
@@ -1106,11 +1146,26 @@ def _retained_selection_v1(
                 )
             ),
             witness_retrieved_at=witness_time,
+            selection_identity_sha256=cast(
+                str, stored_row["selection_identity_sha256"]
+            ),
         )
-        if retained.retrieved_at != max(*cohort_times, witness_time):
+        if (
+            retained.retrieved_at != max(*cohort_times, witness_time)
+            or stored_row.get("selection_source_identity_sha256")
+            != _selection_source_identity_v1(retained)
+            or retained.selection_identity_sha256 != _selection_identity_v1(retained)
+            or raw != selection_revision_bytes_v1(retained)
+        ):
             raise ValueError
         return retained
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (
+        KeyError,
+        RecursionError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         raise EvidenceConflict("selection evidence conflict") from None
 
 
@@ -1139,7 +1194,7 @@ def _read_retained_selection_v1(
                 raw = _read_immutable_object_v1(
                     operation,
                     directory,
-                    f"{selection.selection_identity_sha256}.json",
+                    f"{_selection_source_identity_v1(selection)}.json",
                     MAX_SELECTION_REVISION_BYTES_V1,
                 )
                 return _retained_selection_v1(raw, selection)
@@ -1196,7 +1251,7 @@ def resolve_selection_v1(
 
     _create_private_root_v1(root)
     payload = selection_revision_bytes_v1(selection)
-    name = f"{selection.selection_identity_sha256}.json"
+    name = f"{_selection_source_identity_v1(selection)}.json"
     lease_result = StorageRootLease.try_acquire_private_empty(root)
     if lease_result.outcome is not LeaseOutcome.ACQUIRED:
         identity = StorageRootLease.admit_existing_private_identity(root)
@@ -1356,12 +1411,36 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
         parent = _descriptor_directory_path_v1(operation.descriptor)
         location = Path(mkdtemp(prefix=".plan33-yfinance-", dir=parent))
         name = location.name
+        created = os.stat(
+            name,
+            dir_fd=operation.descriptor,
+            follow_symlinks=False,
+        )
+        created_identity = (
+            created.st_dev,
+            created.st_ino,
+            created.st_mode,
+            created.st_uid,
+        )
+        if (
+            not stat.S_ISDIR(created.st_mode)
+            or stat.S_IMODE(created.st_mode) != 0o700
+            or created.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("provider runtime configuration invalid")
         descriptor = os.open(
             name,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=operation.descriptor,
         )
         held = os.fstat(descriptor)
+        if (
+            held.st_dev,
+            held.st_ino,
+            held.st_mode,
+            held.st_uid,
+        ) != created_identity or os.listdir(descriptor):
+            raise RuntimeError("provider runtime configuration invalid")
         authority = _ProviderCacheAuthorityV1(
             lease,
             operation,
@@ -1945,6 +2024,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     provider: _Plan33ProviderV1 | None = None
     runtime_unavailable = False
     cleanup_failed = False
+    shared_failure: SharedFailureV1 | None = None
     try:
         for index, (cohort, low_request, root) in enumerate(
             zip(request.cohorts, low_requests, roots, strict=True)
@@ -1960,9 +2040,14 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 )
                 continue
 
-            result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                low_request, _UnresolvedProbeV1(), root, schedule_root
-            )
+            try:
+                result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                    low_request, _UnresolvedProbeV1(), root, schedule_root
+                )
+            except (RuntimeError, ValueError):
+                result = low.CaptureForwardAdjustedOhlcvFailureV1(
+                    "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
+                )
             active_session: BoundedYahooSessionV1 | None = None
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
@@ -1997,14 +2082,22 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 active_provider = cast(_Plan33ProviderV1, provider)
                 session.begin_cohort()
                 active_session = session
-                result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                    low_request, active_provider, root, schedule_root
-                )
+                try:
+                    result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                        low_request, active_provider, root, schedule_root
+                    )
+                except (RuntimeError, ValueError):
+                    result = low.CaptureForwardAdjustedOhlcvFailureV1(
+                        "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
+                    )
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
                 and result.reason == "SCHEDULE_EVIDENCE_MISMATCH"
             ):
-                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+                shared_failure = SharedFailureV1(
+                    "INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID"
+                )
+                break
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1)
                 and session is not None
@@ -2023,7 +2116,10 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 else None,
             )
             if outcome.reason == "EVIDENCE_CONFLICT":
-                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+                shared_failure = SharedFailureV1(
+                    "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
+                )
+                break
             outcomes[index] = outcome
     finally:
         if session is not None:
@@ -2039,6 +2135,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             )
             for cohort in request.cohorts
         ]
+    elif shared_failure is not None:
+        return shared_failure
 
     for index, outcome in enumerate(outcomes):
         if outcome is None:
