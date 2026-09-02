@@ -591,6 +591,7 @@ def admit_selection_v1(
     identity_value = {
         "contract_version": CONTRACT_VERSION_V1,
         "label": "CURRENT_OFFICIAL_LIST_AT_RETRIEVAL",
+        "runtime_code_identity_sha256": _runtime_code_identity_v1(),
         "sources": [
             {
                 "url": response.request_url,
@@ -702,6 +703,8 @@ class TransportLedgerV1:
         if type(response) is not int or type(byte_count) is not int or byte_count < 0:
             raise ValueError("body byte count is invalid")
         with self._lock:
+            if self._rate_limited:
+                raise ProviderRateLimited
             current = self._response_bytes.get(response)
             if current is None:
                 raise ValueError("response is not active")
@@ -1196,6 +1199,7 @@ class _Plan33ProviderV1:
             raise RuntimeError("provider runtime configuration invalid")
         kwargs["threads"] = 8
         kwargs["session"] = self._session
+        kwargs["_plan33_normalize_provider_order"] = True
         previous_disable = logging.root.manager.disable
         logging.disable(logging.CRITICAL)
         try:
@@ -1269,7 +1273,7 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
     lease = lease_result.lease
     directory: int | None = None
     try:
-        with lease.root_operation(root) as operation:
+        with lease.read_operation(root) as operation:
             assert_private_storage_operation(operation)
             try:
                 directory = open_private_storage_directory(
@@ -1449,6 +1453,48 @@ def _has_effect_stopping_failure(outcomes: list[CohortOutcomeV1 | None]) -> bool
     )
 
 
+def _validated_reuse_v1(
+    cohort: CohortRequestV1,
+    low_request: low.CaptureForwardAdjustedOhlcvRequestV1,
+    selection: SelectionRevisionV1,
+    request: CurrentNifty100RequestV1,
+    *,
+    binding_root: Path,
+    store_root: Path,
+) -> CohortOutcomeV1 | None:
+    name = _plan33_binding_name_v1(
+        cohort, selection, low_request.request_identity_sha256
+    )
+    existing = _read_plan33_binding_v1(binding_root, name)
+    if existing is None:
+        return None
+    try:
+        parsed_value: object = json.loads(existing)
+        if type(parsed_value) is not dict:
+            raise ValueError("Plan 33 binding is not an object")
+        parsed = cast(dict[str, object], parsed_value)
+        revision_sha256 = parsed.get("revision_sha256")
+        if (
+            type(revision_sha256) is not str
+            or len(revision_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in revision_sha256)
+        ):
+            raise ValueError("Plan 33 revision identity is invalid")
+        revision = low.read_capture_forward_revision_v1(store_root, revision_sha256)
+        reused = low.CaptureForwardAdjustedOhlcvSuccessV1("REUSED", revision)
+        if existing != _plan33_binding_payload_v1(cohort, reused, selection):
+            raise ValueError("Plan 33 binding payload mismatch")
+        outcome = _cohort_outcome_v1(cohort, low_request, reused, selection, request)
+        if (
+            not _is_success(outcome)
+            or outcome.selection_identity_sha256 != selection.selection_identity_sha256
+        ):
+            raise ValueError("Plan 33 reuse binding mismatch")
+        return outcome
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise EvidenceConflict("Plan 33 binding evidence conflict") from None
+
+
 def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transaction
     raw_request: bytes,
     *,
@@ -1540,134 +1586,99 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     roots = (nifty50_root, nifty_next50_root)
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
     validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
-    unresolved: list[int] = []
-    probes = [
-        low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-            low_request, _UnresolvedProbeV1(), root, schedule_root
-        )
-        for low_request, root in zip(low_requests, roots, strict=True)
-    ]
-
-    for index, (cohort, low_request, probe) in enumerate(
-        zip(request.cohorts, low_requests, probes, strict=True)
+    for index, (cohort, low_request, root) in enumerate(
+        zip(request.cohorts, low_requests, roots, strict=True)
     ):
-        name = _plan33_binding_name_v1(
-            cohort, selection, low_request.request_identity_sha256
-        )
         try:
-            existing = _read_plan33_binding_v1(selection_root, name)
+            validated_reuses[index] = _validated_reuse_v1(
+                cohort,
+                low_request,
+                selection,
+                request,
+                binding_root=selection_root,
+                store_root=root,
+            )
         except EvidenceConflict:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError, ValueError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
-        checked = _cohort_outcome_v1(cohort, low_request, probe, selection, request)
-        if checked.reason == "EVIDENCE_CONFLICT":
-            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-        if isinstance(probe, low.CaptureForwardAdjustedOhlcvSuccessV1):
-            payload = _plan33_binding_payload_v1(cohort, probe, selection)
-            if existing is not None and existing != payload:
-                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-            if (
-                probe.code == "REUSED"
-                and existing == payload
-                and _is_success(checked)
-                and checked.selection_identity_sha256
-                == selection.selection_identity_sha256
-            ):
-                validated_reuses[index] = checked
-        elif existing is not None and checked.reason != "RETENTION_FAILED":
-            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
 
-    for index, (cohort, low_request, probe) in enumerate(
-        zip(request.cohorts, low_requests, probes, strict=True)
-    ):
-        if isinstance(probe, low.CaptureForwardAdjustedOhlcvSuccessV1):
-            outcome = _cohort_outcome_v1(
-                cohort,
-                low_request,
-                probe,
-                selection,
-                request,
-                binding_root=selection_root,
-            )
-            if outcome.reason == "EVIDENCE_CONFLICT":
-                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-            outcomes[index] = outcome
-        elif probe.reason == "PROVIDER_CALL_FAILED":
-            unresolved.append(index)
-            continue
-        else:
-            outcome = _cohort_outcome_v1(cohort, low_request, probe, selection, request)
-            if outcome.reason == "EVIDENCE_CONFLICT":
-                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-            outcomes[index] = outcome
-        if outcome.reason == "RETENTION_FAILED":
-            for later in range(index + 1, 2):
-                outcomes[later] = validated_reuses[later] or CohortOutcomeV1(
-                    request.cohorts[later].name,
+    session: BoundedYahooSessionV1 | None = None
+    provider: _Plan33ProviderV1 | None = None
+    runtime_unavailable = False
+    try:
+        for index, (cohort, low_request, root) in enumerate(
+            zip(request.cohorts, low_requests, roots, strict=True)
+        ):
+            if validated_reuses[index] is not None:
+                outcomes[index] = validated_reuses[index]
+                continue
+            if _has_effect_stopping_failure(outcomes):
+                outcomes[index] = CohortOutcomeV1(
+                    cohort.name,
                     "NOT_ATTEMPTED",
                     "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
                 )
-            break
+                continue
 
-    if unresolved and not _has_effect_stopping_failure(outcomes):
-        try:
-            session = prepare_yfinance_runtime_v1()
-        except (ImportError, RuntimeError):
-            for index in unresolved:
-                outcomes[index] = CohortOutcomeV1(
-                    request.cohorts[index].name,
-                    "INSUFFICIENT_EVIDENCE",
-                    "CONFIGURATION_INVALID",
-                )
-        else:
-            provider = _Plan33ProviderV1(session)
-            try:
-                for position, index in enumerate(unresolved):
-                    if _has_effect_stopping_failure(outcomes):
-                        if outcomes[index] is None:
-                            outcomes[index] = CohortOutcomeV1(
-                                request.cohorts[index].name,
-                                "NOT_ATTEMPTED",
-                                "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
-                            )
-                        continue
-                    if not _pool_is_exact_v1():
+            result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                low_request, _UnresolvedProbeV1(), root, schedule_root
+            )
+            active_session: BoundedYahooSessionV1 | None = None
+            if (
+                isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
+                and result.reason == "PROVIDER_CALL_FAILED"
+            ):
+                if runtime_unavailable:
+                    outcomes[index] = CohortOutcomeV1(
+                        cohort.name,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CONFIGURATION_INVALID",
+                    )
+                    continue
+                if session is None:
+                    try:
+                        session = prepare_yfinance_runtime_v1()
+                    except (ImportError, RuntimeError):
+                        runtime_unavailable = True
                         outcomes[index] = CohortOutcomeV1(
-                            request.cohorts[index].name,
+                            cohort.name,
                             "INSUFFICIENT_EVIDENCE",
                             "CONFIGURATION_INVALID",
                         )
                         continue
-                    session.begin_cohort()
-                    result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                        low_requests[index], provider, roots[index], schedule_root
+                    provider = _Plan33ProviderV1(session)
+                if not _pool_is_exact_v1():
+                    outcomes[index] = CohortOutcomeV1(
+                        cohort.name,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CONFIGURATION_INVALID",
                     )
-                    outcome = _cohort_outcome_v1(
-                        request.cohorts[index],
-                        low_requests[index],
-                        result,
-                        selection,
-                        request,
-                        session,
-                        binding_root=selection_root,
-                    )
-                    if outcome.reason == "EVIDENCE_CONFLICT":
-                        return SharedFailureV1(
-                            "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
-                        )
-                    outcomes[index] = outcome
-                    if outcome.reason == "RETENTION_FAILED":
-                        for later_index in unresolved[position + 1 :]:
-                            if outcomes[later_index] is None:
-                                outcomes[later_index] = CohortOutcomeV1(
-                                    request.cohorts[later_index].name,
-                                    "NOT_ATTEMPTED",
-                                    "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
-                                )
-                        break
-            finally:
-                session.close()
+                    continue
+                active_provider = cast(_Plan33ProviderV1, provider)
+                session.begin_cohort()
+                active_session = session
+                result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                    low_request, active_provider, root, schedule_root
+                )
+
+            outcome = _cohort_outcome_v1(
+                cohort,
+                low_request,
+                result,
+                selection,
+                request,
+                active_session,
+                binding_root=selection_root
+                if isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1)
+                else None,
+            )
+            if outcome.reason == "EVIDENCE_CONFLICT":
+                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+            outcomes[index] = outcome
+    finally:
+        if session is not None:
+            session.close()
 
     for index, outcome in enumerate(outcomes):
         if outcome is None:

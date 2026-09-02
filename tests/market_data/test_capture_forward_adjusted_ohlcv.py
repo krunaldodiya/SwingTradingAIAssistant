@@ -1985,7 +1985,7 @@ def test_yfinance_adapter_accepts_only_exact_ticker_price_orientation(
     assert tuple(cast(dict[str, object], result["ohlcv"])) == ("RELIANCE.NS",)
 
 
-def test_yfinance_adapter_accepts_exact_multi_ticker_provider_order(
+def test_yfinance_adapter_rejects_reordered_multi_ticker_columns_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tickers = ("TCS.NS", "RELIANCE.NS")
@@ -1996,13 +1996,22 @@ def test_yfinance_adapter_accepts_exact_multi_ticker_provider_order(
         return frame
 
     monkeypatch.setattr(core, "_public_yfinance_download", download)
-    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+    adapter = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
+    result = adapter.download(
         tickers=tickers,
         expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
     )
 
-    assert isinstance(result, dict)
-    assert tuple(cast(dict[str, object], result["ohlcv"])) == tickers
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
+    )
+    normalized = adapter.download(
+        tickers=tickers,
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+        _plan33_normalize_provider_order=True,
+    )
+    assert isinstance(normalized, dict)
+    assert tuple(cast(dict[str, object], normalized["ohlcv"])) == tickers
 
 
 def test_provider_identity_precedes_malformed_dataframe_schema(

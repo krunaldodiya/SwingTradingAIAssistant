@@ -923,8 +923,13 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
 
     def download(self, **kwargs: object) -> object:  # noqa: C901
         expected_sessions = kwargs.pop("expected_sessions", None)
+        normalize_plan33_order = kwargs.pop("_plan33_normalize_provider_order", False)
         tickers_value = kwargs.get("tickers")
-        if type(expected_sessions) is not tuple or type(tickers_value) is not tuple:
+        if (
+            type(expected_sessions) is not tuple
+            or type(tickers_value) is not tuple
+            or type(normalize_plan33_order) is not bool
+        ):
             return CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
             )
@@ -961,11 +966,17 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
                 "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
             )
         fields = ("Open", "High", "Low", "Close", "Volume")
-        expected_columns = {(ticker, field) for ticker in tickers for field in fields}
-        actual_columns = set(cast(Iterable[tuple[str, str]], response.columns))
-        if actual_columns != expected_columns:
+        expected_columns = tuple(
+            (ticker, field) for ticker in tickers for field in fields
+        )
+        actual_columns = tuple(cast(Iterable[tuple[str, str]], response.columns))
+        if set(actual_columns) != set(expected_columns):
             return CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
+            )
+        if actual_columns != expected_columns and not normalize_plan33_order:
+            return CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
             )
         timezone = getattr(response.index.tz, "key", None) or getattr(
             response.index.tz, "zone", None

@@ -341,6 +341,19 @@ def test_transport_ledger_enforces_every_bound_and_limit_plus_one() -> None:
         ledger.admit_body(response, 1)
 
 
+def test_first_rate_limit_remains_sticky_across_active_responses() -> None:
+    ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
+    ledger.begin_cohort()
+    ledger.admit_start("GET", "https://example.test/a")
+    active = ledger.admit_start("GET", "https://example.test/b")
+    ledger.mark_rate_limited()
+
+    with pytest.raises(core.ProviderRateLimited):
+        ledger.admit_body(active, core.MAX_RESPONSE_BYTES_V1 + 1)
+    assert ledger.rate_limited is True
+    assert ledger.violated is False
+
+
 def test_encoded_query_target_is_bounded_before_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -524,6 +537,20 @@ def test_permutation_has_stable_selection_and_public_order() -> None:
     assert isinstance(selection, core.SelectionRevisionV1)
     assert [row.name for row in selection.cohorts] == ["NIFTY_50", "NIFTY_NEXT_50"]
     assert selection.cohorts[0].rows == tuple(sorted(selection.cohorts[0].rows))
+
+
+def test_runtime_change_uses_a_distinct_selection_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = core.parse_request_v1(_request())
+    monkeypatch.setattr(core, "_runtime_code_identity_v1", lambda: "a" * 64)
+    first = core.admit_selection_v1(request, _Fetcher())
+    monkeypatch.setattr(core, "_runtime_code_identity_v1", lambda: "b" * 64)
+    second = core.admit_selection_v1(request, _Fetcher())
+
+    assert isinstance(first, core.SelectionRevisionV1)
+    assert isinstance(second, core.SelectionRevisionV1)
+    assert first.selection_identity_sha256 != second.selection_identity_sha256
 
 
 def test_selection_revision_is_immutable_and_exactly_reused() -> None:
@@ -768,6 +795,7 @@ def test_plan33_provider_replaces_disabled_threads_with_exact_pool_and_session(
     provider.download(threads=False, tickers=("S000.NS",))
     assert captured["threads"] == 8
     assert captured["session"] is session
+    assert captured["_plan33_normalize_provider_order"] is True
     assert capsys.readouterr() == ("", "")
 
 
@@ -1511,7 +1539,7 @@ def test_binding_io_failure_is_retention_failure(
     )
 
 
-def test_existing_binding_does_not_relabel_low_store_failure(
+def test_low_store_failure_stops_before_later_low_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
@@ -1534,24 +1562,31 @@ def test_existing_binding_does_not_relabel_low_store_failure(
         "resolve_selection_v1",
         lambda selection, _root: ("INSERTED", selection),
     )
-    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: b"bound")
-    monkeypatch.setattr(
-        core.low,
-        "_capture_forward_adjusted_ohlcv_with_provider_v1",
-        lambda *_args: core.low.CaptureForwardAdjustedOhlcvFailureV1(
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    low_calls: list[Path] = []
+
+    def fail_store(
+        _request: object, _provider: object, root: Path, _schedule: Path
+    ) -> object:
+        low_calls.append(root)
+        return core.low.CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
-        ),
+        )
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", fail_store
     )
 
     def forbidden_provider() -> None:
         raise AssertionError("provider must not run after a low-store failure")
 
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
+    nifty50_root = tmp_path / "nifty50"
     result = core.capture_current_nifty100_v1(
         _request(),
         acknowledged=True,
         selection_root=tmp_path / "selection",
-        nifty50_root=tmp_path / "nifty50",
+        nifty50_root=nifty50_root,
         nifty_next50_root=tmp_path / "next50",
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
@@ -1561,6 +1596,7 @@ def test_existing_binding_does_not_relabel_low_store_failure(
         "RETENTION_FAILED",
         "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
     ]
+    assert low_calls == [nifty50_root]
 
 
 def test_prior_retention_failure_preserves_validated_later_reuse(
@@ -1625,6 +1661,13 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
         return second_payload if len(binding_reads) == 2 else None
 
     monkeypatch.setattr(core, "_read_plan33_binding_v1", read_binding)
+    revision_reads: list[tuple[Path, str]] = []
+
+    def read_revision(root: Path, revision_sha256: str) -> object:
+        revision_reads.append((root, revision_sha256))
+        return probes[1].revision
+
+    monkeypatch.setattr(core.low, "read_capture_forward_revision_v1", read_revision)
     probe_calls: list[Path] = []
 
     def probe(
@@ -1632,7 +1675,7 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     ) -> object:
         assert isinstance(provider, core._UnresolvedProbeV1)
         probe_calls.append(root)
-        return probes[len(probe_calls) - 1]
+        return probes[0]
 
     monkeypatch.setattr(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", probe
@@ -1663,11 +1706,12 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.cohorts[0].reason == "RETENTION_FAILED"
     assert binding_reads[1] == second_name
-    assert binding_payloads[1] == second_payload
+    assert binding_payloads == [second_payload]
     assert result.cohorts[1] == core._cohort_outcome_v1(
         request.cohorts[1], low_requests[1], probes[1], selection, request
     )
-    assert probe_calls == [tmp_path / "nifty50", tmp_path / "next50"]
+    assert probe_calls == [tmp_path / "nifty50"]
+    assert revision_reads == [(tmp_path / "next50", "2" * 64)]
     assert retain_calls == ["NIFTY_50"]
 
 
