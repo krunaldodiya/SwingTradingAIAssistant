@@ -7,8 +7,10 @@ import logging
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
+import time
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -26,6 +28,13 @@ from swing_trading_ai_assistant.market_data import (
 
 _NOW = datetime(2026, 9, 1, 10, 30, tzinfo=UTC)
 _SESSIONS = tuple(date(2026, 8, 4) + timedelta(days=index) for index in range(21))
+
+
+class _ProtectedCleanupSessionStub:
+    def protect_cleanup_identities(
+        self, _identities: frozenset[tuple[int, int]]
+    ) -> None:
+        return None
 
 
 def _isin(index: int) -> str:
@@ -128,6 +137,17 @@ def _request(*, enabled: object = True) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _refresh_request_identities(request: dict[str, object]) -> None:
+    cohort: Any = request["cohort"]
+    canonical_cohort = sorted(cohort, key=lambda item: item["isin"])
+    request["cohort_identity_sha256"] = core._digest(core._canonical(canonical_cohort))
+    identity_request = {
+        key: item for key, item in request.items() if key != "request_identity_sha256"
+    }
+    identity_request["cohort"] = canonical_cohort
+    request["request_identity_sha256"] = core._digest(core._canonical(identity_request))
 
 
 class _Fetcher:
@@ -307,6 +327,7 @@ def test_source_limit_plus_one_stops_before_parse() -> None:
 def test_mapping_substitution_and_temporal_mismatch_fail_before_runtime() -> None:
     value = json.loads(_request())
     value["cohorts"][0]["request"]["cohort"][0]["effective_symbol"] = "WRONG"
+    _refresh_request_identities(value["cohorts"][0]["request"])
     result = core.admit_selection_v1(
         core.parse_request_v1(json.dumps(value).encode()), _Fetcher()
     )
@@ -316,6 +337,7 @@ def test_mapping_substitution_and_temporal_mismatch_fail_before_runtime() -> Non
 
     value = json.loads(_request())
     value["cohorts"][1]["request"]["schedule"]["schedule_identity_sha256"] = "f" * 64
+    _refresh_request_identities(value["cohorts"][1]["request"])
     fetcher = _Fetcher()
     with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
         root = Path(temporary)
@@ -395,6 +417,61 @@ def test_transport_ledger_enforces_every_bound_and_limit_plus_one() -> None:
         ledger.admit_body(response, 1)
 
 
+def test_resource_limit_violation_is_sticky_until_next_cohort() -> None:
+    def assert_sticky(ledger: core.TransportLedgerV1, *active_responses: int) -> None:
+        with pytest.raises(core.ResourceLimitExceeded):
+            ledger.admit_start("GET", "https://example.test/after-violation")
+        with pytest.raises(core.ResourceLimitExceeded):
+            ledger.admit_body(active_responses[0], 0)
+        with pytest.raises(core.ResourceLimitExceeded):
+            ledger.begin_cohort()
+        for response in active_responses:
+            ledger.finish_response(response)
+        ledger.begin_cohort()
+        reset = ledger.admit_start("GET", "https://example.test/reset")
+        ledger.finish_response(reset)
+
+    ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
+    ledger.begin_cohort()
+    with pytest.raises(core.ResourceLimitExceeded):
+        ledger.admit_start("GET", "x" * (core.MAX_REQUEST_TARGET_BYTES_V1 + 1))
+    with pytest.raises(core.ResourceLimitExceeded):
+        ledger.admit_start("GET", "https://example.test/after-target-limit")
+    ledger.begin_cohort()
+    reset_response = ledger.admit_start("GET", "https://example.test/reset")
+    ledger.finish_response(reset_response)
+
+    ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
+    ledger.begin_cohort()
+    oversized = ledger.admit_start("GET", "https://example.test/oversized")
+    active = ledger.admit_start("GET", "https://example.test/active")
+    with pytest.raises(core.ResourceLimitExceeded):
+        ledger.admit_body(oversized, core.MAX_RESPONSE_BYTES_V1 + 1)
+    assert_sticky(ledger, oversized, active)
+
+    ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
+    ledger.begin_cohort()
+    active = ledger.admit_start("GET", "https://example.test/active")
+    response_count = core.MAX_AGGREGATE_RESPONSE_BYTES_V1 // core.MAX_RESPONSE_BYTES_V1
+    for _ in range(response_count):
+        response = ledger.admit_start("GET", "https://example.test/full")
+        ledger.admit_body(response, core.MAX_RESPONSE_BYTES_V1)
+        ledger.finish_response(response)
+    with pytest.raises(core.ResourceLimitExceeded):
+        ledger.admit_body(active, 1)
+    assert_sticky(ledger, active)
+
+    ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
+    ledger.begin_cohort()
+    active = ledger.admit_start("GET", "https://example.test/active")
+    for _ in range(core.MAX_HTTP_STARTS_PER_COHORT_V1 - 1):
+        response = ledger.admit_start("GET", "https://example.test/count")
+        ledger.finish_response(response)
+    with pytest.raises(core.ResourceLimitExceeded):
+        ledger.admit_start("GET", "https://example.test/limit-plus-one")
+    assert_sticky(ledger, active)
+
+
 def test_first_rate_limit_remains_sticky_across_active_responses() -> None:
     ledger = core.TransportLedgerV1(clock=lambda: 0.0, sleep=lambda _: None)
     ledger.begin_cohort()
@@ -428,6 +505,103 @@ def test_encoded_query_target_is_bounded_before_transport(
             params={"symbols": "x" * core.MAX_REQUEST_TARGET_BYTES_V1},
         )
     assert calls == 0
+
+
+def test_concurrent_requests_space_actual_transport_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries: list[float] = []
+    errors: list[BaseException] = []
+    entries_lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def request(_self: object, _method: str, _url: str, **kwargs: object) -> object:
+        with entries_lock:
+            entries.append(time.monotonic())
+        callback = kwargs["content_callback"]
+        assert callable(callback)
+        callback(b"ok")
+        return SimpleNamespace(status_code=200, content=b"")
+
+    def invoke(session: core.BoundedYahooSessionV1) -> None:
+        try:
+            barrier.wait()
+            session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(core.CurlSession, "request", request)
+    session = core.BoundedYahooSessionV1()
+    session.begin_cohort()
+    threads = [threading.Thread(target=invoke, args=(session,)) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(entries) == 2
+    assert entries[1] - entries[0] >= core.MIN_START_INTERVAL_SECONDS_V1 - 0.01
+
+
+def test_delayed_ledger_admission_cannot_cluster_transport_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries: list[float] = []
+    errors: list[BaseException] = []
+    entries_lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def request(_self: object, _method: str, _url: str, **kwargs: object) -> object:
+        with entries_lock:
+            entries.append(time.monotonic())
+        callback = kwargs["content_callback"]
+        assert callable(callback)
+        callback(b"ok")
+        return SimpleNamespace(status_code=200, content=b"")
+
+    def invoke(session: core.BoundedYahooSessionV1) -> None:
+        try:
+            barrier.wait()
+            session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(core.CurlSession, "request", request)
+    session = core.BoundedYahooSessionV1()
+    session.begin_cohort()
+    original_admit = session._ledger.admit_start_without_cadence  # pyright: ignore[reportPrivateUsage]
+    admission_count = 0
+    admission_lock = threading.Lock()
+
+    def delayed_first_admission(method: str, url: str) -> int:
+        nonlocal admission_count
+        response_id = original_admit(method, url)
+        with admission_lock:
+            admission_count += 1
+            first = admission_count == 1
+        if first:
+            time.sleep(0.1)
+        return response_id
+
+    monkeypatch.setattr(
+        session._ledger,  # pyright: ignore[reportPrivateUsage]
+        "admit_start_without_cadence",
+        delayed_first_admission,
+    )
+    threads = [threading.Thread(target=invoke, args=(session,)) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(entries) == 2
+    assert entries[1] - entries[0] >= core.MIN_START_INTERVAL_SECONDS_V1 - 0.01
 
 
 def test_first_429_is_intercepted_without_second_request(
@@ -640,15 +814,55 @@ def test_cohort_compatibility_uses_retained_revision_provenance() -> None:
     assert outcome.selection_identity_sha256 == selection.selection_identity_sha256
 
 
-def test_permutation_has_stable_selection_and_public_order() -> None:
+def test_permutation_has_stable_selection_and_public_order(tmp_path: Path) -> None:
+    canonical = core.parse_request_v1(_request())
     request = json.loads(_request())
     for cohort in request["cohorts"]:
         cohort["request"]["cohort"].reverse()
-    parsed = core.parse_request_v1(json.dumps(request).encode())
+    raw = json.dumps(request).encode()
+    parsed = core.parse_request_v1(raw)
     selection = core.admit_selection_v1(parsed, _Fetcher())
     assert isinstance(selection, core.SelectionRevisionV1)
     assert [row.name for row in selection.cohorts] == ["NIFTY_50", "NIFTY_NEXT_50"]
     assert selection.cohorts[0].rows == tuple(sorted(selection.cohorts[0].rows))
+    assert tuple(cohort.request_identity_sha256 for cohort in parsed.cohorts) == tuple(
+        cohort.request_identity_sha256 for cohort in canonical.cohorts
+    )
+
+    canonical_fetcher = _Fetcher()
+    permuted_fetcher = _Fetcher()
+    canonical_result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "canonical-selection",
+        nifty50_root=tmp_path / "canonical-nifty50",
+        nifty_next50_root=tmp_path / "canonical-next50",
+        schedule_root=tmp_path / "missing-schedule",
+        fetcher=canonical_fetcher,
+    )
+    permuted_result = core.capture_current_nifty100_v1(
+        raw,
+        acknowledged=True,
+        selection_root=tmp_path / "permuted-selection",
+        nifty50_root=tmp_path / "permuted-nifty50",
+        nifty_next50_root=tmp_path / "permuted-next50",
+        schedule_root=tmp_path / "missing-schedule",
+        fetcher=permuted_fetcher,
+    )
+    assert (
+        canonical_result
+        == permuted_result
+        == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    )
+    assert (
+        canonical_fetcher.calls
+        == permuted_fetcher.calls
+        == [
+            core.NIFTY_50_URL,
+            core.NIFTY_NEXT_50_URL,
+            core.NIFTY_100_URL,
+        ]
+    )
 
 
 def test_runtime_change_uses_a_distinct_selection_identity(
@@ -870,6 +1084,45 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_runtime_disables_yfinance_disk_caches_before_provider_use() -> None:
+    script = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
+with TemporaryDirectory(dir=Path.home()) as temporary:
+    root = Path(temporary)
+    root.chmod(0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    session = core.prepare_yfinance_runtime_v1(root)
+    from yfinance import cache
+    for getter, expected in (
+        (cache.get_tz_cache, cache._TzCacheDummy),
+        (cache.get_cookie_cache, cache._CookieCacheDummy),
+        (cache.get_isin_cache, cache._ISINCacheDummy),
+    ):
+        assert type(getter()) is expected
+    for manager in (
+        cache._TzDBManager,
+        cache._CookieDBManager,
+        cache._ISINDBManager,
+    ):
+        assert manager._db is None
+    session.close()
+    retained = root / '.plan33-yfinance-cache'
+    assert list(retained.iterdir()) == []
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_cache_cleanup_cannot_delete_a_substituted_sibling(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -882,11 +1135,12 @@ def test_cache_cleanup_cannot_delete_a_substituted_sibling(
     retained = root / "retained"
     retained.mkdir(mode=0o700)
     (retained / "sentinel").write_text("keep")
-    original_rmtree = core.rmtree
+    original_clear = core._clear_provider_cache_v1
 
-    def substitute_then_remove(path: str, *, dir_fd: int | None = None) -> None:
-        assert path == "."
-        assert dir_fd == authority.descriptor
+    def substitute_then_remove(
+        descriptor: int, protected_identities: set[tuple[int, int]]
+    ) -> None:
+        assert descriptor == authority.descriptor
         os.rename(
             authority.name,
             "moved-cache",
@@ -899,9 +1153,9 @@ def test_cache_cleanup_cannot_delete_a_substituted_sibling(
             src_dir_fd=authority.operation.descriptor,
             dst_dir_fd=authority.operation.descriptor,
         )
-        original_rmtree(path, dir_fd=dir_fd)
+        original_clear(descriptor, protected_identities)
 
-    monkeypatch.setattr(core, "rmtree", substitute_then_remove)
+    monkeypatch.setattr(core, "_clear_provider_cache_v1", substitute_then_remove)
     with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
         authority.close()
     assert (root / authority.name / "sentinel").read_text() == "keep"
@@ -938,7 +1192,65 @@ def test_cache_cleanup_clears_the_held_cache_before_name_validation(
         authority.close()
 
     assert (root / authority.name / "sentinel").read_text() == "keep"
-    assert list((root / "moved-cache").iterdir()) == []
+    assert (root / "moved-cache" / "private-cookie").read_bytes() == b""
+
+
+def test_cache_admission_rejects_its_own_protected_identity(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    cache = root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(mode=0o700)
+    metadata = os.stat(cache, follow_symlinks=False)
+
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        core._open_provider_cache_authority_v1(
+            root,
+            protected_identities=frozenset({(metadata.st_dev, metadata.st_ino)}),
+        )
+
+    assert cache.is_dir()
+
+
+def test_cache_cleanup_never_unlinks_a_finally_substituted_protected_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    authority = core._open_provider_cache_authority_v1(root)
+    candidate = authority.location / "candidate"
+    candidate.write_text("discard")
+    protected = tmp_path / "request.json"
+    protected.write_text("preserve")
+    protected.chmod(0o600)
+    metadata = os.stat(protected, follow_symlinks=False)
+    authority.protected_identities.add((metadata.st_dev, metadata.st_ino))
+    discarded = tmp_path / "discarded"
+    original_unlink = core.os.unlink
+    original_rename = core.os.rename
+
+    def swap_at_delete(path: str | bytes, *, dir_fd: int | None = None) -> None:
+        if path == "candidate" and dir_fd is not None and protected.exists():
+            original_rename(
+                "candidate",
+                discarded,
+                src_dir_fd=dir_fd,
+            )
+            original_rename(protected, "candidate", dst_dir_fd=dir_fd)
+        original_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(core.os, "unlink", swap_at_delete)
+    authority.close()
+
+    assert protected.read_text() == "preserve"
+    assert candidate.read_bytes() == b""
 
 
 def test_cache_admission_rejects_preopen_name_substitution(
@@ -1026,8 +1338,8 @@ def test_cache_cleanup_reuses_empty_slot_without_path_removal(
     original_rmdir = core.os.rmdir
 
     def only_descriptor_cleanup(*args: object, **kwargs: object) -> None:
-        if args != (".",):
-            raise AssertionError("pathname cache removal")
+        if args == (cache_name,):
+            raise AssertionError("provider cache pathname removal")
         original_rmdir(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(core.os, "rmdir", only_descriptor_cleanup)
@@ -1035,7 +1347,7 @@ def test_cache_cleanup_reuses_empty_slot_without_path_removal(
 
     retained = root / cache_name
     assert retained.is_dir()
-    assert list(retained.iterdir()) == []
+    assert (retained / "private-cookie").read_bytes() == b""
     reused = core._open_provider_cache_authority_v1(root)
     assert reused.name == cache_name
     reused.close()
@@ -1067,6 +1379,50 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
         '.plan33-yfinance-cache',
     }
     assert list((root / '.plan33-yfinance-cache').iterdir()) == []
+    assert not core._PROVIDER_ADMISSION_LOCK.locked()
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_import_failure_cleanup_preserves_a_protected_file_moved_into_cache() -> None:
+    script = """
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
+with TemporaryDirectory(dir=Path.home()) as temporary:
+    base = Path(temporary)
+    root = base / 'selection'
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    protected = base / 'request.json'
+    protected.write_text('preserve')
+    protected.chmod(0o600)
+    metadata = os.stat(protected, follow_symlinks=False)
+    moved = root / core._PROVIDER_CACHE_NAME_V1 / 'moved-request.json'
+    def fail_after_move():
+        protected.rename(moved)
+        raise ImportError('provider import failed')
+    core.low._load_yfinance_module = fail_after_move
+    try:
+        core.prepare_yfinance_runtime_v1(
+            root,
+            protected_identities=frozenset({(metadata.st_dev, metadata.st_ino)}),
+        )
+    except (ImportError, RuntimeError):
+        pass
+    else:
+        raise AssertionError('provider import failure accepted')
+    assert moved.read_text() == 'preserve'
     assert not core._PROVIDER_ADMISSION_LOCK.locked()
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
@@ -1158,6 +1514,7 @@ def test_official_source_admission_precedes_missing_mapping(
 ) -> None:
     missing = json.loads(_request())
     del missing["cohorts"][0]["request"]["cohort"][0]["provider_symbol"]
+    _refresh_request_identities(missing["cohorts"][0]["request"])
     fetcher = _Fetcher()
     unsupported = core.capture_current_nifty100_v1(
         json.dumps(missing).encode(),
@@ -1233,7 +1590,7 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
     )
 
-    class _Session:
+    class _Session(_ProtectedCleanupSessionStub):
         resource_limited = False
         rate_limited = False
 
@@ -1244,7 +1601,9 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
             return None
 
     session: Any = _Session()
-    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda _root: session)
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda _root, **_kwargs: session
+    )
     monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     nifty50_root = tmp_path / "nifty50"
@@ -1312,9 +1671,13 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         ),
     )
     preparations = 0
+    request_identity = (101, 202)
 
-    def malformed_runtime(_root: Path) -> None:
+    def malformed_runtime(_root: Path, **kwargs: object) -> None:
         nonlocal preparations
+        protected = kwargs["protected_identities"]
+        assert isinstance(protected, frozenset)
+        assert request_identity in protected
         preparations += 1
         raise KeyError("POOL_NAME")
 
@@ -1327,6 +1690,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         nifty_next50_root=tmp_path / "next50",
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
+        _protected_cleanup_identities=frozenset({request_identity}),
     )
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert [(row.cohort, row.reason) for row in result.cohorts] == [
@@ -1335,7 +1699,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
     ]
     assert preparations == 1
 
-    class _CloseFailure:
+    class _CloseFailure(_ProtectedCleanupSessionStub):
         resource_limited = False
         rate_limited = False
 
@@ -1347,7 +1711,9 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
 
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     monkeypatch.setattr(
-        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseFailure()
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda _root, **_kwargs: _CloseFailure(),
     )
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -1364,7 +1730,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         ("NIFTY_NEXT_50", "CONFIGURATION_INVALID"),
     ]
 
-    class _CloseSuccess:
+    class _CloseSuccess(_ProtectedCleanupSessionStub):
         resource_limited = False
         rate_limited = False
 
@@ -1389,7 +1755,9 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", runtime_drift
     )
     monkeypatch.setattr(
-        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseSuccess()
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda _root, **_kwargs: _CloseSuccess(),
     )
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -1420,7 +1788,9 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", schedule_mismatch
     )
     monkeypatch.setattr(
-        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseFailure()
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda _root, **_kwargs: _CloseFailure(),
     )
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -1492,7 +1862,9 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch.setattr(
         core,
         "prepare_yfinance_runtime_v1",
-        lambda _root: (_ for _ in ()).throw(AssertionError("provider preparation")),
+        lambda _root, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider preparation")
+        ),
     )
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -1650,6 +2022,49 @@ def test_deep_json_cli_is_malformed_without_internal_error(
     assert captured.err == ""
 
 
+def _shadow_dependency_packages(
+    shadow: Path, marker_root: Path, *, coherent_metadata: bool
+) -> tuple[Path, ...]:
+    files = {
+        "multitasking/__init__.py": marker_root / "multitasking-executed",
+        "curl_cffi/__init__.py": marker_root / "curl-cffi-executed",
+        "curl_cffi/requests/__init__.py": marker_root / "curl-requests-executed",
+        "curl_cffi/requests/utils.py": marker_root / "curl-utils-executed",
+    }
+    for relative, marker in files.items():
+        target = shadow / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+        )
+    if coherent_metadata:
+        for name, version, records in (
+            (
+                "multitasking",
+                "0.0.13",
+                ("multitasking/__init__.py",),
+            ),
+            (
+                "curl-cffi",
+                "0.16.1",
+                (
+                    "curl_cffi/__init__.py",
+                    "curl_cffi/requests/__init__.py",
+                    "curl_cffi/requests/utils.py",
+                ),
+            ),
+        ):
+            metadata = shadow / f"{name.replace('-', '_')}-{version}.dist-info"
+            metadata.mkdir()
+            (metadata / "METADATA").write_text(
+                f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+            )
+            (metadata / "RECORD").write_text(
+                "".join(f"{record},,\n" for record in records)
+            )
+    return tuple(files.values())
+
+
 def test_disabled_cli_returns_before_runtime_effects(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1680,6 +2095,50 @@ def test_disabled_cli_returns_before_runtime_effects(
         "contract_version": core.CONTRACT_VERSION_V1,
         "reason": "ADAPTER_DISABLED",
     }
+
+
+def test_disabled_cli_executes_no_third_party_import(tmp_path: Path) -> None:
+    request = tmp_path / "disabled.json"
+    request.write_bytes(_request(enabled=False))
+    request.chmod(0o600)
+    shadow = tmp_path / "shadow"
+    markers = _shadow_dependency_packages(shadow, tmp_path, coherent_metadata=True)
+    script = f"""
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(shadow), environment.get("PYTHONPATH"))
+        if value is not None
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "DISABLED",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "ADAPTER_DISABLED",
+    }
+    assert completed.stderr == ""
+    assert all(not marker.exists() for marker in markers)
 
 
 def test_yahoo_redirects_are_disabled_before_transport(
@@ -1756,6 +2215,7 @@ def test_stale_mapping_is_mapping_evidence_invalid(tmp_path: Path) -> None:
         mapping_valid_from=date.fromisoformat(member["mapping_valid_from"]),
         mapping_valid_through=date.fromisoformat(member["mapping_valid_through"]),
     )
+    _refresh_request_identities(value["cohorts"][0]["request"])
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),
         acknowledged=True,
@@ -1788,6 +2248,7 @@ def noisy_import():
 core._pool_is_exact_v1 = lambda: True
 
 core.low._load_yfinance_module = noisy_import
+core._disable_yfinance_disk_caches_v1 = lambda: None
 with __import__('tempfile').TemporaryDirectory(dir=__import__('pathlib').Path.home()) as temporary:
     root = __import__('pathlib').Path(temporary)
     root.chmod(0o700)
@@ -2128,7 +2589,7 @@ def test_all_reuse_capture_clears_retained_provider_cache(
     monkeypatch.setattr(
         core,
         "prepare_yfinance_runtime_v1",
-        lambda _root: (_ for _ in ()).throw(
+        lambda _root, **_kwargs: (_ for _ in ()).throw(
             AssertionError("validated reuse must not prepare provider")
         ),
     )
@@ -2144,8 +2605,259 @@ def test_all_reuse_capture_clears_retained_provider_cache(
     )
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
-    assert not residue.exists()
-    assert list(cache.iterdir()) == []
+    assert residue.read_bytes() == b""
+    assert list(cache.iterdir()) == [residue]
+
+
+def test_protected_roots_are_snapshotted_before_source_effects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    roots = tuple(
+        tmp_path / name for name in ("selection", "nifty50", "next50", "schedule")
+    )
+    for root in roots:
+        root.mkdir(mode=0o700)
+    cache = roots[0] / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(mode=0o700)
+    retained = roots[3] / "retained-evidence"
+    retained.write_text("preserve")
+    moved = cache / "moved-schedule"
+    original_snapshot = core._snapshot_protected_directories_v1
+    snapshot_attempted = False
+
+    def move_before_snapshot(
+        paths: tuple[Path, ...], *, require_all: bool
+    ) -> tuple[object, ...]:
+        nonlocal snapshot_attempted
+        snapshot_attempted = True
+        roots[3].rename(moved)
+        roots[3].mkdir(mode=0o700)
+        return original_snapshot(paths, require_all=require_all)
+
+    monkeypatch.setattr(
+        core, "_snapshot_protected_directories_v1", move_before_snapshot
+    )
+    fetcher = _Fetcher()
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=roots[0],
+        nifty50_root=roots[1],
+        nifty_next50_root=roots[2],
+        schedule_root=roots[3],
+        fetcher=fetcher,
+    )
+
+    assert snapshot_attempted is True
+    assert result == core.SharedFailureV1(
+        "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+    )
+    assert fetcher.calls == []
+    assert (moved / retained.name).read_text() == "preserve"
+
+
+@pytest.mark.parametrize(
+    ("conflicting_root", "equals_boundary"),
+    [("nifty50", True), ("next50", False), ("schedule", False)],
+)
+def test_reserved_provider_cache_rejects_evidence_roots_before_effects(
+    tmp_path: Path, conflicting_root: str, equals_boundary: bool
+) -> None:
+    selection_root = tmp_path / "selection"
+    cache = selection_root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(parents=True, mode=0o700)
+    retained = cache / "retained-evidence"
+    retained.write_text("unchanged")
+    roots = {
+        "nifty50": tmp_path / "nifty50",
+        "next50": tmp_path / "next50",
+        "schedule": tmp_path / "schedule",
+    }
+    roots[conflicting_root] = cache if equals_boundary else cache / conflicting_root
+    fetcher = _Fetcher()
+
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=selection_root,
+        nifty50_root=roots["nifty50"],
+        nifty_next50_root=roots["next50"],
+        schedule_root=roots["schedule"],
+        fetcher=fetcher,
+    )
+
+    assert result == core.SharedFailureV1("MALFORMED_INPUT", None)
+    assert fetcher.calls == []
+    assert retained.read_text() == "unchanged"
+
+
+def test_cli_rejects_request_file_inside_reserved_provider_cache(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    selection_root = tmp_path / "selection"
+    cache = selection_root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(parents=True, mode=0o700)
+    request = cache / "request.json"
+    request.write_bytes(_request())
+    request.chmod(0o600)
+
+    assert (
+        cli.main(
+            [
+                "--request-file",
+                str(request),
+                "--selection-root",
+                str(selection_root),
+                "--nifty50-storage-root",
+                str(tmp_path / "nifty50"),
+                "--nifty-next50-storage-root",
+                str(tmp_path / "next50"),
+                "--schedule-root",
+                str(tmp_path / "schedule"),
+                "--ack-owner-private-yfinance-research",
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "request_invalid\n"
+    assert request.exists()
+
+
+@pytest.mark.parametrize(
+    ("protected_kind", "move_after_cleanup"),
+    [
+        ("nifty50", False),
+        ("schedule", False),
+        ("request", False),
+        ("nifty50", True),
+    ],
+)
+def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    protected_kind: str,
+    move_after_cleanup: bool,
+) -> None:
+    request, selection = _admitted()
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(selection_root).lease
+    assert lease is not None
+    lease.close()
+    cache = selection_root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(mode=0o700)
+    roots = {
+        "nifty50": tmp_path / "nifty50",
+        "next50": tmp_path / "next50",
+        "schedule": tmp_path / "schedule",
+    }
+    for root in roots.values():
+        root.mkdir(mode=0o700)
+    request_file = tmp_path / "request.json"
+    request_file.write_bytes(_request())
+    request_file.chmod(0o600)
+    protected = request_file if protected_kind == "request" else roots[protected_kind]
+    if protected.is_dir():
+        (protected / "retained-evidence").write_text("unchanged")
+    destination = cache / f"moved-{protected_kind}"
+    request_metadata = os.stat(request_file, follow_symlinks=False)
+    extra_identities = (
+        frozenset({(request_metadata.st_dev, request_metadata.st_ino)})
+        if protected_kind == "request"
+        else frozenset()
+    )
+
+    def reused(
+        cohort: core.CohortRequestV1, request_identity_sha256: str
+    ) -> core.CohortOutcomeV1:
+        return core.CohortOutcomeV1(
+            cohort.name,
+            "REUSED",
+            revision_sha256=("b" if cohort.name == "NIFTY_50" else "c") * 64,
+            request_identity_sha256=request_identity_sha256,
+            selection_identity_sha256=selection.selection_identity_sha256,
+            schedule_identity_sha256=request.schedule_identity_sha256,
+            decision_session=request.decision_session,
+            decision_cutoff=request.decision_cutoff,
+            configuration_identity_sha256=core.CONFIGURATION_IDENTITY_SHA256_V1,
+            retrieved_at=selection.retrieved_at + timedelta(seconds=1),
+            source_identity_sha256="d" * 64,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+        )
+
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_args: True
+    )
+    monkeypatch.setattr(core, "_read_retained_selection_v1", lambda *_args: selection)
+    monkeypatch.setattr(
+        core.low, "read_capture_forward_request_revision_v1", lambda *_args: object()
+    )
+    monkeypatch.setattr(
+        core, "resolve_selection_v1", lambda *_args: ("REUSED", selection)
+    )
+    monkeypatch.setattr(
+        core,
+        "_validated_reuse_v1",
+        lambda cohort, low_request, *_args, **_kwargs: reused(
+            cohort, low_request.request_identity_sha256
+        ),
+    )
+    original_open = core._open_provider_cache_authority_v1
+
+    def move_around_cleanup(
+        root: Path,
+        *,
+        require_empty: bool = True,
+        protected_identities: frozenset[tuple[int, int]] = frozenset(),
+    ) -> object:
+        if not move_after_cleanup:
+            protected.rename(destination)
+            return original_open(
+                root,
+                require_empty=require_empty,
+                protected_identities=protected_identities,
+            )
+        authority = original_open(
+            root,
+            require_empty=require_empty,
+            protected_identities=protected_identities,
+        )
+
+        def close_then_move() -> None:
+            authority.close()
+            protected.rename(destination)
+
+        return SimpleNamespace(close=close_then_move)
+
+    monkeypatch.setattr(core, "_open_provider_cache_authority_v1", move_around_cleanup)
+
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=selection_root,
+        nifty50_root=roots["nifty50"],
+        nifty_next50_root=roots["next50"],
+        schedule_root=roots["schedule"],
+        fetcher=_Fetcher(),
+        _protected_cleanup_identities=extra_identities,
+    )
+
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [item.reason for item in result.cohorts] == [
+        "CONFIGURATION_INVALID",
+        "CONFIGURATION_INVALID",
+    ]
+    assert not protected.exists()
+    assert destination.exists()
+    if destination.is_dir():
+        assert (destination / "retained-evidence").read_text() == "unchanged"
+    else:
+        assert destination.read_bytes() == _request()
 
 
 def test_selection_conflict_maps_to_evidence_conflict(
@@ -2263,6 +2975,8 @@ def test_mapping_precedes_schedule_after_official_admission(tmp_path: Path) -> N
         mapping_valid_through=None,
     )
     value["cohorts"][1]["request"]["schedule"]["schedule_identity_sha256"] = "f" * 64
+    _refresh_request_identities(value["cohorts"][0]["request"])
+    _refresh_request_identities(value["cohorts"][1]["request"])
     fetcher = _Fetcher()
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),
@@ -2295,6 +3009,8 @@ def test_mapping_precedes_earlier_schedule_failure_after_official_admission(
         mapping_valid_from=_SESSIONS[1],
         mapping_valid_through=None,
     )
+    _refresh_request_identities(value["cohorts"][0]["request"])
+    _refresh_request_identities(value["cohorts"][1]["request"])
     fetcher = _Fetcher()
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),
@@ -2331,6 +3047,30 @@ def test_malformed_low_request_identity_precedes_official_source_effects(
     assert fetcher.calls == []
 
 
+def test_missing_mapping_does_not_hide_malformed_request_identity(
+    tmp_path: Path,
+) -> None:
+    value = json.loads(_request())
+    request = value["cohorts"][0]["request"]
+    del request["cohort"][0]["provider_symbol"]
+    request["cohort_identity_sha256"] = core._digest(core._canonical(request["cohort"]))
+    request["request_identity_sha256"] = "f" * 64
+    fetcher = _Fetcher()
+
+    result = core.capture_current_nifty100_v1(
+        json.dumps(value).encode(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=fetcher,
+    )
+
+    assert result == core.SharedFailureV1("MALFORMED_INPUT", None)
+    assert fetcher.calls == []
+
+
 def test_cross_cohort_provider_symbol_collision_is_mapping_invalid(
     tmp_path: Path,
 ) -> None:
@@ -2349,16 +3089,7 @@ def test_cross_cohort_provider_symbol_collision_is_mapping_invalid(
         mapping_valid_from=date.fromisoformat(member["mapping_valid_from"]),
         mapping_valid_through=None,
     )
-    request["cohort_identity_sha256"] = core._digest(core._canonical(request["cohort"]))
-    request["request_identity_sha256"] = core._digest(
-        core._canonical(
-            {
-                key: item
-                for key, item in request.items()
-                if key != "request_identity_sha256"
-            }
-        )
-    )
+    _refresh_request_identities(request)
     fetcher = _Fetcher()
 
     result = core.capture_current_nifty100_v1(
@@ -2455,6 +3186,348 @@ def test_missing_acknowledgement_hides_private_path_validity(
         "contract_version": core.CONTRACT_VERSION_V1,
         "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
     }
+
+
+def test_missing_acknowledgement_executes_no_third_party_import(
+    tmp_path: Path,
+) -> None:
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    marker = tmp_path / "multitasking-executed"
+    (shadow / "multitasking.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+    )
+    script = f"""
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(tmp_path / "private-request.json")!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--output', 'json',
+]))
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(shadow), environment.get("PYTHONPATH"))
+        if value is not None
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "AUTHORIZATION_DENIED",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
+    }
+    assert completed.stderr == ""
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("coherent_metadata", [False, True])
+def test_enabled_cli_ignores_pythonpath_dependency_substitutions(
+    tmp_path: Path, coherent_metadata: bool
+) -> None:
+    request = tmp_path / "malformed-enabled.json"
+    request.write_bytes(
+        json.dumps(
+            {
+                "cohorts": [],
+                "contract_version": core.CONTRACT_VERSION_V1,
+                "enabled": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    request.chmod(0o600)
+    shadow = tmp_path / "shadow"
+    markers = _shadow_dependency_packages(
+        shadow, tmp_path, coherent_metadata=coherent_metadata
+    )
+    script = f"""
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(shadow), environment.get("PYTHONPATH"))
+        if value is not None
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "MALFORMED_INPUT",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": None,
+    }
+    assert completed.stderr == ""
+    assert all(not marker.exists() for marker in markers)
+
+
+def test_trusted_import_path_excludes_nested_site_package_directory() -> None:
+    site_root = Path(sysconfig.get_paths()["purelib"]).resolve(strict=True)
+    nested = site_root / "certifi"
+    assert nested.is_dir()
+    original = list(sys.path)
+    try:
+        sys.path.insert(0, str(nested))
+        trusted = cli._trusted_import_path_v1((site_root,))
+    finally:
+        sys.path[:] = original
+
+    assert str(nested) not in trusted
+
+
+def test_enabled_cli_rejects_preloaded_curl_session_child(
+    tmp_path: Path,
+) -> None:
+    request = tmp_path / "malformed-enabled.json"
+    request.write_bytes(
+        json.dumps(
+            {
+                "cohorts": [],
+                "contract_version": core.CONTRACT_VERSION_V1,
+                "enabled": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    request.chmod(0o600)
+    substituted = tmp_path / "session.py"
+    substituted.write_text("# substituted module origin\n")
+    marker = tmp_path / "substituted-session-executed"
+    script = f"""
+import sys
+from types import ModuleType
+
+substituted = ModuleType('curl_cffi.requests.session')
+substituted.__file__ = {str(substituted)!r}
+class Session:
+    def __init__(self, *args, **kwargs):
+        __import__('pathlib').Path({str(marker)!r}).write_text('executed')
+substituted.Session = Session
+sys.modules['curl_cffi.requests.session'] = substituted
+
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "INSUFFICIENT_EVIDENCE",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "CONFIGURATION_INVALID",
+    }
+    assert completed.stderr == ""
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["curl_cffi.requests.headers", "curl_cffi.requests.cookies"],
+)
+def test_enabled_cli_rejects_any_preloaded_curl_child(
+    tmp_path: Path, module_name: str
+) -> None:
+    request = tmp_path / "malformed-enabled.json"
+    request.write_bytes(
+        json.dumps(
+            {
+                "cohorts": [],
+                "contract_version": core.CONTRACT_VERSION_V1,
+                "enabled": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    request.chmod(0o600)
+    script = f"""
+__import__({module_name!r})
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "INSUFFICIENT_EVIDENCE",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "CONFIGURATION_INVALID",
+    }
+    assert completed.stderr == ""
+
+
+def test_cli_request_handoff_keeps_descriptor_bound_identity(
+    tmp_path: Path,
+) -> None:
+    request = tmp_path / "enabled.json"
+    original = json.dumps(
+        {
+            "cohorts": [],
+            "contract_version": core.CONTRACT_VERSION_V1,
+            "enabled": True,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    request.write_bytes(original)
+    request.chmod(0o600)
+    moved = tmp_path / "read-request.json"
+    replacement = json.dumps(
+        {
+            "contract_version": core.CONTRACT_VERSION_V1,
+            "enabled": False,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    script = f"""
+from pathlib import Path
+from swing_trading_ai_assistant.historical_evaluation import capability_validation_cli as reader
+
+request = Path({str(request)!r})
+real_reader = reader.read_private_request_with_identity
+def swap_after_read(path, maximum_bytes):
+    payload, identity = real_reader(path, maximum_bytes)
+    request.rename({str(moved)!r})
+    request.write_bytes({replacement!r})
+    request.chmod(0o600)
+    return payload, identity
+reader.read_private_request_with_identity = swap_after_read
+
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', str(request),
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "INSUFFICIENT_EVIDENCE",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "CONFIGURATION_INVALID",
+    }
+    assert completed.stderr == ""
+    assert moved.read_bytes() == original
+
+
+def test_cli_rejects_request_substitution_before_capture_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    effects: list[str] = []
+    monkeypatch.setattr(cli, "_reject_preloaded_dependency_modules_v1", lambda: None)
+    monkeypatch.setattr(cli, "_admitted_dependency_origins_v1", lambda: ((), {}, {}))
+    monkeypatch.setattr(
+        cli, "_require_dependency_origins_v1", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_require_loaded_curl_modules_owned_v1", lambda *_args: None
+    )
+    monkeypatch.setattr(cli, "_trusted_import_path_v1", lambda _roots: list(sys.path))
+    monkeypatch.setattr(cli, "_request_file_live_v1", lambda *_args: False)
+
+    def capture(*_args: object, **_kwargs: object) -> core.SharedFailureV1:
+        effects.append("capture")
+        return core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+
+    monkeypatch.setattr(core, "capture_current_nifty100_v1", capture)
+    arguments = SimpleNamespace(
+        ack_owner_private_yfinance_research=True,
+        request_file="/nonexistent/replaced-request",
+    )
+    roots = tuple(tmp_path / f"plan33-review-{index}" for index in range(4))
+
+    assert (
+        cli._run_enabled(
+            json.dumps(
+                {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
+            ).encode(),
+            arguments,
+            roots,
+            (0, 0, 0, 0, 0, 0, 0, 0),
+        )
+        == 1
+    )
+    assert effects == []
+    assert json.loads(capsys.readouterr().out)["reason"] == "CONFIGURATION_INVALID"
 
 
 def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
@@ -2690,8 +3763,11 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
     monkeypatch.setattr(
         core,
         "prepare_yfinance_runtime_v1",
-        lambda root: core.BoundedYahooSessionV1(
-            cache_authority=core._open_provider_cache_authority_v1(root)
+        lambda root, **kwargs: core.BoundedYahooSessionV1(
+            cache_authority=core._open_provider_cache_authority_v1(
+                root,
+                protected_identities=kwargs.get("protected_identities", frozenset()),
+            )
         ),
     )
     monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
@@ -2807,7 +3883,7 @@ def test_low_store_failure_stops_before_later_low_effect(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", fail_store
     )
 
-    def forbidden_provider(_root: Path) -> None:
+    def forbidden_provider(_root: Path, **_kwargs: object) -> None:
         raise AssertionError("provider must not run after a low-store failure")
 
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
@@ -2931,7 +4007,7 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
 
     monkeypatch.setattr(core, "_retain_plan33_binding_v1", fail_first_retain)
 
-    def forbidden_provider(_root: Path) -> None:
+    def forbidden_provider(_root: Path, **_kwargs: object) -> None:
         raise AssertionError("validated reuse must not call the provider")
 
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)

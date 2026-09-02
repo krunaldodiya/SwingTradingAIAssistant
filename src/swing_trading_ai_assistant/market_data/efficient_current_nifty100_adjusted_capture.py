@@ -21,8 +21,7 @@ from datetime import UTC, datetime
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
-from shutil import rmtree
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 from urllib.request import HTTPRedirectHandler, build_opener
 
 import multitasking as _untyped_multitasking  # pyright: ignore[reportMissingImports,reportUnknownVariableType]
@@ -465,14 +464,36 @@ def parse_request_v1(  # noqa: C901 - closed untrusted request boundary
         members_value = request.get("cohort")
         schedule_value = request.get("schedule")
         request_identity = request.get("request_identity_sha256")
+        cohort_identity = request.get("cohort_identity_sha256")
         if type(members_value) is not list:
             raise ValueError("request is invalid")
         member_values = cast(list[object], members_value)
         if (
             len(member_values) != 50
             or type(schedule_value) is not dict
+            or type(cohort_identity) is not str
             or type(request_identity) is not str
+            or any(
+                type(item) is not dict
+                or type(cast(dict[str, object], item).get("isin")) is not str
+                for item in member_values
+            )
         ):
+            raise ValueError("request is invalid")
+        canonical_members = sorted(
+            member_values,
+            key=lambda item: cast(str, cast(dict[str, object], item)["isin"]),
+        )
+        canonical_request = dict(request)
+        canonical_request["cohort"] = canonical_members
+        identity_request = {
+            key: item
+            for key, item in canonical_request.items()
+            if key != "request_identity_sha256"
+        }
+        if cohort_identity != _digest(
+            _canonical(canonical_members)
+        ) or request_identity != _digest(_canonical(identity_request)):
             raise ValueError("request is invalid")
         members: list[tuple[str, str, str]] = []
         for member_value in member_values:
@@ -567,7 +588,7 @@ def parse_request_v1(  # noqa: C901 - closed untrusted request boundary
         cohorts.append(
             CohortRequestV1(
                 expected_name,
-                request,
+                canonical_request,
                 tuple(sorted(members)),
                 request_identity,
             )
@@ -778,29 +799,38 @@ class TransportLedgerV1:
             self._violation = False
             self._rate_limited = False
 
-    def admit_start(self, method: str, url: str) -> int:
+    def _admit_start(self, method: str, url: str, *, enforce_cadence: bool) -> int:
         target_bytes = len(method.encode("utf-8")) + len(url.encode("utf-8"))
         with self._lock:
             if self._rate_limited:
                 raise ProviderRateLimited
+            if self._violation:
+                raise ResourceLimitExceeded
             if target_bytes > MAX_REQUEST_TARGET_BYTES_V1:
                 self._violation = True
                 raise ResourceLimitExceeded
             if self._starts >= MAX_HTTP_STARTS_PER_COHORT_V1:
                 self._violation = True
                 raise ResourceLimitExceeded
-            now = self._clock()
-            if self._last_start is not None:
-                remaining = MIN_START_INTERVAL_SECONDS_V1 - (now - self._last_start)
-                if remaining > 0:
-                    self._sleep(remaining)
-                    now = self._clock()
-            self._last_start = now
+            if enforce_cadence:
+                now = self._clock()
+                if self._last_start is not None:
+                    remaining = MIN_START_INTERVAL_SECONDS_V1 - (now - self._last_start)
+                    if remaining > 0:
+                        self._sleep(remaining)
+                        now = self._clock()
+                self._last_start = now
             self._starts += 1
             self._next_response += 1
             response = self._next_response
             self._response_bytes[response] = 0
             return response
+
+    def admit_start(self, method: str, url: str) -> int:
+        return self._admit_start(method, url, enforce_cadence=True)
+
+    def admit_start_without_cadence(self, method: str, url: str) -> int:
+        return self._admit_start(method, url, enforce_cadence=False)
 
     def admit_body(self, response: int, byte_count: int) -> None:
         if type(response) is not int or type(byte_count) is not int or byte_count < 0:
@@ -808,6 +838,8 @@ class TransportLedgerV1:
         with self._lock:
             if self._rate_limited:
                 raise ProviderRateLimited
+            if self._violation:
+                raise ResourceLimitExceeded
             current = self._response_bytes.get(response)
             if current is None:
                 raise ValueError("response is not active")
@@ -840,6 +872,77 @@ class TransportLedgerV1:
             return self._violation
 
 
+def _request_target_v1(url: str, kwargs: dict[str, object]) -> str:
+    if kwargs.get("content_callback") is not None:
+        raise ResourceLimitExceeded
+    params = kwargs.get("params")
+    if params is None:
+        return url
+    if not isinstance(params, (dict, list, tuple)):
+        raise ResourceLimitExceeded
+    try:
+        return _update_url_params(url, cast(object, params))
+    except (TypeError, ValueError):
+        raise ResourceLimitExceeded from None
+
+
+def _disable_yfinance_disk_caches_v1() -> None:
+    cache_module = sys.modules.get("yfinance.cache")
+    if cache_module is None:
+        raise RuntimeError("provider runtime configuration invalid")
+    missing = object()
+    for manager_name, cache_attribute, dummy_name, getter_name in (
+        ("_TzCacheManager", "_tz_cache", "_TzCacheDummy", "get_tz_cache"),
+        (
+            "_CookieCacheManager",
+            "_Cookie_cache",
+            "_CookieCacheDummy",
+            "get_cookie_cache",
+        ),
+        ("_ISINCacheManager", "_isin_cache", "_ISINCacheDummy", "get_isin_cache"),
+    ):
+        manager = getattr(cache_module, manager_name, missing)
+        dummy_type = getattr(cache_module, dummy_name, missing)
+        getter = getattr(cache_module, getter_name, missing)
+        if (
+            manager is missing
+            or not isinstance(dummy_type, type)
+            or not callable(getter)
+        ):
+            raise RuntimeError("provider runtime configuration invalid")
+        setattr(manager, cache_attribute, dummy_type())
+        if type(getter()) is not dummy_type:
+            raise RuntimeError("provider runtime configuration invalid")
+    for name in ("_TzDBManager", "_CookieDBManager", "_ISINDBManager"):
+        manager = getattr(cache_module, name, missing)
+        if manager is missing or getattr(manager, "_db", missing) is not None:
+            raise RuntimeError("provider runtime configuration invalid")
+
+
+def _close_yfinance_cache_databases_v1() -> None:
+    cache_module = sys.modules.get("yfinance.cache")
+    if cache_module is None:
+        return
+    missing = object()
+    for name in ("_TzDBManager", "_CookieDBManager", "_ISINDBManager"):
+        manager = getattr(cache_module, name, missing)
+        if manager is missing:
+            raise RuntimeError("provider runtime configuration invalid")
+        database = getattr(manager, "_db", missing)
+        if database is missing:
+            raise RuntimeError("provider runtime configuration invalid")
+        if database is None:
+            continue
+        close = getattr(database, "close", None)
+        is_closed = getattr(database, "is_closed", None)
+        if not callable(close) or not callable(is_closed):
+            raise RuntimeError("provider runtime configuration invalid")
+        close()
+        if not is_closed():
+            raise RuntimeError("provider runtime configuration invalid")
+        cast(Any, manager)._db = None
+
+
 class BoundedYahooSessionV1(CurlSession):
     """curl-cffi session with the exact Plan 33 transport ledger."""
 
@@ -855,26 +958,52 @@ class BoundedYahooSessionV1(CurlSession):
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission
         self._cache_authority = cache_authority
+        self._start_boundary_lock = threading.Lock()
+        self._clock = clock
+        self._sleep = sleep
+        self._last_transport_release: float | None = None
 
     def begin_cohort(self) -> None:
         self._ledger.begin_cohort()
 
+    def protect_cleanup_identities(
+        self, identities: frozenset[tuple[int, int]]
+    ) -> None:
+        if self._cache_authority is None:
+            raise RuntimeError("provider runtime configuration invalid")
+        self._cache_authority.protected_identities.update(identities)
+
+    def _acquire_start_boundary(self) -> None:
+        self._start_boundary_lock.acquire()
+        if self._last_transport_release is None:
+            return
+        remaining = MIN_START_INTERVAL_SECONDS_V1 - (
+            self._clock() - self._last_transport_release
+        )
+        if remaining > 0:
+            self._sleep(remaining)
+
     def request(self, method: str, url: str, **kwargs: object) -> object:
-        if kwargs.get("content_callback") is not None:
-            raise ResourceLimitExceeded
-        params = kwargs.get("params")
-        if params is not None and not isinstance(params, (dict, list, tuple)):
-            raise ResourceLimitExceeded
+        target_url = _request_target_v1(url, kwargs)
+
+        self._acquire_start_boundary()
+        boundary_held = True
         try:
-            target_url = (
-                url if params is None else _update_url_params(url, cast(object, params))
-            )
-        except (TypeError, ValueError):
-            raise ResourceLimitExceeded from None
-        response_id = self._ledger.admit_start(method, target_url)
+            response_id = self._ledger.admit_start_without_cadence(method, target_url)
+        except BaseException:
+            self._start_boundary_lock.release()
+            raise
         chunks = bytearray()
 
+        def release_start_boundary() -> None:
+            nonlocal boundary_held
+            if boundary_held:
+                self._last_transport_release = self._clock()
+                boundary_held = False
+                self._start_boundary_lock.release()
+
         def receive(chunk: bytes) -> None:
+            release_start_boundary()
             self._ledger.admit_body(response_id, len(chunk))
             chunks.extend(chunk)
 
@@ -903,6 +1032,7 @@ class BoundedYahooSessionV1(CurlSession):
                 raise ProviderRateLimited
             return response
         finally:
+            release_start_boundary()
             self._ledger.finish_response(response_id)
 
     @property
@@ -921,6 +1051,11 @@ class BoundedYahooSessionV1(CurlSession):
                 if self._cache_authority is not None:
                     cache = self._cache_authority
                     self._cache_authority = None
+                    try:
+                        _close_yfinance_cache_databases_v1()
+                    except BaseException:
+                        cache.abandon()
+                        raise
                     cache.close()
             finally:
                 if self._owns_provider_admission:
@@ -1405,6 +1540,147 @@ def _descriptor_directory_path_v1(descriptor: int) -> Path:
     return location
 
 
+_PathIdentityV1 = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedPathSnapshotV1:
+    path: Path
+    identity: _PathIdentityV1
+
+
+def _path_identity_v1(value: os.stat_result) -> _PathIdentityV1:
+    return value.st_dev, value.st_ino, value.st_mode, value.st_uid
+
+
+def _snapshot_protected_directories_v1(
+    paths: tuple[Path, ...], *, require_all: bool
+) -> tuple[_ProtectedPathSnapshotV1, ...]:
+    snapshots: list[_ProtectedPathSnapshotV1] = []
+    for path in paths:
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            if require_all:
+                raise
+            continue
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError("provider runtime configuration invalid")
+        snapshots.append(_ProtectedPathSnapshotV1(path, _path_identity_v1(metadata)))
+    return tuple(snapshots)
+
+
+def _protected_paths_live_v1(
+    snapshots: tuple[_ProtectedPathSnapshotV1, ...],
+) -> bool:
+    try:
+        return all(
+            _path_identity_v1(os.stat(item.path, follow_symlinks=False))
+            == item.identity
+            for item in snapshots
+        )
+    except OSError:
+        return False
+
+
+def _clear_provider_cache_entry_v1(
+    descriptor: int,
+    name: str,
+    protected_identities: set[tuple[int, int]],
+) -> None:
+    before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    expected = _path_identity_v1(before)
+    if expected[:2] in protected_identities:
+        raise RuntimeError("provider runtime configuration invalid")
+    if stat.S_ISDIR(before.st_mode):
+        child = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=descriptor,
+        )
+        try:
+            if _path_identity_v1(os.fstat(child)) != expected:
+                raise RuntimeError("provider runtime configuration invalid")
+            _clear_provider_cache_v1(child, protected_identities)
+        finally:
+            os.close(child)
+    elif stat.S_ISREG(before.st_mode):
+        if before.st_nlink != 1:
+            raise RuntimeError("provider runtime configuration invalid")
+        child = os.open(
+            name,
+            os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=descriptor,
+        )
+        try:
+            held = os.fstat(child)
+            if _path_identity_v1(held) != expected or held.st_nlink != 1:
+                raise RuntimeError("provider runtime configuration invalid")
+            os.ftruncate(child, 0)
+            os.fsync(child)
+            cleared = os.fstat(child)
+            if (
+                _path_identity_v1(cleared) != expected
+                or cleared.st_nlink != 1
+                or cleared.st_size != 0
+            ):
+                raise RuntimeError("provider runtime configuration invalid")
+        finally:
+            os.close(child)
+    else:
+        raise RuntimeError("provider runtime configuration invalid")
+    current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    if _path_identity_v1(current) != expected:
+        raise RuntimeError("provider runtime configuration invalid")
+
+
+def _provider_cache_is_cleared_v1(
+    descriptor: int, protected_identities: set[tuple[int, int]]
+) -> bool:
+    try:
+        for name in os.listdir(descriptor):
+            value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            identity = _path_identity_v1(value)
+            if identity[:2] in protected_identities:
+                return False
+            if stat.S_ISDIR(value.st_mode):
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=descriptor,
+                )
+                try:
+                    if _path_identity_v1(
+                        os.fstat(child)
+                    ) != identity or not _provider_cache_is_cleared_v1(
+                        child, protected_identities
+                    ):
+                        return False
+                finally:
+                    os.close(child)
+            elif (
+                not stat.S_ISREG(value.st_mode)
+                or value.st_nlink != 1
+                or value.st_size != 0
+            ):
+                return False
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if _path_identity_v1(current) != identity:
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def _clear_provider_cache_v1(
+    descriptor: int, protected_identities: set[tuple[int, int]]
+) -> None:
+    for name in os.listdir(descriptor):
+        _clear_provider_cache_entry_v1(descriptor, name, protected_identities)
+    if not _provider_cache_is_cleared_v1(descriptor, protected_identities):
+        raise RuntimeError("provider runtime configuration invalid")
+
+
 @dataclass(slots=True)
 class _ProviderCacheAuthorityV1:
     lease: StorageRootLease
@@ -1413,6 +1689,7 @@ class _ProviderCacheAuthorityV1:
     name: str
     location: Path
     identity: tuple[int, int, int, int]
+    protected_identities: set[tuple[int, int]]
 
     def ensure_descriptor_live(self) -> None:
         self.operation.ensure_live()
@@ -1420,6 +1697,7 @@ class _ProviderCacheAuthorityV1:
         actual = (held.st_dev, held.st_ino, held.st_mode, held.st_uid)
         if (
             actual != self.identity
+            or actual[:2] in self.protected_identities
             or not stat.S_ISDIR(held.st_mode)
             or stat.S_IMODE(held.st_mode) != 0o700
             or held.st_uid != os.geteuid()
@@ -1436,28 +1714,31 @@ class _ProviderCacheAuthorityV1:
         if self.identity != (named.st_dev, named.st_ino, named.st_mode, named.st_uid):
             raise RuntimeError("provider runtime configuration invalid")
 
+    def _release(self) -> None:
+        os.close(self.descriptor)
+        try:
+            self.operation.__exit__(None, None, None)
+        finally:
+            self.lease.close()
+
+    def abandon(self) -> None:
+        self._release()
+
     def close(self) -> None:
         try:
             self.ensure_descriptor_live()
-            try:
-                rmtree(".", dir_fd=self.descriptor)
-            except OSError as error:
-                if error.errno not in {errno.EBUSY, errno.EINVAL}:
-                    raise
-            if os.listdir(self.descriptor):
-                raise RuntimeError("provider runtime configuration invalid")
+            _clear_provider_cache_v1(self.descriptor, self.protected_identities)
             self.ensure_live()
             self.operation.ensure_live()
         finally:
-            os.close(self.descriptor)
-            try:
-                self.operation.__exit__(None, None, None)
-            finally:
-                self.lease.close()
+            self._release()
 
 
 def _open_provider_cache_authority_v1(
-    root: Path, *, require_empty: bool = True
+    root: Path,
+    *,
+    require_empty: bool = True,
+    protected_identities: frozenset[tuple[int, int]] = frozenset(),
 ) -> _ProviderCacheAuthorityV1:
     identity = StorageRootLease.admit_existing_private_identity(root)
     if identity is None:
@@ -1504,7 +1785,10 @@ def _open_provider_cache_authority_v1(
             held.st_ino,
             held.st_mode,
             held.st_uid,
-        ) != created_identity or (require_empty and os.listdir(descriptor)):
+        ) != created_identity or (
+            require_empty
+            and not _provider_cache_is_cleared_v1(descriptor, set(protected_identities))
+        ):
             raise RuntimeError("provider runtime configuration invalid")
         authority = _ProviderCacheAuthorityV1(
             lease,
@@ -1513,6 +1797,7 @@ def _open_provider_cache_authority_v1(
             name,
             _descriptor_directory_path_v1(descriptor),
             (held.st_dev, held.st_ino, held.st_mode, held.st_uid),
+            set(protected_identities),
         )
         authority.ensure_live()
         return authority
@@ -1525,7 +1810,11 @@ def _open_provider_cache_authority_v1(
         raise
 
 
-def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
+def prepare_yfinance_runtime_v1(
+    cache_root: Path,
+    *,
+    protected_identities: frozenset[tuple[int, int]] = frozenset(),
+) -> BoundedYahooSessionV1:
     """Create and verify one exact exclusive runtime before importing yfinance."""
 
     if not _PROVIDER_ADMISSION_LOCK.acquire(blocking=False):
@@ -1547,7 +1836,9 @@ def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
         multitasking.createPool(name=POOL_NAME_V1, threads=8, engine="thread")
         if not _pool_is_exact_v1():
             raise RuntimeError("provider runtime configuration invalid")
-        cache = _open_provider_cache_authority_v1(cache_root)
+        cache = _open_provider_cache_authority_v1(
+            cache_root, protected_identities=protected_identities
+        )
         session = BoundedYahooSessionV1(
             owns_provider_admission=True,
             cache_authority=cache,
@@ -1572,6 +1863,7 @@ def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
                 if not callable(set_cache):
                     raise RuntimeError("provider runtime configuration invalid")
                 set_cache(str(cache.location))
+                _disable_yfinance_disk_caches_v1()
         finally:
             logging.disable(previous_disable)
         if (
@@ -2003,6 +2295,25 @@ def _validated_reuse_v1(
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
 
 
+def _at_or_below_v1(candidate: Path, boundary: Path) -> bool:
+    return candidate == boundary or boundary in candidate.parents
+
+
+def _reserved_cache_root_overlap_v1(
+    selection_root: Path, roots: tuple[Path, ...]
+) -> bool:
+    try:
+        normalized_selection = selection_root.resolve(strict=False)
+        boundary = (normalized_selection / _PROVIDER_CACHE_NAME_V1).resolve(
+            strict=False
+        )
+        return any(
+            _at_or_below_v1(root.resolve(strict=False), boundary) for root in roots
+        )
+    except (OSError, RuntimeError):
+        return True
+
+
 def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transaction
     raw_request: bytes,
     *,
@@ -2012,16 +2323,17 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     nifty_next50_root: Path,
     schedule_root: Path,
     fetcher: SourceFetcherV1 | None = None,
+    _protected_cleanup_identities: frozenset[tuple[int, int]] = frozenset(),
 ) -> CurrentNifty100ResultV1 | SharedFailureV1:
     """Run one exact operator-triggered current Nifty 100 capture."""
 
     preflight = preflight_request_v1(raw_request, acknowledged=acknowledged)
     if preflight is not None:
         return SharedFailureV1(*preflight)
-    if not all(
-        path.is_absolute()
-        for path in (selection_root, nifty50_root, nifty_next50_root, schedule_root)
-    ):
+    roots = (selection_root, nifty50_root, nifty_next50_root, schedule_root)
+    if not all(path.is_absolute() for path in roots):
+        return SharedFailureV1("MALFORMED_INPUT", None)
+    if _reserved_cache_root_overlap_v1(selection_root, roots[1:]):
         return SharedFailureV1("MALFORMED_INPUT", None)
     try:
         request = parse_request_v1(raw_request)
@@ -2049,6 +2361,30 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             malformed = True
     if malformed:
         return SharedFailureV1("MALFORMED_INPUT", None)
+    try:
+        expected_root_identities: dict[Path, _PathIdentityV1] = {}
+        for root in roots:
+            try:
+                metadata = os.stat(root, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            expected_root_identities[root] = _path_identity_v1(metadata)
+        protected_snapshots = _snapshot_protected_directories_v1(
+            roots, require_all=False
+        )
+        protected_by_path = {item.path: item for item in protected_snapshots}
+        if {
+            path: item.identity for path, item in protected_by_path.items()
+        } != expected_root_identities:
+            raise RuntimeError("provider runtime configuration invalid")
+        protected_identities = frozenset(
+            {
+                *_protected_cleanup_identities,
+                *(identity[:2] for identity in expected_root_identities.values()),
+            }
+        )
+    except (OSError, RuntimeError):
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
 
     selection = admit_selection_v1(request, fetcher or OfficialSourceFetcherV1())
     if isinstance(selection, SharedFailureV1):
@@ -2128,9 +2464,13 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
 
     try:
         cache_authority = _open_provider_cache_authority_v1(
-            selection_root, require_empty=False
+            selection_root,
+            require_empty=False,
+            protected_identities=protected_identities,
         )
         cache_authority.close()
+        if not _protected_paths_live_v1(tuple(protected_by_path.values())):
+            raise RuntimeError("provider runtime configuration invalid")
     except (OSError, RuntimeError):
         unavailable = tuple(
             CohortOutcomeV1(
@@ -2190,7 +2530,10 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                     continue
                 if session is None:
                     try:
-                        session = prepare_yfinance_runtime_v1(selection_root)
+                        session = prepare_yfinance_runtime_v1(
+                            selection_root,
+                            protected_identities=protected_identities,
+                        )
                     except Exception:
                         runtime_unavailable = True
                         outcomes[index] = CohortOutcomeV1(
@@ -2218,6 +2561,26 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                     result = low.CaptureForwardAdjustedOhlcvFailureV1(
                         "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
                     )
+            try:
+                current_snapshots = _snapshot_protected_directories_v1(
+                    (root,), require_all=False
+                )
+                for item in current_snapshots:
+                    previous = protected_by_path.get(item.path)
+                    protected_by_path[item.path] = item
+                    protected_identities = frozenset(
+                        {*protected_identities, item.identity[:2]}
+                    )
+                    if session is not None:
+                        session.protect_cleanup_identities(protected_identities)
+                    if previous is not None and previous.identity != item.identity:
+                        raise RuntimeError("provider runtime configuration invalid")
+                if not _protected_paths_live_v1(tuple(protected_by_path.values())):
+                    raise RuntimeError("provider runtime configuration invalid")
+            except (OSError, RuntimeError):
+                cleanup_failed = True
+                break
+
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
                 and result.reason == "SCHEDULE_EVIDENCE_MISMATCH"
@@ -2256,6 +2619,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             except (OSError, RuntimeError):
                 cleanup_failed = True
 
+    if not _protected_paths_live_v1(tuple(protected_by_path.values())):
+        cleanup_failed = True
     if cleanup_failed:
         outcomes = [
             CohortOutcomeV1(

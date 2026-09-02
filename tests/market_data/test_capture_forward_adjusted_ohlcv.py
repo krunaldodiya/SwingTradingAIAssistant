@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -2090,16 +2091,119 @@ def test_provider_identity_is_rechecked_after_response_before_interpretation(
     )
 
 
+def test_yfinance_import_origin_must_belong_to_distribution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_root = tmp_path / "fake"
+    package = fake_root / "yfinance"
+    package.mkdir(parents=True)
+    marker = tmp_path / "executed"
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "__version__ = '1.6.0'\n"
+    )
+    monkeypatch.syspath_prepend(str(fake_root))
+    monkeypatch.delitem(sys.modules, "yfinance", raising=False)
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    assert not Path(cast(str, module.__file__)).is_relative_to(fake_root)
+    assert not marker.exists()
+
+
+def test_coherent_pythonpath_distribution_cannot_supply_yfinance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_root = tmp_path / "fake"
+    package = fake_root / "yfinance"
+    package.mkdir(parents=True)
+    marker = tmp_path / "executed"
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "__version__ = '1.6.0'\n"
+    )
+    metadata = fake_root / "yfinance-1.6.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: yfinance\nVersion: 1.6.0\n"
+    )
+    (metadata / "RECORD").write_text(
+        "yfinance/__init__.py,,\n"
+        "yfinance-1.6.0.dist-info/METADATA,,\n"
+        "yfinance-1.6.0.dist-info/RECORD,,\n"
+    )
+    monkeypatch.syspath_prepend(str(fake_root))
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    assert not Path(cast(str, module.__file__)).is_relative_to(fake_root)
+    assert not marker.exists()
+
+
+def test_yfinance_executes_admitted_bytes_without_pathname_reread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package = tmp_path / "yfinance"
+    package.mkdir()
+    origin = package / "__init__.py"
+    marker = tmp_path / "replaced-source-executed"
+    origin.write_text("__version__ = '1.6.0'\n")
+    specification = importlib.util.spec_from_file_location(
+        "yfinance", origin, submodule_search_locations=[str(package)]
+    )
+    assert specification is not None
+    identity = core._regular_file_identity(str(origin))  # pyright: ignore[reportPrivateUsage]
+    admitted_source = b"__version__ = '1.6.0'\n"
+
+    def replace_after_admission(
+        admitted_origin: str, admitted_identity: tuple[int, int, int, int]
+    ) -> bytes:
+        assert (admitted_origin, admitted_identity) == (str(origin), identity)
+        origin.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('executed')\n"
+            "__version__ = '1.6.0'\n"
+        )
+        return admitted_source
+
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+    monkeypatch.setattr(
+        core,
+        "_trusted_yfinance_distribution_v1",
+        lambda: (specification, str(origin), identity),
+    )
+    monkeypatch.setattr(core, "_read_yfinance_init_v1", replace_after_admission)
+
+    try:
+        module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+        assert module.__dict__["__version__"] == "1.6.0"
+        assert not marker.exists()
+    finally:
+        for name in tuple(sys.modules):
+            if name == "yfinance" or name.startswith("yfinance."):
+                sys.modules.pop(name, None)
+
+
 def test_yfinance_distribution_mismatch_precedes_import_and_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     imported = False
     provider_called = False
 
-    def forbidden_import(_name: str) -> object:
+    def forbidden_import(_origin: str, _identity: object) -> bytes:
         nonlocal imported
         imported = True
-        return object()
+        return b""
 
     def forbidden_provider(**_kwargs: object) -> object:
         nonlocal provider_called
@@ -2107,8 +2211,12 @@ def test_yfinance_distribution_mismatch_precedes_import_and_provider(
         return object()
 
     monkeypatch.setattr(core, "_yfinance_modules", [])
-    monkeypatch.setattr(core.importlib.metadata, "version", lambda _package: "1.5.0")
-    monkeypatch.setattr(core, "__import__", forbidden_import, raising=False)
+    monkeypatch.setattr(
+        core,
+        "_trusted_yfinance_distribution_v1",
+        lambda: (_ for _ in ()).throw(RuntimeError("distribution mismatch")),
+    )
+    monkeypatch.setattr(core, "_read_yfinance_init_v1", forbidden_import)
     monkeypatch.setattr(core, "_public_yfinance_download", forbidden_provider)
     result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
         tickers=("RELIANCE.NS",),

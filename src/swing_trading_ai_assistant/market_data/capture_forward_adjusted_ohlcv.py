@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib.machinery
 import importlib.metadata
+import importlib.util
 import json
 import os
 import re
 import stat
+import sys
+import sysconfig
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -1022,13 +1026,162 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
         }
 
 
-def _load_yfinance_module() -> ModuleType:
-    if importlib.metadata.version("yfinance") != "1.6.0":
+def _stat_regular_file_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int]:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("yfinance module origin mismatch")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+    )
+
+
+def _regular_file_identity(value: object) -> tuple[int, int, int, int]:
+    if type(value) is not str:
+        raise RuntimeError("yfinance module origin mismatch")
+    try:
+        return _stat_regular_file_identity(os.stat(value, follow_symlinks=False))
+    except OSError:
+        raise RuntimeError("yfinance module origin mismatch") from None
+
+
+def _trusted_site_roots_v1() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    try:
+        paths = sysconfig.get_paths()
+        for key in ("purelib", "platlib"):
+            value = paths.get(key)
+            if type(value) is not str or not Path(value).is_absolute():
+                raise RuntimeError
+            root = Path(value).resolve(strict=True)
+            if not root.is_dir():
+                raise RuntimeError
+            if root not in roots:
+                roots.append(root)
+    except (OSError, RuntimeError):
+        raise RuntimeError("yfinance distribution identity mismatch") from None
+    if not roots:
         raise RuntimeError("yfinance distribution identity mismatch")
+    return tuple(roots)
+
+
+def _trusted_yfinance_distribution_v1() -> tuple[
+    importlib.machinery.ModuleSpec, str, tuple[int, int, int, int]
+]:
+    try:
+        roots = _trusted_site_roots_v1()
+        distributions = tuple(
+            distribution
+            for distribution in importlib.metadata.distributions(
+                path=[str(root) for root in roots]
+            )
+            if str(distribution.metadata["Name"]).casefold().replace("_", "-")
+            == "yfinance"
+        )
+        if len(distributions) != 1 or distributions[0].version != "1.6.0":
+            raise RuntimeError
+        distribution = distributions[0]
+        owned_item = next(
+            item
+            for item in distribution.files or ()
+            if str(item).replace(os.sep, "/") == "yfinance/__init__.py"
+        )
+        owned_origin = Path(str(distribution.locate_file(owned_item))).resolve(
+            strict=True
+        )
+        if not any(owned_origin.is_relative_to(root) for root in roots):
+            raise RuntimeError
+        specification = importlib.machinery.PathFinder.find_spec(
+            "yfinance", [str(root) for root in roots]
+        )
+        if (
+            specification is None
+            or specification.loader is None
+            or specification.origin is None
+            or specification.submodule_search_locations is None
+            or tuple(
+                Path(location).resolve(strict=True)
+                for location in specification.submodule_search_locations
+            )
+            != (owned_origin.parent,)
+        ):
+            raise RuntimeError
+        specification_origin = Path(specification.origin).resolve(strict=True)
+        identity = _regular_file_identity(str(owned_origin))
+        if specification_origin != owned_origin:
+            raise RuntimeError
+        if _regular_file_identity(str(specification_origin)) != identity:
+            raise RuntimeError
+        return specification, str(owned_origin), identity
+    except (KeyError, OSError, RuntimeError, StopIteration, TypeError, ValueError):
+        raise RuntimeError("yfinance distribution identity mismatch") from None
+
+
+def _read_yfinance_init_v1(
+    origin: str, expected_identity: tuple[int, int, int, int]
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            origin,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            _stat_regular_file_identity(metadata) != expected_identity
+            or not 1 <= metadata.st_size <= 1_048_576
+        ):
+            raise RuntimeError
+        payload = bytearray()
+        while len(payload) <= metadata.st_size:
+            chunk = os.read(
+                descriptor, min(65_536, metadata.st_size + 1 - len(payload))
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) != metadata.st_size:
+            raise RuntimeError
+        return bytes(payload)
+    except (OSError, RuntimeError):
+        raise RuntimeError("yfinance module origin mismatch") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _load_yfinance_module() -> ModuleType:
+    specification, owned_origin, origin_identity = _trusted_yfinance_distribution_v1()
     if not _yfinance_modules:
-        _yfinance_modules.append(cast(ModuleType, __import__("yfinance")))
+        source = _read_yfinance_init_v1(owned_origin, origin_identity)
+        for name in tuple(sys.modules):
+            if name == "yfinance" or name.startswith("yfinance."):
+                sys.modules.pop(name, None)
+        before = frozenset(sys.modules)
+        module = importlib.util.module_from_spec(specification)
+        sys.modules["yfinance"] = module
+        try:
+            code = compile(source, owned_origin, "exec", dont_inherit=True)
+            exec(code, module.__dict__)  # noqa: S102 - execute descriptor-admitted bytes
+        except BaseException:
+            for name in tuple(sys.modules):
+                if (
+                    name == "yfinance" or name.startswith("yfinance.")
+                ) and name not in before:
+                    sys.modules.pop(name, None)
+            raise RuntimeError("yfinance module import failed") from None
+        _yfinance_modules.append(module)
     module = _yfinance_modules[0]
-    if module.__dict__.get("__version__") != "1.6.0":
+    module_specification = module.__dict__.get("__spec__")
+    if (
+        module.__dict__.get("__version__") != "1.6.0"
+        or _regular_file_identity(module.__dict__.get("__file__")) != origin_identity
+        or _regular_file_identity(getattr(module_specification, "origin", None))
+        != origin_identity
+    ):
         raise RuntimeError("yfinance module identity mismatch")
     return module
 

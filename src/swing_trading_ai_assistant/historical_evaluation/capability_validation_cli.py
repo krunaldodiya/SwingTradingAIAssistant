@@ -42,7 +42,9 @@ def _directory_metadata(value: os.stat_result) -> tuple[int, ...]:
     return value.st_dev, value.st_ino, value.st_mode, value.st_uid
 
 
-def read_private_request(path: str, maximum_bytes: int) -> bytes:
+def read_private_request_with_identity(
+    path: str, maximum_bytes: int
+) -> tuple[bytes, tuple[int, ...]]:
     components = path.split("/")
     if (
         not path.startswith("/")
@@ -112,18 +114,23 @@ def read_private_request(path: str, maximum_bytes: int) -> bytes:
             after = os.fstat(descriptor)
             path_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
             parent_final = os.fstat(parent)
+            identity = _metadata(before)
             if (
                 len(payload) != before.st_size
-                or _metadata(after) != _metadata(before)
-                or _metadata(path_after) != _metadata(before)
+                or _metadata(after) != identity
+                or _metadata(path_after) != identity
                 or _directory_metadata(parent_final)
                 != _directory_metadata(parent_before)
                 or os.read(descriptor, 1)
             ):
                 raise ValueError("request path is invalid")
-            return bytes(payload)
+            return bytes(payload), identity
     except OSError as exc:
         raise ValueError("request path is invalid") from exc
+
+
+def read_private_request(path: str, maximum_bytes: int) -> bytes:
+    return read_private_request_with_identity(path, maximum_bytes)[0]
 
 
 def _run(argv: list[str] | None) -> int:

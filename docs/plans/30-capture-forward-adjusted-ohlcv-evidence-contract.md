@@ -163,7 +163,7 @@ The request is decoded, closed-field validated, bounded, canonicalized, and iden
 - contract and request identities;
 - exact sorted cohort and schedule identities;
 - decision session, official close, retrieval `known_at`, and decision cutoff;
-- provider `YAHOO_FINANCE`, exact yfinance library version, adapter/source identity, and fixed call-configuration identity;
+- provider `YAHOO_FINANCE`, exact yfinance library version, module origin owned by the sole matching distribution under the running interpreter's resolved `purelib`/`platlib`, descriptor-held admitted `__init__.py` bytes executed without a second pathname read, adapter/source identity, and fixed call-configuration identity;
 - `ADJUSTED_YFINANCE_RATIO` OHLC and `SOURCE_REPORTED_UNADJUSTED` volume bases;
 - for every member/session, finite positive decimal open/high/low/close and integral nonnegative volume;
 - `low <= min(open, close) <= max(open, close) <= high`;
@@ -282,7 +282,7 @@ Public capture output is limited to a result code, contract version, source prof
 | Explicit correction request naming a currently admitted parent and returning changed provider content | new immutable revision linked to the exact parent; prepared recovery rechecks the parent | no overwrite, orphaned correction, hidden correction, or old-identity reuse |
 | Zero/51 members; 3/367 decision points; 3/367 window sessions; oversized/deep/noncanonical JSON | structural rejection / `request_invalid` | no lease, provider, store read, staging object, or report |
 | Session still open, non-session date, wrong official close, schedule/source/release substitution | exact insufficiency or structural rejection before publication | no partial-current bar, weekend inference, schedule fallback, or timestamp clipping |
-| Empty/provider exception/wrong yfinance version/wrong call metadata | typed insufficiency with provider identity checked before frame interpretation and store authority rechecked on exception | no retry, fallback, cache relabel, raw exception, swallowed authority failure, or write |
+| Empty/provider exception/wrong yfinance version or module origin/wrong call metadata | typed insufficiency with provider identity anchored to the running interpreter's resolved install roots and checked before descriptor-held module bytes execute and before frame interpretation, with store authority rechecked on exception | no execution of a `PYTHONPATH` package or metadata substitution, pathname re-read of admitted module bytes, retry, fallback, cache relabel, raw exception, swallowed authority failure, or write |
 | Wrong timezone; non-DataFrame; flat, inverted, reordered, or duplicate MultiIndex; duplicate/missing/extra/reordered session or ticker | exact schema or coverage reason; no revision | no column guessing, nearest-date selection, dedupe, or partial grid |
 | NaN/infinity/bool/zero/negative price; invalid OHLC envelope; negative/fractional volume | exact value reason; no revision | no rounding, repair, coercion, imputation, or dropped cell |
 | Retrieved after cutoff; historical session downloaded later and assigned earlier cutoff | blocked future-known evidence | no point-in-time relabel or cutoff widening |
