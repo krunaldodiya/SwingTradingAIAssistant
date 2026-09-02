@@ -1563,6 +1563,114 @@ def test_existing_binding_does_not_relabel_low_store_failure(
     ]
 
 
+def test_prior_retention_failure_preserves_validated_later_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    low_requests = tuple(
+        core.low.parse_capture_forward_request_v1(
+            core._canonical(cohort.request) + b"\n"
+        )
+        for cohort in request.cohorts
+    )
+
+    def success(index: int, code: str) -> object:
+        low_request = low_requests[index]
+        revision: Any = SimpleNamespace(
+            request_identity_sha256=low_request.request_identity_sha256,
+            revision_sha256=str(index + 1) * 64,
+            cohort=low_request.cohort,
+            schedule=low_request.schedule,
+            decision_session=low_request.decision_session,
+            configuration_identity_sha256=low_request.configuration_identity_sha256,
+            provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+            source_identity_sha256=str(index + 3) * 64,
+            retrieved_at=selection.retrieved_at,
+        )
+        return core.low.CaptureForwardAdjustedOhlcvSuccessV1(code, revision)
+
+    probes = (success(0, "CAPTURED"), success(1, "REUSED"))
+    second_name = core._plan33_binding_name_v1(
+        request.cohorts[1],
+        selection,
+        low_requests[1].request_identity_sha256,
+    )
+    second_payload = core._plan33_binding_payload_v1(
+        request.cohorts[1], probes[1], selection
+    )
+    binding_payloads: list[bytes] = []
+    original_binding_payload = core._plan33_binding_payload_v1
+
+    def track_binding_payload(*args: Any) -> bytes:
+        payload = original_binding_payload(*args)
+        binding_payloads.append(payload)
+        return payload
+
+    monkeypatch.setattr(core, "_plan33_binding_payload_v1", track_binding_payload)
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root: True,
+    )
+    monkeypatch.setattr(
+        core,
+        "resolve_selection_v1",
+        lambda admitted, _root: ("INSERTED", admitted),
+    )
+    binding_reads: list[str] = []
+
+    def read_binding(_root: Path, name: str) -> bytes | None:
+        binding_reads.append(name)
+        return second_payload if len(binding_reads) == 2 else None
+
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", read_binding)
+    probe_calls: list[Path] = []
+
+    def probe(
+        _request: object, provider: object, root: Path, _schedule: Path
+    ) -> object:
+        assert isinstance(provider, core._UnresolvedProbeV1)
+        probe_calls.append(root)
+        return probes[len(probe_calls) - 1]
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", probe
+    )
+    retain_calls: list[str] = []
+
+    def fail_first_retain(
+        cohort: object, _result: object, _selection: object, _root: Path
+    ) -> None:
+        retain_calls.append(cohort.name)
+        raise OSError
+
+    monkeypatch.setattr(core, "_retain_plan33_binding_v1", fail_first_retain)
+
+    def forbidden_provider() -> None:
+        raise AssertionError("validated reuse must not call the provider")
+
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert result.cohorts[0].reason == "RETENTION_FAILED"
+    assert binding_reads[1] == second_name
+    assert binding_payloads[1] == second_payload
+    assert result.cohorts[1] == core._cohort_outcome_v1(
+        request.cohorts[1], low_requests[1], probes[1], selection, request
+    )
+    assert probe_calls == [tmp_path / "nifty50", tmp_path / "next50"]
+    assert retain_calls == ["NIFTY_50"]
+
+
 @pytest.mark.parametrize(
     "reason",
     [

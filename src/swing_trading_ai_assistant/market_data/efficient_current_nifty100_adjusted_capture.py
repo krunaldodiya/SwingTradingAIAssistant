@@ -818,28 +818,11 @@ def _is_success(row: CohortOutcomeV1) -> bool:
     return row.code in {"REUSED", "INSERTED"} and row.reason is None
 
 
-def execute_admitted_v1(
+def _result_v1(
     request: CurrentNifty100RequestV1,
     selection: SelectionRevisionV1,
-    capture: Callable[[CohortRequestV1], CohortOutcomeV1],
+    outcomes: tuple[CohortOutcomeV1, CohortOutcomeV1],
 ) -> CurrentNifty100ResultV1:
-    """Process both independently retained cohorts with frozen failure precedence."""
-
-    outcomes: list[CohortOutcomeV1] = []
-    for cohort in request.cohorts:
-        if outcomes and outcomes[-1].reason == "RETENTION_FAILED":
-            outcomes.append(
-                CohortOutcomeV1(
-                    cohort.name,
-                    "NOT_ATTEMPTED",
-                    "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
-                )
-            )
-            continue
-        outcome = capture(cohort)
-        if outcome.cohort != cohort.name:
-            raise ValueError("cohort result order is invalid")
-        outcomes.append(outcome)
     first, second = outcomes
     compatible = (
         _is_success(first)
@@ -868,7 +851,7 @@ def execute_admitted_v1(
             if compatible
             else "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
         ),
-        cohorts=(first, second),
+        cohorts=outcomes,
         selection_identity_sha256=selection.selection_identity_sha256,
         selection_retrieved_at=selection.retrieved_at,
         schedule_identity_sha256=request.schedule_identity_sha256,
@@ -876,6 +859,35 @@ def execute_admitted_v1(
         configuration_identity_sha256=CONFIGURATION_IDENTITY_SHA256_V1,
         member_count=selection.member_count,
         union_reason=None if compatible or not both_valid else "UNION_INCOMPATIBLE",
+    )
+
+
+def execute_admitted_v1(
+    request: CurrentNifty100RequestV1,
+    selection: SelectionRevisionV1,
+    capture: Callable[[CohortRequestV1], CohortOutcomeV1],
+) -> CurrentNifty100ResultV1:
+    """Process both independently retained cohorts with frozen failure precedence."""
+
+    outcomes: list[CohortOutcomeV1] = []
+    for cohort in request.cohorts:
+        if outcomes and outcomes[-1].reason == "RETENTION_FAILED":
+            outcomes.append(
+                CohortOutcomeV1(
+                    cohort.name,
+                    "NOT_ATTEMPTED",
+                    "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
+                )
+            )
+            continue
+        outcome = capture(cohort)
+        if outcome.cohort != cohort.name:
+            raise ValueError("cohort result order is invalid")
+        outcomes.append(outcome)
+    return _result_v1(
+        request,
+        selection,
+        cast(tuple[CohortOutcomeV1, CohortOutcomeV1], tuple(outcomes)),
     )
 
 
@@ -1527,6 +1539,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
 
     roots = (nifty50_root, nifty_next50_root)
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
+    validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
     unresolved: list[int] = []
     probes = [
         low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
@@ -1535,8 +1548,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         for low_request, root in zip(low_requests, roots, strict=True)
     ]
 
-    for cohort, low_request, probe in zip(
-        request.cohorts, low_requests, probes, strict=True
+    for index, (cohort, low_request, probe) in enumerate(
+        zip(request.cohorts, low_requests, probes, strict=True)
     ):
         name = _plan33_binding_name_v1(
             cohort, selection, low_request.request_identity_sha256
@@ -1551,10 +1564,17 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         if checked.reason == "EVIDENCE_CONFLICT":
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         if isinstance(probe, low.CaptureForwardAdjustedOhlcvSuccessV1):
-            if existing is not None and existing != _plan33_binding_payload_v1(
-                cohort, probe, selection
-            ):
+            payload = _plan33_binding_payload_v1(cohort, probe, selection)
+            if existing is not None and existing != payload:
                 return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+            if (
+                probe.code == "REUSED"
+                and existing == payload
+                and _is_success(checked)
+                and checked.selection_identity_sha256
+                == selection.selection_identity_sha256
+            ):
+                validated_reuses[index] = checked
         elif existing is not None and checked.reason != "RETENTION_FAILED":
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
 
@@ -1583,7 +1603,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             outcomes[index] = outcome
         if outcome.reason == "RETENTION_FAILED":
             for later in range(index + 1, 2):
-                outcomes[later] = CohortOutcomeV1(
+                outcomes[later] = validated_reuses[later] or CohortOutcomeV1(
                     request.cohorts[later].name,
                     "NOT_ATTEMPTED",
                     "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
@@ -1657,8 +1677,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
             )
     finalized = cast(tuple[CohortOutcomeV1, CohortOutcomeV1], tuple(outcomes))
-    by_name = {outcome.cohort: outcome for outcome in finalized}
-    return execute_admitted_v1(request, selection, lambda row: by_name[row.name])
+    return _result_v1(request, selection, finalized)
 
 
 def serialize_capture_result_v1(
