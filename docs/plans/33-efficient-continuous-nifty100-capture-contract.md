@@ -263,9 +263,11 @@ configuration is versioned rather than weakening or silently mutating the
 delivered `threads=False` contract.
 
 The provider cache uses one fixed owner-private directory beneath the
-descriptor-admitted selection root. Every close clears its contents through the
-held directory descriptor, revalidates the held and named identities, and
-retains the empty directory for the next invocation. It never removes the
+descriptor-admitted selection root. Every admitted invocation clears its
+contents through the held directory descriptor before resolving cohort
+outcomes, including an all-`REUSED` invocation that never imports yfinance.
+Every close repeats that cleanup, revalidates the held and named identities,
+and retains the empty directory for the next invocation. It never removes the
 directory through a mutable pathname: POSIX pathname removal cannot atomically
 bind the removed directory to the previously checked identity. No cookie,
 provider response, or other cache content is retained.
@@ -360,6 +362,8 @@ only by its own cohort identity and cannot authorize the union claim.
 | First cohort retention fails; second is unresolved | First is `RETENTION_FAILED`; second is `NOT_ATTEMPTED/BLOCKED_BY_PRIOR_RETENTION_FAILURE`; no later provider/store effect | Use of potentially unsafe store; missing second row | Retention-stop test |
 | First cohort retention fails; second was already validly reused | Failed first row plus valid reused second row; no new effect | Deletion or relabelling of reused revision | Mixed reuse/retention test |
 | Interruption or write failure during second cohort retention | `INSUFFICIENT_EVIDENCE/RETENTION_FAILED` for second; existing rollback/recovery semantics; ordered incomplete union | Partial revision admission; overwrite | Existing atomic-store interruption tests plus orchestration test |
+| The canonical `selections` or `plan33_bindings` child name is replaced after descriptor admission during a missing read or immutable publish | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; the replacement remains untouched and no success is returned | Publication into, deletion of, or trust in the substituted sibling | Descriptor/name identity race tests for both stores and both paths |
+| Both cohorts are validly `REUSED` while the fixed cache contains residue from an earlier cleanup failure | Cache contents are descriptor-cleared without importing yfinance or calling the provider; cleanup failure makes both rows `CONFIGURATION_INVALID` | Retained cookie/response data; provider work on an all-reuse invocation | All-reuse cache-residue regression |
 | Exact retry | Same revision identity and `REUSED`; no provider call/write | Duplicate revision; changed known-at | Retry test |
 | Either request identity points to invalid/conflicting bytes | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; no new provider/store effect | Repair, overwrite, or masking provider call | Conflict/substitution tests |
 | Raw Upstox or another provider appears in either cohort | `INSUFFICIENT_EVIDENCE/PROVIDER_BASIS_INVALID` | Raw/adjusted mixing; silent fallback | Provider/price-basis substitution tests |

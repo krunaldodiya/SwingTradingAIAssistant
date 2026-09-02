@@ -777,6 +777,61 @@ def test_selection_store_rejects_unsafe_missing_root_paths(tmp_path: Path) -> No
     assert not (tmp_path / "selection").exists()
 
 
+def test_selection_publish_rejects_child_directory_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, selection = _admitted()
+    root = tmp_path / "selection"
+    original_publish = core._publish_immutable_object_v1
+    substituted = False
+
+    def substitute_then_publish(
+        operation: object,
+        directory: int,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        nonlocal substituted
+        if not substituted:
+            (root / "selections").rename(root / "displaced-selections")
+            (root / "selections").mkdir(mode=0o700)
+            substituted = True
+        original_publish(operation, directory, name, payload)
+
+    monkeypatch.setattr(core, "_publish_immutable_object_v1", substitute_then_publish)
+
+    with pytest.raises(core.EvidenceConflict):
+        core.resolve_selection_v1(selection, root)
+
+    assert list((root / "selections").iterdir()) == []
+    assert len(tuple((root / "displaced-selections").iterdir())) == 1
+
+
+def test_selection_missing_read_rejects_child_directory_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, selection = _admitted()
+    root = tmp_path / "selection"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    (root / "selections").mkdir(mode=0o700)
+
+    def substitute_then_miss(*_args: object, **_kwargs: object) -> bytes:
+        (root / "selections").rename(root / "displaced-selections")
+        (root / "selections").mkdir(mode=0o700)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(core, "_read_immutable_object_v1", substitute_then_miss)
+
+    with pytest.raises(core.EvidenceConflict):
+        core._read_retained_selection_v1(selection, root)
+
+    assert list((root / "selections").iterdir()) == []
+    assert list((root / "displaced-selections").iterdir()) == []
+
+
 def test_pool_and_session_exist_before_yfinance_import() -> None:
 
     script = """
@@ -1148,6 +1203,11 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
         "resolve_selection_v1",
         lambda selection, _root: ("INSERTED", selection),
     )
+    monkeypatch.setattr(
+        core,
+        "_open_provider_cache_authority_v1",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
+    )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     monkeypatch.setattr(
         core.low,
@@ -1237,6 +1297,11 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
         core,
         "resolve_selection_v1",
         lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(
+        core,
+        "_open_provider_cache_authority_v1",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     monkeypatch.setattr(
@@ -1405,6 +1470,11 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
         core,
         "resolve_selection_v1",
         lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(
+        core,
+        "_open_provider_cache_authority_v1",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     calls = 0
@@ -1925,6 +1995,157 @@ def test_plan33_binding_recovery_requires_compatible_retrieval_boundary() -> Non
         assert old.code == "REUSED"
         assert old.selection_identity_sha256 is None
         assert not (old_root / "plan33_bindings").exists()
+
+
+def test_binding_publish_rejects_child_directory_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    cohort = request.cohorts[0]
+    members = tuple(
+        SimpleNamespace(isin=row.isin, effective_symbol=row.symbol)
+        for row in selection.cohorts[0].rows
+    )
+    schedule = SimpleNamespace(
+        schedule_identity_sha256=request.schedule_identity_sha256
+    )
+    revision = SimpleNamespace(
+        request_identity_sha256=cohort.request_identity_sha256,
+        revision_sha256="c" * 64,
+        cohort=members,
+        schedule=schedule,
+        decision_session=date.fromisoformat(request.decision_session),
+        decision_cutoff=datetime.fromisoformat(
+            request.decision_cutoff.replace("Z", "+00:00")
+        ),
+        configuration_identity_sha256="d" * 64,
+        provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+        source_profile=core.low.SOURCE_PROFILE_V1,
+        source_identity_sha256="b" * 64,
+        retrieved_at=selection.retrieved_at + timedelta(seconds=1),
+    )
+    result = core.low.CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", revision)
+    root = tmp_path / "binding"
+    root.mkdir(mode=0o700)
+    original_publish = core._publish_immutable_object_v1
+    substituted = False
+
+    def substitute_then_publish(
+        operation: object,
+        directory: int,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        nonlocal substituted
+        if not substituted:
+            (root / "plan33_bindings").rename(root / "displaced-bindings")
+            (root / "plan33_bindings").mkdir(mode=0o700)
+            substituted = True
+        original_publish(operation, directory, name, payload)
+
+    monkeypatch.setattr(core, "_publish_immutable_object_v1", substitute_then_publish)
+
+    with pytest.raises(core.EvidenceConflict):
+        core._retain_plan33_binding_v1(cohort, result, selection, root)
+
+    assert list((root / "plan33_bindings").iterdir()) == []
+    assert len(tuple((root / "displaced-bindings").iterdir())) == 1
+
+
+def test_binding_missing_read_rejects_child_directory_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "binding"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    (root / "plan33_bindings").mkdir(mode=0o700)
+
+    def substitute_then_miss(*_args: object, **_kwargs: object) -> bytes:
+        (root / "plan33_bindings").rename(root / "displaced-bindings")
+        (root / "plan33_bindings").mkdir(mode=0o700)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(core, "_read_immutable_object_v1", substitute_then_miss)
+
+    with pytest.raises(core.EvidenceConflict):
+        core._read_plan33_binding_v1(root, "missing.json")
+
+    assert list((root / "plan33_bindings").iterdir()) == []
+    assert list((root / "displaced-bindings").iterdir()) == []
+
+
+def test_all_reuse_capture_clears_retained_provider_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(selection_root).lease
+    assert lease is not None
+    lease.close()
+    cache = selection_root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(mode=0o700)
+    residue = cache / "private-cookie"
+    residue.write_text("private")
+
+    def reused(
+        cohort: core.CohortRequestV1, request_identity_sha256: str
+    ) -> core.CohortOutcomeV1:
+        return core.CohortOutcomeV1(
+            cohort.name,
+            "REUSED",
+            revision_sha256=("b" if cohort.name == "NIFTY_50" else "c") * 64,
+            request_identity_sha256=request_identity_sha256,
+            selection_identity_sha256=selection.selection_identity_sha256,
+            schedule_identity_sha256=request.schedule_identity_sha256,
+            decision_session=request.decision_session,
+            decision_cutoff=request.decision_cutoff,
+            configuration_identity_sha256=core.CONFIGURATION_IDENTITY_SHA256_V1,
+            retrieved_at=selection.retrieved_at + timedelta(seconds=1),
+            source_identity_sha256="d" * 64,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+        )
+
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_args: True
+    )
+    monkeypatch.setattr(core, "_read_retained_selection_v1", lambda *_args: selection)
+    monkeypatch.setattr(
+        core.low, "read_capture_forward_request_revision_v1", lambda *_args: object()
+    )
+    monkeypatch.setattr(
+        core, "resolve_selection_v1", lambda *_args: ("REUSED", selection)
+    )
+    monkeypatch.setattr(
+        core,
+        "_validated_reuse_v1",
+        lambda cohort, low_request, *_args, **_kwargs: reused(
+            cohort, low_request.request_identity_sha256
+        ),
+    )
+    monkeypatch.setattr(
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda _root: (_ for _ in ()).throw(
+            AssertionError("validated reuse must not prepare provider")
+        ),
+    )
+
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=selection_root,
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
+    assert not residue.exists()
+    assert list(cache.iterdir()) == []
 
 
 def test_selection_conflict_maps_to_evidence_conflict(
@@ -2561,6 +2782,11 @@ def test_low_store_failure_stops_before_later_low_effect(
         "resolve_selection_v1",
         lambda selection, _root: ("INSERTED", selection),
     )
+    monkeypatch.setattr(
+        core,
+        "_open_provider_cache_authority_v1",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
+    )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     monkeypatch.setattr(
         core.low,
@@ -2661,6 +2887,11 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
         core,
         "resolve_selection_v1",
         lambda admitted, _root: ("INSERTED", admitted),
+    )
+    monkeypatch.setattr(
+        core,
+        "_open_provider_cache_authority_v1",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
     )
     binding_reads: list[str] = []
 

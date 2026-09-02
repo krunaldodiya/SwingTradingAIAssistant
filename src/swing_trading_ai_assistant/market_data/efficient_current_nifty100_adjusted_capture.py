@@ -112,6 +112,28 @@ class EvidenceConflict(OSError):
     """Previously retained immutable evidence conflicts with current bytes."""
 
 
+def _assert_private_directory_edge_v1(
+    operation: StorageRootLeaseOperation,
+    descriptor: int,
+    name: str,
+    message: str,
+) -> None:
+    try:
+        assert_private_storage_operation(operation)
+        held = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=operation.descriptor, follow_symlinks=False)
+    except (OSError, ValueError):
+        raise EvidenceConflict(message) from None
+    if (
+        not stat.S_ISDIR(held.st_mode)
+        or stat.S_IMODE(held.st_mode) != 0o700
+        or held.st_uid != os.geteuid()
+        or (held.st_dev, held.st_ino, held.st_mode, held.st_uid)
+        != (named.st_dev, named.st_ino, named.st_mode, named.st_uid)
+    ):
+        raise EvidenceConflict(message)
+
+
 def _read_immutable_object_v1(
     operation: StorageRootLeaseOperation,
     parent: int,
@@ -1191,14 +1213,33 @@ def _read_retained_selection_v1(
                 directory = open_private_storage_directory(
                     operation, operation.descriptor, "selections", False
                 )
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "selections",
+                    "selection evidence conflict",
+                )
                 raw = _read_immutable_object_v1(
                     operation,
                     directory,
                     f"{_selection_source_identity_v1(selection)}.json",
                     MAX_SELECTION_REVISION_BYTES_V1,
                 )
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "selections",
+                    "selection evidence conflict",
+                )
                 return _retained_selection_v1(raw, selection)
             except FileNotFoundError:
+                if directory is not None:
+                    _assert_private_directory_edge_v1(
+                        operation,
+                        directory,
+                        "selections",
+                        "selection evidence conflict",
+                    )
                 return None
     except ValueError:
         raise EvidenceConflict("selection evidence conflict") from None
@@ -1272,19 +1313,43 @@ def resolve_selection_v1(
                 )
             except ValueError:
                 raise EvidenceConflict("selection evidence conflict") from None
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "selections",
+                "selection evidence conflict",
+            )
             try:
                 existing = _read_immutable_object_v1(
                     operation, directory, name, MAX_SELECTION_REVISION_BYTES_V1
                 )
             except FileNotFoundError:
                 _publish_immutable_object_v1(operation, directory, name, payload)
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "selections",
+                    "selection evidence conflict",
+                )
                 status, retained = "INSERTED", selection
                 expected = payload
             else:
                 status, retained = "REUSED", _retained_selection_v1(existing, selection)
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "selections",
+                    "selection evidence conflict",
+                )
                 expected = existing
             exact = _read_immutable_object_v1(
                 operation, directory, name, MAX_SELECTION_REVISION_BYTES_V1
+            )
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "selections",
+                "selection evidence conflict",
             )
             if exact != expected:
                 raise EvidenceConflict("selection exact read failed")
@@ -1391,7 +1456,9 @@ class _ProviderCacheAuthorityV1:
                 self.lease.close()
 
 
-def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
+def _open_provider_cache_authority_v1(
+    root: Path, *, require_empty: bool = True
+) -> _ProviderCacheAuthorityV1:
     identity = StorageRootLease.admit_existing_private_identity(root)
     if identity is None:
         raise RuntimeError("provider runtime configuration invalid")
@@ -1437,7 +1504,7 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
             held.st_ino,
             held.st_mode,
             held.st_uid,
-        ) != created_identity or os.listdir(descriptor):
+        ) != created_identity or (require_empty and os.listdir(descriptor)):
             raise RuntimeError("provider runtime configuration invalid")
         authority = _ProviderCacheAuthorityV1(
             lease,
@@ -1620,10 +1687,30 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
                     "plan33_bindings",
                     False,
                 )
-                return _read_immutable_object_v1(
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "plan33_bindings",
+                    "Plan 33 binding evidence conflict",
+                )
+                raw = _read_immutable_object_v1(
                     operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
                 )
+                _assert_private_directory_edge_v1(
+                    operation,
+                    directory,
+                    "plan33_bindings",
+                    "Plan 33 binding evidence conflict",
+                )
+                return raw
             except FileNotFoundError:
+                if directory is not None:
+                    _assert_private_directory_edge_v1(
+                        operation,
+                        directory,
+                        "plan33_bindings",
+                        "Plan 33 binding evidence conflict",
+                    )
                 return None
     except ValueError:
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
@@ -1653,6 +1740,12 @@ def _retain_plan33_binding_with_operation_v1(
         )
     except ValueError:
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
+    _assert_private_directory_edge_v1(
+        operation,
+        directory,
+        "plan33_bindings",
+        "Plan 33 binding evidence conflict",
+    )
     try:
         try:
             existing = _read_immutable_object_v1(
@@ -1660,9 +1753,21 @@ def _retain_plan33_binding_with_operation_v1(
             )
         except FileNotFoundError:
             _publish_immutable_object_v1(operation, directory, name, payload)
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
         else:
             if existing != payload:
                 raise EvidenceConflict("Plan 33 binding evidence conflict")
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
         if (
             _read_immutable_object_v1(
                 operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
@@ -1670,6 +1775,12 @@ def _retain_plan33_binding_with_operation_v1(
             != payload
         ):
             raise EvidenceConflict("Plan 33 binding evidence conflict")
+        _assert_private_directory_edge_v1(
+            operation,
+            directory,
+            "plan33_bindings",
+            "Plan 33 binding evidence conflict",
+        )
     finally:
         os.close(directory)
 
@@ -2014,6 +2125,28 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError, ValueError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
+
+    try:
+        cache_authority = _open_provider_cache_authority_v1(
+            selection_root, require_empty=False
+        )
+        cache_authority.close()
+    except (OSError, RuntimeError):
+        unavailable = tuple(
+            CohortOutcomeV1(
+                cohort.name, "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+            )
+            for cohort in request.cohorts
+        )
+        return _result_v1(
+            request,
+            selection,
+            cast(tuple[CohortOutcomeV1, CohortOutcomeV1], unavailable),
+            request_identities=cast(
+                tuple[str, str],
+                tuple(item.request_identity_sha256 for item in low_requests),
+            ),
+        )
 
     session: BoundedYahooSessionV1 | None = None
     provider: _Plan33ProviderV1 | None = None
