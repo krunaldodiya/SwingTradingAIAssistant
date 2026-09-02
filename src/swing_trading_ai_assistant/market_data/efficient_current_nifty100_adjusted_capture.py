@@ -22,7 +22,6 @@ from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
 from shutil import rmtree
-from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Final, Protocol, cast
 from urllib.request import HTTPRedirectHandler, build_opener
 
@@ -71,6 +70,7 @@ CONTRACT_VERSION_V1: Final = "efficient-current-nifty100-adjusted-capture@v1"
 CONFIGURATION_IDENTITY_SHA256_V1: Final = hashlib.sha256(
     b"plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|max_target=16384|max_response=2097152|max_aggregate=134217728|retry=0"
 ).hexdigest()
+_PROVIDER_CACHE_NAME_V1: Final = ".plan33-yfinance-cache"
 NIFTY_50_URL: Final = (
     "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
 )
@@ -1382,7 +1382,6 @@ class _ProviderCacheAuthorityV1:
             if os.listdir(self.descriptor):
                 raise RuntimeError("provider runtime configuration invalid")
             self.ensure_live()
-            os.rmdir(self.name, dir_fd=self.operation.descriptor)
             self.operation.ensure_live()
         finally:
             os.close(self.descriptor)
@@ -1402,16 +1401,14 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
     lease = result.lease
     operation = lease.root_operation(root)
     descriptor: int | None = None
-    location: Path | None = None
-    created_identity: tuple[int, int, int, int] | None = None
     entered = False
     try:
         operation.__enter__()
         entered = True
         assert_private_storage_operation(operation)
-        parent = _descriptor_directory_path_v1(operation.descriptor)
-        location = Path(mkdtemp(prefix=".plan33-yfinance-", dir=parent))
-        name = location.name
+        name = _PROVIDER_CACHE_NAME_V1
+        with suppress(FileExistsError):
+            os.mkdir(name, mode=0o700, dir_fd=operation.descriptor)
         created = os.stat(
             name,
             dir_fd=operation.descriptor,
@@ -1455,20 +1452,6 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
     except BaseException:
         if descriptor is not None:
             os.close(descriptor)
-        if location is not None and created_identity is not None:
-            with suppress(OSError):
-                named = os.stat(
-                    location.name,
-                    dir_fd=operation.descriptor,
-                    follow_symlinks=False,
-                )
-                if (
-                    named.st_dev,
-                    named.st_ino,
-                    named.st_mode,
-                    named.st_uid,
-                ) == created_identity:
-                    os.rmdir(location.name, dir_fd=operation.descriptor)
         if entered:
             operation.__exit__(None, None, None)
         lease.close()

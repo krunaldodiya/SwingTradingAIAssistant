@@ -2066,6 +2066,30 @@ def test_provider_identity_precedes_malformed_dataframe_schema(
     )
 
 
+def test_provider_identity_is_rechecked_after_response_before_interpretation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _strict_yfinance_frame()
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    def download(**kwargs: object) -> pd.DataFrame:
+        del kwargs
+        monkeypatch.setitem(module.__dict__, "__version__", "0.0.0")
+        return frame
+
+    monkeypatch.setattr(core, "_public_yfinance_download", download)
+
+    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+        tickers=("RELIANCE.NS",),
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="INSUFFICIENT_EVIDENCE",
+        reason="PROVIDER_IDENTITY_MISMATCH",
+    )
+
+
 def test_yfinance_distribution_mismatch_precedes_import_and_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2803,6 +2827,51 @@ def test_request_revision_read_rejects_corrupted_pointer(tmp_path: Path) -> None
     pointer.write_bytes(b"{}")
     pointer.chmod(0o400)
 
+    with pytest.raises(ValueError, match="request revision evidence conflict"):
+        read_capture_forward_request_revision_v1(tmp_path, request)
+
+
+def test_deeply_nested_prepared_revision_is_evidence_conflict(
+    tmp_path: Path,
+) -> None:
+    first_request = _request()
+    _capture(tmp_path)
+    request = _request(evaluated_at=first_request.evaluated_at + timedelta(minutes=1))
+    prepared = tmp_path / "prepared" / f"{request.request_identity_sha256}.json"
+    prepared.write_bytes(b"[" * 1_200 + b"0" + b"]" * 1_200)
+    prepared.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
+
+
+def test_deeply_nested_admitted_revision_is_evidence_conflict(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    captured = _capture(tmp_path)
+    revision = tmp_path / "revisions" / f"{captured.revision.revision_sha256}.json"
+    revision.chmod(0o600)
+    revision.write_bytes(b"[" * 1_200 + b"0" + b"]" * 1_200)
+    revision.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=captured.revision.retrieved_at + timedelta(minutes=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
     with pytest.raises(ValueError, match="request revision evidence conflict"):
         read_capture_forward_request_revision_v1(tmp_path, request)
 

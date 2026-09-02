@@ -262,6 +262,14 @@ provider work. The changed pool, supplied session, cadence, and byte-bound
 configuration is versioned rather than weakening or silently mutating the
 delivered `threads=False` contract.
 
+The provider cache uses one fixed owner-private directory beneath the
+descriptor-admitted selection root. Every close clears its contents through the
+held directory descriptor, revalidates the held and named identities, and
+retains the empty directory for the next invocation. It never removes the
+directory through a mutable pathname: POSIX pathname removal cannot atomically
+bind the removed directory to the previously checked identity. No cookie,
+provider response, or other cache content is retained.
+
 The governing [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
 merge ports the exact reviewed actionable Plan 30 runtime from source candidate
 `54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main without changing

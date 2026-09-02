@@ -942,6 +942,12 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
                 "INSUFFICIENT_EVIDENCE", "PROVIDER_IDENTITY_MISMATCH"
             )
         response = _public_yfinance_download(**kwargs)
+        try:
+            _load_yfinance_module()
+        except (ImportError, RuntimeError):
+            return CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_IDENTITY_MISMATCH"
+            )
         if response is None:
             return CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "PROVIDER_EMPTY"
@@ -2466,7 +2472,7 @@ def _read_prepared_revision(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
         held.close()
         raise _ImmutableEvidenceConflict("prepared revision invalid") from None
     except Exception:
@@ -2659,7 +2665,7 @@ def _hold_revision_descriptor(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
         held.close()
         raise _ImmutableEvidenceConflict("capture revision invalid") from None
     except Exception:

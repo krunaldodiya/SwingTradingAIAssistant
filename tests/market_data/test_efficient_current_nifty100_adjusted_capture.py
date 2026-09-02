@@ -233,6 +233,44 @@ def test_source_admission_is_canonical_and_current_at_retrieval() -> None:
             "CONSTITUENT_SOURCE_INVALID",
         ),
         (
+            lambda bodies: bodies.__setitem__(core.NIFTY_50_URL, _csv(_rows(0, 51))),
+            "CONSTITUENT_SOURCE_INVALID",
+        ),
+        (
+            lambda bodies: bodies.__setitem__(core.NIFTY_100_URL, _csv(_rows(0, 101))),
+            "CONSTITUENT_SOURCE_INVALID",
+        ),
+        (
+            lambda bodies: bodies.__setitem__(
+                core.NIFTY_50_URL, _csv([*_rows(0, 49), _rows(0, 1)[0]])
+            ),
+            "CONSTITUENT_SOURCE_INVALID",
+        ),
+        (
+            lambda bodies: bodies.__setitem__(
+                core.NIFTY_50_URL,
+                _csv(
+                    [
+                        (_rows(0, 1)[0][0], "Industry", _symbol(0), "BE", _isin(0)),
+                        *_rows(1, 49),
+                    ]
+                ),
+            ),
+            "CONSTITUENT_SOURCE_INVALID",
+        ),
+        (
+            lambda bodies: bodies.__setitem__(
+                core.NIFTY_50_URL,
+                _csv(
+                    [
+                        (_rows(0, 1)[0][0], "Industry", _symbol(0), "EQ", ""),
+                        *_rows(1, 49),
+                    ]
+                ),
+            ),
+            "CONSTITUENT_SOURCE_INVALID",
+        ),
+        (
             lambda bodies: bodies.__setitem__(core.NIFTY_100_URL, _csv(_rows(1, 100))),
             "CONSTITUENT_SOURCE_CONFLICT",
         ),
@@ -761,7 +799,11 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
     cache = [path for path in root.iterdir() if path.name != '.ingestion.lock']
     assert len(cache) == 1 and cache[0].is_dir()
     session.close()
-    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
+    assert {path.name for path in root.iterdir()} == {
+        '.ingestion.lock',
+        '.plan33-yfinance-cache',
+    }
+    assert list((root / '.plan33-yfinance-cache').iterdir()) == []
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
         [sys.executable, "-c", script],
@@ -915,6 +957,35 @@ def test_cache_admission_preserves_empty_preopen_substitution(
     assert list((root / "moved-cache").iterdir()) == []
 
 
+def test_cache_cleanup_reuses_empty_slot_without_path_removal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    authority = core._open_provider_cache_authority_v1(root)
+    cache_name = authority.name
+    (authority.location / "private-cookie").write_text("private")
+    original_rmdir = core.os.rmdir
+
+    def only_descriptor_cleanup(*args: object, **kwargs: object) -> None:
+        if args != (".",):
+            raise AssertionError("pathname cache removal")
+        original_rmdir(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(core.os, "rmdir", only_descriptor_cleanup)
+    authority.close()
+
+    retained = root / cache_name
+    assert retained.is_dir()
+    assert list(retained.iterdir()) == []
+    reused = core._open_provider_cache_authority_v1(root)
+    assert reused.name == cache_name
+    reused.close()
+
+
 def test_session_constructor_failure_releases_cache_and_admission() -> None:
     script = """
 from pathlib import Path
@@ -936,7 +1007,11 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
         pass
     else:
         raise AssertionError('constructor failure accepted')
-    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
+    assert {path.name for path in root.iterdir()} == {
+        '.ingestion.lock',
+        '.plan33-yfinance-cache',
+    }
+    assert list((root / '.plan33-yfinance-cache').iterdir()) == []
     assert not core._PROVIDER_ADMISSION_LOCK.locked()
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
@@ -1692,7 +1767,11 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
         pass
     else:
         raise AssertionError('debug dependency logging accepted')
-    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
+    assert {path.name for path in root.iterdir()} == {
+        '.ingestion.lock',
+        '.plan33-yfinance-cache',
+    }
+    assert list((root / '.plan33-yfinance-cache').iterdir()) == []
     assert not core._PROVIDER_ADMISSION_LOCK.locked()
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
