@@ -648,6 +648,26 @@ def test_runtime_identity_drift_stops_before_official_source_effect(
     )
 
 
+def test_malformed_input_precedes_runtime_identity_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def invalid_runtime() -> str:
+        raise RuntimeError("runtime drift")
+
+    monkeypatch.setattr(core, "_runtime_code_identity_v1", invalid_runtime)
+    result = core.capture_current_nifty100_v1(
+        json.dumps(
+            {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
+        ).encode(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+    )
+    assert result == core.SharedFailureV1("MALFORMED_INPUT", None)
+
+
 def test_nested_low_runtime_drift_stops_before_official_source_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -776,6 +796,127 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
         ("NIFTY_NEXT_50", "PROVIDER_ERROR"),
     ]
     assert calls == [nifty50_root, next50_root, next50_root]
+
+
+def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        core.low,
+        "parse_capture_forward_request_v1",
+        lambda _raw: SimpleNamespace(
+            request_identity_sha256="a" * 64,
+            schedule="schedule",
+            decision_session="session",
+            decision_cutoff="cutoff",
+        ),
+    )
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root: True,
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda _root, _request: None,
+    )
+    monkeypatch.setattr(
+        core,
+        "resolve_selection_v1",
+        lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    monkeypatch.setattr(
+        core.low,
+        "_capture_forward_adjusted_ohlcv_with_provider_v1",
+        lambda *_args: core.low.CaptureForwardAdjustedOhlcvFailureV1(
+            "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+        ),
+    )
+    preparations = 0
+
+    def malformed_runtime() -> None:
+        nonlocal preparations
+        preparations += 1
+        raise KeyError("POOL_NAME")
+
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", malformed_runtime)
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert [(row.cohort, row.reason) for row in result.cohorts] == [
+        ("NIFTY_50", "CONFIGURATION_INVALID"),
+        ("NIFTY_NEXT_50", "CONFIGURATION_INVALID"),
+    ]
+    assert preparations == 1
+
+
+def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(core, "_runtime_code_identity_v1", lambda: "a" * 64)
+    monkeypatch.setattr(
+        core.low,
+        "parse_capture_forward_request_v1",
+        lambda _raw: SimpleNamespace(
+            request_identity_sha256="a" * 64,
+            schedule="schedule",
+            decision_session="session",
+            decision_cutoff="cutoff",
+        ),
+    )
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root: True,
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda _root, _request: None,
+    )
+    monkeypatch.setattr(
+        core,
+        "resolve_selection_v1",
+        lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    calls = 0
+
+    def changed_schedule(*_args: object) -> object:
+        nonlocal calls
+        calls += 1
+        return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+            "INSUFFICIENT_EVIDENCE", "SCHEDULE_EVIDENCE_MISMATCH"
+        )
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", changed_schedule
+    )
+    monkeypatch.setattr(
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda: (_ for _ in ()).throw(AssertionError("provider preparation")),
+    )
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    assert calls == 1
 
 
 def test_plan33_provider_replaces_disabled_threads_with_exact_pool_and_session(

@@ -1423,7 +1423,6 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
             "PROVIDER_VALUE_INVALID",
             "RETRIEVED_AFTER_DECISION_CUTOFF",
             "RETRIEVED_BEFORE_OFFICIAL_CLOSE",
-            "SCHEDULE_EVIDENCE_MISMATCH",
         }:
             reason = "PROVIDER_FRAME_INCOMPLETE"
         elif result.reason == "PROVIDER_IDENTITY_MISMATCH":
@@ -1517,13 +1516,13 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     ):
         return SharedFailureV1("MALFORMED_INPUT", None)
     try:
-        _runtime_code_identity_v1()
-    except RuntimeError:
-        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
-    try:
         request = parse_request_v1(raw_request)
     except ValueError:
         return SharedFailureV1("MALFORMED_INPUT", None)
+    try:
+        _runtime_code_identity_v1()
+    except RuntimeError:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
 
     low_requests: list[low.CaptureForwardAdjustedOhlcvRequestV1] = []
     mapping_invalid = False
@@ -1651,7 +1650,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 if session is None:
                     try:
                         session = prepare_yfinance_runtime_v1()
-                    except (ImportError, RuntimeError):
+                    except Exception:
                         runtime_unavailable = True
                         outcomes[index] = CohortOutcomeV1(
                             cohort.name,
@@ -1673,6 +1672,11 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
                     low_request, active_provider, root, schedule_root
                 )
+            if (
+                isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
+                and result.reason == "SCHEDULE_EVIDENCE_MISMATCH"
+            ):
+                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
 
             outcome = _cohort_outcome_v1(
                 cohort,

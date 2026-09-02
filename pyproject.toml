@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Deterministic market-data and research foundations for Nifty 50 swing trading"
 requires-python = ">=3.11"
 dependencies = [
+    "curl-cffi==0.16.1",
     "duckdb>=1.5.5,<1.6",
+    "multitasking==0.0.13",
     "pyarrow>=25,<26",
     "python-dotenv>=1.1",
     "yfinance==1.6.0",

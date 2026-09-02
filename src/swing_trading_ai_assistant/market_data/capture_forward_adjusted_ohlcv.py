@@ -2377,7 +2377,7 @@ def _validated_admission_chain(
         raise
 
 
-def _read_request_revision(
+def _read_request_revision(  # noqa: C901 - bounded immutable-admission transaction
     operation: StorageRootLeaseOperation,
     requests: _PrivateDirectory,
     revisions: _PrivateDirectory,
@@ -2411,6 +2411,8 @@ def _read_request_revision(
             held_revision.ensure_exact()
         for pointer in held_pointers:
             pointer.ensure_exact()
+        if not commit_pointer and requested_pointer[1].mode != 0o400:
+            return None
         if commit_pointer:
             requested_pointer[1].commit()
         for held_revision in held_revisions:

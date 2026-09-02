@@ -2797,13 +2797,11 @@ def test_request_revision_read_does_not_commit_recoverable_pointer(
     tmp_path: Path,
 ) -> None:
     request = _request()
-    captured = _capture(tmp_path)
+    _capture(tmp_path)
     pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
     pointer.chmod(0o600)
 
-    assert read_capture_forward_request_revision_v1(tmp_path, request) == (
-        captured.revision
-    )
+    assert read_capture_forward_request_revision_v1(tmp_path, request) is None
     assert stat.S_IMODE(pointer.stat().st_mode) == 0o600
 
 

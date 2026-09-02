@@ -154,6 +154,11 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
 def test_distribution_ci_secrets_and_future_scope_are_release_bounded() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         project = tomllib.load(file)["project"]
+    assert {
+        "curl-cffi==0.16.1",
+        "multitasking==0.0.13",
+        "yfinance==1.6.0",
+    } <= set(project["dependencies"])
     assert project["scripts"] == {
         "capture-forward-adjusted-ohlcv": (
             "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
