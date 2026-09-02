@@ -1967,11 +1967,6 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
     def capture(
         low_request: object, provider: object, _root: Path, _schedule: Path
     ) -> object:
-        if isinstance(provider, core._UnresolvedProbeV1):
-            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
-            )
-        provider_calls.append(low_request.request_identity_sha256)
         revision = SimpleNamespace(
             request_identity_sha256=low_request.request_identity_sha256,
             revision_sha256=low_request.request_identity_sha256,
@@ -1985,23 +1980,26 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
             source_identity_sha256="b" * 64,
             retrieved_at=_NOW + timedelta(minutes=1),
         )
+        if isinstance(provider, core._UnresolvedProbeV1):
+            if not provider_calls:
+                return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                    "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+                )
+            return core.low.CaptureForwardAdjustedOhlcvSuccessV1("REUSED", revision)
+        provider_calls.append(low_request.request_identity_sha256)
         return core.low.CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", revision)
 
     monkeypatch.setattr(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
     )
 
-    class _Session:
-        resource_limited = False
-        rate_limited = False
-
-        def begin_cohort(self) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda _root: _Session())
+    monkeypatch.setattr(
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda root: core.BoundedYahooSessionV1(
+            cache_authority=core._open_provider_cache_authority_v1(root)
+        ),
+    )
     monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     selection_root = tmp_path / "selection"
@@ -2017,10 +2015,10 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
 
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
-    assert [row.code for row in result.cohorts] == ["INSERTED", "INSERTED"]
+    assert [row.code for row in result.cohorts] == ["INSERTED", "REUSED"]
     assert len(revision_reads) == 2
     assert not original_identities.intersection(revision_reads)
-    assert provider_calls == revision_reads
+    assert provider_calls == revision_reads[:1]
     assert selection_root.stat().st_mode & 0o777 == 0o700
 
 

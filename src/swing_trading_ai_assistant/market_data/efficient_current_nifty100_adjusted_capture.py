@@ -1985,6 +1985,11 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 and result.reason == "SCHEDULE_EVIDENCE_MISMATCH"
             ):
                 return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+            if (
+                isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1)
+                and session is not None
+            ):
+                active_session = session
 
             outcome = _cohort_outcome_v1(
                 cohort,
