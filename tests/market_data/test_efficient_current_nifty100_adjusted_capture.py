@@ -165,6 +165,15 @@ def test_request_bound_and_exact_enablement_are_fail_closed() -> None:
             "MALFORMED_INPUT",
             None,
         )
+    duplicate_enabled = _request().replace(
+        b'"enabled":true', b'"enabled":false,"enabled":true', 1
+    )
+    assert core.preflight_request_v1(duplicate_enabled, acknowledged=True) == (
+        "MALFORMED_INPUT",
+        None,
+    )
+    with pytest.raises(ValueError):
+        core.parse_request_v1(duplicate_enabled)
     assert core.preflight_request_v1(_request(), acknowledged=False) == (
         "AUTHORIZATION_DENIED",
         "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",

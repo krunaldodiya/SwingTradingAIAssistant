@@ -285,6 +285,17 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _unique_json_object_v1(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
 def _digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -324,8 +335,8 @@ def preflight_request_v1(
     if type(raw) is not bytes or len(raw) > MAX_REQUEST_BYTES_V1:
         return "MALFORMED_INPUT", None
     try:
-        decoded: object = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        decoded: object = json.loads(raw, object_pairs_hook=_unique_json_object_v1)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return "MALFORMED_INPUT", None
     if type(decoded) is not dict:
         return "MALFORMED_INPUT", None
@@ -350,8 +361,8 @@ def parse_request_v1(  # noqa: C901 - closed untrusted request boundary
     if type(raw) is not bytes or not raw or len(raw) > MAX_REQUEST_BYTES_V1:
         raise ValueError("request is invalid")
     try:
-        decoded: object = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        decoded: object = json.loads(raw, object_pairs_hook=_unique_json_object_v1)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ValueError("request is invalid") from error
     if type(decoded) is not dict:
         raise ValueError("request is invalid")
