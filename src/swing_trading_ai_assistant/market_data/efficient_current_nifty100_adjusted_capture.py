@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import import_module
@@ -1313,21 +1313,24 @@ class _ProviderCacheAuthorityV1:
             raise RuntimeError("provider runtime configuration invalid")
 
     def close(self) -> None:
-        safe_to_remove = False
         try:
             self.ensure_live()
-            safe_to_remove = True
-        finally:
             try:
-                if safe_to_remove:
-                    rmtree(self.name, dir_fd=self.operation.descriptor)
-                    self.operation.ensure_live()
+                rmtree(".", dir_fd=self.descriptor)
+            except OSError as error:
+                if error.errno not in {errno.EBUSY, errno.EINVAL}:
+                    raise
+            if os.listdir(self.descriptor):
+                raise RuntimeError("provider runtime configuration invalid")
+            self.ensure_live()
+            os.rmdir(self.name, dir_fd=self.operation.descriptor)
+            self.operation.ensure_live()
+        finally:
+            os.close(self.descriptor)
+            try:
+                self.operation.__exit__(None, None, None)
             finally:
-                os.close(self.descriptor)
-                try:
-                    self.operation.__exit__(None, None, None)
-                finally:
-                    self.lease.close()
+                self.lease.close()
 
 
 def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
@@ -1369,7 +1372,8 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
         if descriptor is not None:
             os.close(descriptor)
         if location is not None:
-            rmtree(location, ignore_errors=True)
+            with suppress(OSError):
+                location.rmdir()
         if entered:
             operation.__exit__(None, None, None)
         lease.close()
@@ -1410,29 +1414,31 @@ def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
         finally:
             _PROVIDER_ADMISSION_LOCK.release()
         raise
-    previous_disable = logging.root.manager.disable
-    logging.disable(logging.CRITICAL)
     try:
-        with (
-            redirect_stdout(_DiscardOutputV1()),
-            redirect_stderr(_DiscardOutputV1()),
-        ):
-            module = low._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
-            set_cache = module.__dict__.get("set_tz_cache_location")
-            if not callable(set_cache):
-                raise RuntimeError("provider runtime configuration invalid")
-            set_cache(str(cache.location))
+        previous_disable = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
+        try:
+            with (
+                redirect_stdout(_DiscardOutputV1()),
+                redirect_stderr(_DiscardOutputV1()),
+            ):
+                module = low._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+                set_cache = module.__dict__.get("set_tz_cache_location")
+                if not callable(set_cache):
+                    raise RuntimeError("provider runtime configuration invalid")
+                set_cache(str(cache.location))
+        finally:
+            logging.disable(previous_disable)
         if (
             module.__dict__.get("__version__") != "1.6.0"
             or not _pool_is_exact_v1()
+            or multitasking.get_active_tasks()
             or not _dependency_logging_is_safe_v1()
         ):
             raise RuntimeError("provider runtime configuration invalid")
     except BaseException:
         session.close()
         raise
-    finally:
-        logging.disable(previous_disable)
     return session
 
 
@@ -1442,7 +1448,12 @@ class _Plan33ProviderV1:
         self._adapter = low.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
 
     def download(self, **kwargs: object) -> object:
-        if not _pool_is_exact_v1() or kwargs.get("threads") is not False:
+        if (
+            not _pool_is_exact_v1()
+            or multitasking.get_active_tasks()
+            or not _dependency_logging_is_safe_v1()
+            or kwargs.get("threads") is not False
+        ):
             raise RuntimeError("provider runtime configuration invalid")
         kwargs["threads"] = 8
         kwargs["session"] = self._session

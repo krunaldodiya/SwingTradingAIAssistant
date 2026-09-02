@@ -741,7 +741,7 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_cache_cleanup_uses_parent_descriptor_while_child_is_live(
+def test_cache_cleanup_cannot_delete_a_substituted_sibling(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     root = tmp_path / "private"
@@ -750,17 +750,33 @@ def test_cache_cleanup_uses_parent_descriptor_while_child_is_live(
     assert lease is not None
     lease.close()
     authority = core._open_provider_cache_authority_v1(root)
+    retained = root / "retained"
+    retained.mkdir(mode=0o700)
+    (retained / "sentinel").write_text("keep")
     original_rmtree = core.rmtree
 
-    def guarded_rmtree(path: str, *, dir_fd: int | None = None) -> None:
-        assert path == authority.name
-        assert dir_fd == authority.operation.descriptor
-        os.fstat(authority.descriptor)
+    def substitute_then_remove(path: str, *, dir_fd: int | None = None) -> None:
+        assert path == "."
+        assert dir_fd == authority.descriptor
+        os.rename(
+            authority.name,
+            "moved-cache",
+            src_dir_fd=authority.operation.descriptor,
+            dst_dir_fd=authority.operation.descriptor,
+        )
+        os.rename(
+            "retained",
+            authority.name,
+            src_dir_fd=authority.operation.descriptor,
+            dst_dir_fd=authority.operation.descriptor,
+        )
         original_rmtree(path, dir_fd=dir_fd)
 
-    monkeypatch.setattr(core, "rmtree", guarded_rmtree)
-    authority.close()
-    assert [path.name for path in root.iterdir()] == [".ingestion.lock"]
+    monkeypatch.setattr(core, "rmtree", substitute_then_remove)
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        authority.close()
+    assert (root / authority.name / "sentinel").read_text() == "keep"
+    assert list((root / "moved-cache").iterdir()) == []
 
 
 def test_session_constructor_failure_releases_cache_and_admission() -> None:
@@ -1125,6 +1141,8 @@ def test_plan33_provider_replaces_disabled_threads_with_exact_pool_and_session(
         core.low, "YfinanceCaptureForwardAdjustedOhlcvAdapterV1", _Adapter
     )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
     session: Any = object()
     provider = core._Plan33ProviderV1(session)
     provider.download(threads=False, tickers=("S000.NS",))
@@ -1132,6 +1150,36 @@ def test_plan33_provider_replaces_disabled_threads_with_exact_pool_and_session(
     assert captured["session"] is session
     assert captured["_plan33_normalize_provider_order"] is True
     assert capsys.readouterr() == ("", "")
+
+
+def test_plan33_provider_rejects_changed_runtime_before_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    class _Adapter:
+        def download(self, **_kwargs: object) -> object:
+            nonlocal called
+            called = True
+            return object()
+
+    monkeypatch.setattr(
+        core.low, "YfinanceCaptureForwardAdjustedOhlcvAdapterV1", _Adapter
+    )
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: False)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
+    provider = core._Plan33ProviderV1(object())
+
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        provider.download(threads=False)
+    assert not called
+
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [object()])
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        provider.download(threads=False)
+    assert not called
 
 
 def test_cli_rejects_duplicate_or_missing_owner_private_acknowledgement(
@@ -1325,6 +1373,49 @@ with __import__('tempfile').TemporaryDirectory(dir=__import__('pathlib').Path.ho
     lease.close()
     session = core.prepare_yfinance_runtime_v1(root)
     session.close()
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+
+
+def test_yfinance_imported_debug_logging_is_rejected() -> None:
+    script = """
+import logging
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
+
+def debug_import():
+    logging.getLogger('yfinance').setLevel(logging.DEBUG)
+    return SimpleNamespace(
+        __version__='1.6.0',
+        set_tz_cache_location=lambda _path: None,
+    )
+
+core.low._load_yfinance_module = debug_import
+with TemporaryDirectory(dir=Path.home()) as temporary:
+    root = Path(temporary)
+    root.chmod(0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    try:
+        core.prepare_yfinance_runtime_v1(root)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('debug dependency logging accepted')
+    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
+    assert not core._PROVIDER_ADMISSION_LOCK.locked()
 """
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
         [sys.executable, "-c", script],
