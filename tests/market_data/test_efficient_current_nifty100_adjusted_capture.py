@@ -779,6 +779,39 @@ def test_cache_cleanup_cannot_delete_a_substituted_sibling(
     assert list((root / "moved-cache").iterdir()) == []
 
 
+def test_cache_cleanup_clears_the_held_cache_before_name_validation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    authority = core._open_provider_cache_authority_v1(root)
+    (authority.location / "private-cookie").write_text("private")
+    retained = root / "retained"
+    retained.mkdir(mode=0o700)
+    (retained / "sentinel").write_text("keep")
+    os.rename(
+        authority.name,
+        "moved-cache",
+        src_dir_fd=authority.operation.descriptor,
+        dst_dir_fd=authority.operation.descriptor,
+    )
+    os.rename(
+        "retained",
+        authority.name,
+        src_dir_fd=authority.operation.descriptor,
+        dst_dir_fd=authority.operation.descriptor,
+    )
+
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        authority.close()
+
+    assert (root / authority.name / "sentinel").read_text() == "keep"
+    assert list((root / "moved-cache").iterdir()) == []
+
+
 def test_session_constructor_failure_releases_cache_and_admission() -> None:
     script = """
 from pathlib import Path
@@ -1059,6 +1092,35 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
     ]
     assert preparations == 1
 
+    class _CloseFailure:
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            pass
+
+        def close(self) -> None:
+            raise RuntimeError("cache identity changed")
+
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda _root: _CloseFailure()
+    )
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection-close-failure",
+        nifty50_root=tmp_path / "nifty50-close-failure",
+        nifty_next50_root=tmp_path / "next50-close-failure",
+        schedule_root=tmp_path / "schedule-close-failure",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert [(row.cohort, row.reason) for row in result.cohorts] == [
+        ("NIFTY_50", "CONFIGURATION_INVALID"),
+        ("NIFTY_NEXT_50", "CONFIGURATION_INVALID"),
+    ]
+
 
 def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1171,14 +1233,19 @@ def test_plan33_provider_rejects_changed_runtime_before_call(
     monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
     provider = core._Plan33ProviderV1(object())
 
-    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
-        provider.download(threads=False)
+    failure = provider.download(threads=False)
+    assert failure == core.low.CaptureForwardAdjustedOhlcvFailureV1(
+        "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
+    )
+    outcome = core._cohort_outcome_v1(
+        SimpleNamespace(name="NIFTY_50"), None, failure, None, None
+    )
+    assert outcome.reason == "CONFIGURATION_INVALID"
     assert not called
 
     monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
     monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [object()])
-    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
-        provider.download(threads=False)
+    assert provider.download(threads=False) == failure
     assert not called
 
 

@@ -1294,27 +1294,31 @@ class _ProviderCacheAuthorityV1:
     location: Path
     identity: tuple[int, int, int, int]
 
-    def ensure_live(self) -> None:
+    def ensure_descriptor_live(self) -> None:
         self.operation.ensure_live()
         held = os.fstat(self.descriptor)
-        named = os.stat(
-            self.name,
-            dir_fd=self.operation.descriptor,
-            follow_symlinks=False,
-        )
         actual = (held.st_dev, held.st_ino, held.st_mode, held.st_uid)
         if (
             actual != self.identity
-            or actual != (named.st_dev, named.st_ino, named.st_mode, named.st_uid)
             or not stat.S_ISDIR(held.st_mode)
             or stat.S_IMODE(held.st_mode) != 0o700
             or held.st_uid != os.geteuid()
         ):
             raise RuntimeError("provider runtime configuration invalid")
 
+    def ensure_live(self) -> None:
+        self.ensure_descriptor_live()
+        named = os.stat(
+            self.name,
+            dir_fd=self.operation.descriptor,
+            follow_symlinks=False,
+        )
+        if self.identity != (named.st_dev, named.st_ino, named.st_mode, named.st_uid):
+            raise RuntimeError("provider runtime configuration invalid")
+
     def close(self) -> None:
         try:
-            self.ensure_live()
+            self.ensure_descriptor_live()
             try:
                 rmtree(".", dir_fd=self.descriptor)
             except OSError as error:
@@ -1454,7 +1458,9 @@ class _Plan33ProviderV1:
             or not _dependency_logging_is_safe_v1()
             or kwargs.get("threads") is not False
         ):
-            raise RuntimeError("provider runtime configuration invalid")
+            return low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
+            )
         kwargs["threads"] = 8
         kwargs["session"] = self._session
         kwargs["_plan33_normalize_provider_order"] = True
@@ -1709,7 +1715,9 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
     elif session is not None and session.rate_limited:
         reason = "PROVIDER_RATE_LIMITED"
     elif isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1):
-        if result.reason == "PROVIDER_CALL_FAILED":
+        if result.reason == "RUNTIME_CONFIGURATION_INVALID":
+            reason = "CONFIGURATION_INVALID"
+        elif result.reason == "PROVIDER_CALL_FAILED":
             reason = "PROVIDER_ERROR"
         elif result.reason.startswith("FRAME_") or result.reason in {
             "CORRECTION_CONTENT_UNCHANGED",
@@ -1936,6 +1944,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     session: BoundedYahooSessionV1 | None = None
     provider: _Plan33ProviderV1 | None = None
     runtime_unavailable = False
+    cleanup_failed = False
     try:
         for index, (cohort, low_request, root) in enumerate(
             zip(request.cohorts, low_requests, roots, strict=True)
@@ -2018,7 +2027,18 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             outcomes[index] = outcome
     finally:
         if session is not None:
-            session.close()
+            try:
+                session.close()
+            except (OSError, RuntimeError):
+                cleanup_failed = True
+
+    if cleanup_failed:
+        outcomes = [
+            CohortOutcomeV1(
+                cohort.name, "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+            )
+            for cohort in request.cohorts
+        ]
 
     for index, outcome in enumerate(outcomes):
         if outcome is None:
