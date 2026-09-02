@@ -1162,12 +1162,32 @@ def _ensure_capture_state(
         raise _ImmutableEvidenceConflict("correction parent is no longer admitted")
 
 
+def _validate_typed_request_identity_v1(request: object) -> None:
+    try:
+        if not isinstance(request, CaptureForwardAdjustedOhlcvRequestV1):
+            raise ValueError
+        cohort_identity = _sha(
+            _canonical([member.canonical_value() for member in request.cohort])
+        )
+        request_identity = _sha(
+            _canonical(request.canonical_value(include_request_identity=False))
+        )
+        if (
+            request.cohort_identity_sha256 != cohort_identity
+            or request.request_identity_sha256 != request_identity
+        ):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("capture request identity mismatch") from None
+
+
 def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
     request: CaptureForwardAdjustedOhlcvRequestV1,
     provider: _CaptureForwardAdjustedOhlcvProviderV1,
     store_root: Path,
     schedule_root: Path,
 ) -> CaptureForwardAdjustedOhlcvResultV1:
+    _validate_typed_request_identity_v1(request)
     if not _valid_absolute_path(store_root) or not _valid_absolute_path(schedule_root):
         raise ValueError("capture invocation is invalid")
     if (
@@ -2513,6 +2533,7 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
     store_root: Path, request: CaptureForwardAdjustedOhlcvRequestV1
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
     """Read-validate one request's immutable store state without creating it."""
+    _validate_typed_request_identity_v1(request)
 
     if not _valid_absolute_path(store_root):
         raise ValueError("request revision read is invalid")

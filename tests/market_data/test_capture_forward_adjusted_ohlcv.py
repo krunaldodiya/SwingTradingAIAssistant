@@ -1771,6 +1771,30 @@ def test_capture_request_parser_rejects_request_identity_substitution() -> None:
         parse_capture_forward_request_v1(raw)
 
 
+@pytest.mark.parametrize(
+    "identity_field", ["cohort_identity_sha256", "request_identity_sha256"]
+)
+def test_typed_request_identity_is_rechecked_before_effects(
+    identity_field: str, tmp_path: Path
+) -> None:
+    request = _request()
+    object.__setattr__(request, identity_field, "f" * 64)
+    provider = _Provider(retrieved_at=request.decision_cutoff)
+    store_root = tmp_path / "store"
+    schedule_root = tmp_path / "schedule"
+
+    with pytest.raises(ValueError, match="capture request identity mismatch"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request, provider, store_root, schedule_root
+        )
+    with pytest.raises(ValueError, match="capture request identity mismatch"):
+        read_capture_forward_request_revision_v1(store_root, request)
+
+    assert provider.calls == 0
+    assert not store_root.exists()
+    assert not schedule_root.exists()
+
+
 def test_capture_request_parser_rejects_excessive_json_depth() -> None:
     raw = b"[" * 1_100 + b"]" * 1_100
 

@@ -1403,6 +1403,7 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
     operation = lease.root_operation(root)
     descriptor: int | None = None
     location: Path | None = None
+    created_identity: tuple[int, int, int, int] | None = None
     entered = False
     try:
         operation.__enter__()
@@ -1454,9 +1455,20 @@ def _open_provider_cache_authority_v1(root: Path) -> _ProviderCacheAuthorityV1:
     except BaseException:
         if descriptor is not None:
             os.close(descriptor)
-        if location is not None:
+        if location is not None and created_identity is not None:
             with suppress(OSError):
-                location.rmdir()
+                named = os.stat(
+                    location.name,
+                    dir_fd=operation.descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    named.st_dev,
+                    named.st_ino,
+                    named.st_mode,
+                    named.st_uid,
+                ) == created_identity:
+                    os.rmdir(location.name, dir_fd=operation.descriptor)
         if entered:
             operation.__exit__(None, None, None)
         lease.close()

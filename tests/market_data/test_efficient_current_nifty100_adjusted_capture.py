@@ -881,6 +881,40 @@ def test_cache_admission_rejects_preopen_name_substitution(
     assert list((root / "moved-cache").iterdir()) == []
 
 
+def test_cache_admission_preserves_empty_preopen_substitution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    (root / "retained").mkdir(mode=0o700)
+    original_open = core.os.open
+
+    def substitute_before_open(
+        path: str | bytes | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(path, str) and path.startswith(".plan33-yfinance-"):
+            assert dir_fd is not None
+            os.rename(path, "moved-cache", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.rename("retained", path, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(core.os, "open", substitute_before_open)
+    with pytest.raises(RuntimeError, match="provider runtime configuration invalid"):
+        core._open_provider_cache_authority_v1(root)
+
+    replacements = list(root.glob(".plan33-yfinance-*"))
+    assert len(replacements) == 1
+    assert replacements[0].is_dir()
+    assert list((root / "moved-cache").iterdir()) == []
+
+
 def test_session_constructor_failure_releases_cache_and_admission() -> None:
     script = """
 from pathlib import Path
