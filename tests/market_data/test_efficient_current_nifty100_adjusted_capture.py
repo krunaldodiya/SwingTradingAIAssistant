@@ -409,6 +409,51 @@ def test_first_429_is_intercepted_without_second_request(
     assert calls == 1
 
 
+def test_non429_yfinance_retry_remains_one_bounded_request() -> None:
+    script = """
+from types import SimpleNamespace
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
+
+statuses = iter((401, 200))
+calls = []
+sleeps = []
+
+def request(_self, _method, _url, **kwargs):
+    status = next(statuses)
+    calls.append(status)
+    kwargs["content_callback"](b"x")
+    return SimpleNamespace(status_code=status, content=b"")
+
+core.CurlSession.request = request
+session = core.BoundedYahooSessionV1(clock=lambda: 0.0, sleep=sleeps.append)
+session.begin_cohort()
+data_module = core.import_module("yfinance.data")
+data = data_module.YfData(session=session)
+crumbs = iter((("first", "basic"), ("second", "csrf")))
+strategies = []
+data._get_cookie_and_crumb = lambda *_args: next(crumbs)
+data._set_cookie_strategy = strategies.append
+response = data._make_request(
+    "https://query1.finance.yahoo.com/v8/chart",
+    session.get,
+)
+session.close()
+
+assert response.status_code == 200
+assert calls == [401, 200]
+assert strategies == ["csrf"]
+assert sleeps == [core.MIN_START_INTERVAL_SECONDS_V1]
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_official_source_redirect_handler_denies_every_redirect() -> None:
     handler = core._RejectRedirectHandlerV1()
     assert (
@@ -600,6 +645,14 @@ def test_exact_source_retry_reuses_original_selection_without_timestamp_refresh(
         / f"{first.selection_identity_sha256}.json"
     )
     modified = stored.stat().st_mtime_ns
+    observed = core._read_retained_selection_v1(later, root)
+    assert observed == first
+    low_request = core.low.parse_capture_forward_request_v1(
+        core._canonical(request.cohorts[0].request) + b"\n"
+    )
+    first_bound = core._selection_bound_low_request_v1(low_request, first)
+    retry_bound = core._selection_bound_low_request_v1(low_request, observed)
+    assert retry_bound.request_identity_sha256 == first_bound.request_identity_sha256
     status, retained = core.resolve_selection_v1(later, root)
     assert status == "REUSED"
     assert retained == first
@@ -737,6 +790,7 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
             schedule="schedule",
             decision_session="session",
             decision_cutoff="cutoff",
+            evaluated_at=_NOW,
         ),
     )
     monkeypatch.setattr(
@@ -818,6 +872,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
             schedule="schedule",
             decision_session="session",
             decision_cutoff="cutoff",
+            evaluated_at=_NOW,
         ),
     )
     monkeypatch.setattr(
@@ -880,6 +935,7 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
             schedule="schedule",
             decision_session="session",
             decision_cutoff="cutoff",
+            evaluated_at=_NOW,
         ),
     )
     monkeypatch.setattr(
@@ -1653,6 +1709,24 @@ def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
         assert len(tuple((root / "plan33_bindings").iterdir())) == 2
 
 
+def test_later_selection_rebinds_low_request_once() -> None:
+    request, selection = _admitted()
+    original = core.low.parse_capture_forward_request_v1(
+        core._canonical(request.cohorts[0].request) + b"\n"
+    )
+    later = replace(
+        selection,
+        retrieved_at=original.evaluated_at + timedelta(seconds=1),
+        selection_identity_sha256="f" * 64,
+    )
+
+    rebound = core._selection_bound_low_request_v1(original, later)
+
+    assert rebound.evaluated_at == later.retrieved_at
+    assert rebound.request_identity_sha256 != original.request_identity_sha256
+    assert core._selection_bound_low_request_v1(rebound, later) == rebound
+
+
 def test_binding_io_failure_is_retention_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1700,6 +1774,86 @@ def test_binding_io_failure_is_retention_failure(
     assert outcome == core.CohortOutcomeV1(
         "NIFTY_50", "INSUFFICIENT_EVIDENCE", "RETENTION_FAILED"
     )
+
+
+def test_source_transition_uses_new_low_identity_and_provider_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, _selection = _admitted()
+    originals = tuple(
+        core.low.parse_capture_forward_request_v1(
+            core._canonical(cohort.request) + b"\n"
+        )
+        for cohort in request.cohorts
+    )
+    original_identities = {item.request_identity_sha256 for item in originals}
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root: True,
+    )
+    monkeypatch.setattr(
+        core,
+        "resolve_selection_v1",
+        lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    revision_reads: list[str] = []
+
+    def read_revision(_root: Path, low_request: object) -> object | None:
+        identity = low_request.request_identity_sha256
+        revision_reads.append(identity)
+        return object() if identity in original_identities else None
+
+    monkeypatch.setattr(
+        core.low, "read_capture_forward_request_revision_v1", read_revision
+    )
+    provider_calls: list[str] = []
+
+    def capture(
+        low_request: object, provider: object, _root: Path, _schedule: Path
+    ) -> object:
+        if not isinstance(provider, core._UnresolvedProbeV1):
+            provider_calls.append(low_request.request_identity_sha256)
+        return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+            "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+        )
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
+    )
+
+    class _Session:
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", _Session)
+    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert [row.reason for row in result.cohorts] == [
+        "PROVIDER_ERROR",
+        "PROVIDER_ERROR",
+    ]
+    assert len(revision_reads) == 2
+    assert not original_identities.intersection(revision_reads)
+    assert provider_calls == revision_reads
 
 
 def test_later_low_evidence_conflict_stops_before_any_low_effect(
@@ -1752,6 +1906,7 @@ def test_low_store_failure_stops_before_later_low_effect(
             schedule="schedule",
             decision_session="session",
             decision_cutoff="cutoff",
+            evaluated_at=_NOW,
         ),
     )
     monkeypatch.setattr(
@@ -1815,6 +1970,9 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
             core._canonical(cohort.request) + b"\n"
         )
         for cohort in request.cohorts
+    )
+    low_requests = tuple(
+        core._selection_bound_low_request_v1(item, selection) for item in low_requests
     )
 
     def success(index: int, code: str) -> object:

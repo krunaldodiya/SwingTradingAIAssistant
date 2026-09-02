@@ -1073,6 +1073,45 @@ def _retained_selection_v1(
         raise EvidenceConflict("selection evidence conflict") from None
 
 
+def _read_retained_selection_v1(
+    selection: SelectionRevisionV1, root: Path
+) -> SelectionRevisionV1 | None:
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return None
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    if identity is None:
+        raise OSError("selection store unavailable")
+    lease_result = StorageRootLease.try_acquire_existing_identity(root, identity)
+    if lease_result.outcome is not LeaseOutcome.ACQUIRED or lease_result.lease is None:
+        raise OSError("selection store unavailable")
+    lease = lease_result.lease
+    directory: int | None = None
+    try:
+        with lease.read_operation(root) as operation:
+            assert_private_storage_operation(operation)
+            try:
+                directory = open_private_storage_directory(
+                    operation, operation.descriptor, "selections", False
+                )
+                raw = _read_immutable_object_v1(
+                    operation,
+                    directory,
+                    f"{selection.selection_identity_sha256}.json",
+                    MAX_SELECTION_REVISION_BYTES_V1,
+                )
+                return _retained_selection_v1(raw, selection)
+            except FileNotFoundError:
+                return None
+    except ValueError:
+        raise EvidenceConflict("selection evidence conflict") from None
+    finally:
+        if directory is not None:
+            os.close(directory)
+        lease.close()
+
+
 def resolve_selection_v1(
     selection: SelectionRevisionV1, root: Path
 ) -> tuple[str, SelectionRevisionV1]:
@@ -1463,6 +1502,15 @@ def _has_effect_stopping_failure(outcomes: list[CohortOutcomeV1 | None]) -> bool
     )
 
 
+def _selection_bound_low_request_v1(
+    request: low.CaptureForwardAdjustedOhlcvRequestV1,
+    selection: SelectionRevisionV1,
+) -> low.CaptureForwardAdjustedOhlcvRequestV1:
+    if request.evaluated_at >= selection.retrieved_at:
+        return request
+    return replace(request, evaluated_at=selection.retrieved_at)
+
+
 def _validated_reuse_v1(
     cohort: CohortRequestV1,
     low_request: low.CaptureForwardAdjustedOhlcvRequestV1,
@@ -1587,6 +1635,18 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         for item in low_requests
     ):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    try:
+        retained_selection = _read_retained_selection_v1(selection, selection_root)
+    except EvidenceConflict:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+    except (OSError, RuntimeError, ValueError):
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
+    expected_selection = retained_selection or selection
+    low_requests = [
+        _selection_bound_low_request_v1(item, expected_selection)
+        for item in low_requests
+    ]
+
     roots = (nifty50_root, nifty_next50_root)
     low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None] = [None, None]
     for index, (low_request, root) in enumerate(zip(low_requests, roots, strict=True)):
@@ -1606,6 +1666,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     except (OSError, RuntimeError, ValueError):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
 
+    if selection != expected_selection:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
     validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
     for index, (cohort, low_request) in enumerate(
