@@ -41,6 +41,7 @@ from swing_trading_ai_assistant.historical_evaluation.capability_validation impo
     capability_validation_current_identities_v1,
     evaluate_capability_aware_historical_validation_v1,
 )
+from swing_trading_ai_assistant.market_data import storage_root_lease as lease_core
 from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv_runtime_identity_manifest import (
     CAPTURE_FORWARD_ADJUSTED_OHLCV_RUNTIME_SOURCE_SHA256_V1,
 )
@@ -2381,6 +2382,8 @@ def _read_request_revision(
     requests: _PrivateDirectory,
     revisions: _PrivateDirectory,
     request: CaptureForwardAdjustedOhlcvRequestV1,
+    *,
+    commit_pointer: bool = True,
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
     requested_pointer = _open_pointer_revision(
         operation,
@@ -2408,7 +2411,8 @@ def _read_request_revision(
             held_revision.ensure_exact()
         for pointer in held_pointers:
             pointer.ensure_exact()
-        requested_pointer[1].commit()
+        if commit_pointer:
+            requested_pointer[1].commit()
         for held_revision in held_revisions:
             held_revision.ensure_exact()
         for pointer in held_pointers:
@@ -2473,6 +2477,30 @@ def _read_admitted_revision(
             held_revision.close()
 
 
+def _admit_existing_private_empty_store_v1(store_root: Path) -> bool:
+    descriptor: int | None = None
+    admitted = False
+    try:
+        descriptor = lease_core._open_directory_without_symlink_components(  # pyright: ignore[reportPrivateUsage]
+            store_root
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError
+        lease_core._assert_private_empty_root(  # pyright: ignore[reportPrivateUsage]
+            store_root, descriptor, metadata
+        )
+        admitted = True
+    except Exception:
+        admitted = False
+    finally:
+        if not lease_core._close_descriptor(  # pyright: ignore[reportPrivateUsage]
+            descriptor
+        ):
+            admitted = False
+    return admitted
+
+
 def _acquire_existing_private_lease(store_root: Path) -> StorageRootLease | None:
     root_identity = StorageRootLease.admit_existing_private_identity(store_root)
     if root_identity is None:
@@ -2496,6 +2524,8 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
         raise ValueError("request revision read is invalid")
     lease = _acquire_existing_private_lease(store_root)
     if lease is None:
+        if _admit_existing_private_empty_store_v1(store_root):
+            return None
         raise OSError(errno.EBUSY, "capture store unavailable")
     directories: list[_PrivateDirectory | None] = []
     try:
@@ -2516,7 +2546,13 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
                 tuple[_PrivateDirectory, _PrivateDirectory, _PrivateDirectory],
                 tuple(directories),
             )
-            existing = _read_request_revision(operation, requests, revisions, request)
+            existing = _read_request_revision(
+                operation,
+                requests,
+                revisions,
+                request,
+                commit_pointer=False,
+            )
             parent: AdjustedOhlcvCaptureRevisionV1 | None = None
             if request.parent_revision_sha256 is not None:
                 parent = _read_admitted_revision(

@@ -1148,12 +1148,16 @@ def test_selection_conflict_maps_to_evidence_conflict(
         raise core.EvidenceConflict
 
     monkeypatch.setattr(core, "resolve_selection_v1", conflict)
+    nifty50_root = tmp_path / "nifty50"
+    next50_root = tmp_path / "next50"
+    nifty50_root.mkdir(mode=0o700)
+    next50_root.mkdir(mode=0o700)
     result = core.capture_current_nifty100_v1(
         _request(),
         acknowledged=True,
         selection_root=tmp_path / "selection",
-        nifty50_root=tmp_path / "nifty50",
-        nifty_next50_root=tmp_path / "next50",
+        nifty50_root=nifty50_root,
+        nifty_next50_root=next50_root,
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
@@ -1179,12 +1183,16 @@ def test_real_selection_object_corruption_maps_to_evidence_conflict(
             / f"{selection.selection_identity_sha256}.json"
         )
         retained.chmod(0o644)
+        nifty50_root = root / "nifty50"
+        next50_root = root / "next50"
+        nifty50_root.mkdir(mode=0o700)
+        next50_root.mkdir(mode=0o700)
         result = core.capture_current_nifty100_v1(
             _request(),
             acknowledged=True,
             selection_root=selection_root,
-            nifty50_root=root / "nifty50",
-            nifty_next50_root=root / "next50",
+            nifty50_root=nifty50_root,
+            nifty_next50_root=next50_root,
             schedule_root=root / "schedule",
             fetcher=_Fetcher(),
         )
@@ -1552,11 +1560,6 @@ def test_later_low_evidence_conflict_stops_before_any_low_effect(
         "_retained_schedule_matches_request",
         lambda _request, _root: True,
     )
-    monkeypatch.setattr(
-        core,
-        "resolve_selection_v1",
-        lambda selection, _root: ("INSERTED", selection),
-    )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     reads: list[Path] = []
 
@@ -1573,16 +1576,18 @@ def test_later_low_evidence_conflict_stops_before_any_low_effect(
     monkeypatch.setattr(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", forbidden_effect
     )
+    selection_root = tmp_path / "selection"
     result = core.capture_current_nifty100_v1(
         _request(),
         acknowledged=True,
-        selection_root=tmp_path / "selection",
+        selection_root=selection_root,
         nifty50_root=tmp_path / "nifty50",
         nifty_next50_root=tmp_path / "next50",
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
     assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+    assert not selection_root.exists()
     assert reads == [tmp_path / "nifty50", tmp_path / "next50"]
 
 

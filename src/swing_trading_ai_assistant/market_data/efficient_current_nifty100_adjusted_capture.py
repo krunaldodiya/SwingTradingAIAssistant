@@ -1577,6 +1577,18 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         for item in low_requests
     ):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    roots = (nifty50_root, nifty_next50_root)
+    low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None] = [None, None]
+    for index, (low_request, root) in enumerate(zip(low_requests, roots, strict=True)):
+        try:
+            low_revisions[index] = low.read_capture_forward_request_revision_v1(
+                root, low_request
+            )
+        except ValueError:
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+        except (OSError, RuntimeError):
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
+
     try:
         _, selection = resolve_selection_v1(selection, selection_root)
     except EvidenceConflict:
@@ -1584,17 +1596,12 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     except (OSError, RuntimeError, ValueError):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
 
-    roots = (nifty50_root, nifty_next50_root)
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
     validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
-    low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None] = [None, None]
-    for index, (cohort, low_request, root) in enumerate(
-        zip(request.cohorts, low_requests, roots, strict=True)
+    for index, (cohort, low_request) in enumerate(
+        zip(request.cohorts, low_requests, strict=True)
     ):
         try:
-            low_revisions[index] = low.read_capture_forward_request_revision_v1(
-                root, low_request
-            )
             validated_reuses[index] = _validated_reuse_v1(
                 cohort,
                 low_request,
@@ -1605,9 +1612,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             )
         except EvidenceConflict:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-        except ValueError:
-            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, ValueError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
 
     session: BoundedYahooSessionV1 | None = None

@@ -2783,6 +2783,30 @@ def test_request_revision_read_rejects_corrupted_pointer(tmp_path: Path) -> None
         read_capture_forward_request_revision_v1(tmp_path, request)
 
 
+def test_request_revision_read_leaves_fresh_private_root_empty(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir(mode=0o700)
+
+    assert read_capture_forward_request_revision_v1(root, _request()) is None
+    assert list(root.iterdir()) == []
+
+
+def test_request_revision_read_does_not_commit_recoverable_pointer(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    captured = _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+
+    assert read_capture_forward_request_revision_v1(tmp_path, request) == (
+        captured.revision
+    )
+    assert stat.S_IMODE(pointer.stat().st_mode) == 0o600
+
+
 def test_reused_revision_must_match_complete_current_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
