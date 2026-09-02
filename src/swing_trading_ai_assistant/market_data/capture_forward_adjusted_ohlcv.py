@@ -2483,6 +2483,73 @@ def _acquire_existing_private_lease(store_root: Path) -> StorageRootLease | None
     return result.lease
 
 
+def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
+    store_root: Path, request: CaptureForwardAdjustedOhlcvRequestV1
+) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    """Read-validate one request's immutable store state without creating it."""
+
+    if type(
+        request
+    ) is not CaptureForwardAdjustedOhlcvRequestV1 or not _valid_absolute_path(
+        store_root
+    ):
+        raise ValueError("request revision read is invalid")
+    lease = _acquire_existing_private_lease(store_root)
+    if lease is None:
+        raise OSError(errno.EBUSY, "capture store unavailable")
+    directories: list[_PrivateDirectory | None] = []
+    try:
+        with lease.read_operation(store_root) as operation:
+            for name in ("revisions", "requests", "prepared"):
+                try:
+                    directory = _open_private_directory(
+                        operation, operation.descriptor, name, create=False
+                    )
+                except FileNotFoundError:
+                    directory = None
+                directories.append(directory)
+            if all(directory is None for directory in directories):
+                return None
+            if any(directory is None for directory in directories):
+                raise _ImmutableEvidenceConflict("capture store state incomplete")
+            revisions, requests, prepared = cast(
+                tuple[_PrivateDirectory, _PrivateDirectory, _PrivateDirectory],
+                tuple(directories),
+            )
+            existing = _read_request_revision(operation, requests, revisions, request)
+            parent: AdjustedOhlcvCaptureRevisionV1 | None = None
+            if request.parent_revision_sha256 is not None:
+                parent = _read_admitted_revision(
+                    operation, requests, revisions, request.parent_revision_sha256
+                )
+                if not _valid_correction_parent(request, parent):
+                    raise _ImmutableEvidenceConflict("correction parent invalid")
+            _ensure_capture_state(
+                operation, revisions, requests, prepared, request, parent
+            )
+            if existing is not None:
+                return existing
+            prepared_recovery = _read_prepared_revision(
+                operation, prepared, request.request_identity_sha256
+            )
+            if prepared_recovery is None:
+                return None
+            recovered, held_prepared = prepared_recovery
+            try:
+                if not _revision_matches_request(request, recovered):
+                    raise _ImmutableEvidenceConflict("prepared revision invalid")
+                return None
+            finally:
+                held_prepared.close()
+    except _ImmutableEvidenceConflict:
+        raise ValueError("request revision evidence conflict") from None
+    finally:
+        for directory in directories:
+            if directory is not None:
+                directory.close()
+        lease.close()
+
+
 def read_capture_forward_revision_v1(
     store_root: Path, revision_sha256: str
 ) -> AdjustedOhlcvCaptureRevisionV1:

@@ -721,6 +721,11 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
         lambda selection, _root: ("INSERTED", selection),
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda _root, _request: None,
+    )
     calls: list[Path] = []
 
     def capture(
@@ -1539,6 +1544,48 @@ def test_binding_io_failure_is_retention_failure(
     )
 
 
+def test_later_low_evidence_conflict_stops_before_any_low_effect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root: True,
+    )
+    monkeypatch.setattr(
+        core,
+        "resolve_selection_v1",
+        lambda selection, _root: ("INSERTED", selection),
+    )
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    reads: list[Path] = []
+
+    def read_low(root: Path, _request: object) -> None:
+        reads.append(root)
+        if len(reads) == 2:
+            raise ValueError("request revision evidence conflict")
+
+    monkeypatch.setattr(core.low, "read_capture_forward_request_revision_v1", read_low)
+
+    def forbidden_effect(*_args: object) -> None:
+        raise AssertionError("low capture effect must not run")
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", forbidden_effect
+    )
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+    assert reads == [tmp_path / "nifty50", tmp_path / "next50"]
+
+
 def test_low_store_failure_stops_before_later_low_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1563,6 +1610,11 @@ def test_low_store_failure_stops_before_later_low_effect(
         lambda selection, _root: ("INSERTED", selection),
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda _root, _request: None,
+    )
     low_calls: list[Path] = []
 
     def fail_store(
@@ -1663,11 +1715,13 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     monkeypatch.setattr(core, "_read_plan33_binding_v1", read_binding)
     revision_reads: list[tuple[Path, str]] = []
 
-    def read_revision(root: Path, revision_sha256: str) -> object:
-        revision_reads.append((root, revision_sha256))
-        return probes[1].revision
+    def read_revision(root: Path, _request: object) -> object | None:
+        revision_reads.append((root, _request.request_identity_sha256))
+        return probes[1].revision if len(revision_reads) == 2 else None
 
-    monkeypatch.setattr(core.low, "read_capture_forward_revision_v1", read_revision)
+    monkeypatch.setattr(
+        core.low, "read_capture_forward_request_revision_v1", read_revision
+    )
     probe_calls: list[Path] = []
 
     def probe(
@@ -1710,8 +1764,10 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     assert result.cohorts[1] == core._cohort_outcome_v1(
         request.cohorts[1], low_requests[1], probes[1], selection, request
     )
-    assert probe_calls == [tmp_path / "nifty50"]
-    assert revision_reads == [(tmp_path / "next50", "2" * 64)]
+    assert revision_reads == [
+        (tmp_path / "nifty50", low_requests[0].request_identity_sha256),
+        (tmp_path / "next50", low_requests[1].request_identity_sha256),
+    ]
     assert retain_calls == ["NIFTY_50"]
 
 

@@ -38,6 +38,7 @@ from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv impor
     compose_capture_forward_plan29_v1,
     mapping_identity_v1,
     parse_capture_forward_request_v1,
+    read_capture_forward_request_revision_v1,
     read_capture_forward_revision_v1,
     serialize_capture_forward_result_v1,
 )
@@ -2768,6 +2769,18 @@ def test_corrupted_request_pointer_is_evidence_conflict_before_provider(
         code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 0
+
+
+def test_request_revision_read_rejects_corrupted_pointer(tmp_path: Path) -> None:
+    request = _request()
+    _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+    pointer.write_bytes(b"{}")
+    pointer.chmod(0o400)
+
+    with pytest.raises(ValueError, match="request revision evidence conflict"):
+        read_capture_forward_request_revision_v1(tmp_path, request)
 
 
 def test_reused_revision_must_match_complete_current_request(

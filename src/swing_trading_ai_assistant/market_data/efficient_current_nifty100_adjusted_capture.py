@@ -1456,11 +1456,11 @@ def _has_effect_stopping_failure(outcomes: list[CohortOutcomeV1 | None]) -> bool
 def _validated_reuse_v1(
     cohort: CohortRequestV1,
     low_request: low.CaptureForwardAdjustedOhlcvRequestV1,
+    low_revision: low.AdjustedOhlcvCaptureRevisionV1 | None,
     selection: SelectionRevisionV1,
     request: CurrentNifty100RequestV1,
     *,
     binding_root: Path,
-    store_root: Path,
 ) -> CohortOutcomeV1 | None:
     name = _plan33_binding_name_v1(
         cohort, selection, low_request.request_identity_sha256
@@ -1480,8 +1480,9 @@ def _validated_reuse_v1(
             or any(character not in "0123456789abcdef" for character in revision_sha256)
         ):
             raise ValueError("Plan 33 revision identity is invalid")
-        revision = low.read_capture_forward_revision_v1(store_root, revision_sha256)
-        reused = low.CaptureForwardAdjustedOhlcvSuccessV1("REUSED", revision)
+        if low_revision is None or revision_sha256 != low_revision.revision_sha256:
+            raise ValueError("Plan 33 revision is unavailable")
+        reused = low.CaptureForwardAdjustedOhlcvSuccessV1("REUSED", low_revision)
         if existing != _plan33_binding_payload_v1(cohort, reused, selection):
             raise ValueError("Plan 33 binding payload mismatch")
         outcome = _cohort_outcome_v1(cohort, low_request, reused, selection, request)
@@ -1586,21 +1587,27 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     roots = (nifty50_root, nifty_next50_root)
     outcomes: list[CohortOutcomeV1 | None] = [None, None]
     validated_reuses: list[CohortOutcomeV1 | None] = [None, None]
+    low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None] = [None, None]
     for index, (cohort, low_request, root) in enumerate(
         zip(request.cohorts, low_requests, roots, strict=True)
     ):
         try:
+            low_revisions[index] = low.read_capture_forward_request_revision_v1(
+                root, low_request
+            )
             validated_reuses[index] = _validated_reuse_v1(
                 cohort,
                 low_request,
+                low_revisions[index],
                 selection,
                 request,
                 binding_root=selection_root,
-                store_root=root,
             )
         except EvidenceConflict:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
-        except (OSError, RuntimeError, ValueError):
+        except ValueError:
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+        except (OSError, RuntimeError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
 
     session: BoundedYahooSessionV1 | None = None
