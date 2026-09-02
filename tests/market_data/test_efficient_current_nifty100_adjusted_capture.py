@@ -763,6 +763,40 @@ def test_cache_cleanup_uses_parent_descriptor_while_child_is_live(
     assert [path.name for path in root.iterdir()] == [".ingestion.lock"]
 
 
+def test_session_constructor_failure_releases_cache_and_admission() -> None:
+    script = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture as core
+with TemporaryDirectory(dir=Path.home()) as temporary:
+    root = Path(temporary)
+    root.chmod(0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    def fail(**kwargs):
+        assert kwargs['cache_authority'] is not None
+        raise RuntimeError('constructor failed')
+    core.BoundedYahooSessionV1 = fail
+    try:
+        core.prepare_yfinance_runtime_v1(root)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('constructor failure accepted')
+    assert [path.name for path in root.iterdir()] == ['.ingestion.lock']
+    assert not core._PROVIDER_ADMISSION_LOCK.locked()
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_runtime_identity_drift_stops_before_official_source_effect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1791,29 +1825,39 @@ def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
     with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
         root = Path(temporary)
         root.chmod(0o700)
+        lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+        assert lease is not None
+        lease.close()
+        authority = core._open_provider_cache_authority_v1(root)
+        session = core.BoundedYahooSessionV1(cache_authority=authority)
         success = core.low.CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", revision)
-        assert (
-            core._cohort_outcome_v1(
-                cohort,
-                low_request,
-                success,
-                selection,
-                request,
-                binding_root=root,
-            ).code
-            == "INSERTED"
-        )
-        assert (
-            core._cohort_outcome_v1(
-                cohort,
-                low_request,
-                success,
-                changed,
-                request,
-                binding_root=root,
-            ).code
-            == "INSERTED"
-        )
+        try:
+            assert (
+                core._cohort_outcome_v1(
+                    cohort,
+                    low_request,
+                    success,
+                    selection,
+                    request,
+                    session,
+                    binding_root=root,
+                ).code
+                == "INSERTED"
+            )
+            assert (
+                core._cohort_outcome_v1(
+                    cohort,
+                    low_request,
+                    success,
+                    changed,
+                    request,
+                    session,
+                    binding_root=root,
+                ).code
+                == "INSERTED"
+            )
+        finally:
+            session.close()
         assert len(tuple((root / "plan33_bindings").iterdir())) == 2
 
 

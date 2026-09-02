@@ -1381,6 +1381,7 @@ def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
 
     if not _PROVIDER_ADMISSION_LOCK.acquire(blocking=False):
         raise RuntimeError("provider runtime configuration invalid")
+    cache: _ProviderCacheAuthorityV1 | None = None
     try:
         if (
             "yfinance" in sys.modules
@@ -1403,7 +1404,11 @@ def prepare_yfinance_runtime_v1(cache_root: Path) -> BoundedYahooSessionV1:
             cache_authority=cache,
         )
     except BaseException:
-        _PROVIDER_ADMISSION_LOCK.release()
+        try:
+            if cache is not None:
+                cache.close()
+        finally:
+            _PROVIDER_ADMISSION_LOCK.release()
         raise
     previous_disable = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
@@ -1537,15 +1542,63 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
         lease.close()
 
 
-def _retain_plan33_binding_v1(  # noqa: C901 - immutable storage boundary
+def _retain_plan33_binding_with_operation_v1(
     cohort: CohortRequestV1,
     result: low.CaptureForwardAdjustedOhlcvSuccessV1,
     selection: SelectionRevisionV1,
-    root: Path,
+    operation: StorageRootLeaseOperation,
 ) -> None:
     revision = result.revision
     payload = _plan33_binding_payload_v1(cohort, result, selection)
     name = _plan33_binding_name_v1(cohort, selection, revision.request_identity_sha256)
+    directory: int
+    assert_private_storage_operation(operation)
+    try:
+        directory = open_private_storage_directory(
+            operation,
+            operation.descriptor,
+            "plan33_bindings",
+            True,
+        )
+    except ValueError:
+        raise EvidenceConflict("Plan 33 binding evidence conflict") from None
+    try:
+        try:
+            existing = _read_immutable_object_v1(
+                operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
+            )
+        except FileNotFoundError:
+            _publish_immutable_object_v1(operation, directory, name, payload)
+        else:
+            if existing != payload:
+                raise EvidenceConflict("Plan 33 binding evidence conflict")
+        if (
+            _read_immutable_object_v1(
+                operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
+            )
+            != payload
+        ):
+            raise EvidenceConflict("Plan 33 binding evidence conflict")
+    finally:
+        os.close(directory)
+
+
+def _retain_plan33_binding_v1(
+    cohort: CohortRequestV1,
+    result: low.CaptureForwardAdjustedOhlcvSuccessV1,
+    selection: SelectionRevisionV1,
+    root: Path,
+    *,
+    operation: StorageRootLeaseOperation | None = None,
+) -> None:
+    if operation is not None:
+        identity = StorageRootLease.admit_existing_private_identity(root)
+        held = os.fstat(operation.descriptor)
+        if identity != (held.st_dev, held.st_ino):
+            raise OSError("Plan 33 binding store unavailable")
+        _retain_plan33_binding_with_operation_v1(cohort, result, selection, operation)
+        return
+
     lease_result = StorageRootLease.try_acquire_private_empty(root)
     if lease_result.outcome is not LeaseOutcome.ACQUIRED:
         identity = StorageRootLease.admit_existing_private_identity(root)
@@ -1556,38 +1609,12 @@ def _retain_plan33_binding_v1(  # noqa: C901 - immutable storage boundary
     if lease_result.outcome is not LeaseOutcome.ACQUIRED or lease_result.lease is None:
         raise OSError("Plan 33 binding store unavailable")
     lease = lease_result.lease
-    directory: int | None = None
     try:
-        with lease.root_operation(root) as operation:
-            assert_private_storage_operation(operation)
-            try:
-                directory = open_private_storage_directory(
-                    operation,
-                    operation.descriptor,
-                    "plan33_bindings",
-                    True,
-                )
-            except ValueError:
-                raise EvidenceConflict("Plan 33 binding evidence conflict") from None
-            try:
-                existing = _read_immutable_object_v1(
-                    operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
-                )
-            except FileNotFoundError:
-                _publish_immutable_object_v1(operation, directory, name, payload)
-            else:
-                if existing != payload:
-                    raise EvidenceConflict("Plan 33 binding evidence conflict")
-            if (
-                _read_immutable_object_v1(
-                    operation, directory, name, MAX_PLAN33_BINDING_BYTES_V1
-                )
-                != payload
-            ):
-                raise EvidenceConflict("Plan 33 binding evidence conflict")
+        with lease.root_operation(root) as held_operation:
+            _retain_plan33_binding_with_operation_v1(
+                cohort, result, selection, held_operation
+            )
     finally:
-        if directory is not None:
-            os.close(directory)
         lease.close()
 
 
@@ -1625,7 +1652,22 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
         selection_bound = revision.retrieved_at >= selection.retrieved_at
         if binding_root is not None and selection_bound:
             try:
-                _retain_plan33_binding_v1(cohort, result, selection, binding_root)
+                authority = (
+                    getattr(session, "_cache_authority", None)
+                    if session is not None
+                    else None
+                )
+                if authority is None:
+                    _retain_plan33_binding_v1(cohort, result, selection, binding_root)
+                else:
+                    authority.ensure_live()
+                    _retain_plan33_binding_v1(
+                        cohort,
+                        result,
+                        selection,
+                        binding_root,
+                        operation=authority.operation,
+                    )
             except EvidenceConflict:
                 return CohortOutcomeV1(
                     cohort.name, "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
