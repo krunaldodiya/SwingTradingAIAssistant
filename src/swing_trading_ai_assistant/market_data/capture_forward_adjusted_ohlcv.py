@@ -540,6 +540,7 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "84591e7c04f06227430d1511e0008e8136a0d2a83a30325c3ba9e2ef58e7e149",
         "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
         "7a620872d3b70684811912c46a5c1ef776383d18871ee63e5840a0a423ab020e",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
     }
 )
 
@@ -920,6 +921,10 @@ CaptureForwardAdjustedOhlcvResultV1 = (
 
 
 class _ImmutableEvidenceConflict(Exception):
+    pass
+
+
+class _CaptureCleanupFailureV1(RuntimeError):
     pass
 
 
@@ -1804,7 +1809,10 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
             "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
         )
     finally:
-        lease.close()
+        try:
+            lease.close()
+        except RuntimeError as error:
+            raise _CaptureCleanupFailureV1("capture cleanup failed") from error
 
 
 def _revision_matches_request(
@@ -1821,7 +1829,7 @@ def _revision_matches_request(
         and revision.parent_revision_sha256 == request.parent_revision_sha256
         and revision.schema_identity_sha256 == request.schema_identity_sha256
         and revision.runtime_code_identity_sha256
-        == request.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
         and revision.configuration_identity_sha256
         == request.configuration_identity_sha256
     )

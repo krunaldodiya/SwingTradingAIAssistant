@@ -111,6 +111,10 @@ class EvidenceConflict(OSError):
     """Previously retained immutable evidence conflicts with current bytes."""
 
 
+class _BindingCleanupFailureV1(RuntimeError):
+    """Descriptor cleanup failed after binding evidence access."""
+
+
 def _assert_private_directory_edge_v1(
     operation: StorageRootLeaseOperation,
     descriptor: int,
@@ -2201,6 +2205,27 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
         lease.close()
 
 
+def _close_binding_read_resources_v1(
+    descriptor: int | None,
+    directory: int | None,
+    lease: StorageRootLease,
+) -> None:
+    cleanup_failed = False
+    for item in (descriptor, directory):
+        if item is None:
+            continue
+        try:
+            os.close(item)
+        except OSError:
+            cleanup_failed = True
+    try:
+        lease.close()
+    except RuntimeError:
+        cleanup_failed = True
+    if cleanup_failed:
+        raise _BindingCleanupFailureV1("binding descriptor cleanup failed")
+
+
 def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
     """Read a validated binding into a detached exact identity record."""
 
@@ -2269,11 +2294,7 @@ def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
     except (OSError, RuntimeError, ValueError):
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if directory is not None:
-            os.close(directory)
-        lease.close()
+        _close_binding_read_resources_v1(descriptor, directory, lease)
 
 
 def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
@@ -2339,11 +2360,7 @@ def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
     except (OSError, RuntimeError, ValueError):
         return False
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if directory is not None:
-            os.close(directory)
-        lease.close()
+        _close_binding_read_resources_v1(descriptor, directory, lease)
 
 
 def _retain_plan33_binding_with_operation_v1(
@@ -2993,6 +3010,9 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                         _expected_store_root_identity=root_identity[:2],
                         _expected_schedule_root_identity=schedule_identity[:2],
                     )
+            except low._CaptureCleanupFailureV1:  # pyright: ignore[reportPrivateUsage]
+                cleanup_failed = True
+                break
             except (RuntimeError, ValueError):
                 result = low.CaptureForwardAdjustedOhlcvFailureV1(
                     "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
@@ -3058,6 +3078,9 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                             _expected_store_root_identity=root_identity[:2],
                             _expected_schedule_root_identity=schedule_identity[:2],
                         )
+                except low._CaptureCleanupFailureV1:  # pyright: ignore[reportPrivateUsage]
+                    cleanup_failed = True
+                    break
                 except (RuntimeError, ValueError):
                     result = low.CaptureForwardAdjustedOhlcvFailureV1(
                         "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
@@ -3147,9 +3170,13 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
 
     if not _protected_paths_live_v1(tuple(protected_by_path.values())):
         cleanup_failed = True
-    binding_conflict = len(binding_snapshots) != sum(
-        _is_success(outcome) for outcome in outcomes if outcome is not None
-    ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots)
+    try:
+        binding_conflict = len(binding_snapshots) != sum(
+            _is_success(outcome) for outcome in outcomes if outcome is not None
+        ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots)
+    except _BindingCleanupFailureV1:
+        cleanup_failed = True
+        binding_conflict = False
     if binding_conflict and not cleanup_failed:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     if cleanup_failed:
@@ -3218,6 +3245,23 @@ def capture_current_nifty100_v1(
             except OSError:
                 authority_cleanup_failed = True
     if authority_cleanup_failed:
+        if isinstance(result, CurrentNifty100ResultV1):
+            return replace(
+                result,
+                code="INCOMPLETE_CURRENT_NIFTY100_CAPTURE",
+                cohorts=cast(
+                    tuple[CohortOutcomeV1, CohortOutcomeV1],
+                    tuple(
+                        CohortOutcomeV1(
+                            cohort.cohort,
+                            "INSUFFICIENT_EVIDENCE",
+                            "CONFIGURATION_INVALID",
+                        )
+                        for cohort in result.cohorts
+                    ),
+                ),
+                union_reason="UNION_INCOMPATIBLE",
+            )
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     return result
 

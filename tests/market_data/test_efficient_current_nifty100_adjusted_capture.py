@@ -2568,7 +2568,12 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "finalization",
-    ["live", "binding_lost", "cleanup_and_binding_lost"],
+    [
+        "live",
+        "binding_lost",
+        "binding_cleanup_failed",
+        "cleanup_and_binding_lost",
+    ],
 )
 def test_all_reuse_capture_clears_retained_provider_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, finalization: str
@@ -2634,6 +2639,8 @@ def test_all_reuse_capture_clears_retained_provider_cache(
     def binding_live(snapshot: object) -> bool:
         nonlocal binding_checks
         binding_checks += 1
+        if finalization == "binding_cleanup_failed" and binding_checks == 3:
+            raise core._BindingCleanupFailureV1("binding descriptor cleanup failed")
         return snapshot is binding_snapshot and (
             finalization == "live" or binding_checks != 3
         )
@@ -2677,7 +2684,10 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         )
     else:
         assert isinstance(result, core.CurrentNifty100ResultV1)
-        if finalization == "cleanup_and_binding_lost":
+        if finalization in {
+            "binding_cleanup_failed",
+            "cleanup_and_binding_lost",
+        }:
             assert [row.reason for row in result.cohorts] == [
                 "CONFIGURATION_INVALID",
                 "CONFIGURATION_INVALID",
@@ -3954,8 +3964,9 @@ def test_later_low_evidence_conflict_stops_before_any_low_effect(
     assert reads == [tmp_path / "nifty50", tmp_path / "next50"]
 
 
+@pytest.mark.parametrize("failure_kind", ["store", "cleanup"])
 def test_low_store_failure_stops_before_later_low_effect(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_kind: str
 ) -> None:
     monkeypatch.setattr(
         core.low,
@@ -4001,6 +4012,10 @@ def test_low_store_failure_stops_before_later_low_effect(
         _request: object, _provider: object, root: Path, _schedule: Path
     ) -> object:
         low_calls.append(root)
+        if failure_kind == "cleanup":
+            raise core.low._CaptureCleanupFailureV1(  # pyright: ignore[reportPrivateUsage]
+                "capture cleanup failed"
+            )
         return core.low.CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
         )
@@ -4024,10 +4039,16 @@ def test_low_store_failure_stops_before_later_low_effect(
         fetcher=_Fetcher(),
     )
     assert isinstance(result, core.CurrentNifty100ResultV1)
-    assert [row.reason for row in result.cohorts] == [
-        "RETENTION_FAILED",
-        "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
-    ]
+    if failure_kind == "cleanup":
+        assert [row.reason for row in result.cohorts] == [
+            "CONFIGURATION_INVALID",
+            "CONFIGURATION_INVALID",
+        ]
+    else:
+        assert [row.reason for row in result.cohorts] == [
+            "RETENTION_FAILED",
+            "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
+        ]
     assert low_calls == [nifty50_root]
 
 
@@ -4410,6 +4431,61 @@ def test_missing_selection_root_authority_closes_on_failure_paths(
         )
         assert len(opened) == index + 1
         assert all(not authority.descriptors for authority in opened)
+
+
+def test_post_result_missing_root_cleanup_failure_rewrites_both_cohorts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    completed = core.CurrentNifty100ResultV1(
+        code="COMPLETE_CURRENT_NIFTY100_CAPTURE",
+        cohorts=(
+            core.CohortOutcomeV1("NIFTY_50", "REUSED"),
+            core.CohortOutcomeV1("NIFTY_NEXT_50", "REUSED"),
+        ),
+        selection_identity_sha256="a" * 64,
+        selection_retrieved_at=_NOW,
+        schedule_identity_sha256="b" * 64,
+        decision_session="2026-08-27",
+        configuration_identity_sha256=core.CONFIGURATION_IDENTITY_SHA256_V1,
+        member_count=100,
+    )
+    original_close = core._MissingSelectionRootAuthorityV1.close
+
+    def close_then_fail(authority: core._MissingSelectionRootAuthorityV1) -> None:
+        original_close(authority)
+        raise OSError("root authority cleanup failed")
+
+    def complete_with_held_authority(
+        *_args: object,
+        authority_holder: list[core._MissingSelectionRootAuthorityV1],
+        **_kwargs: object,
+    ) -> core.CurrentNifty100ResultV1:
+        authority = core._MissingSelectionRootAuthorityV1.open(tmp_path / "selection")
+        authority.create()
+        authority_holder.append(authority)
+        return completed
+
+    monkeypatch.setattr(
+        core, "_capture_current_nifty100_impl_v1", complete_with_held_authority
+    )
+    monkeypatch.setattr(core._MissingSelectionRootAuthorityV1, "close", close_then_fail)
+
+    result = core.capture_current_nifty100_v1(
+        b"{}",
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+    )
+
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.reason for row in result.cohorts] == [
+        "CONFIGURATION_INVALID",
+        "CONFIGURATION_INVALID",
+    ]
+    assert result.union_reason == "UNION_INCOMPATIBLE"
 
 
 def test_dependency_code_aggregate_rejects_nested_substitution(tmp_path: Path) -> None:

@@ -923,12 +923,21 @@ def _retarget_retained_revision_writer(
     return historical
 
 
-def test_correction_accepts_compatible_parent_writer_runtime(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "writer_identity",
+    [
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    ],
+)
+def test_correction_accepts_compatible_parent_writer_runtime(
+    tmp_path: Path, writer_identity: str
+) -> None:
     initial = _capture(tmp_path)
     historical = _retarget_retained_revision_writer(
         tmp_path,
         initial.revision,
-        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        writer_identity,
     )
     request = _request(parent_revision_sha256=historical.revision_sha256)
 
@@ -950,12 +959,21 @@ def test_correction_accepts_compatible_parent_writer_runtime(tmp_path: Path) -> 
     )
 
 
-def test_writer_upgrade_is_not_correction_content_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "writer_identity",
+    [
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    ],
+)
+def test_writer_upgrade_is_not_correction_content_change(
+    tmp_path: Path, writer_identity: str
+) -> None:
     initial = _capture(tmp_path)
     historical = _retarget_retained_revision_writer(
         tmp_path,
         initial.revision,
-        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        writer_identity,
     )
     request = _request(parent_revision_sha256=historical.revision_sha256)
     provider = _Provider(
@@ -969,6 +987,51 @@ def test_writer_upgrade_is_not_correction_content_change(tmp_path: Path) -> None
         "INSUFFICIENT_EVIDENCE", "CORRECTION_CONTENT_UNCHANGED"
     )
     assert provider.calls == 1
+
+
+def test_released_base_writer_revision_remains_exactly_readable(
+    tmp_path: Path,
+) -> None:
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    )
+
+    assert (
+        core.read_capture_forward_request_revision_v1(tmp_path, _request())
+        == historical
+    )
+
+
+def test_capture_lease_cleanup_failure_raises_typed_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capture(tmp_path)
+    request = _request()
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    monkeypatch.setattr(
+        core, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
+    )
+    original_close = core.StorageRootLease.close
+
+    def close_then_fail(lease: core.StorageRootLease) -> None:
+        original_close(lease)
+        raise RuntimeError("descriptor cleanup failed")
+
+    monkeypatch.setattr(core.StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(core._CaptureCleanupFailureV1, match="capture cleanup failed"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request,
+            provider,
+            tmp_path,
+            tmp_path / "schedule",
+        )
 
 
 def test_provider_failure_does_not_hide_correction_parent_admission_loss(
