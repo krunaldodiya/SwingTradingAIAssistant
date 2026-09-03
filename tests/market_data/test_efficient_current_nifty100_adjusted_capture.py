@@ -4524,6 +4524,14 @@ def test_cleanup_value_error_abandons_cache_without_truncation_or_lock_leak(
     retained.write_bytes(b"live database bytes")
     authority = core._open_provider_cache_authority_v1(root, require_empty=False)
     session = core.BoundedYahooSessionV1(cache_authority=authority)
+    assert core._PROVIDER_ADMISSION_LOCK.acquire(blocking=False)
+    session._owns_provider_admission = True
+    cleanup_events: list[str] = []
+    monkeypatch.setattr(
+        core,
+        "_close_yfinance_cache_databases_v1",
+        lambda: cleanup_events.append("cache-managers"),
+    )
 
     def fail_close(_self: object) -> None:
         raise ValueError("close failed")
@@ -4532,6 +4540,9 @@ def test_cleanup_value_error_abandons_cache_without_truncation_or_lock_leak(
 
     with pytest.raises(ValueError, match="close failed"):
         session.close()
+    assert cleanup_events == ["cache-managers"]
+    assert core._PROVIDER_ADMISSION_LOCK.acquire(blocking=False)
+    core._PROVIDER_ADMISSION_LOCK.release()
 
     assert retained.read_bytes() == b"live database bytes"
     retry = core._open_provider_cache_authority_v1(root, require_empty=False)

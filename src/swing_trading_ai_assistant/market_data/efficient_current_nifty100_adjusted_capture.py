@@ -1076,28 +1076,36 @@ class BoundedYahooSessionV1(CurlSession):
         return self._ledger.violated
 
     def close(self) -> None:
+        failure: BaseException | None = None
         try:
             super().close()
-        except BaseException:
-            if self._cache_authority is not None:
-                cache = self._cache_authority
-                self._cache_authority = None
-                cache.abandon()
-            raise
-        else:
-            if self._cache_authority is not None:
-                cache = self._cache_authority
-                self._cache_authority = None
-                try:
-                    _close_yfinance_cache_databases_v1()
-                except BaseException:
+        except BaseException as error:
+            failure = error
+
+        cache = self._cache_authority
+        self._cache_authority = None
+        if cache is not None:
+            try:
+                _close_yfinance_cache_databases_v1()
+            except BaseException as error:
+                failure = failure or error
+            try:
+                if failure is None:
+                    cache.close()
+                else:
                     cache.abandon()
-                    raise
-                cache.close()
-        finally:
-            if self._owns_provider_admission:
-                self._owns_provider_admission = False
+            except BaseException as error:
+                failure = failure or error
+
+        if self._owns_provider_admission:
+            self._owns_provider_admission = False
+            try:
                 _PROVIDER_ADMISSION_LOCK.release()
+            except BaseException as error:
+                failure = failure or error
+
+        if failure is not None:
+            raise failure
 
 
 def _is_success(row: CohortOutcomeV1) -> bool:
