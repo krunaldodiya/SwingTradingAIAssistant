@@ -102,10 +102,19 @@ class PrivateRequestAuthorityV1:
             return False
 
     def close(self) -> None:
-        descriptors, self._descriptors = self._descriptors, []
         self._descriptor = -1
-        for descriptor in reversed(descriptors):
-            os.close(descriptor)
+        failure: OSError | None = None
+        while self._descriptors:
+            descriptor = self._descriptors[-1]
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if failure is None:
+                    failure = error
+            finally:
+                self._descriptors.pop()
+        if failure is not None:
+            raise failure
 
     def __enter__(self) -> PrivateRequestAuthorityV1:
         if self._descriptor < 0:

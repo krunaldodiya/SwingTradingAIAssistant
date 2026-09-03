@@ -928,28 +928,51 @@ def _disable_yfinance_disk_caches_v1() -> None:
             raise RuntimeError("provider runtime configuration invalid")
 
 
+def _close_yfinance_cache_database_v1(
+    manager: object, missing: object
+) -> list[BaseException]:
+    if manager is missing:
+        return [RuntimeError("provider runtime configuration invalid")]
+    database = getattr(manager, "_db", missing)
+    if database is missing:
+        return [RuntimeError("provider runtime configuration invalid")]
+    if database is None:
+        return []
+    close = getattr(database, "close", None)
+    is_closed = getattr(database, "is_closed", None)
+    if not callable(close) or not callable(is_closed):
+        return [RuntimeError("provider runtime configuration invalid")]
+    failures: list[BaseException] = []
+    try:
+        close()
+    except BaseException as error:
+        failures.append(error)
+    try:
+        closed = is_closed()
+    except BaseException as error:
+        failures.append(error)
+        return failures
+    if closed:
+        cast(Any, manager)._db = None
+    else:
+        failures.append(RuntimeError("provider runtime configuration invalid"))
+    return failures
+
+
 def _close_yfinance_cache_databases_v1() -> None:
     cache_module = sys.modules.get("yfinance.cache")
     if cache_module is None:
         return
     missing = object()
+    failures: list[BaseException] = []
     for name in ("_TzDBManager", "_CookieDBManager", "_ISINDBManager"):
-        manager = getattr(cache_module, name, missing)
-        if manager is missing:
-            raise RuntimeError("provider runtime configuration invalid")
-        database = getattr(manager, "_db", missing)
-        if database is missing:
-            raise RuntimeError("provider runtime configuration invalid")
-        if database is None:
-            continue
-        close = getattr(database, "close", None)
-        is_closed = getattr(database, "is_closed", None)
-        if not callable(close) or not callable(is_closed):
-            raise RuntimeError("provider runtime configuration invalid")
-        close()
-        if not is_closed():
-            raise RuntimeError("provider runtime configuration invalid")
-        cast(Any, manager)._db = None
+        failures.extend(
+            _close_yfinance_cache_database_v1(
+                getattr(cache_module, name, missing), missing
+            )
+        )
+    if failures:
+        raise failures[0]
 
 
 class BoundedYahooSessionV1(CurlSession):

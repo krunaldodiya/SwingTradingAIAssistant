@@ -469,12 +469,23 @@ def _open_native_dependency_handle_v1(
 def _close_native_dependency_handles_v1(
     handles: dict[str, _NativeDependencyHandleV1],
 ) -> None:
+    failure: OSError | None = None
     while handles:
-        _name, handle = handles.popitem()
+        name = next(reversed(handles))
+        handle = handles[name]
         try:
-            fcntl.flock(handle[1], fcntl.LOCK_UN)
+            try:
+                fcntl.flock(handle[1], fcntl.LOCK_UN)
+            except OSError as error:
+                failure = failure or error
+            try:
+                os.close(handle[1])
+            except OSError as error:
+                failure = failure or error
         finally:
-            os.close(handle[1])
+            del handles[name]
+    if failure is not None:
+        raise failure
 
 
 def _owned_dependency_path_v1(

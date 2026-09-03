@@ -4803,3 +4803,120 @@ def test_request_authority_cleanup_replaces_staged_success(
         "contract_version": core.CONTRACT_VERSION_V1,
         "reason": "CONFIGURATION_INVALID",
     }
+
+
+def test_private_request_cleanup_attempts_every_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swing_trading_ai_assistant.historical_evaluation import (  # noqa: PLC0415
+        capability_validation_cli as request_reader,
+    )
+
+    authority = request_reader.PrivateRequestAuthorityV1(
+        descriptors=[11, 12, 13],
+        parents=[],
+        parent=12,
+        name="request.json",
+        descriptor=13,
+        identity=(),
+        payload=b"",
+    )
+    attempted: list[int] = []
+
+    def fail_first(descriptor: int) -> None:
+        attempted.append(descriptor)
+        if descriptor == 13:
+            raise OSError("request descriptor cleanup failed")
+
+    monkeypatch.setattr(request_reader.os, "close", fail_first)
+
+    with pytest.raises(OSError, match="request descriptor cleanup failed"):
+        authority.close()
+
+    assert attempted == [13, 12, 11]
+    assert authority._descriptors == []
+    assert not authority.ensure_live()
+
+
+def test_native_dependency_cleanup_attempts_unlock_and_close_for_every_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handles = {
+        "first": (Path("/first"), 11, (0, 0, 0, 0, 0, 0, 0, 0), 0, b""),
+        "second": (Path("/second"), 12, (0, 0, 0, 0, 0, 0, 0, 0), 0, b""),
+    }
+    events: list[tuple[str, int]] = []
+
+    def unlock(descriptor: int, _operation: int) -> None:
+        events.append(("unlock", descriptor))
+        if descriptor == 12:
+            raise OSError("native unlock failed")
+
+    def close(descriptor: int) -> None:
+        events.append(("close", descriptor))
+        if descriptor == 11:
+            raise OSError("native close failed")
+
+    monkeypatch.setattr(cli.fcntl, "flock", unlock)
+    monkeypatch.setattr(cli.os, "close", close)
+
+    with pytest.raises(OSError, match="native unlock failed"):
+        cli._close_native_dependency_handles_v1(handles)
+
+    assert events == [
+        ("unlock", 12),
+        ("close", 12),
+        ("unlock", 11),
+        ("close", 11),
+    ]
+    assert handles == {}
+
+
+def test_yfinance_cache_cleanup_attempts_every_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, str]] = []
+
+    class Database:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self.name = name
+            self.fail = fail
+            self.closed = False
+
+        def close(self) -> None:
+            events.append(("close", self.name))
+            self.closed = True
+            if self.fail:
+                raise OSError("timezone cache cleanup failed")
+
+        def is_closed(self) -> bool:
+            events.append(("is_closed", self.name))
+            return self.closed
+
+    managers = [
+        SimpleNamespace(_db=Database("timezone", fail=True)),
+        SimpleNamespace(_db=Database("cookie")),
+        SimpleNamespace(_db=Database("isin")),
+    ]
+    monkeypatch.setitem(
+        sys.modules,
+        "yfinance.cache",
+        SimpleNamespace(
+            _TzDBManager=managers[0],
+            _CookieDBManager=managers[1],
+            _ISINDBManager=managers[2],
+        ),
+    )
+
+    with pytest.raises(OSError, match="timezone cache cleanup failed"):
+        core._close_yfinance_cache_databases_v1()
+
+    assert events == [
+        ("close", "timezone"),
+        ("is_closed", "timezone"),
+        ("close", "cookie"),
+        ("is_closed", "cookie"),
+        ("close", "isin"),
+        ("is_closed", "isin"),
+    ]
+    assert all(manager._db is None for manager in managers)
