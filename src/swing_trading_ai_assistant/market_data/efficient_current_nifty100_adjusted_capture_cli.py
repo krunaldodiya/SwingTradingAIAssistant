@@ -15,7 +15,7 @@ import stat
 import sys
 import sysconfig
 from collections.abc import Callable, Generator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -49,11 +49,28 @@ _CONTRACT_VERSION_V1 = "efficient-current-nifty100-adjusted-capture@v1"
 _MAX_REQUEST_BYTES_V1 = 262_144
 _MAX_RESULT_BYTES_V1 = 262_144
 _PROVIDER_CACHE_NAME_V1 = ".plan33-yfinance-cache"
+_CA_BUNDLE_HANDLE_NAME_V1 = "__plan33_ca_bundle__"
+_PROVIDER_CA_BUNDLE_PATH_ENV_V1 = "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
+_AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1 = frozenset(
+    {
+        "curl_ca_bundle",
+        "requests_ca_bundle",
+        "ssl_cert_dir",
+        "ssl_cert_file",
+        "sslkeylogfile",
+        _PROVIDER_CA_BUNDLE_PATH_ENV_V1.casefold(),
+    }
+)
 _DEPENDENCY_REQUIREMENTS_V1 = (
     (
         "multitasking",
         "0.0.13",
         (("multitasking", "multitasking/__init__.py"),),
+    ),
+    (
+        "certifi",
+        "2026.7.22",
+        (("certifi", "certifi/__init__.py"),),
     ),
     (
         "curl-cffi",
@@ -68,6 +85,9 @@ _DEPENDENCY_REQUIREMENTS_V1 = (
 )
 
 _DEPENDENCY_CODE_AGGREGATES_V1 = {
+    "certifi": frozenset(
+        {"c0bd210d45178498029f61dffd180212f3e6e4161e9b94994d49dcb0476dcb4a"}
+    ),
     "multitasking": frozenset(
         {"e655ad7c1c9d055102c00c8ab5f7db66849672705435c182638eed490d60176b"}
     ),
@@ -126,6 +146,9 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
             if not stat.S_ISREG(metadata.st_mode):
                 raise RuntimeError("dependency distribution identity mismatch")
             descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            held = metadata
+            content = bytearray()
+            failure: BaseException | None = None
             try:
                 held = os.fstat(descriptor)
                 if (
@@ -134,7 +157,6 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
                     or held.st_size != metadata.st_size
                 ):
                     raise RuntimeError("dependency distribution identity mismatch")
-                content = bytearray()
                 while len(content) < held.st_size:
                     chunk = os.read(descriptor, held.st_size - len(content))
                     if not chunk:
@@ -142,8 +164,14 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
                     content.extend(chunk)
                 if os.fstat(descriptor).st_size != held.st_size:
                     raise RuntimeError("dependency distribution identity mismatch")
-            finally:
+            except BaseException as error:
+                failure = error
+            try:
                 os.close(descriptor)
+            except BaseException as error:
+                failure = failure or error
+            if failure is not None:
+                raise failure
             raw = bytes(content)
             entries.append(
                 (
@@ -292,13 +320,20 @@ def _verified_dependency_import_lifetime_v1(
     sys.meta_path.insert(0, finder)
     sys.pycache_prefix = os.path.join(os.devnull, "plan33-disabled-pycache")
     sys.dont_write_bytecode = True
+    failure: BaseException | None = None
     try:
         yield
-    finally:
-        sys.dont_write_bytecode = prior_dont_write_bytecode
-        sys.pycache_prefix = prior_cache_prefix
-        sys.meta_path[:] = prior_meta_path
+    except BaseException as error:
+        failure = error
+    sys.dont_write_bytecode = prior_dont_write_bytecode
+    sys.pycache_prefix = prior_cache_prefix
+    sys.meta_path[:] = prior_meta_path
+    try:
         _close_native_dependency_handles_v1(native_handles)
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise failure
 
 
 def _require_acknowledgement(argv: list[str]) -> None:
@@ -410,15 +445,16 @@ def _native_dependency_descriptor_path_v1(descriptor: int) -> str:
     for root in ("/dev/fd", "/proc/self/fd"):
         candidate = f"{root}/{descriptor}"
         duplicate = -1
+        matched = False
         try:
             duplicate = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC)
-            if _dependency_file_identity_v1(os.fstat(duplicate)) == expected:
-                return candidate
+            matched = _dependency_file_identity_v1(os.fstat(duplicate)) == expected
         except OSError:
-            continue
-        finally:
-            if duplicate >= 0:
-                os.close(duplicate)
+            pass
+        if duplicate >= 0:
+            os.close(duplicate)
+        if matched:
+            return candidate
     raise RuntimeError("dependency native descriptor unavailable")
 
 
@@ -443,6 +479,22 @@ def _native_dependency_handle_live_v1(
         return False
 
 
+def _ensure_native_dependency_handle_live_v1(
+    handle: _NativeDependencyHandleV1,
+) -> None:
+    if not _native_dependency_handle_live_v1(handle, require_name=True):
+        raise RuntimeError("provider trust configuration invalid")
+
+
+def _reject_ambient_transport_authority_v1() -> None:
+    if any(
+        name.casefold() in _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+        or name.casefold().endswith("_proxy")
+        for name in os.environ
+    ):
+        raise RuntimeError("ambient transport authority is not allowed")
+
+
 def _open_native_dependency_handle_v1(
     origin: Path,
     identity: _DependencyFileIdentityV1,
@@ -462,28 +514,55 @@ def _open_native_dependency_handle_v1(
             raise RuntimeError
         return handle
     except (OSError, RuntimeError):
-        os.close(descriptor)
+        with suppress(BaseException):
+            os.close(descriptor)
         raise
 
 
 def _close_native_dependency_handles_v1(
     handles: dict[str, _NativeDependencyHandleV1],
 ) -> None:
-    failure: OSError | None = None
+    failure: BaseException | None = None
     while handles:
         name = next(reversed(handles))
         handle = handles[name]
         try:
             try:
                 fcntl.flock(handle[1], fcntl.LOCK_UN)
-            except OSError as error:
+            except BaseException as error:
                 failure = failure or error
             try:
                 os.close(handle[1])
-            except OSError as error:
+            except BaseException as error:
                 failure = failure or error
         finally:
             del handles[name]
+    if failure is not None:
+        raise failure
+
+
+@contextmanager
+def _provider_trust_environment_v1(
+    handles: dict[str, _NativeDependencyHandleV1],
+) -> Generator[None]:
+    try:
+        handle = handles[_CA_BUNDLE_HANDLE_NAME_V1]
+    except KeyError:
+        raise RuntimeError("provider trust configuration invalid") from None
+    _ensure_native_dependency_handle_live_v1(handle)
+    os.environ[_PROVIDER_CA_BUNDLE_PATH_ENV_V1] = _native_dependency_descriptor_path_v1(
+        handle[1]
+    )
+    failure: BaseException | None = None
+    try:
+        yield
+    except BaseException as error:
+        failure = error
+    try:
+        _ensure_native_dependency_handle_live_v1(handle)
+    except BaseException as error:
+        failure = failure or error
+    os.environ.pop(_PROVIDER_CA_BUNDLE_PATH_ENV_V1, None)
     if failure is not None:
         raise failure
 
@@ -593,6 +672,19 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                     distribution_files[origin],
                     file_bytes[origin],
                 )
+            if normalized_name == "certifi":
+                ca_bundle = package_root / "cacert.pem"
+                ca_identity = distribution_files.get(ca_bundle)
+                ca_bytes = file_bytes.get(ca_bundle)
+                if ca_identity is None or ca_bytes is None:
+                    raise RuntimeError
+                native_handles[_CA_BUNDLE_HANDLE_NAME_V1] = (
+                    _open_native_dependency_handle_v1(
+                        ca_bundle,
+                        ca_identity,
+                        ca_bytes,
+                    )
+                )
             if normalized_name == "curl-cffi":
                 curl_admitted = True
             top_module = modules[0][0]
@@ -617,9 +709,21 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
         if not curl_admitted:
             raise RuntimeError
         return roots, origins, owned_files, sources, native_handles
-    except (KeyError, OSError, RuntimeError, StopIteration, TypeError, ValueError):
-        _close_native_dependency_handles_v1(native_handles)
-        raise RuntimeError("dependency distribution identity mismatch") from None
+    except (
+        KeyError,
+        OSError,
+        RuntimeError,
+        StopIteration,
+        TypeError,
+        ValueError,
+    ) as error:
+        with suppress(BaseException):
+            _close_native_dependency_handles_v1(native_handles)
+        raise RuntimeError("dependency distribution identity mismatch") from error
+    except BaseException:
+        with suppress(BaseException):
+            _close_native_dependency_handles_v1(native_handles)
+        raise
 
 
 def _module_origin_matches_v1(
@@ -652,7 +756,10 @@ def _module_origin_matches_v1(
 
 def _reject_preloaded_dependency_modules_v1() -> None:
     if any(
-        name == "multitasking" or name == "curl_cffi" or name.startswith("curl_cffi.")
+        name in {"certifi", "multitasking"}
+        or name.startswith("certifi.")
+        or name == "curl_cffi"
+        or name.startswith("curl_cffi.")
         for name in sys.modules
     ):
         raise RuntimeError("dependency module preloaded")
@@ -835,6 +942,7 @@ def _run_enabled(
     original_import_path = list(sys.path)
     native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
+        _reject_ambient_transport_authority_v1()
         _reject_preloaded_dependency_modules_v1()
         (
             site_roots,
@@ -849,13 +957,17 @@ def _run_enabled(
         sys.path[:] = _trusted_import_path_v1(site_roots)
     except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         sys.path[:] = original_import_path
-        _close_native_dependency_handles_v1(native_handles)
+        with suppress(BaseException):
+            _close_native_dependency_handles_v1(native_handles)
         return (
             _static_failure_v1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"),
             1,
         )
     try:
-        with _verified_dependency_import_lifetime_v1(sources, native_handles):
+        with (
+            _verified_dependency_import_lifetime_v1(sources, native_handles),
+            _provider_trust_environment_v1(native_handles),
+        ):
             try:
                 from . import (  # noqa: PLC0415
                     efficient_current_nifty100_adjusted_capture as core,

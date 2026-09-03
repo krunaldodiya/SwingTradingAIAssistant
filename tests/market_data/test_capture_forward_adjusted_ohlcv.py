@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import json
 import os
+import select
 import stat
 import subprocess
 import sys
@@ -1096,6 +1097,38 @@ def test_child_cleanup_failure_attempts_all_resources_and_releases_lease(
     acquired.lease.close()
 
 
+def test_capture_cleanup_preserves_first_base_failure_and_exhausts_resources() -> None:
+    events: list[str] = []
+
+    class CleanupSignal(BaseException):
+        pass
+
+    class Resource:
+        def __init__(self, name: str, failure: BaseException | None) -> None:
+            self.name = name
+            self.failure = failure
+
+        def close(self) -> None:
+            events.append(self.name)
+            if self.failure is not None:
+                raise self.failure
+
+    first = CleanupSignal("first cleanup failure")
+    resources = (
+        Resource("first", first),
+        Resource("second", ValueError("second cleanup failure")),
+        Resource("third", None),
+    )
+
+    with pytest.raises(
+        core._CaptureCleanupFailureV1, match="capture cleanup failed"
+    ) as raised:
+        core._close_capture_resources_v1(*resources)
+
+    assert events == ["first", "second", "third"]
+    assert raised.value.__cause__ is first
+
+
 def test_provider_failure_does_not_hide_correction_parent_admission_loss(
     tmp_path: Path,
 ) -> None:
@@ -1468,6 +1501,7 @@ provider = namespace["_Provider"](
     retrieved_at=request.schedule.decision_session_official_close_at
     + timedelta(hours=1)
 )
+print("READY", flush=True)
 result = namespace["_invoke"](
     request,
     provider,
@@ -1483,7 +1517,7 @@ if result != expected:
 if provider.calls != 0:
     raise AssertionError("provider was called")
 """
-    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+    process = subprocess.Popen(  # noqa: S603 - trusted isolated interpreter
         [
             sys.executable,
             "-c",
@@ -1492,14 +1526,23 @@ if provider.calls != 0:
             str(tmp_path),
             str(schedule_root),
         ],
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=3,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
+    try:
+        assert process.stdout is not None
+        ready, _, _ = select.select((process.stdout,), (), (), 15)
+        assert ready, "child process did not finish initialization"
+        assert process.stdout.readline() == "READY\n"
+        _stdout, stderr = process.communicate(timeout=3)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
 
-    assert completed.returncode == 0, completed.stderr
+    assert process.returncode == 0, stderr
     assert stat.S_ISFIFO(prepared.lstat().st_mode)
     assert displaced.read_bytes() == original
     assert set((tmp_path / "prepared").iterdir()) == {prepared, displaced}

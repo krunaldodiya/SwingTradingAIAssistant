@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib
 import importlib.machinery
 import io
@@ -31,6 +32,18 @@ from swing_trading_ai_assistant.market_data import (
 
 _NOW = datetime(2026, 9, 1, 10, 30, tzinfo=UTC)
 _SESSIONS = tuple(date(2026, 8, 4) + timedelta(days=index) for index in range(21))
+
+
+@pytest.fixture(autouse=True)
+def _clear_ambient_transport_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in tuple(os.environ):
+        if (
+            name.casefold() in cli._AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+            or name.casefold().endswith("_proxy")
+        ):
+            monkeypatch.delenv(name, raising=False)
 
 
 class _ProtectedCleanupSessionStub:
@@ -486,6 +499,46 @@ def test_first_rate_limit_remains_sticky_across_active_responses() -> None:
         ledger.admit_body(active, core.MAX_RESPONSE_BYTES_V1 + 1)
     assert ledger.rate_limited is True
     assert ledger.violated is False
+
+
+def test_provider_transport_pins_proxy_and_ca_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = core.BoundedYahooSessionV1()
+    assert session.trust_env is False
+    assert session.verify == core._PROVIDER_CA_BUNDLE_PATH_V1
+    assert session.curl_options[core.CurlOpt.PROXY] == ""
+    assert (
+        hashlib.sha256(
+            (
+                "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
+                "max_target=16384|max_response=2097152|max_aggregate=134217728|"
+                "retry=0|trust_env=false|proxy=none|ambient_env=reject|ca_sha256="
+                f"{core._PROVIDER_CA_BUNDLE_SHA256_V1}"
+            ).encode()
+        ).hexdigest()
+        == core.CONFIGURATION_IDENTITY_SHA256_V1
+    )
+
+    with monkeypatch.context() as context:
+        context.setenv("HTTPS_PROXY", "http://ambient-proxy.invalid")
+        with pytest.raises(RuntimeError, match="provider trust configuration invalid"):
+            core.BoundedYahooSessionV1()
+
+    with monkeypatch.context() as context:
+        context.setenv("SSLKEYLOGFILE", "unadmitted-key-log")
+        with pytest.raises(RuntimeError, match="provider trust configuration invalid"):
+            session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            core,
+            "_provider_ca_bundle_v1",
+            lambda: (core._PROVIDER_CA_BUNDLE_PATH_V1, "0" * 64),
+        )
+        with pytest.raises(RuntimeError, match="provider trust configuration invalid"):
+            session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
+    session.close()
 
 
 def test_encoded_query_target_is_bounded_before_transport(
@@ -2039,6 +2092,7 @@ def _shadow_dependency_packages(
 ) -> tuple[Path, ...]:
     files = {
         "multitasking/__init__.py": marker_root / "multitasking-executed",
+        "certifi/__init__.py": marker_root / "certifi-executed",
         "curl_cffi/__init__.py": marker_root / "curl-cffi-executed",
         "curl_cffi/requests/__init__.py": marker_root / "curl-requests-executed",
         "curl_cffi/requests/utils.py": marker_root / "curl-utils-executed",
@@ -3405,6 +3459,74 @@ raise SystemExit(main([
     }
     assert completed.stderr == ""
     assert all(not marker.exists() for marker in markers)
+
+
+@pytest.mark.parametrize(
+    "authority_name",
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "SSLKEYLOGFILE",
+    ],
+)
+def test_enabled_cli_rejects_ambient_transport_authority(
+    tmp_path: Path,
+    authority_name: str,
+) -> None:
+    request = tmp_path / "malformed-enabled.json"
+    request.write_bytes(
+        json.dumps(
+            {
+                "cohorts": [],
+                "contract_version": core.CONTRACT_VERSION_V1,
+                "enabled": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    request.chmod(0o600)
+    script = f"""
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if (
+            name.casefold() in cli._AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+            or name.casefold().endswith("_proxy")
+        ):
+            del environment[name]
+    environment[authority_name] = "/unadmitted/transport-authority"
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "INSUFFICIENT_EVIDENCE",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "CONFIGURATION_INVALID",
+    }
+    assert completed.stderr == ""
 
 
 def test_trusted_import_path_excludes_nested_site_package_directory() -> None:
@@ -4823,6 +4945,9 @@ def test_private_request_cleanup_attempts_every_descriptor(
         capability_validation_cli as request_reader,
     )
 
+    class CleanupSignal(BaseException):
+        pass
+
     authority = request_reader.PrivateRequestAuthorityV1(
         descriptors=[11, 12, 13],
         parents=[],
@@ -4837,11 +4962,11 @@ def test_private_request_cleanup_attempts_every_descriptor(
     def fail_first(descriptor: int) -> None:
         attempted.append(descriptor)
         if descriptor == 13:
-            raise OSError("request descriptor cleanup failed")
+            raise CleanupSignal("request descriptor cleanup failed")
 
     monkeypatch.setattr(request_reader.os, "close", fail_first)
 
-    with pytest.raises(OSError, match="request descriptor cleanup failed"):
+    with pytest.raises(CleanupSignal, match="request descriptor cleanup failed"):
         authority.close()
 
     assert attempted == [13, 12, 11]
@@ -4852,6 +4977,9 @@ def test_private_request_cleanup_attempts_every_descriptor(
 def test_native_dependency_cleanup_attempts_unlock_and_close_for_every_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class CleanupSignal(BaseException):
+        pass
+
     handles = {
         "first": (Path("/first"), 11, (0, 0, 0, 0, 0, 0, 0, 0), 0, b""),
         "second": (Path("/second"), 12, (0, 0, 0, 0, 0, 0, 0, 0), 0, b""),
@@ -4861,7 +4989,7 @@ def test_native_dependency_cleanup_attempts_unlock_and_close_for_every_handle(
     def unlock(descriptor: int, _operation: int) -> None:
         events.append(("unlock", descriptor))
         if descriptor == 12:
-            raise OSError("native unlock failed")
+            raise CleanupSignal("native unlock failed")
 
     def close(descriptor: int) -> None:
         events.append(("close", descriptor))
@@ -4871,7 +4999,7 @@ def test_native_dependency_cleanup_attempts_unlock_and_close_for_every_handle(
     monkeypatch.setattr(cli.fcntl, "flock", unlock)
     monkeypatch.setattr(cli.os, "close", close)
 
-    with pytest.raises(OSError, match="native unlock failed"):
+    with pytest.raises(CleanupSignal, match="native unlock failed"):
         cli._close_native_dependency_handles_v1(handles)
 
     assert events == [

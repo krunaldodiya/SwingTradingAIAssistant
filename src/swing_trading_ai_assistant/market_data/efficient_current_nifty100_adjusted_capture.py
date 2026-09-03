@@ -46,9 +46,20 @@ from .universe_snapshot import (
 
 if TYPE_CHECKING:
 
+    class CurlOpt:
+        PROXY: object
+
     class CurlSession:
-        def __init__(self, *, impersonate: str, retry: int) -> None:
-            del impersonate, retry
+        def __init__(
+            self,
+            *,
+            impersonate: str,
+            retry: int,
+            verify: str,
+            trust_env: bool,
+            curl_options: dict[object, str],
+        ) -> None:
+            del impersonate, retry, verify, trust_env, curl_options
 
         def request(self, method: str, url: str, **kwargs: object) -> object: ...
 
@@ -59,6 +70,7 @@ if TYPE_CHECKING:
         raise NotImplementedError
 
 else:
+    CurlOpt = import_module("curl_cffi.const").__dict__["CurlOpt"]
     CurlSession = import_module("curl_cffi.requests").__dict__["Session"]
     _update_url_params = cast(
         Callable[[str, object], str],
@@ -66,9 +78,91 @@ else:
     )
 
 CONTRACT_VERSION_V1: Final = "efficient-current-nifty100-adjusted-capture@v1"
+_PROVIDER_CA_BUNDLE_PATH_ENV_V1: Final = (
+    "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
+)
+_MAX_PROVIDER_CA_BUNDLE_BYTES_V1: Final = 1_048_576
+_AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1: Final = frozenset(
+    {
+        "curl_ca_bundle",
+        "requests_ca_bundle",
+        "ssl_cert_dir",
+        "ssl_cert_file",
+        "sslkeylogfile",
+        _PROVIDER_CA_BUNDLE_PATH_ENV_V1.casefold(),
+    }
+)
+
+
+def _reject_ambient_transport_authority_v1() -> None:
+    if any(
+        name.casefold() in _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+        or name.casefold().endswith("_proxy")
+        for name in os.environ
+    ):
+        raise RuntimeError("provider trust configuration invalid")
+
+
+def _read_provider_ca_bundle_v1(path: str) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    failure: BaseException | None = None
+    raw = b""
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size < 1
+            or metadata.st_size > _MAX_PROVIDER_CA_BUNDLE_BYTES_V1
+        ):
+            raise RuntimeError("provider trust configuration invalid")
+        raw = os.pread(descriptor, metadata.st_size, 0)
+        if len(raw) != metadata.st_size:
+            raise RuntimeError("provider trust configuration invalid")
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise failure
+    return raw
+
+
+def _provider_ca_bundle_v1() -> tuple[str, str]:
+    configured = os.environ.get(_PROVIDER_CA_BUNDLE_PATH_ENV_V1)
+    if configured is None:
+        certifi = import_module("certifi")
+        where = certifi.__dict__.get("where")
+        if not callable(where):
+            raise RuntimeError("provider trust configuration invalid")
+        configured = cast(Callable[[], str], where)()
+    if not os.path.isabs(configured):
+        raise RuntimeError("provider trust configuration invalid")
+    raw = _read_provider_ca_bundle_v1(configured)
+    return configured, hashlib.sha256(raw).hexdigest()
+
+
+_PROVIDER_CA_BUNDLE_PATH_V1, _PROVIDER_CA_BUNDLE_SHA256_V1 = _provider_ca_bundle_v1()
 CONFIGURATION_IDENTITY_SHA256_V1: Final = hashlib.sha256(
-    b"plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|max_target=16384|max_response=2097152|max_aggregate=134217728|retry=0"
+    (
+        "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
+        "max_target=16384|max_response=2097152|max_aggregate=134217728|"
+        "retry=0|trust_env=false|proxy=none|ambient_env=reject|ca_sha256="
+        f"{_PROVIDER_CA_BUNDLE_SHA256_V1}"
+    ).encode()
 ).hexdigest()
+
+
+def _ensure_provider_ca_bundle_live_v1() -> None:
+    try:
+        path, digest = _provider_ca_bundle_v1()
+    except (OSError, RuntimeError):
+        raise RuntimeError("provider trust configuration invalid") from None
+    if path != _PROVIDER_CA_BUNDLE_PATH_V1 or digest != _PROVIDER_CA_BUNDLE_SHA256_V1:
+        raise RuntimeError("provider trust configuration invalid")
+
+
 _PROVIDER_CACHE_NAME_V1: Final = ".plan33-yfinance-cache"
 NIFTY_50_URL: Final = (
     "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
@@ -113,6 +207,50 @@ class EvidenceConflict(OSError):
 
 class _BindingCleanupFailureV1(RuntimeError):
     """Descriptor cleanup failed after binding evidence access."""
+
+
+def _cleanup_preserving_active_failure_v1(cleanup: Callable[[], None]) -> None:
+    active = sys.exception()
+    try:
+        cleanup()
+    except BaseException:
+        if active is None:
+            raise
+
+
+def _close_descriptor_and_lease_v1(
+    descriptor: int | None,
+    lease: StorageRootLease,
+    message: str,
+) -> None:
+    failure: BaseException | None = None
+    if descriptor is not None:
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            failure = error
+    try:
+        lease.close()
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise OSError(message) from failure
+
+
+def _close_descriptors_v1(
+    descriptors: tuple[int | None, ...],
+    message: str,
+) -> None:
+    failure: BaseException | None = None
+    for descriptor in descriptors:
+        if descriptor is None:
+            continue
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            failure = failure or error
+    if failure is not None:
+        raise OSError(message) from failure
 
 
 def _assert_private_directory_edge_v1(
@@ -986,7 +1124,15 @@ class BoundedYahooSessionV1(CurlSession):
         owns_provider_admission: bool = False,
         cache_authority: _ProviderCacheAuthorityV1 | None = None,
     ) -> None:
-        super().__init__(impersonate="chrome", retry=0)
+        _reject_ambient_transport_authority_v1()
+        _ensure_provider_ca_bundle_live_v1()
+        super().__init__(
+            impersonate="chrome",
+            retry=0,
+            verify=_PROVIDER_CA_BUNDLE_PATH_V1,
+            trust_env=False,
+            curl_options={CurlOpt.PROXY: ""},
+        )
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission
         self._cache_authority = cache_authority
@@ -1016,6 +1162,8 @@ class BoundedYahooSessionV1(CurlSession):
             self._sleep(remaining)
 
     def request(self, method: str, url: str, **kwargs: object) -> object:
+        _reject_ambient_transport_authority_v1()
+        _ensure_provider_ca_bundle_live_v1()
         target_url = _request_target_v1(url, kwargs)
 
         self._acquire_start_boundary()
@@ -1096,6 +1244,11 @@ class BoundedYahooSessionV1(CurlSession):
                     cache.abandon()
             except BaseException as error:
                 failure = failure or error
+        try:
+            _reject_ambient_transport_authority_v1()
+            _ensure_provider_ca_bundle_live_v1()
+        except BaseException as error:
+            failure = failure or error
 
         if self._owns_provider_admission:
             self._owns_provider_admission = False
@@ -1471,9 +1624,11 @@ def _read_retained_selection_v1(
     except ValueError:
         raise EvidenceConflict("selection evidence conflict") from None
     finally:
-        if directory is not None:
-            os.close(directory)
-        lease.close()
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_descriptor_and_lease_v1(
+                directory, lease, "selection descriptor cleanup failed"
+            )
+        )
 
 
 @dataclass(slots=True)
@@ -1536,7 +1691,7 @@ class _MissingSelectionRootAuthorityV1:
             return authority
         except BaseException:
             for descriptor in reversed(descriptors):
-                with suppress(OSError):
+                with suppress(BaseException):
                     os.close(descriptor)
             raise
 
@@ -1589,16 +1744,22 @@ class _MissingSelectionRootAuthorityV1:
                 raise OSError("selection root unavailable")
             return held.st_dev, held.st_ino
         finally:
-            os.close(descriptor)
+            _cleanup_preserving_active_failure_v1(
+                lambda: _close_descriptors_v1(
+                    (descriptor,), "selection root descriptor cleanup failed"
+                )
+            )
 
     def close(self) -> None:
-        descriptors, self.descriptors = self.descriptors, []
-        failure: OSError | None = None
-        for descriptor in reversed(descriptors):
+        failure: BaseException | None = None
+        while self.descriptors:
+            descriptor = self.descriptors[-1]
             try:
                 os.close(descriptor)
-            except OSError as error:
-                failure = error
+            except BaseException as error:
+                failure = failure or error
+            finally:
+                self.descriptors.pop()
         if failure is not None:
             raise failure
 
@@ -1634,9 +1795,11 @@ def _create_private_root_v1(root: Path) -> None:
         ):
             raise OSError("selection store unavailable")
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent)
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_descriptors_v1(
+                (descriptor, parent), "selection root descriptor cleanup failed"
+            )
+        )
 
 
 def resolve_selection_v1(  # noqa: C901 - immutable selection transaction
@@ -1728,9 +1891,11 @@ def resolve_selection_v1(  # noqa: C901 - immutable selection transaction
                 raise EvidenceConflict("selection exact read failed")
             return status, retained
     finally:
-        if directory is not None:
-            os.close(directory)
-        lease.close()
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_descriptor_and_lease_v1(
+                directory, lease, "selection descriptor cleanup failed"
+            )
+        )
 
 
 def retain_selection_v1(selection: SelectionRevisionV1, root: Path) -> str:
@@ -1855,7 +2020,11 @@ def _clear_provider_cache_entry_v1(
                 raise RuntimeError("provider runtime configuration invalid")
             _clear_provider_cache_v1(child, protected_identities)
         finally:
-            os.close(child)
+            _cleanup_preserving_active_failure_v1(
+                lambda: _close_descriptors_v1(
+                    (child,), "provider cache descriptor cleanup failed"
+                )
+            )
     elif stat.S_ISREG(before.st_mode):
         if before.st_nlink != 1:
             raise RuntimeError("provider runtime configuration invalid")
@@ -1878,7 +2047,11 @@ def _clear_provider_cache_entry_v1(
             ):
                 raise RuntimeError("provider runtime configuration invalid")
         finally:
-            os.close(child)
+            _cleanup_preserving_active_failure_v1(
+                lambda: _close_descriptors_v1(
+                    (child,), "provider cache descriptor cleanup failed"
+                )
+            )
     else:
         raise RuntimeError("provider runtime configuration invalid")
     current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
@@ -1909,7 +2082,11 @@ def _provider_cache_is_cleared_v1(
                     ):
                         return False
                 finally:
-                    os.close(child)
+                    _cleanup_preserving_active_failure_v1(
+                        lambda child=child: _close_descriptors_v1(
+                            (child,), "provider cache descriptor cleanup failed"
+                        )
+                    )
             elif (
                 not stat.S_ISREG(value.st_mode)
                 or value.st_nlink != 1
@@ -1938,23 +2115,23 @@ def _release_provider_cache_resources_v1(
     operation: StorageRootLeaseOperation | None,
     lease: StorageRootLease,
 ) -> None:
-    cleanup_failed = False
+    failure: BaseException | None = None
     if descriptor is not None:
         try:
             os.close(descriptor)
-        except Exception:
-            cleanup_failed = True
+        except BaseException as error:
+            failure = error
     if operation is not None:
         try:
             operation.__exit__(None, None, None)
-        except Exception:
-            cleanup_failed = True
+        except BaseException as error:
+            failure = failure or error
     try:
         lease.close()
-    except Exception:
-        cleanup_failed = True
-    if cleanup_failed:
-        raise OSError("provider cache cleanup failed")
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise OSError("provider cache cleanup failed") from failure
 
 
 @dataclass(slots=True)
@@ -2001,13 +2178,20 @@ class _ProviderCacheAuthorityV1:
         self._release()
 
     def close(self) -> None:
+        failure: BaseException | None = None
         try:
             self.ensure_descriptor_live()
             _clear_provider_cache_v1(self.descriptor, self.protected_identities)
             self.ensure_live()
             self.operation.ensure_live()
-        finally:
+        except BaseException as error:
+            failure = error
+        try:
             self._release()
+        except BaseException as error:
+            failure = failure or error
+        if failure is not None:
+            raise failure
 
 
 def _open_provider_cache_authority_v1(
@@ -2085,11 +2269,12 @@ def _open_provider_cache_authority_v1(
         authority.ensure_live()
         return authority
     except BaseException:
-        _release_provider_cache_resources_v1(
-            descriptor,
-            operation if entered else None,
-            lease,
-        )
+        with suppress(BaseException):
+            _release_provider_cache_resources_v1(
+                descriptor,
+                operation if entered else None,
+                lease,
+            )
         raise
 
 
@@ -2101,6 +2286,7 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
 ) -> BoundedYahooSessionV1:
     """Create and verify one exact exclusive runtime before importing yfinance."""
 
+    _reject_ambient_transport_authority_v1()
     if not _PROVIDER_ADMISSION_LOCK.acquire(blocking=False):
         raise RuntimeError("provider runtime configuration invalid")
     cache: _ProviderCacheAuthorityV1 | None = None
@@ -2130,10 +2316,10 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
             cache_authority=cache,
         )
     except BaseException:
-        try:
-            if cache is not None:
+        if cache is not None:
+            with suppress(BaseException):
                 cache.close()
-        finally:
+        with suppress(BaseException):
             _PROVIDER_ADMISSION_LOCK.release()
         raise
     try:
@@ -2160,7 +2346,7 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
         ):
             raise RuntimeError("provider runtime configuration invalid")
     except BaseException:
-        with suppress(Exception):
+        with suppress(BaseException):
             session.close()
         raise
     return session
@@ -2294,7 +2480,9 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
     except ValueError:
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
-        _close_binding_read_resources_v1(None, directory, lease)
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_binding_read_resources_v1(None, directory, lease)
+        )
 
 
 def _close_binding_read_resources_v1(
@@ -2302,20 +2490,20 @@ def _close_binding_read_resources_v1(
     directory: int | None,
     lease: StorageRootLease,
 ) -> None:
-    cleanup_failed = False
+    failure: BaseException | None = None
     for item in (descriptor, directory):
         if item is None:
             continue
         try:
             os.close(item)
-        except OSError:
-            cleanup_failed = True
+        except BaseException as error:
+            failure = failure or error
     try:
         lease.close()
-    except RuntimeError:
-        cleanup_failed = True
-    if cleanup_failed:
-        raise _BindingCleanupFailureV1("binding descriptor cleanup failed")
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise _BindingCleanupFailureV1("binding descriptor cleanup failed") from failure
 
 
 def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
@@ -2386,7 +2574,9 @@ def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
     except (OSError, RuntimeError, ValueError):
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
-        _close_binding_read_resources_v1(descriptor, directory, lease)
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_binding_read_resources_v1(descriptor, directory, lease)
+        )
 
 
 def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
@@ -2452,7 +2642,9 @@ def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
     except (OSError, RuntimeError, ValueError):
         return False
     finally:
-        _close_binding_read_resources_v1(descriptor, directory, lease)
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_binding_read_resources_v1(descriptor, directory, lease)
+        )
 
 
 def _retain_plan33_binding_with_operation_v1(
@@ -2517,7 +2709,11 @@ def _retain_plan33_binding_with_operation_v1(
             "Plan 33 binding evidence conflict",
         )
     finally:
-        os.close(directory)
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_descriptors_v1(
+                (directory,), "Plan 33 binding descriptor cleanup failed"
+            )
+        )
 
 
 def _retain_plan33_binding_v1(
@@ -2552,7 +2748,11 @@ def _retain_plan33_binding_v1(
                 cohort, result, selection, held_operation
             )
     finally:
-        lease.close()
+        _cleanup_preserving_active_failure_v1(
+            lambda: _close_descriptor_and_lease_v1(
+                None, lease, "Plan 33 binding lease cleanup failed"
+            )
+        )
 
 
 def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
@@ -3279,7 +3479,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
         if session is not None:
             try:
                 session.close()
-            except Exception:
+            except BaseException:
                 cleanup_failed = True
 
     if not _protected_paths_live_v1(tuple(protected_by_path.values())):
@@ -3344,6 +3544,8 @@ def capture_current_nifty100_v1(
 
     authorities: list[_MissingSelectionRootAuthorityV1] = []
     authority_cleanup_failed = False
+    failure: BaseException | None = None
+    result: CurrentNifty100ResultV1 | SharedFailureV1 | None = None
     try:
         result = _capture_current_nifty100_impl_v1(
             raw_request,
@@ -3357,12 +3559,17 @@ def capture_current_nifty100_v1(
             request_live=_request_live,
             authority_holder=authorities,
         )
-    finally:
-        for authority in authorities:
-            try:
-                authority.close()
-            except OSError:
-                authority_cleanup_failed = True
+    except BaseException as error:
+        failure = error
+    for authority in authorities:
+        try:
+            authority.close()
+        except BaseException:
+            authority_cleanup_failed = True
+    if failure is not None:
+        raise failure
+    if result is None:
+        raise RuntimeError("capture result unavailable")
     if authority_cleanup_failed:
         if isinstance(result, CurrentNifty100ResultV1):
             return replace(

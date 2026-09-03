@@ -103,14 +103,13 @@ class PrivateRequestAuthorityV1:
 
     def close(self) -> None:
         self._descriptor = -1
-        failure: OSError | None = None
+        failure: BaseException | None = None
         while self._descriptors:
             descriptor = self._descriptors[-1]
             try:
                 os.close(descriptor)
-            except OSError as error:
-                if failure is None:
-                    failure = error
+            except BaseException as error:
+                failure = failure or error
             finally:
                 self._descriptors.pop()
         if failure is not None:
@@ -121,8 +120,12 @@ class PrivateRequestAuthorityV1:
             raise ValueError("request path is invalid")
         return self
 
-    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        self.close()
+    def __exit__(self, _exc_type: object, exc: object, _traceback: object) -> None:
+        if exc is None:
+            self.close()
+        else:
+            with suppress(BaseException):
+                self.close()
 
 
 def open_private_request_authority(  # noqa: C901 - descriptor-chain admission
