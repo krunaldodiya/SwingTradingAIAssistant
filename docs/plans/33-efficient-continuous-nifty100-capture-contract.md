@@ -95,17 +95,22 @@ Pinned `multitasking==0.0.13` creates its default CPU-sized pool when yfinance's
 Before the enabled core import executes either dependency, the CLI requires a
 fresh process with no preloaded `multitasking` or `curl_cffi` module, admits the
 sole `multitasking==0.0.13` and `curl-cffi==0.16.1` distributions beneath the
-running interpreter's resolved `purelib`/`platlib`, and binds every file-backed
-loaded `curl_cffi` module's `__file__` and `__spec__.origin` to the same absolute
-regular file whose full metadata identity was recorded from that exact
-distribution before import. The cffi-generated
-`curl_cffi._wrapper.lib` object has no file/spec; it is admitted only when it is
-the exact `lib` object exported by the separately file-bound admitted
-`curl_cffi._wrapper` extension. The CLI also proves that the exported and
-inherited `Session` class is the admitted `curl_cffi.requests.session` class.
-Ambient import paths are removed for the duration of the operation. A package,
-coherent package-plus-metadata, or preloaded transitive child-module
-substitution is not executed.
+running interpreter's resolved `purelib`/`platlib`, and binds every
+distribution-owned package file into an allowlisted aggregate. Every Python
+module executes from descriptor-read admitted bytes. Each native extension is
+held by a shared-locked descriptor whose full metadata and content identity
+match the admitted distribution object; the extension loader receives only the
+verified `/dev/fd` or `/proc/self/fd` alias to that held object, never a second
+lookup of its mutable package pathname. Loaded Python file/spec origins bind to
+their admitted absolute paths, while a loaded native file/spec origin binds to
+that verified descriptor alias and remains live through the operation. The
+cffi-generated `curl_cffi._wrapper.lib` object has no file/spec; it is admitted
+only when it is the exact `lib` object exported by the separately
+descriptor-bound `curl_cffi._wrapper` extension. The CLI also proves that the
+exported and inherited `Session` class is the admitted
+`curl_cffi.requests.session` class. Ambient import paths are removed for the
+duration of the operation. A package, coherent package-plus-metadata, preloaded
+transitive child-module, or native pathname substitution is not executed.
 
 The supplied session is one `curl_cffi.requests.Session(impersonate="chrome", retry=0)` subtype with a shared locked transport ledger and a non-overtakable call-start boundary. A worker holds that boundary from ledger admission through entry into the superclass HTTP call and releases it only at the first response-body callback or terminal return/failure. Thus concurrent scheduling cannot reorder admissions or cluster actual HTTP-call starts. It admits only:
 
@@ -277,9 +282,12 @@ low-level revision publishes one immutable receipt binding its selection,
 request, schedule, revision, source, and retrieval time. An exact reused
 low-level revision may recover a missing receipt only after every bound identity
 and the immutable revision are revalidated; conflicting bytes fail closed before
-provider work. The changed pool, supplied session, cadence, and byte-bound
-configuration is versioned rather than weakening or silently mutating the
-delivered `threads=False` contract.
+provider work. Every successful reused or captured cohort must then yield
+exactly one detached, exact-identity binding snapshot that remains live through
+cleanup and finalization. A missing, renamed, or replaced successful binding is
+`EVIDENCE_CONFLICT`; completion cannot omit its snapshot. The changed pool,
+supplied session, cadence, and byte-bound configuration is versioned rather than
+weakening or silently mutating the delivered `threads=False` contract.
 
 Before reading the private request or performing any source, cache, provider,
 or store effect, the CLI rejects the request file, schedule root, or either
@@ -397,20 +405,20 @@ only by its own cohort identity and cannot authorize the union claim.
 | Current CSV lacks publisher-effective time | Current-at-retrieval label only | Historical/pre-retrieval membership claim | Serialization/nonclaim test |
 | Mapping capability is absent | `UNSUPPORTED_CAPABILITY` before provider call | `.NS` inference; wrong ticker call | Missing-capability test |
 | Mapping evidence is stale, conflicting, or substituted | `INSUFFICIENT_EVIDENCE/MAPPING_EVIDENCE_INVALID` before provider call | Mapping repair or wrong ticker call | Mapping interval/identity tests |
-| Invalid schedule, incomplete decision session, wrong close/cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar | Schedule/temporal tests |
-| Pool/session was not created before yfinance import; any `multitasking` or `curl_cffi` module is preloaded; the admitted distribution, any loaded `curl_cffi` module's file/spec origin, exact exported/inherited `Session` class, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive child-module substitution; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution and import-order/pool/session/configuration tests |
+| Invalid schedule, incomplete decision session, wrong close/cutoff, selection retrieved after the decision cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar; untyped temporal failure | Schedule/temporal tests |
+| Pool/session was not created before yfinance import; any `multitasking` or `curl_cffi` module is preloaded; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive child-module substitution; native pathname reopen/substitution; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution and import-order/pool/session/configuration/native-descriptor tests |
 | Concurrent actual HTTP-call starts are less than 125 milliseconds apart, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | Sticky `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; no later start, active-response body admission, or cohort reset until every active response closes; callback stops before frame decode; no partial publish | Admission overtake; clustered real calls; limit bypass after first violation; reset with active response; full oversized decode; retry | Concurrent superclass-entry cadence plus clock-controlled bound, limit-plus-one, active-reset, and post-violation tests |
 | First transport response is HTTP 429 | Session stops it before yfinance alternate-cookie handling; `INSUFFICIENT_EVIDENCE/PROVIDER_RATE_LIMITED`; second unresolved cohort still follows precedence | Dependency/operator retry; fallback; partial publish | Session interception/rate-limit test |
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |
 | Provider raises an ordinary non-rate exception or timeout | `INSUFFICIENT_EVIDENCE/PROVIDER_ERROR` for that cohort | Operator retry; fallback; partial cohort publish | Adapter failure tests |
 | Empty/unexpected-schema frame, missing/duplicated session or ticker, NaN/non-finite/non-positive price, negative/non-integral volume, or wrong timezone | `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE` for that cohort | Invented 429; member/session dropping; value repair | Frame matrix tests |
 | Complete yfinance-adjusted window crosses a provider-reported corporate action | Capture remains one adjusted revision; volume remains source-reported unadjusted; limitation retained | Upstox/raw substitution; local adjustment inference | Corporate-action basis test |
-| A later authorized request observes revised adjusted bytes | New immutable revision/lineage; old revision unchanged | Overwrite or relabelling old known-at | Revision/correction test |
+| A later authorized request observes revised adjusted bytes, including when its admitted parent was written by an explicitly compatible historical runtime | New immutable revision/lineage; old revision and writer identity unchanged; writer upgrade alone is not changed provider content | Overwrite, historical-writer rejection, spurious correction, or relabelling old known-at | Revision/correction and compatible-writer lineage tests |
 | First cohort has provider/frame failure; second is unresolved | Second is still attempted; ordered tuple carries both exact rows | Nondeterministic short-circuit | Combined-failure precedence test |
 | First cohort retention fails; second is unresolved | First is `RETENTION_FAILED`; second is `NOT_ATTEMPTED/BLOCKED_BY_PRIOR_RETENTION_FAILURE`; no later provider/store effect | Use of potentially unsafe store; missing second row | Retention-stop test |
 | First cohort retention fails; second was already validly reused | Failed first row plus valid reused second row; no new effect | Deletion or relabelling of reused revision | Mixed reuse/retention test |
 | Interruption or write failure during second cohort retention | `INSUFFICIENT_EVIDENCE/RETENTION_FAILED` for second; existing rollback/recovery semantics; ordered incomplete union | Partial revision admission; overwrite | Existing atomic-store interruption tests plus orchestration test |
-| The canonical `selections` or `plan33_bindings` child name is replaced after descriptor admission during a missing read or immutable publish | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; the replacement remains untouched and no success is returned | Publication into, deletion of, or trust in the substituted sibling | Descriptor/name identity race tests for both stores and both paths |
+| The canonical `selections` or `plan33_bindings` child name is replaced after descriptor admission during a missing read or immutable publish, or a successful cohort binding disappears before detached snapshot/finalization | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; the replacement remains untouched and no success is returned | Publication into, deletion of, trust in the substituted sibling, or completion without exactly one live successful-cohort binding snapshot | Descriptor/name identity race and successful-binding-disappearance tests |
 | Both cohorts are validly `REUSED` while the fixed cache contains residue from an earlier cleanup failure | Cache contents are descriptor-cleared without importing yfinance or calling the provider; cleanup failure makes both rows `CONFIGURATION_INVALID` | Retained cookie/response data; provider work on an all-reuse invocation | All-reuse cache-residue regression |
 | Request, schedule, or cohort storage root equals/descends from the fixed provider-cache boundary; the cache directory aliases a protected identity; or a validated protected object is moved there before/during cleanup or provider import failure | Static overlap is `MALFORMED_INPUT`/`request_invalid`; later aliasing is `CONFIGURATION_INVALID`; protected identity is not deleted and no complete result is returned | Deletion of retained evidence; publication followed by cache deletion; dangling success | Core/CLI static-overlap, own-cache-alias, import-failure movement, root-before-source snapshot, descriptor-bound content-clear, and final-delete-substitution regressions |
 | Exact retry | Same revision identity and `REUSED`; no provider call/write | Duplicate revision; changed known-at | Retry test |

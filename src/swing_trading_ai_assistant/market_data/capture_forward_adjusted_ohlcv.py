@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib.abc
 import importlib.machinery
 import importlib.metadata
 import importlib.util
@@ -13,7 +14,8 @@ import re
 import stat
 import sys
 import sysconfig
-from collections.abc import Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -66,6 +68,11 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
 )
 
 _yfinance_modules: list[ModuleType] = []
+_yfinance_finders: list[_YfinanceSourceFinderV1] = []
+_yfinance_code_identities: list[str] = []
+_YFINANCE_CODE_AGGREGATES_V1: Final = frozenset(
+    {"c380fb01c2e583112e614091d07a3c3e53a474e3154cc29beb44d403d9e29963"}
+)
 
 CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv@v1"
 REVISION_CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv-revision@v1"
@@ -1026,9 +1033,13 @@ class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
         }
 
 
+_YfinanceFileIdentityV1 = tuple[int, int, int, int, int, int, int, int]
+_YfinanceSourceV1 = tuple[Path, bytes, bool, _YfinanceFileIdentityV1]
+
+
 def _stat_regular_file_identity(
     metadata: os.stat_result,
-) -> tuple[int, int, int, int]:
+) -> _YfinanceFileIdentityV1:
     if not stat.S_ISREG(metadata.st_mode):
         raise RuntimeError("yfinance module origin mismatch")
     return (
@@ -1036,10 +1047,14 @@ def _stat_regular_file_identity(
         metadata.st_ino,
         metadata.st_mode,
         metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
     )
 
 
-def _regular_file_identity(value: object) -> tuple[int, int, int, int]:
+def _regular_file_identity(value: object) -> _YfinanceFileIdentityV1:
     if type(value) is not str:
         raise RuntimeError("yfinance module origin mismatch")
     try:
@@ -1068,8 +1083,61 @@ def _trusted_site_roots_v1() -> tuple[Path, ...]:
     return tuple(roots)
 
 
-def _trusted_yfinance_distribution_v1() -> tuple[
-    importlib.machinery.ModuleSpec, str, tuple[int, int, int, int]
+def _read_yfinance_source_v1(
+    origin: Path, expected_identity: _YfinanceFileIdentityV1
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            origin,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            _stat_regular_file_identity(metadata) != expected_identity
+            or metadata.st_nlink != 1
+            or not 0 <= metadata.st_size <= 1_048_576
+        ):
+            raise RuntimeError
+        payload = bytearray()
+        while len(payload) <= metadata.st_size:
+            chunk = os.read(
+                descriptor, min(65_536, metadata.st_size + 1 - len(payload))
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if (
+            len(payload) != metadata.st_size
+            or _stat_regular_file_identity(os.fstat(descriptor)) != expected_identity
+            or _regular_file_identity(str(origin)) != expected_identity
+        ):
+            raise RuntimeError
+        return bytes(payload)
+    except (OSError, RuntimeError):
+        raise RuntimeError("yfinance module origin mismatch") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _yfinance_module_name_v1(package_root: Path, origin: Path) -> tuple[str, bool]:
+    relative = origin.relative_to(package_root.parent)
+    parts = list(relative.with_suffix("").parts)
+    is_package = parts[-1] == "__init__"
+    if is_package:
+        parts.pop()
+    if not parts or parts[0] != "yfinance":
+        raise RuntimeError("yfinance module origin mismatch")
+    return ".".join(parts), is_package
+
+
+def _trusted_yfinance_distribution_v1(  # noqa: C901 - closed package admission
+) -> tuple[
+    str,
+    _YfinanceFileIdentityV1,
+    str,
+    dict[str, _YfinanceSourceV1],
 ]:
     try:
         roots = _trusted_site_roots_v1()
@@ -1084,88 +1152,179 @@ def _trusted_yfinance_distribution_v1() -> tuple[
         if len(distributions) != 1 or distributions[0].version != "1.6.0":
             raise RuntimeError
         distribution = distributions[0]
-        owned_item = next(
-            item
-            for item in distribution.files or ()
-            if str(item).replace(os.sep, "/") == "yfinance/__init__.py"
-        )
-        owned_origin = Path(str(distribution.locate_file(owned_item))).resolve(
-            strict=True
-        )
-        if not any(owned_origin.is_relative_to(root) for root in roots):
+        sources: dict[str, _YfinanceSourceV1] = {}
+        aggregate_entries: list[tuple[str, int, bytes]] = []
+        package_root: Path | None = None
+        for item in distribution.files or ():
+            relative = str(item).replace(os.sep, "/")
+            if not relative.startswith("yfinance/") or not relative.endswith(".py"):
+                continue
+            located = Path(str(distribution.locate_file(item)))
+            if not located.is_absolute() or located.is_symlink():
+                raise RuntimeError
+            origin = located.resolve(strict=True)
+            if not any(origin.is_relative_to(root) for root in roots):
+                raise RuntimeError
+            if relative == "yfinance/__init__.py":
+                package_root = origin.parent
+            identity = _regular_file_identity(str(origin))
+            raw = _read_yfinance_source_v1(origin, identity)
+            aggregate_entries.append((relative, len(raw), hashlib.sha256(raw).digest()))
+            if package_root is None:
+                continue
+            module_name, is_package = _yfinance_module_name_v1(package_root, origin)
+            if module_name in sources:
+                raise RuntimeError
+            sources[module_name] = (origin, raw, is_package, identity)
+        if package_root is None:
             raise RuntimeError
+        if len(sources) != len(aggregate_entries):
+            sources = {}
+            for item in distribution.files or ():
+                relative = str(item).replace(os.sep, "/")
+                if not relative.startswith("yfinance/") or not relative.endswith(".py"):
+                    continue
+                origin = Path(str(distribution.locate_file(item))).resolve(strict=True)
+                identity = _regular_file_identity(str(origin))
+                raw = _read_yfinance_source_v1(origin, identity)
+                module_name, is_package = _yfinance_module_name_v1(package_root, origin)
+                if module_name in sources:
+                    raise RuntimeError
+                sources[module_name] = (origin, raw, is_package, identity)
+        aggregate = hashlib.sha256()
+        for relative, size, digest in sorted(aggregate_entries):
+            aggregate.update(relative.encode("utf-8"))
+            aggregate.update(b"\0")
+            aggregate.update(size.to_bytes(8, "big"))
+            aggregate.update(digest)
+        code_identity = aggregate.hexdigest()
+        if code_identity not in _YFINANCE_CODE_AGGREGATES_V1:
+            raise RuntimeError
+        top_origin, _raw, is_package, top_identity = sources["yfinance"]
         specification = importlib.machinery.PathFinder.find_spec(
             "yfinance", [str(root) for root in roots]
         )
         if (
-            specification is None
+            not is_package
+            or specification is None
             or specification.loader is None
             or specification.origin is None
             or specification.submodule_search_locations is None
+            or Path(specification.origin).resolve(strict=True) != top_origin
             or tuple(
                 Path(location).resolve(strict=True)
                 for location in specification.submodule_search_locations
             )
-            != (owned_origin.parent,)
+            != (package_root,)
         ):
             raise RuntimeError
-        specification_origin = Path(specification.origin).resolve(strict=True)
-        identity = _regular_file_identity(str(owned_origin))
-        if specification_origin != owned_origin:
-            raise RuntimeError
-        if _regular_file_identity(str(specification_origin)) != identity:
-            raise RuntimeError
-        return specification, str(owned_origin), identity
+        return str(top_origin), top_identity, code_identity, sources
     except (KeyError, OSError, RuntimeError, StopIteration, TypeError, ValueError):
         raise RuntimeError("yfinance distribution identity mismatch") from None
 
 
-def _read_yfinance_init_v1(
-    origin: str, expected_identity: tuple[int, int, int, int]
-) -> bytes:
-    descriptor = -1
-    try:
-        descriptor = os.open(
-            origin,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+class _YfinanceSourceFinderV1(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Execute every yfinance Python module from descriptor-admitted bytes."""
+
+    def __init__(self, sources: dict[str, _YfinanceSourceV1]) -> None:
+        self.sources = dict(sources)
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: object = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        del path, target
+        source = self.sources.get(fullname)
+        if source is None:
+            if fullname == "yfinance" or fullname.startswith("yfinance."):
+                raise ImportError("yfinance source module unavailable")
+            return None
+        origin, _raw, is_package, _identity = source
+        specification = importlib.machinery.ModuleSpec(
+            fullname, self, is_package=is_package
         )
-        metadata = os.fstat(descriptor)
-        if (
-            _stat_regular_file_identity(metadata) != expected_identity
-            or not 1 <= metadata.st_size <= 1_048_576
-        ):
-            raise RuntimeError
-        payload = bytearray()
-        while len(payload) <= metadata.st_size:
-            chunk = os.read(
-                descriptor, min(65_536, metadata.st_size + 1 - len(payload))
-            )
-            if not chunk:
-                break
-            payload.extend(chunk)
-        if len(payload) != metadata.st_size:
-            raise RuntimeError
-        return bytes(payload)
-    except (OSError, RuntimeError):
-        raise RuntimeError("yfinance module origin mismatch") from None
+        specification.origin = str(origin)
+        if is_package:
+            specification.submodule_search_locations = [str(origin.parent)]
+        return specification
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> None:
+        del spec
+        return None
+
+    def exec_module(self, module: object) -> None:
+        name = getattr(module, "__name__", None)
+        if type(name) is not str or name not in self.sources:
+            raise ImportError("yfinance source module unavailable")
+        origin, raw, is_package, _identity = self.sources[name]
+        namespace = cast(dict[str, object], module.__dict__)
+        namespace["__file__"] = str(origin)
+        namespace["__cached__"] = None
+        if is_package:
+            namespace["__path__"] = [str(origin.parent)]
+        exec(  # noqa: S102 - execute descriptor-admitted yfinance bytes
+            compile(raw, str(origin), "exec", dont_inherit=True), namespace
+        )
+
+
+@contextmanager
+def _verified_yfinance_import_lifetime_v1(
+    finder: _YfinanceSourceFinderV1,
+) -> Generator[None, None, None]:
+    inserted = finder not in sys.meta_path
+    if inserted:
+        sys.meta_path.insert(0, finder)
+    try:
+        yield
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+        if inserted:
+            sys.meta_path.remove(finder)
+
+
+def _require_loaded_yfinance_modules_v1(
+    finder: _YfinanceSourceFinderV1,
+) -> None:
+    for name, module in tuple(sys.modules.items()):
+        if name != "yfinance" and not name.startswith("yfinance."):
+            continue
+        source = finder.sources.get(name)
+        if source is None:
+            raise RuntimeError("yfinance module identity mismatch")
+        origin, _raw, _is_package, identity = source
+        specification = getattr(module, "__spec__", None)
+        if (
+            getattr(module, "__loader__", None) is not finder
+            or getattr(specification, "loader", None) is not finder
+            or getattr(module, "__file__", None) != str(origin)
+            or getattr(specification, "origin", None) != str(origin)
+            or _regular_file_identity(str(origin)) != identity
+        ):
+            raise RuntimeError("yfinance module identity mismatch")
 
 
 def _load_yfinance_module() -> ModuleType:
-    specification, owned_origin, origin_identity = _trusted_yfinance_distribution_v1()
+    owned_origin, origin_identity, code_identity, sources = (
+        _trusted_yfinance_distribution_v1()
+    )
     if not _yfinance_modules:
-        source = _read_yfinance_init_v1(owned_origin, origin_identity)
+        _yfinance_finders.clear()
+        _yfinance_code_identities.clear()
         for name in tuple(sys.modules):
             if name == "yfinance" or name.startswith("yfinance."):
                 sys.modules.pop(name, None)
         before = frozenset(sys.modules)
+        finder = _YfinanceSourceFinderV1(sources)
+        specification = finder.find_spec("yfinance")
+        if specification is None or specification.loader is not finder:
+            raise RuntimeError("yfinance module import failed")
         module = importlib.util.module_from_spec(specification)
         sys.modules["yfinance"] = module
         try:
-            code = compile(source, owned_origin, "exec", dont_inherit=True)
-            exec(code, module.__dict__)  # noqa: S102 - execute descriptor-admitted bytes
+            with _verified_yfinance_import_lifetime_v1(finder):
+                finder.exec_module(module)
+                _require_loaded_yfinance_modules_v1(finder)
         except BaseException:
             for name in tuple(sys.modules):
                 if (
@@ -1174,23 +1333,33 @@ def _load_yfinance_module() -> ModuleType:
                     sys.modules.pop(name, None)
             raise RuntimeError("yfinance module import failed") from None
         _yfinance_modules.append(module)
+        _yfinance_finders.append(finder)
+        _yfinance_code_identities.append(code_identity)
     module = _yfinance_modules[0]
+    finder = _yfinance_finders[0]
     module_specification = module.__dict__.get("__spec__")
     if (
-        module.__dict__.get("__version__") != "1.6.0"
-        or _regular_file_identity(module.__dict__.get("__file__")) != origin_identity
-        or _regular_file_identity(getattr(module_specification, "origin", None))
-        != origin_identity
+        code_identity != _yfinance_code_identities[0]
+        or module.__dict__.get("__version__") != "1.6.0"
+        or module.__dict__.get("__file__") != owned_origin
+        or getattr(module_specification, "origin", None) != owned_origin
+        or _regular_file_identity(owned_origin) != origin_identity
     ):
         raise RuntimeError("yfinance module identity mismatch")
+    _require_loaded_yfinance_modules_v1(finder)
     return module
 
 
 def _public_yfinance_download(**kwargs: object) -> object:
-    download = _load_yfinance_module().__dict__.get("download")
+    module = _load_yfinance_module()
+    download = module.__dict__.get("download")
     if not callable(download):
         raise RuntimeError("yfinance.download unavailable")
-    return download(**kwargs)
+    finder = _yfinance_finders[0]
+    with _verified_yfinance_import_lifetime_v1(finder):
+        response = download(**kwargs)
+        _require_loaded_yfinance_modules_v1(finder)
+        return response
 
 
 def _session_dates(index: Iterable[object]) -> tuple[date, ...] | None:
@@ -1682,7 +1851,8 @@ def _valid_correction_parent(
         and parent.decision_session == request.decision_session
         and parent.decision_cutoff == request.decision_cutoff
         and parent.schema_identity_sha256 == request.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == request.runtime_code_identity_sha256
+        and parent.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
         and parent.configuration_identity_sha256
         == request.configuration_identity_sha256
     )
@@ -1700,8 +1870,10 @@ def _ensure_valid_revision_parent(
         and parent.decision_session == child.decision_session
         and parent.decision_cutoff == child.decision_cutoff
         and parent.schema_identity_sha256 == child.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == child.runtime_code_identity_sha256
-        and parent.configuration_identity_sha256 == child.configuration_identity_sha256
+        and parent.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
+        and child.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
     ):
         raise _CorrectionAncestorUnavailable
 
@@ -1719,7 +1891,6 @@ def _same_correction_content(
         and parent.source_identity_sha256 == revision.source_identity_sha256
         and parent.bars == revision.bars
         and parent.schema_identity_sha256 == revision.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == revision.runtime_code_identity_sha256
         and parent.configuration_identity_sha256
         == revision.configuration_identity_sha256
     )

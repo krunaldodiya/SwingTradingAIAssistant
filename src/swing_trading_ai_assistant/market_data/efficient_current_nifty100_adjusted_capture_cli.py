@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.abc
 import importlib.machinery
 import importlib.metadata
+import importlib.util
 import json
 import os
 import stat
@@ -99,12 +101,12 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
 def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admission
     root: Path,
 ) -> tuple[str, dict[Path, bytes]]:
-    """Return the admitted package aggregate and descriptor-read Python bytes."""
+    """Return the admitted package aggregate and every descriptor-read file."""
 
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise RuntimeError("dependency distribution identity mismatch")
     entries: list[tuple[str, int, bytes]] = []
-    sources: dict[Path, bytes] = {}
+    payloads: dict[Path, bytes] = {}
     for directory, names, files in os.walk(root, followlinks=False):
         current = Path(directory)
         if current.is_symlink():
@@ -150,15 +152,14 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
                     hashlib.sha256(raw).digest(),
                 )
             )
-            if candidate.suffix == ".py":
-                sources[candidate] = raw
+            payloads[candidate] = raw
     aggregate = hashlib.sha256()
     for relative, size, digest in sorted(entries):
         aggregate.update(relative.encode("utf-8"))
         aggregate.update(b"\0")
         aggregate.update(size.to_bytes(8, "big"))
         aggregate.update(digest)
-    return aggregate.hexdigest(), sources
+    return aggregate.hexdigest(), payloads
 
 
 def _dependency_code_aggregate_v1(  # pyright: ignore[reportUnusedFunction]
@@ -215,11 +216,13 @@ class _VerifiedDependencySourceFinderV1(
     def __init__(
         self,
         sources: dict[str, tuple[Path, bytes, bool]],
-        native_origins: dict[str, Path] | None = None,
+        native_handles: dict[str, _NativeDependencyHandleV1] | None = None,
     ) -> None:
         self._sources = dict(sources)
-        self._native_origins = dict(native_origins or {})
-        self._prefixes = frozenset(name.split(".", 1)[0] for name in sources)
+        self._native_handles = dict(native_handles or {})
+        self._prefixes = frozenset(
+            name.split(".", 1)[0] for name in {*sources, *self._native_handles}
+        )
 
     def find_spec(
         self,
@@ -238,10 +241,18 @@ class _VerifiedDependencySourceFinderV1(
             if is_package:
                 specification.submodule_search_locations = [str(origin.parent)]
             return specification
-        native = self._native_origins.get(fullname)
+        native = self._native_handles.get(fullname)
         if native is not None:
-            specification = importlib.machinery.PathFinder.find_spec(fullname, path)
-            if specification is None or specification.origin != str(native):
+            if not _native_dependency_handle_live_v1(native, require_name=True):
+                raise ImportError("dependency native module origin mismatch")
+            descriptor_origin = _native_dependency_descriptor_path_v1(native[1])
+            loader = importlib.machinery.ExtensionFileLoader(
+                fullname, descriptor_origin
+            )
+            specification = importlib.util.spec_from_file_location(
+                fullname, descriptor_origin, loader=loader
+            )
+            if specification is None or specification.loader is None:
                 raise ImportError("dependency native module origin mismatch")
             return specification
         if fullname.split(".", 1)[0] in self._prefixes:
@@ -270,11 +281,11 @@ class _VerifiedDependencySourceFinderV1(
 @contextmanager
 def _verified_dependency_import_lifetime_v1(
     sources: dict[str, tuple[Path, bytes, bool]],
-    native_origins: dict[str, Path],
+    native_handles: dict[str, _NativeDependencyHandleV1],
 ) -> Generator[None, None, None]:
-    """Exclude bytecode fallbacks while verified dependency sources are enabled."""
+    """Exclude bytecode and pathname native fallbacks during verified imports."""
 
-    finder = _VerifiedDependencySourceFinderV1(sources, native_origins)
+    finder = _VerifiedDependencySourceFinderV1(sources, native_handles)
     prior_meta_path = list(sys.meta_path)
     prior_cache_prefix = sys.pycache_prefix
     prior_dont_write_bytecode = sys.dont_write_bytecode
@@ -287,6 +298,7 @@ def _verified_dependency_import_lifetime_v1(
         sys.dont_write_bytecode = prior_dont_write_bytecode
         sys.pycache_prefix = prior_cache_prefix
         sys.meta_path[:] = prior_meta_path
+        _close_native_dependency_handles_v1(native_handles)
 
 
 def _require_acknowledgement(argv: list[str]) -> None:
@@ -390,6 +402,81 @@ def _dependency_file_identity_v1(
     )
 
 
+_NativeDependencyHandleV1 = tuple[Path, int, _DependencyFileIdentityV1, int, bytes]
+
+
+def _native_dependency_descriptor_path_v1(descriptor: int) -> str:
+    expected = _dependency_file_identity_v1(os.fstat(descriptor))
+    for root in ("/dev/fd", "/proc/self/fd"):
+        candidate = f"{root}/{descriptor}"
+        duplicate = -1
+        try:
+            duplicate = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC)
+            if _dependency_file_identity_v1(os.fstat(duplicate)) == expected:
+                return candidate
+        except OSError:
+            continue
+        finally:
+            if duplicate >= 0:
+                os.close(duplicate)
+    raise RuntimeError("dependency native descriptor unavailable")
+
+
+def _native_dependency_handle_live_v1(
+    handle: _NativeDependencyHandleV1, *, require_name: bool
+) -> bool:
+    origin, descriptor, identity, size, digest = handle
+    try:
+        held = os.fstat(descriptor)
+        _native_dependency_descriptor_path_v1(descriptor)
+        if (
+            _dependency_file_identity_v1(held) != identity
+            or held.st_size != size
+            or hashlib.sha256(os.pread(descriptor, size, 0)).digest() != digest
+        ):
+            return False
+        return not require_name or (
+            _dependency_file_identity_v1(os.stat(origin, follow_symlinks=False))
+            == identity
+        )
+    except (OSError, RuntimeError):
+        return False
+
+
+def _open_native_dependency_handle_v1(
+    origin: Path,
+    identity: _DependencyFileIdentityV1,
+    raw: bytes,
+) -> _NativeDependencyHandleV1:
+    descriptor = os.open(origin, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        handle = (
+            origin,
+            descriptor,
+            identity,
+            len(raw),
+            hashlib.sha256(raw).digest(),
+        )
+        if not _native_dependency_handle_live_v1(handle, require_name=True):
+            raise RuntimeError
+        return handle
+    except (OSError, RuntimeError):
+        os.close(descriptor)
+        raise
+
+
+def _close_native_dependency_handles_v1(
+    handles: dict[str, _NativeDependencyHandleV1],
+) -> None:
+    while handles:
+        _name, handle = handles.popitem()
+        try:
+            fcntl.flock(handle[1], fcntl.LOCK_UN)
+        finally:
+            os.close(handle[1])
+
+
 def _owned_dependency_path_v1(
     distribution: importlib.metadata.Distribution,
     relative: str,
@@ -437,14 +524,15 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
     dict[str, Path],
     dict[Path, _DependencyFileIdentityV1],
     dict[str, tuple[Path, bytes, bool]],
-    dict[str, Path],
+    dict[str, _NativeDependencyHandleV1],
 ]:
+    native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
         roots = _trusted_site_roots_v1()
         origins: dict[str, Path] = {}
         owned_files: dict[Path, _DependencyFileIdentityV1] = {}
         sources: dict[str, tuple[Path, bytes, bool]] = {}
-        native_origins: dict[str, Path] = {}
+        native_handles = {}
         curl_admitted = False
         for distribution_name, expected_version, modules in _DEPENDENCY_REQUIREMENTS_V1:
             normalized_name = distribution_name.casefold().replace("_", "-")
@@ -467,10 +555,12 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 )
             package_root = origins[modules[0][0]].parent
             package_name = modules[0][0].split(".", 1)[0]
-            aggregate, source_bytes = _dependency_code_entries_v1(package_root)
+            aggregate, file_bytes = _dependency_code_entries_v1(package_root)
             if aggregate not in _DEPENDENCY_CODE_AGGREGATES_V1[package_name]:
                 raise RuntimeError
-            for source, raw in source_bytes.items():
+            for source, raw in file_bytes.items():
+                if source.suffix != ".py":
+                    continue
                 module_name, is_package = _module_name_for_dependency_path_v1(
                     package_name, package_root, source
                 )
@@ -485,9 +575,13 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 )
                 if module_name is None:
                     continue
-                if module_name in native_origins:
+                if module_name in native_handles:
                     raise RuntimeError
-                native_origins[module_name] = origin
+                native_handles[module_name] = _open_native_dependency_handle_v1(
+                    origin,
+                    distribution_files[origin],
+                    file_bytes[origin],
+                )
             if normalized_name == "curl-cffi":
                 curl_admitted = True
             top_module = modules[0][0]
@@ -511,8 +605,9 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 raise RuntimeError
         if not curl_admitted:
             raise RuntimeError
-        return roots, origins, owned_files, sources, native_origins
+        return roots, origins, owned_files, sources, native_handles
     except (KeyError, OSError, RuntimeError, StopIteration, TypeError, ValueError):
+        _close_native_dependency_handles_v1(native_handles)
         raise RuntimeError("dependency distribution identity mismatch") from None
 
 
@@ -554,6 +649,7 @@ def _reject_preloaded_dependency_modules_v1() -> None:
 
 def _require_loaded_curl_modules_owned_v1(
     owned_files: dict[Path, _DependencyFileIdentityV1],
+    native_handles: dict[str, _NativeDependencyHandleV1],
 ) -> None:
     for name, module in tuple(sys.modules.items()):
         if name != "curl_cffi" and not name.startswith("curl_cffi."):
@@ -561,6 +657,17 @@ def _require_loaded_curl_modules_owned_v1(
         if name == "curl_cffi._wrapper.lib":
             parent = sys.modules.get("curl_cffi._wrapper")
             if parent is None or getattr(parent, "lib", None) is not module:
+                raise RuntimeError("dependency module origin mismatch")
+            continue
+        native = native_handles.get(name)
+        if native is not None:
+            descriptor_origin = _native_dependency_descriptor_path_v1(native[1])
+            specification = getattr(module, "__spec__", None)
+            if (
+                getattr(module, "__file__", None) != descriptor_origin
+                or getattr(specification, "origin", None) != descriptor_origin
+                or not _native_dependency_handle_live_v1(native, require_name=True)
+            ):
                 raise RuntimeError("dependency module origin mismatch")
             continue
         origin = getattr(module, "__file__", None)
@@ -715,6 +822,7 @@ def _run_enabled(
     _request_live: Callable[[], bool] | None = None,
 ) -> int:
     original_import_path = list(sys.path)
+    native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
         _reject_preloaded_dependency_modules_v1()
         (
@@ -722,7 +830,7 @@ def _run_enabled(
             dependency_origins,
             owned_files,
             sources,
-            native_origins,
+            native_handles,
         ) = _admitted_dependency_origins_v1()
         _require_dependency_origins_v1(
             dependency_origins, owned_files, require_loaded=False
@@ -730,13 +838,14 @@ def _run_enabled(
         sys.path[:] = _trusted_import_path_v1(site_roots)
     except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         sys.path[:] = original_import_path
+        _close_native_dependency_handles_v1(native_handles)
         _emit(
             _static_failure_v1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"),
             maximum_bytes=_MAX_RESULT_BYTES_V1,
         )
         return 1
     try:
-        with _verified_dependency_import_lifetime_v1(sources, native_origins):
+        with _verified_dependency_import_lifetime_v1(sources, native_handles):
             try:
                 from . import (  # noqa: PLC0415
                     efficient_current_nifty100_adjusted_capture as core,
@@ -745,7 +854,7 @@ def _run_enabled(
                 _require_dependency_origins_v1(
                     dependency_origins, owned_files, require_loaded=True
                 )
-                _require_loaded_curl_modules_owned_v1(owned_files)
+                _require_loaded_curl_modules_owned_v1(owned_files, native_handles)
                 requests_module = sys.modules["curl_cffi.requests"]
                 session_module = sys.modules["curl_cffi.requests.session"]
                 session_class = getattr(session_module, "Session", None)

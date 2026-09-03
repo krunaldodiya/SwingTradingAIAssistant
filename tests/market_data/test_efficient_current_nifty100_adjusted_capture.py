@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib
+import importlib.machinery
 import io
 import json
 import logging
@@ -115,8 +116,8 @@ def _cohort_request(start: int) -> dict[str, object]:
         cohort=members,
         schedule=schedule,
         decision_session=_SESSIONS[-1],
-        decision_cutoff=datetime(2026, 8, 24, 12, tzinfo=UTC),
-        evaluated_at=datetime(2026, 8, 24, 12, 5, tzinfo=UTC),
+        decision_cutoff=_NOW + timedelta(hours=2),
+        evaluated_at=_NOW + timedelta(hours=2),
         parent_revision_sha256=None,
         schema_identity_sha256=schema,
         runtime_code_identity_sha256=runtime,
@@ -1545,7 +1546,7 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
             request_identity_sha256="a" * 64,
             schedule="schedule",
             decision_session="session",
-            decision_cutoff="cutoff",
+            decision_cutoff=_NOW + timedelta(hours=2),
             evaluated_at=_NOW,
         ),
     )
@@ -1640,7 +1641,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
             request_identity_sha256="a" * 64,
             schedule="schedule",
             decision_session="session",
-            decision_cutoff="cutoff",
+            decision_cutoff=_NOW + timedelta(hours=2),
             evaluated_at=_NOW,
         ),
     )
@@ -1827,7 +1828,7 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
             request_identity_sha256="a" * 64,
             schedule="schedule",
             decision_session="session",
-            decision_cutoff="cutoff",
+            decision_cutoff=_NOW + timedelta(hours=2),
             evaluated_at=_NOW,
         ),
     )
@@ -2548,6 +2549,23 @@ def test_binding_missing_read_rejects_child_directory_substitution(
     assert list((root / "displaced-bindings").iterdir()) == []
 
 
+def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> None:
+    root = tmp_path / "binding"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    directory = root / "plan33_bindings"
+    directory.mkdir(mode=0o700)
+    binding = directory / "published.json"
+    binding.write_text("{}\n")
+    binding.chmod(0o400)
+    binding.rename(root / "disappeared.json")
+
+    with pytest.raises(core.EvidenceConflict):
+        core._snapshot_plan33_binding_v1(root, binding.name)
+
+
 def test_all_reuse_capture_clears_retained_provider_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2600,6 +2618,17 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         lambda cohort, low_request, *_args, **_kwargs: reused(
             cohort, low_request.request_identity_sha256
         ),
+    )
+    binding_snapshot = SimpleNamespace(protected_identities=())
+    monkeypatch.setattr(
+        core,
+        "_snapshot_plan33_binding_v1",
+        lambda _root, _name: binding_snapshot,
+    )
+    monkeypatch.setattr(
+        core,
+        "_binding_snapshot_live_v1",
+        lambda snapshot: snapshot is binding_snapshot,
     )
     monkeypatch.setattr(
         core,
@@ -2824,6 +2853,17 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
         lambda cohort, low_request, *_args, **_kwargs: reused(
             cohort, low_request.request_identity_sha256
         ),
+    )
+    binding_snapshot = SimpleNamespace(protected_identities=())
+    monkeypatch.setattr(
+        core,
+        "_snapshot_plan33_binding_v1",
+        lambda _root, _name: binding_snapshot,
+    )
+    monkeypatch.setattr(
+        core,
+        "_binding_snapshot_live_v1",
+        lambda snapshot: snapshot is binding_snapshot,
     )
     original_open = core._open_provider_cache_authority_v1
 
@@ -3635,19 +3675,45 @@ def test_selection_retrieval_time_never_moves_evaluation_backward() -> None:
         retrieved_at=original.evaluated_at - timedelta(minutes=2),
         selection_identity_sha256="e" * 64,
     )
-    late = replace(
-        selection,
-        retrieved_at=original.evaluated_at + timedelta(minutes=1),
-        selection_identity_sha256="f" * 64,
-    )
 
     early_bound = core._selection_bound_low_request_v1(original, early)
-    late_bound = core._selection_bound_low_request_v1(original, late)
 
     assert early_bound.evaluated_at == original.evaluated_at
-    assert late_bound.evaluated_at == late.retrieved_at
-    assert early_bound.request_identity_sha256 != late_bound.request_identity_sha256
     assert core._selection_bound_low_request_v1(early_bound, early) == early_bound
+
+
+def test_selection_retrieved_after_cutoff_is_typed_schedule_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    decision_cutoff = datetime.fromisoformat(
+        request.decision_cutoff.replace("Z", "+00:00")
+    )
+    late = replace(
+        selection,
+        retrieved_at=decision_cutoff + timedelta(microseconds=1),
+        selection_identity_sha256="e" * 64,
+    )
+    monkeypatch.setattr(core, "admit_selection_v1", lambda *_args, **_kwargs: late)
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
+    )
+
+    def forbidden_provider(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("provider must not run")
+
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_provider)
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+
+    assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
 
 
 def test_selection_bound_request_is_accepted_by_low_runtime(
@@ -3863,7 +3929,7 @@ def test_low_store_failure_stops_before_later_low_effect(
             request_identity_sha256="a" * 64,
             schedule="schedule",
             decision_session="session",
-            decision_cutoff="cutoff",
+            decision_cutoff=_NOW + timedelta(hours=2),
             evaluated_at=_NOW,
         ),
     )
@@ -4343,3 +4409,32 @@ def test_verified_dependency_loader_binds_nested_child_source(
         sys.meta_path.remove(finder)
         for name in ("nested_fixture.child", "nested_fixture"):
             sys.modules.pop(name, None)
+
+
+def test_native_dependency_loader_uses_admitted_descriptor_not_path_finder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = sys.modules["curl_cffi._wrapper"]
+    origin = Path(wrapper.__file__).resolve(strict=True)
+    metadata = os.stat(origin, follow_symlinks=False)
+    identity = cli._dependency_file_identity_v1(metadata)
+    raw = origin.read_bytes()
+    handle = cli._open_native_dependency_handle_v1(origin, identity, raw)
+    handles = {"curl_cffi._wrapper": handle}
+    finder = cli._VerifiedDependencySourceFinderV1({}, handles)
+
+    def forbidden_path_finder(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("native import must not reopen the admitted pathname")
+
+    monkeypatch.setattr(
+        importlib.machinery.PathFinder, "find_spec", forbidden_path_finder
+    )
+    try:
+        specification = finder.find_spec("curl_cffi._wrapper")
+        assert specification is not None
+        assert specification.origin == cli._native_dependency_descriptor_path_v1(
+            handle[1]
+        )
+        assert specification.origin != str(origin)
+    finally:
+        cli._close_native_dependency_handles_v1(handles)

@@ -2195,7 +2195,7 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
         lease.close()
 
 
-def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1 | None:
+def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
     """Read a validated binding into a detached exact identity record."""
 
     result = StorageRootLease.try_admit_read_existing(root)
@@ -2259,7 +2259,7 @@ def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1 | N
                 payload,
             )
     except FileNotFoundError:
-        return None
+        raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     except (OSError, RuntimeError, ValueError):
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
@@ -2805,6 +2805,10 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     except (OSError, RuntimeError, ValueError):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
     expected_selection = retained_selection or selection
+    if any(
+        expected_selection.retrieved_at > item.decision_cutoff for item in low_requests
+    ):
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
     low_requests = [
         _selection_bound_low_request_v1(item, expected_selection)
         for item in low_requests
@@ -2888,14 +2892,14 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         ):
             if reused is None:
                 continue
-            snapshot = _snapshot_plan33_binding_v1(
-                selection_root,
-                _plan33_binding_name_v1(
-                    cohort, selection, low_request.request_identity_sha256
-                ),
+            binding_snapshots.append(
+                _snapshot_plan33_binding_v1(
+                    selection_root,
+                    _plan33_binding_name_v1(
+                        cohort, selection, low_request.request_identity_sha256
+                    ),
+                )
             )
-            if snapshot is not None:
-                binding_snapshots.append(snapshot)
         protected_identities = frozenset(
             {
                 *protected_identities,
@@ -3109,17 +3113,21 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                             cohort, selection, low_request.request_identity_sha256
                         ),
                     )
-                    if snapshot is not None:
-                        binding_snapshots.append(snapshot)
-                        protected_identities = frozenset(
-                            {
-                                *protected_identities,
-                                *snapshot.protected_identities,
-                            }
-                        )
-                        if session is not None:
-                            session.protect_cleanup_identities(protected_identities)
-                except (OSError, RuntimeError, ValueError, EvidenceConflict):
+                    binding_snapshots.append(snapshot)
+                    protected_identities = frozenset(
+                        {
+                            *protected_identities,
+                            *snapshot.protected_identities,
+                        }
+                    )
+                    if session is not None:
+                        session.protect_cleanup_identities(protected_identities)
+                except EvidenceConflict:
+                    shared_failure = SharedFailureV1(
+                        "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
+                    )
+                    break
+                except (OSError, RuntimeError, ValueError):
                     cleanup_failed = True
                     break
     finally:
@@ -3131,7 +3139,9 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
 
     if not _protected_paths_live_v1(tuple(protected_by_path.values())):
         cleanup_failed = True
-    if not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
+    if len(binding_snapshots) != sum(
+        _is_success(outcome) for outcome in outcomes if outcome is not None
+    ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
         cleanup_failed = True
     if cleanup_failed:
         outcomes = [

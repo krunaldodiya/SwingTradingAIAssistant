@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
+import importlib
 import json
 import os
 import stat
@@ -896,6 +896,78 @@ def test_explicit_changed_correction_preserves_parent_lineage(tmp_path: Path) ->
     )
     assert correction.revision.revision_sha256 != initial.revision.revision_sha256
     assert len(tuple((tmp_path / "revisions").iterdir())) == 2
+
+
+def _retarget_retained_revision_writer(
+    root: Path,
+    revision: AdjustedOhlcvCaptureRevisionV1,
+    writer_identity: str,
+) -> AdjustedOhlcvCaptureRevisionV1:
+    historical = replace(
+        revision,
+        runtime_code_identity_sha256=writer_identity,
+    )
+    revision_path = root / "revisions" / f"{historical.revision_sha256}.json"
+    revision_path.write_bytes(historical.canonical_json_bytes())
+    revision_path.chmod(0o400)
+    pointer = root / "requests" / f"{historical.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+    pointer.write_bytes(
+        core._pointer_bytes(  # pyright: ignore[reportPrivateUsage]
+            historical.request_identity_sha256,
+            historical.revision_sha256,
+        )
+    )
+    pointer.chmod(0o400)
+    return historical
+
+
+def test_correction_accepts_compatible_parent_writer_runtime(tmp_path: Path) -> None:
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+    )
+    request = _request(parent_revision_sha256=historical.revision_sha256)
+
+    correction = _invoke(
+        request,
+        _Provider(
+            retrieved_at=request.schedule.decision_session_official_close_at
+            + timedelta(hours=1),
+            price_offset=1,
+        ),
+        tmp_path,
+    )
+
+    assert isinstance(correction, CaptureForwardAdjustedOhlcvSuccessV1)
+    assert correction.revision.parent_revision_sha256 == historical.revision_sha256
+    assert (
+        correction.revision.runtime_code_identity_sha256
+        != historical.runtime_code_identity_sha256
+    )
+
+
+def test_writer_upgrade_is_not_correction_content_change(tmp_path: Path) -> None:
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+    )
+    request = _request(parent_revision_sha256=historical.revision_sha256)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        "INSUFFICIENT_EVIDENCE", "CORRECTION_CONTENT_UNCHANGED"
+    )
+    assert provider.calls == 1
 
 
 def test_provider_failure_does_not_hide_correction_parent_admission_loss(
@@ -2147,48 +2219,48 @@ def test_coherent_pythonpath_distribution_cannot_supply_yfinance(
     assert not marker.exists()
 
 
-def test_yfinance_executes_admitted_bytes_without_pathname_reread(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_yfinance_transitive_child_executes_admitted_bytes_after_path_swap(
+    tmp_path: Path,
 ) -> None:
     package = tmp_path / "yfinance"
     package.mkdir()
-    origin = package / "__init__.py"
+    parent = package / "__init__.py"
+    child = package / "multi.py"
     marker = tmp_path / "replaced-source-executed"
-    origin.write_text("__version__ = '1.6.0'\n")
-    specification = importlib.util.spec_from_file_location(
-        "yfinance", origin, submodule_search_locations=[str(package)]
+    parent_raw = b"from .multi import VALUE\n__version__ = '1.6.0'\n"
+    child_raw = b"VALUE = 'admitted'\n"
+    parent.write_bytes(parent_raw)
+    child.write_bytes(child_raw)
+    sources: dict[str, core._YfinanceSourceV1] = {  # pyright: ignore[reportPrivateUsage]
+        "yfinance": (
+            parent,
+            parent_raw,
+            True,
+            core._regular_file_identity(str(parent)),  # pyright: ignore[reportPrivateUsage]
+        ),
+        "yfinance.multi": (
+            child,
+            child_raw,
+            False,
+            core._regular_file_identity(str(child)),  # pyright: ignore[reportPrivateUsage]
+        ),
+    }
+    finder = core._YfinanceSourceFinderV1(sources)  # pyright: ignore[reportPrivateUsage]
+    child.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "VALUE = 'substituted'\n"
     )
-    assert specification is not None
-    identity = core._regular_file_identity(str(origin))  # pyright: ignore[reportPrivateUsage]
-    admitted_source = b"__version__ = '1.6.0'\n"
-
-    def replace_after_admission(
-        admitted_origin: str, admitted_identity: tuple[int, int, int, int]
-    ) -> bytes:
-        assert (admitted_origin, admitted_identity) == (str(origin), identity)
-        origin.write_text(
-            "from pathlib import Path\n"
-            f"Path({str(marker)!r}).write_text('executed')\n"
-            "__version__ = '1.6.0'\n"
-        )
-        return admitted_source
-
     for name in tuple(sys.modules):
         if name == "yfinance" or name.startswith("yfinance."):
-            monkeypatch.delitem(sys.modules, name)
-    monkeypatch.setattr(core, "_yfinance_modules", [])
-    monkeypatch.setattr(
-        core,
-        "_trusted_yfinance_distribution_v1",
-        lambda: (specification, str(origin), identity),
-    )
-    monkeypatch.setattr(core, "_read_yfinance_init_v1", replace_after_admission)
-
+            sys.modules.pop(name, None)
+    sys.meta_path.insert(0, finder)
     try:
-        module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
-        assert module.__dict__["__version__"] == "1.6.0"
+        module = importlib.import_module("yfinance")
+        assert module.VALUE == "admitted"
         assert not marker.exists()
     finally:
+        sys.meta_path.remove(finder)
         for name in tuple(sys.modules):
             if name == "yfinance" or name.startswith("yfinance."):
                 sys.modules.pop(name, None)
@@ -2197,13 +2269,7 @@ def test_yfinance_executes_admitted_bytes_without_pathname_reread(
 def test_yfinance_distribution_mismatch_precedes_import_and_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    imported = False
     provider_called = False
-
-    def forbidden_import(_origin: str, _identity: object) -> bytes:
-        nonlocal imported
-        imported = True
-        return b""
 
     def forbidden_provider(**_kwargs: object) -> object:
         nonlocal provider_called
@@ -2216,7 +2282,6 @@ def test_yfinance_distribution_mismatch_precedes_import_and_provider(
         "_trusted_yfinance_distribution_v1",
         lambda: (_ for _ in ()).throw(RuntimeError("distribution mismatch")),
     )
-    monkeypatch.setattr(core, "_read_yfinance_init_v1", forbidden_import)
     monkeypatch.setattr(core, "_public_yfinance_download", forbidden_provider)
     result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
         tickers=("RELIANCE.NS",),
@@ -2226,7 +2291,6 @@ def test_yfinance_distribution_mismatch_precedes_import_and_provider(
         code="INSUFFICIENT_EVIDENCE",
         reason="PROVIDER_IDENTITY_MISMATCH",
     )
-    assert imported is False
     assert provider_called is False
 
 
