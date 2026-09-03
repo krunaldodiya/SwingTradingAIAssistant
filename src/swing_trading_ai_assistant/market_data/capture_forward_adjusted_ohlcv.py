@@ -1207,9 +1207,14 @@ def _session_dates(index: Iterable[object]) -> tuple[date, ...] | None:
 
 
 def _retained_schedule_matches_request(
-    request: CaptureForwardAdjustedOhlcvRequestV1, schedule_root: Path
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    schedule_root: Path,
+    *,
+    _expected_root_identity: tuple[int, int] | None = None,
 ) -> bool:
-    lease = _acquire_existing_private_lease(schedule_root)
+    lease = _acquire_existing_private_lease(
+        schedule_root, _expected_root_identity=_expected_root_identity
+    )
     if lease is None:
         return False
     try:
@@ -1345,6 +1350,9 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
     provider: _CaptureForwardAdjustedOhlcvProviderV1,
     store_root: Path,
     schedule_root: Path,
+    *,
+    _expected_store_root_identity: tuple[int, int] | None = None,
+    _expected_schedule_root_identity: tuple[int, int] | None = None,
 ) -> CaptureForwardAdjustedOhlcvResultV1:
     _validate_typed_request_identity_v1(request)
     if not _valid_absolute_path(store_root) or not _valid_absolute_path(schedule_root):
@@ -1355,13 +1363,32 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
         request.configuration_identity_sha256,
     ) != capture_forward_current_identities_v1():
         raise ValueError("capture request identity mismatch")
-    if not _retained_schedule_matches_request(request, schedule_root):
+    schedule_matches = (
+        _retained_schedule_matches_request(request, schedule_root)
+        if _expected_schedule_root_identity is None
+        else _retained_schedule_matches_request(
+            request,
+            schedule_root,
+            _expected_root_identity=_expected_schedule_root_identity,
+        )
+    )
+    if not schedule_matches:
         return CaptureForwardAdjustedOhlcvFailureV1(
             "INSUFFICIENT_EVIDENCE", "SCHEDULE_EVIDENCE_MISMATCH"
         )
 
-    root_identity = StorageRootLease.admit_existing_private_identity(store_root)
+    root_identity = _expected_store_root_identity or (
+        StorageRootLease.admit_existing_private_identity(store_root)
+    )
     if root_identity is None:
+        return CaptureForwardAdjustedOhlcvFailureV1(
+            "STORE_UNAVAILABLE", "STORAGE_UNSAFE_OR_HELD"
+        )
+    if (
+        _expected_store_root_identity is not None
+        and StorageRootLease.admit_existing_private_identity(store_root)
+        != _expected_store_root_identity
+    ):
         return CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "STORAGE_UNSAFE_OR_HELD"
         )
@@ -2678,8 +2705,12 @@ def _admit_existing_private_empty_store_v1(store_root: Path) -> bool:
     return admitted
 
 
-def _acquire_existing_private_lease(store_root: Path) -> StorageRootLease | None:
-    root_identity = StorageRootLease.admit_existing_private_identity(store_root)
+def _acquire_existing_private_lease(
+    store_root: Path, *, _expected_root_identity: tuple[int, int] | None = None
+) -> StorageRootLease | None:
+    root_identity = _expected_root_identity or (
+        StorageRootLease.admit_existing_private_identity(store_root)
+    )
     if root_identity is None:
         return None
     result = StorageRootLease.try_acquire_existing_identity(store_root, root_identity)
@@ -2689,14 +2720,19 @@ def _acquire_existing_private_lease(store_root: Path) -> StorageRootLease | None
 
 
 def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
-    store_root: Path, request: CaptureForwardAdjustedOhlcvRequestV1
+    store_root: Path,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    *,
+    _expected_root_identity: tuple[int, int] | None = None,
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
     """Read-validate one request's immutable store state without creating it."""
     _validate_typed_request_identity_v1(request)
 
     if not _valid_absolute_path(store_root):
         raise ValueError("request revision read is invalid")
-    lease = _acquire_existing_private_lease(store_root)
+    lease = _acquire_existing_private_lease(
+        store_root, _expected_root_identity=_expected_root_identity
+    )
     if lease is None:
         if _admit_existing_private_empty_store_v1(store_root):
             return None

@@ -8,7 +8,7 @@ CAPABILITY_VALIDATION_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/entrypoints/historical_validation_gate.py": "48210590921658b567a323d34316caf31f2f7d93d482ca3317a4908927c4dd0e",
     "src/swing_trading_ai_assistant/historical_evaluation/__init__.py": "419b35fc272c08dee0fc2a2e5b173f08ba41c8bb95c4c67b213f59778e6cedeb",
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation.py": "bd14e060717965ba8ab78faae404fdf0df207a5eecfe7994b23e5a44c199531e",
-    "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_cli.py": "f95a849ed432068154d3b803e9dfefa873f645e70c8d0ec8c12e8c7535fb6747",
+    "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_cli.py": "e8837fe5b32e64c7dbc0047df881fc57d428347767f483739262c2c85641ead1",
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_service.py": "ae8360f8599541131658af6c8ef8da3f7a312c061b95f378a90345fa157a4a58",
     "src/swing_trading_ai_assistant/market_data/__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3bc35a624ebff3b238b31bb2619dde8b2115b7b55277b3f916355642629039bf",

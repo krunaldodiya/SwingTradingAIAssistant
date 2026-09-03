@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import csv
 import io
 import json
@@ -1553,12 +1554,15 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core,
         "resolve_selection_v1",
-        lambda selection, _root: ("INSERTED", selection),
+        lambda selection, _root, **_kwargs: (
+            _kwargs["_missing_root_authority"].create(),
+            ("INSERTED", selection),
+        )[1],
     )
     monkeypatch.setattr(
         core,
@@ -1645,7 +1649,7 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core.low,
@@ -1655,7 +1659,10 @@ def test_dependency_configuration_exception_is_sanitized_for_both_cohorts(
     monkeypatch.setattr(
         core,
         "resolve_selection_v1",
-        lambda selection, _root: ("INSERTED", selection),
+        lambda selection, _root, **_kwargs: (
+            _kwargs["_missing_root_authority"].create(),
+            ("INSERTED", selection),
+        )[1],
     )
     monkeypatch.setattr(
         core,
@@ -1829,7 +1836,7 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core.low,
@@ -1839,7 +1846,10 @@ def test_low_schedule_mismatch_is_shared_and_stops_later_cohort(
     monkeypatch.setattr(
         core,
         "resolve_selection_v1",
-        lambda selection, _root: ("INSERTED", selection),
+        lambda selection, _root, **_kwargs: (
+            _kwargs["_missing_root_authority"].create(),
+            ("INSERTED", selection),
+        )[1],
     )
     monkeypatch.setattr(
         core,
@@ -2570,14 +2580,18 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         )
 
     monkeypatch.setattr(
-        core.low, "_retained_schedule_matches_request", lambda *_args: True
-    )
-    monkeypatch.setattr(core, "_read_retained_selection_v1", lambda *_args: selection)
-    monkeypatch.setattr(
-        core.low, "read_capture_forward_request_revision_v1", lambda *_args: object()
+        core.low, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
     )
     monkeypatch.setattr(
-        core, "resolve_selection_v1", lambda *_args: ("REUSED", selection)
+        core, "_read_retained_selection_v1", lambda *_args, **_kwargs: selection
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        core, "resolve_selection_v1", lambda *_args, **_kwargs: ("REUSED", selection)
     )
     monkeypatch.setattr(
         core,
@@ -2790,14 +2804,18 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
         )
 
     monkeypatch.setattr(
-        core.low, "_retained_schedule_matches_request", lambda *_args: True
-    )
-    monkeypatch.setattr(core, "_read_retained_selection_v1", lambda *_args: selection)
-    monkeypatch.setattr(
-        core.low, "read_capture_forward_request_revision_v1", lambda *_args: object()
+        core.low, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
     )
     monkeypatch.setattr(
-        core, "resolve_selection_v1", lambda *_args: ("REUSED", selection)
+        core, "_read_retained_selection_v1", lambda *_args, **_kwargs: selection
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        core, "resolve_selection_v1", lambda *_args, **_kwargs: ("REUSED", selection)
     )
     monkeypatch.setattr(
         core,
@@ -2813,6 +2831,7 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
         *,
         require_empty: bool = True,
         protected_identities: frozenset[tuple[int, int]] = frozenset(),
+        _expected_root_identity: tuple[int, int] | None = None,
     ) -> object:
         if not move_after_cleanup:
             protected.rename(destination)
@@ -2820,11 +2839,13 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
                 root,
                 require_empty=require_empty,
                 protected_identities=protected_identities,
+                _expected_root_identity=_expected_root_identity,
             )
         authority = original_open(
             root,
             require_empty=require_empty,
             protected_identities=protected_identities,
+            _expected_root_identity=_expected_root_identity,
         )
 
         def close_then_move() -> None:
@@ -2866,10 +2887,10 @@ def test_selection_conflict_maps_to_evidence_conflict(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
 
-    def conflict(_selection: object, _root: Path) -> None:
+    def conflict(_selection: object, _root: Path, **_kwargs: object) -> None:
         raise core.EvidenceConflict
 
     monkeypatch.setattr(core, "resolve_selection_v1", conflict)
@@ -2896,7 +2917,7 @@ def test_real_selection_object_corruption_maps_to_evidence_conflict(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
         root = Path(temporary)
@@ -3448,14 +3469,14 @@ from pathlib import Path
 from swing_trading_ai_assistant.historical_evaluation import capability_validation_cli as reader
 
 request = Path({str(request)!r})
-real_reader = reader.read_private_request_with_identity
+real_open = reader.open_private_request_authority
 def swap_after_read(path, maximum_bytes):
-    payload, identity = real_reader(path, maximum_bytes)
+    authority = real_open(path, maximum_bytes)
     request.rename({str(moved)!r})
     request.write_bytes({replacement!r})
     request.chmod(0o600)
-    return payload, identity
-reader.read_private_request_with_identity = swap_after_read
+    return authority
+reader.open_private_request_authority = swap_after_read
 
 from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
 raise SystemExit(main([
@@ -3716,7 +3737,7 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     revision_reads: list[str] = []
@@ -3798,7 +3819,7 @@ def test_later_low_evidence_conflict_stops_before_any_low_effect(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
     reads: list[Path] = []
@@ -3851,12 +3872,15 @@ def test_low_store_failure_stops_before_later_low_effect(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core,
         "resolve_selection_v1",
-        lambda selection, _root: ("INSERTED", selection),
+        lambda selection, _root, **_kwargs: (
+            _kwargs["_missing_root_authority"].create(),
+            ("INSERTED", selection),
+        )[1],
     )
     monkeypatch.setattr(
         core,
@@ -3957,12 +3981,15 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core,
         "resolve_selection_v1",
-        lambda admitted, _root: ("INSERTED", admitted),
+        lambda admitted, _root, **_kwargs: (
+            _kwargs["_missing_root_authority"].create(),
+            ("INSERTED", admitted),
+        )[1],
     )
     monkeypatch.setattr(
         core,
@@ -3976,6 +4003,17 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
         return second_payload if len(binding_reads) == 2 else None
 
     monkeypatch.setattr(core, "_read_plan33_binding_v1", read_binding)
+    binding_snapshot = SimpleNamespace(protected_identities=())
+    monkeypatch.setattr(
+        core,
+        "_snapshot_plan33_binding_v1",
+        lambda _root, name: binding_snapshot if name == second_name else None,
+    )
+    monkeypatch.setattr(
+        core,
+        "_binding_snapshot_live_v1",
+        lambda snapshot: snapshot is binding_snapshot,
+    )
     revision_reads: list[tuple[Path, str]] = []
 
     def read_revision(root: Path, _request: object) -> object | None:
@@ -4092,7 +4130,7 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
-        lambda _request, _root: True,
+        lambda _request, _root, **_kwargs: True,
     )
     monkeypatch.setattr(
         core.low,
@@ -4140,3 +4178,168 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
         result.cohorts[0].schedule_identity_sha256
         != result.cohorts[1].schedule_identity_sha256
     )
+
+
+def test_request_liveness_stops_before_source_or_storage_effects(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    class _NoSource:
+        def get(self, _url: str) -> core.SourceResponseV1:
+            calls.append("source")
+            raise AssertionError("source effect must not run")
+
+    result = core.capture_current_nifty100_v1(
+        json.dumps(
+            {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
+        ).encode(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_NoSource(),
+        _request_live=lambda: False,
+    )
+
+    assert result == core.SharedFailureV1(
+        "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+    )
+    assert calls == []
+
+
+def test_dependency_code_aggregate_rejects_nested_substitution(tmp_path: Path) -> None:
+    package = tmp_path / "curl_cffi"
+    package.mkdir()
+    (package / "__init__.py").write_bytes(b"trusted = True\n")
+    nested = package / "requests"
+    nested.mkdir()
+    (nested / "__init__.py").write_bytes(b"trusted = True\n")
+
+    admitted = cli._dependency_code_aggregate_v1(package)
+    (nested / "session.py").write_bytes(b"substituted = True\n")
+
+    assert cli._dependency_code_aggregate_v1(package) != admitted
+
+
+def test_cleanup_value_error_abandons_cache_without_truncation_or_lock_leak(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "selection"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    cache = root / core._PROVIDER_CACHE_NAME_V1
+    cache.mkdir(mode=0o700)
+    retained = cache / "live.sqlite"
+    retained.write_bytes(b"live database bytes")
+    authority = core._open_provider_cache_authority_v1(root, require_empty=False)
+    session = core.BoundedYahooSessionV1(cache_authority=authority)
+
+    def fail_close(_self: object) -> None:
+        raise ValueError("close failed")
+
+    monkeypatch.setattr(core.CurlSession, "close", fail_close)
+
+    with pytest.raises(ValueError, match="close failed"):
+        session.close()
+
+    assert retained.read_bytes() == b"live database bytes"
+    retry = core._open_provider_cache_authority_v1(root, require_empty=False)
+    retry.abandon()
+
+
+def test_selection_publish_rejects_pre_source_root_replacement(
+    tmp_path: Path,
+) -> None:
+    _, selection = _admitted()
+    root = tmp_path / "selection"
+    root.mkdir(mode=0o700)
+    expected = (root.stat().st_dev, root.stat().st_ino)
+    displaced = tmp_path / "displaced"
+    root.rename(displaced)
+    root.mkdir(mode=0o700)
+
+    with pytest.raises(OSError):
+        core.resolve_selection_v1(selection, root, _expected_root_identity=expected)
+
+    assert list(displaced.iterdir()) == []
+    assert list(root.iterdir()) == []
+
+
+def test_verified_dependency_loader_executes_admitted_source_after_path_swap(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "verified_loader_fixture.py"
+    admitted = b"VALUE = 'admitted'\n"
+    source.write_bytes(admitted)
+    finder = cli._VerifiedDependencySourceFinderV1(
+        {"verified_loader_fixture": (source, admitted, False)}
+    )
+    source.write_text("VALUE = 'substituted'\n")
+    sys.modules.pop("verified_loader_fixture", None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("verified_loader_fixture")
+        assert module.VALUE == "admitted"
+    finally:
+        sys.meta_path.remove(finder)
+        sys.modules.pop("verified_loader_fixture", None)
+
+
+def test_verified_dependency_loader_rejects_forged_adjacent_pyc(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "forged_pyc_fixture.py"
+    source.write_text("VALUE = 'forged'\n")
+    cache = tmp_path / "__pycache__"
+    cache.mkdir()
+    pyc = cache / "forged_pyc_fixture.cpython-313.pyc"
+    import py_compile
+
+    py_compile.compile(str(source), cfile=str(pyc), doraise=True)
+    admitted = b"VALUE = 'admitted'\n"
+    source.write_bytes(admitted)
+    finder = cli._VerifiedDependencySourceFinderV1(
+        {"forged_pyc_fixture": (source, admitted, False)}
+    )
+    sys.modules.pop("forged_pyc_fixture", None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("forged_pyc_fixture")
+        assert module.VALUE == "admitted"
+    finally:
+        sys.meta_path.remove(finder)
+        sys.modules.pop("forged_pyc_fixture", None)
+
+
+def test_verified_dependency_loader_binds_nested_child_source(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "nested_fixture"
+    package.mkdir()
+    parent = package / "__init__.py"
+    child = package / "child.py"
+    parent_bytes = b"from .child import VALUE\n"
+    child_bytes = b"VALUE = 'admitted'\n"
+    parent.write_bytes(parent_bytes)
+    child.write_bytes(child_bytes)
+    finder = cli._VerifiedDependencySourceFinderV1(
+        {
+            "nested_fixture": (parent, parent_bytes, True),
+            "nested_fixture.child": (child, child_bytes, False),
+        }
+    )
+    child.write_text("VALUE = 'substituted'\n")
+    for name in ("nested_fixture", "nested_fixture.child"):
+        sys.modules.pop(name, None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("nested_fixture")
+        assert module.VALUE == "admitted"
+    finally:
+        sys.meta_path.remove(finder)
+        for name in ("nested_fixture.child", "nested_fixture"):
+            sys.modules.pop(name, None)

@@ -42,9 +42,85 @@ def _directory_metadata(value: os.stat_result) -> tuple[int, ...]:
     return value.st_dev, value.st_ino, value.st_mode, value.st_uid
 
 
-def read_private_request_with_identity(
+class PrivateRequestAuthorityV1:
+    """Hold the descriptor chain that admitted one exact private request."""
+
+    def __init__(
+        self,
+        *,
+        descriptors: list[int],
+        parents: list[tuple[int, str, tuple[int, ...], tuple[int, ...]]],
+        parent: int,
+        name: str,
+        descriptor: int,
+        identity: tuple[int, ...],
+        payload: bytes,
+    ) -> None:
+        self._descriptors = descriptors
+        self._parents = parents
+        self._parent = parent
+        self._name = name
+        self._descriptor = descriptor
+        self.identity = identity
+        self.payload = payload
+
+    def ensure_live(self) -> bool:
+        """Return whether the admitted descriptor chain and bytes remain exact."""
+
+        if self._descriptor < 0:
+            return False
+        try:
+            for parent, name, parent_identity, child_identity in self._parents:
+                if _directory_metadata(os.fstat(parent)) != parent_identity:
+                    return False
+                child = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if _directory_metadata(child) != child_identity:
+                    return False
+            before = os.fstat(self._descriptor)
+            named = os.stat(self._name, dir_fd=self._parent, follow_symlinks=False)
+            if _metadata(before) != self.identity or _metadata(named) != self.identity:
+                return False
+            payload = bytearray()
+            while len(payload) <= before.st_size:
+                chunk = os.pread(
+                    self._descriptor,
+                    min(1024 * 1024, before.st_size + 1 - len(payload)),
+                    len(payload),
+                )
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            return (
+                bytes(payload) == self.payload
+                and _metadata(os.fstat(self._descriptor)) == self.identity
+                and _metadata(
+                    os.stat(self._name, dir_fd=self._parent, follow_symlinks=False)
+                )
+                == self.identity
+            )
+        except OSError:
+            return False
+
+    def close(self) -> None:
+        descriptors, self._descriptors = self._descriptors, []
+        self._descriptor = -1
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+    def __enter__(self) -> PrivateRequestAuthorityV1:
+        if self._descriptor < 0:
+            raise ValueError("request path is invalid")
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+
+def open_private_request_authority(
     path: str, maximum_bytes: int
-) -> tuple[bytes, tuple[int, ...]]:
+) -> PrivateRequestAuthorityV1:
+    """Descriptor-admit one exact private request and retain its authority."""
+
     components = path.split("/")
     if (
         not path.startswith("/")
@@ -65,68 +141,85 @@ def read_private_request_with_identity(
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_NONBLOCK", 0)
     )
+    descriptors: list[int] = []
     try:
-        with ExitStack() as descriptors:
-            parent = os.open(os.sep, directory_flags)
-            descriptors.callback(os.close, parent)
-            for component in components[1:-1]:
-                parent_before = os.fstat(parent)
-                opened = os.open(component, directory_flags, dir_fd=parent)
-                descriptors.callback(os.close, opened)
-                path_stat = os.stat(component, dir_fd=parent, follow_symlinks=False)
-                parent_after = os.fstat(parent)
-                opened_stat = os.fstat(opened)
-                if (
-                    _directory_metadata(parent_after)
-                    != _directory_metadata(parent_before)
-                    or _directory_metadata(path_stat)
-                    != _directory_metadata(opened_stat)
-                    or not stat.S_ISDIR(opened_stat.st_mode)
-                ):
-                    raise ValueError("request path is invalid")
-                parent = opened
-
+        parent = os.open(os.sep, directory_flags)
+        descriptors.append(parent)
+        parents: list[tuple[int, str, tuple[int, ...], tuple[int, ...]]] = []
+        for component in components[1:-1]:
             parent_before = os.fstat(parent)
-            name = components[-1]
-            descriptor = os.open(name, file_flags, dir_fd=parent)
-            descriptors.callback(os.close, descriptor)
-            before = os.fstat(descriptor)
-            path_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            opened = os.open(component, directory_flags, dir_fd=parent)
+            descriptors.append(opened)
+            path_stat = os.stat(component, dir_fd=parent, follow_symlinks=False)
             parent_after = os.fstat(parent)
+            opened_stat = os.fstat(opened)
             if (
                 _directory_metadata(parent_after) != _directory_metadata(parent_before)
-                or _metadata(path_before) != _metadata(before)
-                or not stat.S_ISREG(before.st_mode)
-                or before.st_uid != os.getuid()
-                or before.st_nlink != 1
-                or before.st_mode & 0o077
-                or not 1 <= before.st_size <= maximum_bytes
+                or _directory_metadata(path_stat) != _directory_metadata(opened_stat)
+                or not stat.S_ISDIR(opened_stat.st_mode)
             ):
                 raise ValueError("request path is invalid")
-            payload = bytearray()
-            while len(payload) <= before.st_size:
-                chunk = os.read(
-                    descriptor, min(1024 * 1024, before.st_size + 1 - len(payload))
+            parents.append(
+                (
+                    parent,
+                    component,
+                    _directory_metadata(parent_before),
+                    _directory_metadata(opened_stat),
                 )
-                if not chunk:
-                    break
-                payload.extend(chunk)
-            after = os.fstat(descriptor)
-            path_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            parent_final = os.fstat(parent)
-            identity = _metadata(before)
-            if (
-                len(payload) != before.st_size
-                or _metadata(after) != identity
-                or _metadata(path_after) != identity
-                or _directory_metadata(parent_final)
-                != _directory_metadata(parent_before)
-                or os.read(descriptor, 1)
-            ):
-                raise ValueError("request path is invalid")
-            return bytes(payload), identity
-    except OSError as exc:
+            )
+            parent = opened
+
+        parent_before = os.fstat(parent)
+        name = components[-1]
+        descriptor = os.open(name, file_flags, dir_fd=parent)
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        path_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        parent_after = os.fstat(parent)
+        if (
+            _directory_metadata(parent_after) != _directory_metadata(parent_before)
+            or _metadata(path_before) != _metadata(before)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or before.st_mode & 0o077
+            or not 1 <= before.st_size <= maximum_bytes
+        ):
+            raise ValueError("request path is invalid")
+        payload = bytearray()
+        while len(payload) <= before.st_size:
+            chunk = os.read(
+                descriptor, min(1024 * 1024, before.st_size + 1 - len(payload))
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        authority = PrivateRequestAuthorityV1(
+            descriptors=descriptors,
+            parents=parents,
+            parent=parent,
+            name=name,
+            descriptor=descriptor,
+            identity=_metadata(before),
+            payload=bytes(payload),
+        )
+        if len(payload) != before.st_size or not authority.ensure_live():
+            raise ValueError("request path is invalid")
+        return authority
+    except (OSError, ValueError) as exc:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         raise ValueError("request path is invalid") from exc
+
+
+def read_private_request_with_identity(
+    path: str, maximum_bytes: int
+) -> tuple[bytes, tuple[int, ...]]:
+    with open_private_request_authority(path, maximum_bytes) as authority:
+        return authority.payload, authority.identity
 
 
 def read_private_request(path: str, maximum_bytes: int) -> bytes:

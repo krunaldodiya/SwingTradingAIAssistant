@@ -697,13 +697,18 @@ def _selection_identity_v1(selection: SelectionRevisionV1) -> str:
 
 
 def admit_selection_v1(
-    request: CurrentNifty100RequestV1, fetcher: SourceFetcherV1
+    request: CurrentNifty100RequestV1,
+    fetcher: SourceFetcherV1,
+    *,
+    _before_source: Callable[[], bool] = lambda: True,
 ) -> SelectionRevisionV1 | SharedFailureV1:
     """Acquire and admit the three exact bounded official constituent artifacts."""
 
     responses: list[SourceResponseV1] = []
     try:
         for url in (NIFTY_50_URL, NIFTY_NEXT_50_URL, NIFTY_100_URL):
+            if not _before_source():
+                return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
             response = fetcher.get(url)
             if response.request_url != url or response.response_url != url:
                 return SharedFailureV1(
@@ -1046,21 +1051,26 @@ class BoundedYahooSessionV1(CurlSession):
     def close(self) -> None:
         try:
             super().close()
+        except BaseException:
+            if self._cache_authority is not None:
+                cache = self._cache_authority
+                self._cache_authority = None
+                cache.abandon()
+            raise
+        else:
+            if self._cache_authority is not None:
+                cache = self._cache_authority
+                self._cache_authority = None
+                try:
+                    _close_yfinance_cache_databases_v1()
+                except BaseException:
+                    cache.abandon()
+                    raise
+                cache.close()
         finally:
-            try:
-                if self._cache_authority is not None:
-                    cache = self._cache_authority
-                    self._cache_authority = None
-                    try:
-                        _close_yfinance_cache_databases_v1()
-                    except BaseException:
-                        cache.abandon()
-                        raise
-                    cache.close()
-            finally:
-                if self._owns_provider_admission:
-                    self._owns_provider_admission = False
-                    _PROVIDER_ADMISSION_LOCK.release()
+            if self._owns_provider_admission:
+                self._owns_provider_admission = False
+                _PROVIDER_ADMISSION_LOCK.release()
 
 
 def _is_success(row: CohortOutcomeV1) -> bool:
@@ -1327,13 +1337,21 @@ def _retained_selection_v1(
 
 
 def _read_retained_selection_v1(
-    selection: SelectionRevisionV1, root: Path
+    selection: SelectionRevisionV1,
+    root: Path,
+    *,
+    _expected_root_identity: tuple[int, int] | None = None,
 ) -> SelectionRevisionV1 | None:
-    try:
-        root.lstat()
-    except FileNotFoundError:
-        return None
-    identity = StorageRootLease.admit_existing_private_identity(root)
+    if _expected_root_identity is None:
+        try:
+            root.lstat()
+        except FileNotFoundError:
+            return None
+        identity = StorageRootLease.admit_existing_private_identity(root)
+    else:
+        identity = _expected_root_identity
+        if StorageRootLease.admit_existing_private_identity(root) != identity:
+            raise OSError("selection store unavailable")
     if identity is None:
         raise OSError("selection store unavailable")
     lease_result = StorageRootLease.try_acquire_existing_identity(root, identity)
@@ -1384,6 +1402,127 @@ def _read_retained_selection_v1(
         lease.close()
 
 
+@dataclass(slots=True)
+class _MissingSelectionRootAuthorityV1:
+    """Hold the exact parent chain until one absent selection root is created."""
+
+    descriptors: list[int]
+    parents: list[tuple[int, str, tuple[int, int, int, int], tuple[int, int, int, int]]]
+    parent: int
+    parent_identity: tuple[int, int, int, int]
+    name: str
+
+    @staticmethod
+    def _identity(value: os.stat_result) -> tuple[int, int, int, int]:
+        return value.st_dev, value.st_ino, value.st_mode, value.st_uid
+
+    @classmethod
+    def open(cls, root: Path) -> _MissingSelectionRootAuthorityV1:
+        if (
+            not root.is_absolute()
+            or len(root.parts) < 2
+            or any(part in {".", ".."} for part in root.parts)
+        ):
+            raise ValueError("selection root must be absolute")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        descriptors: list[int] = []
+        try:
+            parent = os.open(os.sep, flags)
+            descriptors.append(parent)
+            parents: list[
+                tuple[int, str, tuple[int, int, int, int], tuple[int, int, int, int]]
+            ] = []
+            for component in root.parts[1:-1]:
+                parent_before = os.fstat(parent)
+                child = os.open(component, flags, dir_fd=parent)
+                descriptors.append(child)
+                named = os.stat(component, dir_fd=parent, follow_symlinks=False)
+                parent_after = os.fstat(parent)
+                child_stat = os.fstat(child)
+                if (
+                    cls._identity(parent_before) != cls._identity(parent_after)
+                    or cls._identity(named) != cls._identity(child_stat)
+                    or not stat.S_ISDIR(child_stat.st_mode)
+                ):
+                    raise OSError("selection root parent unavailable")
+                parents.append(
+                    (
+                        parent,
+                        component,
+                        cls._identity(parent_before),
+                        cls._identity(child_stat),
+                    )
+                )
+                parent = child
+            authority = cls(
+                descriptors, parents, parent, cls._identity(os.fstat(parent)), root.name
+            )
+            if not authority.ensure_live():
+                raise OSError("selection root parent unavailable")
+            return authority
+        except BaseException:
+            for descriptor in reversed(descriptors):
+                with suppress(OSError):
+                    os.close(descriptor)
+            raise
+
+    def ensure_live(self) -> bool:
+        try:
+            for parent, name, parent_identity, child_identity in self.parents:
+                if self._identity(os.fstat(parent)) != parent_identity:
+                    return False
+                if (
+                    self._identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
+                    != child_identity
+                ):
+                    return False
+            return (
+                self._identity(os.fstat(self.parent)) == self.parent_identity
+                and not self._entry_exists()
+            )
+        except OSError:
+            return False
+
+    def _entry_exists(self) -> bool:
+        try:
+            os.stat(self.name, dir_fd=self.parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return True
+
+    def create(self) -> tuple[int, int]:
+        if not self.ensure_live():
+            raise OSError("selection root parent unavailable")
+        try:
+            os.mkdir(self.name, mode=0o700, dir_fd=self.parent)
+            os.fsync(self.parent)
+        except FileExistsError as exc:
+            raise OSError("selection root concurrently created") from exc
+        descriptor = os.open(
+            self.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=self.parent,
+        )
+        try:
+            held = os.fstat(descriptor)
+            named = os.stat(self.name, dir_fd=self.parent, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(held.st_mode)
+                or held.st_uid != os.geteuid()
+                or stat.S_IMODE(held.st_mode) != 0o700
+                or self._identity(held) != self._identity(named)
+            ):
+                raise OSError("selection root unavailable")
+            return held.st_dev, held.st_ino
+        finally:
+            os.close(descriptor)
+
+    def close(self) -> None:
+        descriptors, self.descriptors = self.descriptors, []
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def _create_private_root_v1(root: Path) -> None:
     if (
         not root.is_absolute()
@@ -1421,20 +1560,39 @@ def _create_private_root_v1(root: Path) -> None:
 
 
 def resolve_selection_v1(
-    selection: SelectionRevisionV1, root: Path
+    selection: SelectionRevisionV1,
+    root: Path,
+    *,
+    _expected_root_identity: tuple[int, int] | None = None,
+    _missing_root_authority: _MissingSelectionRootAuthorityV1 | None = None,
 ) -> tuple[str, SelectionRevisionV1]:
     """Insert new selection bytes or return the exact previously retained revision."""
 
-    _create_private_root_v1(root)
+    if _missing_root_authority is not None:
+        if _expected_root_identity is not None:
+            raise ValueError("selection root authority is inconsistent")
+        root_identity = _missing_root_authority.create()
+    elif _expected_root_identity is not None:
+        if (
+            StorageRootLease.admit_existing_private_identity(root)
+            != _expected_root_identity
+        ):
+            raise OSError("selection store unavailable")
+        root_identity = _expected_root_identity
+    else:
+        _create_private_root_v1(root)
+        root_identity = StorageRootLease.admit_existing_private_identity(root)
+        if root_identity is None:
+            raise OSError("selection store unavailable")
     payload = selection_revision_bytes_v1(selection)
     name = f"{_selection_source_identity_v1(selection)}.json"
-    lease_result = StorageRootLease.try_acquire_private_empty(root)
+    lease_result = StorageRootLease.try_acquire_private_empty_identity(
+        root, root_identity
+    )
     if lease_result.outcome is not LeaseOutcome.ACQUIRED:
-        identity = StorageRootLease.admit_existing_private_identity(root)
-        if identity is not None:
-            lease_result = StorageRootLease.try_acquire_existing_identity(
-                root, identity
-            )
+        lease_result = StorageRootLease.try_acquire_existing_identity(
+            root, root_identity
+        )
     if lease_result.outcome is not LeaseOutcome.ACQUIRED or lease_result.lease is None:
         raise OSError("selection store unavailable")
     lease = lease_result.lease
@@ -1547,6 +1705,20 @@ _PathIdentityV1 = tuple[int, int, int, int]
 class _ProtectedPathSnapshotV1:
     path: Path
     identity: _PathIdentityV1
+
+
+@dataclass(frozen=True, slots=True)
+class _BindingSnapshotV1:
+    root: Path
+    name: str
+    root_identity: tuple[int, int]
+    directory_identity: tuple[int, int]
+    identity: tuple[int, int]
+    payload: bytes
+
+    @property
+    def protected_identities(self) -> tuple[tuple[int, int], ...]:
+        return self.root_identity, self.directory_identity, self.identity
 
 
 def _path_identity_v1(value: os.stat_result) -> _PathIdentityV1:
@@ -1739,9 +1911,16 @@ def _open_provider_cache_authority_v1(
     *,
     require_empty: bool = True,
     protected_identities: frozenset[tuple[int, int]] = frozenset(),
+    _expected_root_identity: tuple[int, int] | None = None,
 ) -> _ProviderCacheAuthorityV1:
-    identity = StorageRootLease.admit_existing_private_identity(root)
-    if identity is None:
+    identity = (
+        _expected_root_identity
+        or StorageRootLease.admit_existing_private_identity(root)
+    )
+    if (
+        identity is None
+        or StorageRootLease.admit_existing_private_identity(root) != identity
+    ):
         raise RuntimeError("provider runtime configuration invalid")
     result = StorageRootLease.try_acquire_existing_identity(root, identity)
     if result.outcome is not LeaseOutcome.ACQUIRED or result.lease is None:
@@ -1814,6 +1993,7 @@ def prepare_yfinance_runtime_v1(
     cache_root: Path,
     *,
     protected_identities: frozenset[tuple[int, int]] = frozenset(),
+    _expected_root_identity: tuple[int, int] | None = None,
 ) -> BoundedYahooSessionV1:
     """Create and verify one exact exclusive runtime before importing yfinance."""
 
@@ -1837,7 +2017,9 @@ def prepare_yfinance_runtime_v1(
         if not _pool_is_exact_v1():
             raise RuntimeError("provider runtime configuration invalid")
         cache = _open_provider_cache_authority_v1(
-            cache_root, protected_identities=protected_identities
+            cache_root,
+            protected_identities=protected_identities,
+            _expected_root_identity=_expected_root_identity,
         )
         session = BoundedYahooSessionV1(
             owns_provider_admission=True,
@@ -1874,7 +2056,10 @@ def prepare_yfinance_runtime_v1(
         ):
             raise RuntimeError("provider runtime configuration invalid")
     except BaseException:
-        session.close()
+        try:
+            session.close()
+        except Exception:
+            pass
         raise
     return session
 
@@ -2007,6 +2192,151 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
     except ValueError:
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
+        if directory is not None:
+            os.close(directory)
+        lease.close()
+
+
+def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1 | None:
+    """Read a validated binding into a detached exact identity record."""
+
+    result = StorageRootLease.try_admit_read_existing(root)
+    if result.outcome is not LeaseOutcome.ACQUIRED or result.lease is None:
+        raise EvidenceConflict("Plan 33 binding evidence conflict")
+    lease = result.lease
+    directory: int | None = None
+    descriptor: int | None = None
+    try:
+        with lease.read_operation(root) as operation:
+            assert_private_storage_operation(operation)
+            root_metadata = os.fstat(operation.descriptor)
+            directory = open_private_storage_directory(
+                operation, operation.descriptor, "plan33_bindings", False
+            )
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
+            directory_metadata = os.fstat(directory)
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=directory,
+            )
+            held = os.fstat(descriptor)
+            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(held.st_mode)
+                or held.st_nlink != 1
+                or stat.S_IMODE(held.st_mode) != 0o400
+                or held.st_size > MAX_PLAN33_BINDING_BYTES_V1
+                or (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+            ):
+                raise EvidenceConflict("Plan 33 binding evidence conflict")
+            payload = os.pread(descriptor, held.st_size, 0)
+            after = os.fstat(descriptor)
+            if (
+                len(payload) != held.st_size
+                or after.st_size != held.st_size
+                or (after.st_dev, after.st_ino) != (held.st_dev, held.st_ino)
+            ):
+                raise EvidenceConflict("Plan 33 binding evidence conflict")
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
+            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
+                raise EvidenceConflict("Plan 33 binding evidence conflict")
+            return _BindingSnapshotV1(
+                root,
+                name,
+                (root_metadata.st_dev, root_metadata.st_ino),
+                (directory_metadata.st_dev, directory_metadata.st_ino),
+                (held.st_dev, held.st_ino),
+                payload,
+            )
+    except FileNotFoundError:
+        return None
+    except (OSError, RuntimeError, ValueError):
+        raise EvidenceConflict("Plan 33 binding evidence conflict") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory is not None:
+            os.close(directory)
+        lease.close()
+
+
+def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
+    identity = StorageRootLease.admit_existing_private_identity(snapshot.root)
+    if identity is None or identity != snapshot.root_identity:
+        return False
+    result = StorageRootLease.try_acquire_existing_identity(snapshot.root, identity)
+    if result.outcome is not LeaseOutcome.ACQUIRED or result.lease is None:
+        return False
+    lease = result.lease
+    directory: int | None = None
+    descriptor: int | None = None
+    try:
+        with lease.read_operation(snapshot.root) as operation:
+            assert_private_storage_operation(operation)
+            held_root = os.fstat(operation.descriptor)
+            if (held_root.st_dev, held_root.st_ino) != snapshot.root_identity:
+                return False
+            directory = open_private_storage_directory(
+                operation, operation.descriptor, "plan33_bindings", False
+            )
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
+            held_directory = os.fstat(directory)
+            if (
+                held_directory.st_dev,
+                held_directory.st_ino,
+            ) != snapshot.directory_identity:
+                return False
+            descriptor = os.open(
+                snapshot.name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=directory,
+            )
+            held = os.fstat(descriptor)
+            if (
+                (held.st_dev, held.st_ino) != snapshot.identity
+                or not stat.S_ISREG(held.st_mode)
+                or held.st_nlink != 1
+                or stat.S_IMODE(held.st_mode) != 0o400
+                or held.st_size != len(snapshot.payload)
+                or os.pread(descriptor, held.st_size, 0) != snapshot.payload
+            ):
+                return False
+            named = os.stat(
+                snapshot.name,
+                dir_fd=directory,
+                follow_symlinks=False,
+            )
+            if (named.st_dev, named.st_ino) != snapshot.identity:
+                return False
+            _assert_private_directory_edge_v1(
+                operation,
+                directory,
+                "plan33_bindings",
+                "Plan 33 binding evidence conflict",
+            )
+            return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
         if directory is not None:
             os.close(directory)
         lease.close()
@@ -2324,12 +2654,15 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     schedule_root: Path,
     fetcher: SourceFetcherV1 | None = None,
     _protected_cleanup_identities: frozenset[tuple[int, int]] = frozenset(),
+    _request_live: Callable[[], bool] = lambda: True,
 ) -> CurrentNifty100ResultV1 | SharedFailureV1:
     """Run one exact operator-triggered current Nifty 100 capture."""
 
     preflight = preflight_request_v1(raw_request, acknowledged=acknowledged)
     if preflight is not None:
         return SharedFailureV1(*preflight)
+    if not _request_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     roots = (selection_root, nifty50_root, nifty_next50_root, schedule_root)
     if not all(path.is_absolute() for path in roots):
         return SharedFailureV1("MALFORMED_INPUT", None)
@@ -2361,6 +2694,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             malformed = True
     if malformed:
         return SharedFailureV1("MALFORMED_INPUT", None)
+    missing_selection_root_authority: _MissingSelectionRootAuthorityV1 | None = None
+    missing_selection_root_for_schedule_failure = False
     try:
         expected_root_identities: dict[Path, _PathIdentityV1] = {}
         for root in roots:
@@ -2369,6 +2704,15 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             except FileNotFoundError:
                 continue
             expected_root_identities[root] = _path_identity_v1(metadata)
+        if selection_root not in expected_root_identities:
+            try:
+                missing_selection_root_authority = (
+                    _MissingSelectionRootAuthorityV1.open(selection_root)
+                )
+            except OSError:
+                if not schedule_invalid:
+                    raise
+                missing_selection_root_for_schedule_failure = True
         protected_snapshots = _snapshot_protected_directories_v1(
             roots, require_all=False
         )
@@ -2384,10 +2728,30 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             }
         )
     except (OSError, RuntimeError):
+        if missing_selection_root_authority is not None:
+            missing_selection_root_authority.close()
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
 
-    selection = admit_selection_v1(request, fetcher or OfficialSourceFetcherV1())
+    def effect_roots_live() -> bool:
+        return (
+            _request_live()
+            and _protected_paths_live_v1(tuple(protected_by_path.values()))
+            and (
+                missing_selection_root_authority is None
+                or missing_selection_root_authority.ensure_live()
+            )
+        )
+
+    if not effect_roots_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+    selection = admit_selection_v1(
+        request,
+        fetcher or OfficialSourceFetcherV1(),
+        _before_source=effect_roots_live,
+    )
     if isinstance(selection, SharedFailureV1):
+        if missing_selection_root_authority is not None:
+            missing_selection_root_authority.close()
         return selection
     provider_symbols = [
         member[2]
@@ -2403,16 +2767,39 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "MAPPING_EVIDENCE_INVALID")
     if schedule_invalid:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    if missing_selection_root_for_schedule_failure:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     if len(low_requests) != len(request.cohorts):
         return SharedFailureV1("MALFORMED_INPUT", None)
 
+    if not effect_roots_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+    schedule_identity = expected_root_identities.get(schedule_root)
     if not all(
-        low._retained_schedule_matches_request(item, schedule_root)  # pyright: ignore[reportPrivateUsage]
+        (
+            low._retained_schedule_matches_request(item, schedule_root)
+            if schedule_identity is None
+            else low._retained_schedule_matches_request(
+                item,
+                schedule_root,
+                _expected_root_identity=schedule_identity[:2],
+            )
+        )
         for item in low_requests
     ):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "SCHEDULE_INVALID")
+    if not effect_roots_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     try:
-        retained_selection = _read_retained_selection_v1(selection, selection_root)
+        retained_selection = (
+            None
+            if missing_selection_root_authority is not None
+            else _read_retained_selection_v1(
+                selection,
+                selection_root,
+                _expected_root_identity=expected_root_identities[selection_root][:2],
+            )
+        )
     except EvidenceConflict:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     except (OSError, RuntimeError, ValueError):
@@ -2426,16 +2813,46 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     roots = (nifty50_root, nifty_next50_root)
     low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None] = [None, None]
     for index, (low_request, root) in enumerate(zip(low_requests, roots, strict=True)):
+        if not effect_roots_live():
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+        identity = expected_root_identities.get(root)
         try:
-            low_revisions[index] = low.read_capture_forward_request_revision_v1(
-                root, low_request
+            low_revisions[index] = (
+                low.read_capture_forward_request_revision_v1(root, low_request)
+                if identity is None
+                else low.read_capture_forward_request_revision_v1(
+                    root, low_request, _expected_root_identity=identity[:2]
+                )
             )
         except ValueError:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
+    if not effect_roots_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+    selection_identity = expected_root_identities.get(selection_root)
     try:
-        _, selection = resolve_selection_v1(selection, selection_root)
+        _, selection = resolve_selection_v1(
+            selection,
+            selection_root,
+            _expected_root_identity=(
+                None if selection_identity is None else selection_identity[:2]
+            ),
+            _missing_root_authority=missing_selection_root_authority,
+        )
+        if missing_selection_root_authority is not None:
+            missing_selection_root_authority.close()
+            missing_selection_root_authority = None
+        selection_metadata = os.stat(selection_root, follow_symlinks=False)
+        selection_identity = _path_identity_v1(selection_metadata)
+        expected_root_identities[selection_root] = selection_identity
+        selection_snapshot = _snapshot_protected_directories_v1(
+            (selection_root,), require_all=True
+        )[0]
+        protected_by_path[selection_root] = selection_snapshot
+        protected_identities = frozenset(
+            {*protected_identities, selection_snapshot.identity[:2]}
+        )
     except EvidenceConflict:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     except (OSError, RuntimeError, ValueError):
@@ -2448,6 +2865,8 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     for index, (cohort, low_request) in enumerate(
         zip(request.cohorts, low_requests, strict=True)
     ):
+        if not _request_live():
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
         try:
             validated_reuses[index] = _validated_reuse_v1(
                 cohort,
@@ -2462,16 +2881,49 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         except (OSError, RuntimeError, ValueError):
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "RETENTION_FAILED")
 
+    binding_snapshots: list[_BindingSnapshotV1] = []
+    try:
+        for cohort, low_request, reused in zip(
+            request.cohorts, low_requests, validated_reuses, strict=True
+        ):
+            if reused is None:
+                continue
+            snapshot = _snapshot_plan33_binding_v1(
+                selection_root,
+                _plan33_binding_name_v1(
+                    cohort, selection, low_request.request_identity_sha256
+                ),
+            )
+            if snapshot is not None:
+                binding_snapshots.append(snapshot)
+        protected_identities = frozenset(
+            {
+                *protected_identities,
+                *(
+                    identity
+                    for snapshot in binding_snapshots
+                    for identity in snapshot.protected_identities
+                ),
+            }
+        )
+    except (OSError, RuntimeError, ValueError, EvidenceConflict):
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+
+    if not _request_live():
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     try:
         cache_authority = _open_provider_cache_authority_v1(
             selection_root,
             require_empty=False,
             protected_identities=protected_identities,
+            _expected_root_identity=selection_identity[:2],
         )
         cache_authority.close()
+        if not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
+            raise RuntimeError("provider runtime configuration invalid")
         if not _protected_paths_live_v1(tuple(protected_by_path.values())):
             raise RuntimeError("provider runtime configuration invalid")
-    except (OSError, RuntimeError):
+    except Exception:
         unavailable = tuple(
             CohortOutcomeV1(
                 cohort.name, "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
@@ -2508,10 +2960,27 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 )
                 continue
 
+            if not effect_roots_live():
+                cleanup_failed = True
+                break
+            root_identity = expected_root_identities.get(root)
             try:
-                result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                    low_request, _UnresolvedProbeV1(), root, schedule_root
-                )
+                if root_identity is None or schedule_identity is None:
+                    result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                        low_request,
+                        _UnresolvedProbeV1(),
+                        root,
+                        schedule_root,
+                    )
+                else:
+                    result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                        low_request,
+                        _UnresolvedProbeV1(),
+                        root,
+                        schedule_root,
+                        _expected_store_root_identity=root_identity[:2],
+                        _expected_schedule_root_identity=schedule_identity[:2],
+                    )
             except (RuntimeError, ValueError):
                 result = low.CaptureForwardAdjustedOhlcvFailureV1(
                     "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
@@ -2529,10 +2998,14 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                     )
                     continue
                 if session is None:
+                    if not _request_live():
+                        cleanup_failed = True
+                        break
                     try:
                         session = prepare_yfinance_runtime_v1(
                             selection_root,
                             protected_identities=protected_identities,
+                            _expected_root_identity=selection_identity[:2],
                         )
                     except Exception:
                         runtime_unavailable = True
@@ -2553,10 +3026,26 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 active_provider = cast(_Plan33ProviderV1, provider)
                 session.begin_cohort()
                 active_session = session
+                if not effect_roots_live():
+                    cleanup_failed = True
+                    break
                 try:
-                    result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                        low_request, active_provider, root, schedule_root
-                    )
+                    if root_identity is None or schedule_identity is None:
+                        result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                            low_request,
+                            active_provider,
+                            root,
+                            schedule_root,
+                        )
+                    else:
+                        result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                            low_request,
+                            active_provider,
+                            root,
+                            schedule_root,
+                            _expected_store_root_identity=root_identity[:2],
+                            _expected_schedule_root_identity=schedule_identity[:2],
+                        )
                 except (RuntimeError, ValueError):
                     result = low.CaptureForwardAdjustedOhlcvFailureV1(
                         "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
@@ -2612,14 +3101,37 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 )
                 break
             outcomes[index] = outcome
+            if _is_success(outcome):
+                try:
+                    snapshot = _snapshot_plan33_binding_v1(
+                        selection_root,
+                        _plan33_binding_name_v1(
+                            cohort, selection, low_request.request_identity_sha256
+                        ),
+                    )
+                    if snapshot is not None:
+                        binding_snapshots.append(snapshot)
+                        protected_identities = frozenset(
+                            {
+                                *protected_identities,
+                                *snapshot.protected_identities,
+                            }
+                        )
+                        if session is not None:
+                            session.protect_cleanup_identities(protected_identities)
+                except (OSError, RuntimeError, ValueError, EvidenceConflict):
+                    cleanup_failed = True
+                    break
     finally:
         if session is not None:
             try:
                 session.close()
-            except (OSError, RuntimeError):
+            except Exception:
                 cleanup_failed = True
 
     if not _protected_paths_live_v1(tuple(protected_by_path.values())):
+        cleanup_failed = True
+    if not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
         cleanup_failed = True
     if cleanup_failed:
         outcomes = [
@@ -2628,7 +3140,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             )
             for cohort in request.cohorts
         ]
-    elif shared_failure is not None:
+    if shared_failure is not None and not cleanup_failed:
         return shared_failure
 
     for index, outcome in enumerate(outcomes):
@@ -2639,7 +3151,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 "BLOCKED_BY_PRIOR_RETENTION_FAILURE",
             )
     finalized = cast(tuple[CohortOutcomeV1, CohortOutcomeV1], tuple(outcomes))
-    return _result_v1(
+    result = _result_v1(
         request,
         selection,
         finalized,
@@ -2648,6 +3160,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             tuple(item.request_identity_sha256 for item in low_requests),
         ),
     )
+    return result
 
 
 def serialize_capture_result_v1(
