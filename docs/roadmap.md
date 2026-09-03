@@ -347,11 +347,10 @@ Sprint 16 gate, preserving the locked architecture sequence.
 
 The live tracker has advanced beyond that dependency statement. Sprint 15 /
 #120 and Sprint 16 / #122 are closed/completed with Project status **Done**.
-Sprint 17 / #147 has a complete reviewed implementable slice but remains open
-with Project status **In Progress** at `1/4` after the valid 2026-08-31
-completed-session capture;
-three distinct future completed-session captures remain. That historical
-qualification lane does not block current/live
+Sprint 17 / #147 has retained all `4/4` predeclared completed-session
+captures with Project status **In Progress**. No future-session capture remains.
+Its exact retained revisions now support the final unchanged Plan 29
+qualification; that historical lane remains separate from current/live
 delivery. Sprint 18 / #148 delivered current/live Market Structure through
 [Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md) and
 merged PR #149; the Issue is closed/completed and its Project item is **Done**.
@@ -379,9 +378,9 @@ without closing #147. [Issue #156](https://github.com/krunaldodiya/SwingTradingA
 then owns the separately bounded Plan 33 implementation.
 
 Owner-prioritized Issue #145 remains open **Todo** and follows #156 before
-another product module starts. Sprint 17 / Issue #147 remains a parallel `1/4`
-temporal-evidence lane and captures continue when genuinely completed sessions
-become available.
+another product module starts. Sprint 17 / Issue #147 has completed its `4/4`
+temporal captures; its final historical qualification remains a separate
+parallel lane and no longer waits on a future session.
 
 [Plan 34](plans/34-swing-research-feature-map.md) owns the necessary-only future
 feature taxonomy. Delivered Market Structure and Price Action remain separate
