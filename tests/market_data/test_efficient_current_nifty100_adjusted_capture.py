@@ -2566,8 +2566,9 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
         core._snapshot_plan33_binding_v1(root, binding.name)
 
 
+@pytest.mark.parametrize("final_binding_live", [True, False])
 def test_all_reuse_capture_clears_retained_provider_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_binding_live: bool
 ) -> None:
     request, selection = _admitted()
     selection_root = tmp_path / "selection"
@@ -2625,11 +2626,16 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         "_snapshot_plan33_binding_v1",
         lambda _root, _name: binding_snapshot,
     )
-    monkeypatch.setattr(
-        core,
-        "_binding_snapshot_live_v1",
-        lambda snapshot: snapshot is binding_snapshot,
-    )
+    binding_checks = 0
+
+    def binding_live(snapshot: object) -> bool:
+        nonlocal binding_checks
+        binding_checks += 1
+        return snapshot is binding_snapshot and (
+            final_binding_live or binding_checks != 3
+        )
+
+    monkeypatch.setattr(core, "_binding_snapshot_live_v1", binding_live)
     monkeypatch.setattr(
         core,
         "prepare_yfinance_runtime_v1",
@@ -2647,6 +2653,12 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
+    if not final_binding_live:
+        assert result == core.SharedFailureV1(
+            "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
+        )
+        assert residue.read_bytes() == b""
+        return
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
     assert residue.read_bytes() == b""
@@ -4177,8 +4189,9 @@ def test_provider_identity_mismatch_is_not_retention_failure() -> None:
     )
 
 
+@pytest.mark.parametrize("final_binding_live", [True, False])
 def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_binding_live: bool
 ) -> None:
     value = json.loads(_request())
     second = core.low.parse_capture_forward_request_v1(
@@ -4205,6 +4218,8 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
         lambda _root, _request: None,
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    if not final_binding_live:
+        monkeypatch.setattr(core, "_binding_snapshot_live_v1", lambda _snapshot: False)
 
     def capture(
         low_request: object, _provider: object, _root: Path, _schedule: Path
@@ -4236,6 +4251,11 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
+    if not final_binding_live:
+        assert result == core.SharedFailureV1(
+            "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
+        )
+        return
 
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
@@ -4274,6 +4294,67 @@ def test_request_liveness_stops_before_source_or_storage_effects(
         "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
     )
     assert calls == []
+
+
+@pytest.mark.parametrize("failure_kind", ["liveness", "resolution"])
+def test_missing_selection_root_authority_closes_on_failure_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_kind: str
+) -> None:
+    opened: list[core._MissingSelectionRootAuthorityV1] = []
+    original_open = core._MissingSelectionRootAuthorityV1.open
+
+    def track_open(root: Path) -> core._MissingSelectionRootAuthorityV1:
+        authority = original_open(root)
+        opened.append(authority)
+        return authority
+
+    monkeypatch.setattr(
+        core._MissingSelectionRootAuthorityV1, "open", staticmethod(track_open)
+    )
+    if failure_kind == "resolution":
+        monkeypatch.setattr(
+            core.low,
+            "_retained_schedule_matches_request",
+            lambda _request, _root, **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            core.low,
+            "read_capture_forward_request_revision_v1",
+            lambda _root, _request: None,
+        )
+
+        def fail_resolution(*_args: object, **_kwargs: object) -> None:
+            raise OSError("selection resolution failed")
+
+        monkeypatch.setattr(core, "resolve_selection_v1", fail_resolution)
+
+    for index in range(3):
+        liveness_calls = 0
+
+        def request_live() -> bool:
+            nonlocal liveness_calls
+            liveness_calls += 1
+            return failure_kind == "resolution" or liveness_calls == 1
+
+        result = core.capture_current_nifty100_v1(
+            _request(),
+            acknowledged=True,
+            selection_root=tmp_path / f"selection-{index}",
+            nifty50_root=tmp_path / f"nifty50-{index}",
+            nifty_next50_root=tmp_path / f"next50-{index}",
+            schedule_root=tmp_path / f"schedule-{index}",
+            fetcher=_Fetcher(),
+            _request_live=request_live,
+        )
+
+        assert result == core.SharedFailureV1(
+            "INSUFFICIENT_EVIDENCE",
+            "RETENTION_FAILED"
+            if failure_kind == "resolution"
+            else "CONFIGURATION_INVALID",
+        )
+        assert len(opened) == index + 1
+        assert all(not authority.descriptors for authority in opened)
 
 
 def test_dependency_code_aggregate_rejects_nested_substitution(tmp_path: Path) -> None:

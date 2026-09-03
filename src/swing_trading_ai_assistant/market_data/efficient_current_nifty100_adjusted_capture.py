@@ -1519,8 +1519,14 @@ class _MissingSelectionRootAuthorityV1:
 
     def close(self) -> None:
         descriptors, self.descriptors = self.descriptors, []
+        failure: OSError | None = None
         for descriptor in reversed(descriptors):
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                failure = error
+        if failure is not None:
+            raise failure
 
 
 def _create_private_root_v1(root: Path) -> None:
@@ -2642,7 +2648,7 @@ def _reserved_cache_root_overlap_v1(
         return True
 
 
-def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transaction
+def _capture_current_nifty100_impl_v1(  # noqa: C901
     raw_request: bytes,
     *,
     acknowledged: bool,
@@ -2650,16 +2656,17 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     nifty50_root: Path,
     nifty_next50_root: Path,
     schedule_root: Path,
-    fetcher: SourceFetcherV1 | None = None,
-    _protected_cleanup_identities: frozenset[tuple[int, int]] = frozenset(),
-    _request_live: Callable[[], bool] = lambda: True,
+    fetcher: SourceFetcherV1 | None,
+    protected_cleanup_identities: frozenset[tuple[int, int]],
+    request_live: Callable[[], bool],
+    authority_holder: list[_MissingSelectionRootAuthorityV1],
 ) -> CurrentNifty100ResultV1 | SharedFailureV1:
     """Run one exact operator-triggered current Nifty 100 capture."""
 
     preflight = preflight_request_v1(raw_request, acknowledged=acknowledged)
     if preflight is not None:
         return SharedFailureV1(*preflight)
-    if not _request_live():
+    if not request_live():
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     roots = (selection_root, nifty50_root, nifty_next50_root, schedule_root)
     if not all(path.is_absolute() for path in roots):
@@ -2707,6 +2714,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                 missing_selection_root_authority = (
                     _MissingSelectionRootAuthorityV1.open(selection_root)
                 )
+                authority_holder.append(missing_selection_root_authority)
             except OSError:
                 if not schedule_invalid:
                     raise
@@ -2721,7 +2729,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             raise RuntimeError("provider runtime configuration invalid")
         protected_identities = frozenset(
             {
-                *_protected_cleanup_identities,
+                *protected_cleanup_identities,
                 *(identity[:2] for identity in expected_root_identities.values()),
             }
         )
@@ -2732,7 +2740,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
 
     def effect_roots_live() -> bool:
         return (
-            _request_live()
+            request_live()
             and _protected_paths_live_v1(tuple(protected_by_path.values()))
             and (
                 missing_selection_root_authority is None
@@ -2869,7 +2877,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     for index, (cohort, low_request) in enumerate(
         zip(request.cohorts, low_requests, strict=True)
     ):
-        if not _request_live():
+        if not request_live():
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
         try:
             validated_reuses[index] = _validated_reuse_v1(
@@ -2913,7 +2921,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     except (OSError, RuntimeError, ValueError, EvidenceConflict):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
 
-    if not _request_live():
+    if not request_live():
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     try:
         cache_authority = _open_provider_cache_authority_v1(
@@ -2924,7 +2932,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
         )
         cache_authority.close()
         if not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
-            raise RuntimeError("provider runtime configuration invalid")
+            return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         if not _protected_paths_live_v1(tuple(protected_by_path.values())):
             raise RuntimeError("provider runtime configuration invalid")
     except Exception:
@@ -3002,7 +3010,7 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
                     )
                     continue
                 if session is None:
-                    if not _request_live():
+                    if not request_live():
                         cleanup_failed = True
                         break
                     try:
@@ -3139,10 +3147,11 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
 
     if not _protected_paths_live_v1(tuple(protected_by_path.values())):
         cleanup_failed = True
-    if len(binding_snapshots) != sum(
+    binding_conflict = len(binding_snapshots) != sum(
         _is_success(outcome) for outcome in outcomes if outcome is not None
-    ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots):
-        cleanup_failed = True
+    ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots)
+    if binding_conflict:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     if cleanup_failed:
         outcomes = [
             CohortOutcomeV1(
@@ -3170,6 +3179,46 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
             tuple(item.request_identity_sha256 for item in low_requests),
         ),
     )
+    return result
+
+
+def capture_current_nifty100_v1(
+    raw_request: bytes,
+    *,
+    acknowledged: bool,
+    selection_root: Path,
+    nifty50_root: Path,
+    nifty_next50_root: Path,
+    schedule_root: Path,
+    fetcher: SourceFetcherV1 | None = None,
+    _protected_cleanup_identities: frozenset[tuple[int, int]] = frozenset(),
+    _request_live: Callable[[], bool] = lambda: True,
+) -> CurrentNifty100ResultV1 | SharedFailureV1:
+    """Run one exact operator-triggered current Nifty 100 capture."""
+
+    authorities: list[_MissingSelectionRootAuthorityV1] = []
+    authority_cleanup_failed = False
+    try:
+        result = _capture_current_nifty100_impl_v1(
+            raw_request,
+            acknowledged=acknowledged,
+            selection_root=selection_root,
+            nifty50_root=nifty50_root,
+            nifty_next50_root=nifty_next50_root,
+            schedule_root=schedule_root,
+            fetcher=fetcher,
+            protected_cleanup_identities=_protected_cleanup_identities,
+            request_live=_request_live,
+            authority_holder=authorities,
+        )
+    finally:
+        for authority in authorities:
+            try:
+                authority.close()
+            except OSError:
+                authority_cleanup_failed = True
+    if authority_cleanup_failed:
+        return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     return result
 
 
