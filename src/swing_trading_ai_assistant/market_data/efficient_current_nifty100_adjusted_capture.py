@@ -1131,6 +1131,44 @@ def _result_v1(
     )
 
 
+def _configuration_invalid_result_v1(
+    request: CurrentNifty100RequestV1,
+    selection: SelectionRevisionV1,
+    *,
+    request_identities: tuple[str, str] | None = None,
+) -> CurrentNifty100ResultV1:
+    outcomes = cast(
+        tuple[CohortOutcomeV1, CohortOutcomeV1],
+        tuple(
+            CohortOutcomeV1(
+                cohort.name, "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+            )
+            for cohort in request.cohorts
+        ),
+    )
+    return _result_v1(
+        request,
+        selection,
+        outcomes,
+        request_identities=request_identities,
+    )
+
+
+def _effective_request_identities_v1(
+    low_requests: list[low.CaptureForwardAdjustedOhlcvRequestV1],
+    low_revisions: list[low.AdjustedOhlcvCaptureRevisionV1 | None],
+) -> tuple[str, str]:
+    return cast(
+        tuple[str, str],
+        tuple(
+            revision.request_identity_sha256
+            if isinstance(revision, low.AdjustedOhlcvCaptureRevisionV1)
+            else request.request_identity_sha256
+            for request, revision in zip(low_requests, low_revisions, strict=True)
+        ),
+    )
+
+
 def execute_admitted_v1(
     request: CurrentNifty100RequestV1,
     selection: SelectionRevisionV1,
@@ -1187,8 +1225,9 @@ def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
             }
             for row in result.cohorts
         ],
-        "union_reason": result.union_reason,
     }
+    if result.union_reason is not None:
+        payload["union_reason"] = result.union_reason
     if len(_canonical(payload)) > MAX_RESULT_BYTES_V1:
         raise ValueError("result exceeds public bound")
     return payload
@@ -1863,6 +1902,30 @@ def _clear_provider_cache_v1(
         raise RuntimeError("provider runtime configuration invalid")
 
 
+def _release_provider_cache_resources_v1(
+    descriptor: int | None,
+    operation: StorageRootLeaseOperation | None,
+    lease: StorageRootLease,
+) -> None:
+    cleanup_failed = False
+    if descriptor is not None:
+        try:
+            os.close(descriptor)
+        except Exception:
+            cleanup_failed = True
+    if operation is not None:
+        try:
+            operation.__exit__(None, None, None)
+        except Exception:
+            cleanup_failed = True
+    try:
+        lease.close()
+    except Exception:
+        cleanup_failed = True
+    if cleanup_failed:
+        raise OSError("provider cache cleanup failed")
+
+
 @dataclass(slots=True)
 class _ProviderCacheAuthorityV1:
     lease: StorageRootLease
@@ -1897,11 +1960,11 @@ class _ProviderCacheAuthorityV1:
             raise RuntimeError("provider runtime configuration invalid")
 
     def _release(self) -> None:
-        os.close(self.descriptor)
-        try:
-            self.operation.__exit__(None, None, None)
-        finally:
-            self.lease.close()
+        _release_provider_cache_resources_v1(
+            self.descriptor,
+            self.operation,
+            self.lease,
+        )
 
     def abandon(self) -> None:
         self._release()
@@ -1991,11 +2054,11 @@ def _open_provider_cache_authority_v1(
         authority.ensure_live()
         return authority
     except BaseException:
-        if descriptor is not None:
-            os.close(descriptor)
-        if entered:
-            operation.__exit__(None, None, None)
-        lease.close()
+        _release_provider_cache_resources_v1(
+            descriptor,
+            operation if entered else None,
+            lease,
+        )
         raise
 
 
@@ -2200,9 +2263,7 @@ def _read_plan33_binding_v1(root: Path, name: str) -> bytes | None:
     except ValueError:
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
     finally:
-        if directory is not None:
-            os.close(directory)
-        lease.close()
+        _close_binding_read_resources_v1(None, directory, lease)
 
 
 def _close_binding_read_resources_v1(
@@ -2478,8 +2539,14 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
         selection_cohort = next(
             row for row in selection.cohorts if row.name == cohort.name
         )
-        request_compatible = (
+        request_identity_compatible = (
             revision.request_identity_sha256 == low_request.request_identity_sha256
+            or low._revision_matches_compatible_request_v1(  # pyright: ignore[reportPrivateUsage]
+                low_request, revision
+            )
+        )
+        request_compatible = (
+            request_identity_compatible
             and revision.cohort == low_request.cohort
             and revision.schedule == low_request.schedule
             and revision.decision_session == low_request.decision_session
@@ -2612,9 +2679,12 @@ def _validated_reuse_v1(
     *,
     binding_root: Path,
 ) -> CohortOutcomeV1 | None:
-    name = _plan33_binding_name_v1(
-        cohort, selection, low_request.request_identity_sha256
+    effective_request_identity = (
+        low_request.request_identity_sha256
+        if low_revision is None
+        else low_revision.request_identity_sha256
     )
+    name = _plan33_binding_name_v1(cohort, selection, effective_request_identity)
     existing = _read_plan33_binding_v1(binding_root, name)
     if existing is None:
         return None
@@ -2642,6 +2712,8 @@ def _validated_reuse_v1(
         ):
             raise ValueError("Plan 33 reuse binding mismatch")
         return outcome
+    except _BindingCleanupFailureV1:
+        raise
     except (OSError, RuntimeError, TypeError, ValueError):
         raise EvidenceConflict("Plan 33 binding evidence conflict") from None
 
@@ -2751,8 +2823,6 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
             }
         )
     except (OSError, RuntimeError):
-        if missing_selection_root_authority is not None:
-            missing_selection_root_authority.close()
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
 
     def effect_roots_live() -> bool:
@@ -2773,8 +2843,6 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
         _before_source=effect_roots_live,
     )
     if isinstance(selection, SharedFailureV1):
-        if missing_selection_root_authority is not None:
-            missing_selection_root_authority.close()
         return selection
     provider_symbols = [
         member[2]
@@ -2853,6 +2921,14 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                     root, low_request, _expected_root_identity=identity[:2]
                 )
             )
+        except low._CaptureCleanupFailureV1:  # pyright: ignore[reportPrivateUsage]
+            return _configuration_invalid_result_v1(
+                request,
+                selection,
+                request_identities=_effective_request_identities_v1(
+                    low_requests, low_revisions
+                ),
+            )
         except ValueError:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError):
@@ -2870,7 +2946,6 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
             _missing_root_authority=missing_selection_root_authority,
         )
         if missing_selection_root_authority is not None:
-            missing_selection_root_authority.close()
             missing_selection_root_authority = None
         selection_metadata = os.stat(selection_root, follow_symlinks=False)
         selection_identity = _path_identity_v1(selection_metadata)
@@ -2905,6 +2980,14 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                 request,
                 binding_root=selection_root,
             )
+        except _BindingCleanupFailureV1:
+            return _configuration_invalid_result_v1(
+                request,
+                selection,
+                request_identities=_effective_request_identities_v1(
+                    low_requests, low_revisions
+                ),
+            )
         except EvidenceConflict:
             return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
         except (OSError, RuntimeError, ValueError):
@@ -2912,16 +2995,16 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
 
     binding_snapshots: list[_BindingSnapshotV1] = []
     try:
-        for cohort, low_request, reused in zip(
-            request.cohorts, low_requests, validated_reuses, strict=True
-        ):
+        for cohort, reused in zip(request.cohorts, validated_reuses, strict=True):
             if reused is None:
                 continue
+            if reused.request_identity_sha256 is None:
+                raise EvidenceConflict("Plan 33 binding evidence conflict")
             binding_snapshots.append(
                 _snapshot_plan33_binding_v1(
                     selection_root,
                     _plan33_binding_name_v1(
-                        cohort, selection, low_request.request_identity_sha256
+                        cohort, selection, reused.request_identity_sha256
                     ),
                 )
             )
@@ -2934,6 +3017,14 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                     for identity in snapshot.protected_identities
                 ),
             }
+        )
+    except _BindingCleanupFailureV1:
+        return _configuration_invalid_result_v1(
+            request,
+            selection,
+            request_identities=_effective_request_identities_v1(
+                low_requests, low_revisions
+            ),
         )
     except (OSError, RuntimeError, ValueError, EvidenceConflict):
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
@@ -2953,19 +3044,11 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
         if not _protected_paths_live_v1(tuple(protected_by_path.values())):
             raise RuntimeError("provider runtime configuration invalid")
     except Exception:
-        unavailable = tuple(
-            CohortOutcomeV1(
-                cohort.name, "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
-            )
-            for cohort in request.cohorts
-        )
-        return _result_v1(
+        return _configuration_invalid_result_v1(
             request,
             selection,
-            cast(tuple[CohortOutcomeV1, CohortOutcomeV1], unavailable),
-            request_identities=cast(
-                tuple[str, str],
-                tuple(item.request_identity_sha256 for item in low_requests),
+            request_identities=_effective_request_identities_v1(
+                low_requests, low_revisions
             ),
         )
 
@@ -3203,7 +3286,12 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
         finalized,
         request_identities=cast(
             tuple[str, str],
-            tuple(item.request_identity_sha256 for item in low_requests),
+            tuple(
+                outcome.request_identity_sha256
+                if _is_success(outcome) and outcome.request_identity_sha256 is not None
+                else low_request.request_identity_sha256
+                for outcome, low_request in zip(finalized, low_requests, strict=True)
+            ),
         ),
     )
     return result
@@ -3260,7 +3348,7 @@ def capture_current_nifty100_v1(
                         for cohort in result.cohorts
                     ),
                 ),
-                union_reason="UNION_INCOMPATIBLE",
+                union_reason=None,
             )
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
     return result

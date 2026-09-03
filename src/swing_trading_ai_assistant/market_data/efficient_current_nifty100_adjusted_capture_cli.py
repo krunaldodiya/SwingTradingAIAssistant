@@ -820,7 +820,7 @@ def _run_enabled(
     request_file_identity: _RequestFileIdentityV1,
     *,
     _request_live: Callable[[], bool] | None = None,
-) -> int:
+) -> tuple[dict[str, object], int]:
     original_import_path = list(sys.path)
     native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
@@ -839,11 +839,10 @@ def _run_enabled(
     except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         sys.path[:] = original_import_path
         _close_native_dependency_handles_v1(native_handles)
-        _emit(
+        return (
             _static_failure_v1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"),
-            maximum_bytes=_MAX_RESULT_BYTES_V1,
+            1,
         )
-        return 1
     try:
         with _verified_dependency_import_lifetime_v1(sources, native_handles):
             try:
@@ -878,13 +877,12 @@ def _run_enabled(
                 TypeError,
                 ValueError,
             ):
-                _emit(
+                return (
                     _static_failure_v1(
                         "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
                     ),
-                    maximum_bytes=_MAX_RESULT_BYTES_V1,
+                    1,
                 )
-                return 1
             request_live = _request_live or (
                 lambda: _request_file_live_v1(
                     arguments.request_file, request_file_identity
@@ -894,21 +892,19 @@ def _run_enabled(
                 raw, acknowledged=arguments.ack_owner_private_yfinance_research
             )
             if preflight is not None:
-                _emit(
+                return (
                     core.serialize_capture_result_v1(core.SharedFailureV1(*preflight)),
-                    maximum_bytes=core.MAX_RESULT_BYTES_V1,
+                    1,
                 )
-                return 1
             if not request_live():
-                _emit(
+                return (
                     core.serialize_capture_result_v1(
                         core.SharedFailureV1(
                             "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
                         )
                     ),
-                    maximum_bytes=core.MAX_RESULT_BYTES_V1,
+                    1,
                 )
-                return 1
             result = core.capture_current_nifty100_v1(
                 raw,
                 acknowledged=True,
@@ -923,16 +919,14 @@ def _run_enabled(
                 result = core.SharedFailureV1(
                     "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
                 )
-            _emit(
-                core.serialize_capture_result_v1(result),
-                maximum_bytes=core.MAX_RESULT_BYTES_V1,
-            )
-            return (
+            payload = core.serialize_capture_result_v1(result)
+            status = (
                 0
                 if isinstance(result, core.CurrentNifty100ResultV1)
                 and result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
                 else 1
             )
+            return payload, status
     finally:
         sys.path[:] = original_import_path
 
@@ -968,6 +962,7 @@ def _run(argv: list[str] | None) -> int:
         sys.stderr.write("request_invalid\n")
         return 2
 
+    authority_entered = False
     try:
         from swing_trading_ai_assistant.historical_evaluation.capability_validation_cli import (  # noqa: PLC0415
             open_private_request_authority,
@@ -976,31 +971,35 @@ def _run(argv: list[str] | None) -> int:
         with open_private_request_authority(
             request_file, _MAX_REQUEST_BYTES_V1
         ) as authority:
+            authority_entered = True
             raw = authority.payload
             request_file_identity = cast(_RequestFileIdentityV1, authority.identity)
             enabled = _request_enabled_state_v1(raw)
             if enabled is None:
-                _emit(
-                    _static_failure_v1("MALFORMED_INPUT", None),
-                    maximum_bytes=_MAX_RESULT_BYTES_V1,
+                payload = _static_failure_v1("MALFORMED_INPUT", None)
+                status = 1
+            elif not enabled:
+                payload = _static_failure_v1("DISABLED", "ADAPTER_DISABLED")
+                status = 1
+            else:
+                payload, status = _run_enabled(
+                    raw,
+                    arguments,
+                    roots,
+                    request_file_identity,
+                    _request_live=authority.ensure_live,
                 )
-                return 1
-            if not enabled:
-                _emit(
-                    _static_failure_v1("DISABLED", "ADAPTER_DISABLED"),
-                    maximum_bytes=_MAX_RESULT_BYTES_V1,
-                )
-                return 1
-            return _run_enabled(
-                raw,
-                arguments,
-                roots,
-                request_file_identity,
-                _request_live=authority.ensure_live,
-            )
-    except (OSError, ValueError):
+    except OSError:
+        if not authority_entered:
+            sys.stderr.write("request_invalid\n")
+            return 2
+        payload = _static_failure_v1("INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID")
+        status = 1
+    except ValueError:
         sys.stderr.write("request_invalid\n")
         return 2
+    _emit(payload, maximum_bytes=_MAX_RESULT_BYTES_V1)
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:

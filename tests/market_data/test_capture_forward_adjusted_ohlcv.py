@@ -902,17 +902,23 @@ def test_explicit_changed_correction_preserves_parent_lineage(tmp_path: Path) ->
 def _retarget_retained_revision_writer(
     root: Path,
     revision: AdjustedOhlcvCaptureRevisionV1,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
     writer_identity: str,
 ) -> AdjustedOhlcvCaptureRevisionV1:
+    historical_request_identity = core._request_identity_for_writer_v1(  # pyright: ignore[reportPrivateUsage]
+        request, writer_identity
+    )
     historical = replace(
         revision,
+        request_identity_sha256=historical_request_identity,
         runtime_code_identity_sha256=writer_identity,
     )
+    (root / "requests" / f"{revision.request_identity_sha256}.json").unlink()
+    (root / "revisions" / f"{revision.revision_sha256}.json").unlink()
     revision_path = root / "revisions" / f"{historical.revision_sha256}.json"
     revision_path.write_bytes(historical.canonical_json_bytes())
     revision_path.chmod(0o400)
     pointer = root / "requests" / f"{historical.request_identity_sha256}.json"
-    pointer.chmod(0o600)
     pointer.write_bytes(
         core._pointer_bytes(  # pyright: ignore[reportPrivateUsage]
             historical.request_identity_sha256,
@@ -937,6 +943,7 @@ def test_correction_accepts_compatible_parent_writer_runtime(
     historical = _retarget_retained_revision_writer(
         tmp_path,
         initial.revision,
+        _request(),
         writer_identity,
     )
     request = _request(parent_revision_sha256=historical.revision_sha256)
@@ -973,6 +980,7 @@ def test_writer_upgrade_is_not_correction_content_change(
     historical = _retarget_retained_revision_writer(
         tmp_path,
         initial.revision,
+        _request(),
         writer_identity,
     )
     request = _request(parent_revision_sha256=historical.revision_sha256)
@@ -992,17 +1000,27 @@ def test_writer_upgrade_is_not_correction_content_change(
 def test_released_base_writer_revision_remains_exactly_readable(
     tmp_path: Path,
 ) -> None:
+    request = _request()
     initial = _capture(tmp_path)
     historical = _retarget_retained_revision_writer(
         tmp_path,
         initial.revision,
+        request,
         "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
     )
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
 
+    assert read_capture_forward_request_revision_v1(tmp_path, request) == historical
     assert (
-        core.read_capture_forward_request_revision_v1(tmp_path, _request())
+        core.read_capture_forward_revision_v1(tmp_path, historical.revision_sha256)
         == historical
     )
+    result = _invoke(request, provider, tmp_path)
+    assert result == CaptureForwardAdjustedOhlcvSuccessV1("REUSED", historical)
+    assert provider.calls == 0
 
 
 def test_capture_lease_cleanup_failure_raises_typed_signal(
@@ -1032,6 +1050,50 @@ def test_capture_lease_cleanup_failure_raises_typed_signal(
             tmp_path,
             tmp_path / "schedule",
         )
+
+
+def test_child_cleanup_failure_attempts_all_resources_and_releases_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capture(tmp_path)
+    request = _request()
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    monkeypatch.setattr(
+        core, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
+    )
+    original_close = core._PrivateDirectory.close  # pyright: ignore[reportPrivateUsage]
+    close_calls = 0
+
+    def close_then_fail_once(directory: object) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        original_close(directory)
+        if close_calls == 1:
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(
+        core._PrivateDirectory,  # pyright: ignore[reportPrivateUsage]
+        "close",
+        close_then_fail_once,
+    )
+
+    with pytest.raises(core._CaptureCleanupFailureV1, match="capture cleanup failed"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request,
+            provider,
+            tmp_path,
+            tmp_path / "schedule",
+        )
+
+    assert close_calls >= 3
+    identity = core.StorageRootLease.admit_existing_private_identity(tmp_path)
+    assert identity is not None
+    acquired = core.StorageRootLease.try_acquire_existing_identity(tmp_path, identity)
+    assert acquired.lease is not None
+    acquired.lease.close()
 
 
 def test_provider_failure_does_not_hide_correction_parent_admission_loss(
@@ -1675,7 +1737,7 @@ def test_four_exact_captures_with_distinct_schedule_releases_approve_plan29(
     assert qualification.evidence.source_identity_sha256 == expected_source
 
 
-def test_composer_accepts_current_and_latest_retained_writer_runtimes(
+def test_composer_accepts_current_and_released_base_writer_runtimes(
     tmp_path: Path,
 ) -> None:
     windows = (
@@ -1690,31 +1752,21 @@ def test_composer_accepts_current_and_latest_retained_writer_runtimes(
     )
     current_runtime = captures[0].revision.runtime_code_identity_sha256
     compatible_runtime = (
-        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3"
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54"
     )
     revisions = tuple(
-        replace(
-            capture.revision,
-            runtime_code_identity_sha256=(
-                compatible_runtime if position % 2 else current_runtime
-            ),
+        (
+            _retarget_retained_revision_writer(
+                tmp_path,
+                capture.revision,
+                _request(sessions=windows[position]),
+                compatible_runtime,
+            )
+            if position % 2
+            else capture.revision
         )
         for position, capture in enumerate(captures)
     )
-    for revision in revisions:
-        destination = tmp_path / "revisions" / f"{revision.revision_sha256}.json"
-        if not destination.exists():
-            destination.write_bytes(revision.canonical_json_bytes())
-            destination.chmod(0o400)
-        pointer = tmp_path / "requests" / f"{revision.request_identity_sha256}.json"
-        pointer.chmod(0o600)
-        pointer.write_bytes(
-            core._pointer_bytes(  # pyright: ignore[reportPrivateUsage]
-                revision.request_identity_sha256,
-                revision.revision_sha256,
-            )
-        )
-        pointer.chmod(0o400)
 
     qualification = compose_capture_forward_plan29_v1(
         tmp_path,

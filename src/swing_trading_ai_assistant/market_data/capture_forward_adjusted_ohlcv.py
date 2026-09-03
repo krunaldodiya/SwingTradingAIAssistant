@@ -928,6 +928,25 @@ class _CaptureCleanupFailureV1(RuntimeError):
     pass
 
 
+class _CaptureCloseableV1(Protocol):
+    def close(self) -> None: ...
+
+
+def _close_capture_resources_v1(
+    *resources: _CaptureCloseableV1 | None,
+) -> None:
+    cleanup_failed = False
+    for resource in resources:
+        if resource is None:
+            continue
+        try:
+            resource.close()
+        except Exception:
+            cleanup_failed = True
+    if cleanup_failed:
+        raise _CaptureCleanupFailureV1("capture cleanup failed")
+
+
 @dataclass(frozen=True, slots=True)
 class CaptureForwardPlan29QualificationV1:
     evidence: HistoricalEvidenceRevisionV1
@@ -1404,9 +1423,7 @@ def _retained_schedule_matches_request(
                 calendar.ensure_live()
                 digests.ensure_live()
             finally:
-                if digests is not None:
-                    digests.close()
-                calendar.close()
+                _close_capture_resources_v1(digests, calendar)
         if (
             type(schedule) is not ExpectedSessionSchedule
             or schedule_digest(schedule) != request.schedule.schedule_evidence_sha256
@@ -1437,7 +1454,7 @@ def _retained_schedule_matches_request(
     except (OSError, ValueError, _ImmutableEvidenceConflict):
         return False
     finally:
-        lease.close()
+        _close_capture_resources_v1(lease)
 
 
 def capture_forward_adjusted_ohlcv_v1(
@@ -1589,13 +1606,21 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
                         revisions,
                         request,
                     )
+                    if existing is None:
+                        existing = _read_compatible_request_revision_v1(
+                            operation,
+                            requests,
+                            revisions,
+                            request,
+                        )
                 except _CorrectionAncestorUnavailable:
                     _ensure_capture_authority(operation, revisions, requests, prepared)
                     return CaptureForwardAdjustedOhlcvFailureV1(
                         "STORE_UNAVAILABLE", "PARENT_REVISION_UNAVAILABLE"
                     )
-                if existing is not None and not _revision_matches_request(
-                    request, existing
+                if existing is not None and not (
+                    _revision_matches_request(request, existing)
+                    or _revision_matches_compatible_request_v1(request, existing)
                 ):
                     _ensure_capture_authority(operation, revisions, requests, prepared)
                     return CaptureForwardAdjustedOhlcvFailureV1(
@@ -1710,7 +1735,7 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
                         )
                         return CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", exact)
                     finally:
-                        held_prepared.close()
+                        _close_capture_resources_v1(held_prepared)
 
                 _ensure_capture_state(
                     operation, revisions, requests, prepared, request, parent
@@ -1794,25 +1819,19 @@ def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
                 )
                 return CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", exact)
             finally:
-                if prepared is not None:
-                    prepared.close()
-                if requests is not None:
-                    requests.close()
-                if revisions is not None:
-                    revisions.close()
+                _close_capture_resources_v1(prepared, requests, revisions)
     except _ImmutableEvidenceConflict:
         return CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "EVIDENCE_CONFLICT"
         )
+    except _CaptureCleanupFailureV1:
+        raise
     except (OSError, RuntimeError):
         return CaptureForwardAdjustedOhlcvFailureV1(
             "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
         )
     finally:
-        try:
-            lease.close()
-        except RuntimeError as error:
-            raise _CaptureCleanupFailureV1("capture cleanup failed") from error
+        _close_capture_resources_v1(lease)
 
 
 def _revision_matches_request(
@@ -1829,7 +1848,37 @@ def _revision_matches_request(
         and revision.parent_revision_sha256 == request.parent_revision_sha256
         and revision.schema_identity_sha256 == request.schema_identity_sha256
         and revision.runtime_code_identity_sha256
-        in _compatible_writer_runtime_identities_v1()
+        == request.runtime_code_identity_sha256
+        and revision.configuration_identity_sha256
+        == request.configuration_identity_sha256
+    )
+
+
+def _request_identity_for_writer_v1(
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    writer_identity: str,
+) -> str:
+    value = request.canonical_value(include_request_identity=False)
+    value["runtime_code_identity_sha256"] = writer_identity
+    return _sha(_canonical(value))
+
+
+def _revision_matches_compatible_request_v1(
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    revision: AdjustedOhlcvCaptureRevisionV1,
+) -> bool:
+    writer_identity = revision.runtime_code_identity_sha256
+    return (
+        writer_identity in _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1
+        and revision.request_identity_sha256
+        == _request_identity_for_writer_v1(request, writer_identity)
+        and revision.cohort == request.cohort
+        and revision.cohort_identity_sha256 == request.cohort_identity_sha256
+        and revision.schedule == request.schedule
+        and revision.decision_session == request.decision_session
+        and revision.decision_cutoff == request.decision_cutoff
+        and revision.parent_revision_sha256 == request.parent_revision_sha256
+        and revision.schema_identity_sha256 == request.schema_identity_sha256
         and revision.configuration_identity_sha256
         == request.configuration_identity_sha256
     )
@@ -2435,7 +2484,7 @@ def _prepare_publication(
             os.close(descriptor)
             raise
     if held.content != content:
-        held.close()
+        _close_capture_resources_v1(held)
         raise _ImmutableEvidenceConflict("immutable content conflict")
     return held
 
@@ -2564,10 +2613,7 @@ def _publish_request_pointer(
         for held_pointer in held_pointers:
             held_pointer.ensure_exact()
     finally:
-        for held_pointer in held_pointers:
-            held_pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+        _close_capture_resources_v1(*held_pointers, *held_revisions)
 
 
 def _revalidate_request_pointer(
@@ -2615,10 +2661,10 @@ def _open_pointer_revision(
             raise ValueError
         return cast(str, revision_sha256), held
     except (json.JSONDecodeError, TypeError, ValueError):
-        held.close()
+        _close_capture_resources_v1(held)
         raise _ImmutableEvidenceConflict("request pointer invalid") from None
     except Exception:
-        held.close()
+        _close_capture_resources_v1(held)
         raise
 
 
@@ -2739,10 +2785,7 @@ def _validated_admission_chain(
             _ensure_valid_revision_parent(child, parent)
             current = parent
     except Exception:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+        _close_capture_resources_v1(*held_pointers, *held_revisions)
         raise
 
 
@@ -2753,11 +2796,22 @@ def _read_request_revision(  # noqa: C901 - bounded immutable-admission transact
     request: CaptureForwardAdjustedOhlcvRequestV1,
     *,
     commit_pointer: bool = True,
+    request_identity_sha256: str | None = None,
+    writer_identity: str | None = None,
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    if (request_identity_sha256 is None) != (writer_identity is None):
+        raise ValueError("request pointer identity is invalid")
+    if request_identity_sha256 is not None and commit_pointer:
+        raise ValueError("compatible request pointer cannot be committed")
+    pointer_identity = (
+        request.request_identity_sha256
+        if request_identity_sha256 is None
+        else request_identity_sha256
+    )
     requested_pointer = _open_pointer_revision(
         operation,
         requests,
-        request.request_identity_sha256,
+        pointer_identity,
         allow_uncommitted=True,
     )
     if requested_pointer is None:
@@ -2771,7 +2825,13 @@ def _read_request_revision(  # noqa: C901 - bounded immutable-admission transact
         requested_pointer=requested_pointer,
     )
     try:
-        if not _revision_matches_request(request, revision):
+        matches = (
+            _revision_matches_request(request, revision)
+            if writer_identity is None
+            else revision.runtime_code_identity_sha256 == writer_identity
+            and _revision_matches_compatible_request_v1(request, revision)
+        )
+        if not matches:
             raise _ImmutableEvidenceConflict("request pointer invalid")
         operation.ensure_live()
         requests.ensure_live()
@@ -2790,10 +2850,29 @@ def _read_request_revision(  # noqa: C901 - bounded immutable-admission transact
             pointer.ensure_exact()
         return revision
     finally:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+        _close_capture_resources_v1(*held_pointers, *held_revisions)
+
+
+def _read_compatible_request_revision_v1(
+    operation: StorageRootLeaseOperation,
+    requests: _PrivateDirectory,
+    revisions: _PrivateDirectory,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    for writer_identity in sorted(_COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1):
+        request_identity = _request_identity_for_writer_v1(request, writer_identity)
+        revision = _read_request_revision(
+            operation,
+            requests,
+            revisions,
+            request,
+            commit_pointer=False,
+            request_identity_sha256=request_identity,
+            writer_identity=writer_identity,
+        )
+        if revision is not None:
+            return revision
+    return None
 
 
 def _read_prepared_revision(
@@ -2820,10 +2899,10 @@ def _read_prepared_revision(
             raise ValueError
         return revision, held
     except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
-        held.close()
+        _close_capture_resources_v1(held)
         raise _ImmutableEvidenceConflict("prepared revision invalid") from None
     except Exception:
-        held.close()
+        _close_capture_resources_v1(held)
         raise
 
 
@@ -2842,10 +2921,7 @@ def _read_admitted_revision(
     try:
         return requested
     finally:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+        _close_capture_resources_v1(*held_pointers, *held_revisions)
 
 
 def _admit_existing_private_empty_store_v1(store_root: Path) -> bool:
@@ -2930,6 +3006,13 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
                 request,
                 commit_pointer=False,
             )
+            if existing is None:
+                existing = _read_compatible_request_revision_v1(
+                    operation,
+                    requests,
+                    revisions,
+                    request,
+                )
             parent: AdjustedOhlcvCaptureRevisionV1 | None = None
             if request.parent_revision_sha256 is not None:
                 parent = _read_admitted_revision(
@@ -2953,14 +3036,11 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
                     raise _ImmutableEvidenceConflict("prepared revision invalid")
                 return None
             finally:
-                held_prepared.close()
+                _close_capture_resources_v1(held_prepared)
     except _ImmutableEvidenceConflict:
         raise ValueError("request revision evidence conflict") from None
     finally:
-        for directory in directories:
-            if directory is not None:
-                directory.close()
-        lease.close()
+        _close_capture_resources_v1(*directories, lease)
 
 
 def read_capture_forward_revision_v1(
@@ -2991,13 +3071,11 @@ def read_capture_forward_revision_v1(
                 revisions.ensure_live()
                 return revision
             finally:
-                if requests is not None:
-                    requests.close()
-                revisions.close()
+                _close_capture_resources_v1(requests, revisions)
     except (OSError, _ImmutableEvidenceConflict):
         raise ValueError("capture revision unavailable") from None
     finally:
-        lease.close()
+        _close_capture_resources_v1(lease)
 
 
 def _hold_revision_descriptor(
@@ -3022,10 +3100,10 @@ def _hold_revision_descriptor(
             raise ValueError
         return revision, held
     except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
-        held.close()
+        _close_capture_resources_v1(held)
         raise _ImmutableEvidenceConflict("capture revision invalid") from None
     except Exception:
-        held.close()
+        _close_capture_resources_v1(held)
         raise
 
 
@@ -3042,7 +3120,7 @@ def _read_revision_descriptor(
     try:
         return revision
     finally:
-        held.close()
+        _close_capture_resources_v1(held)
 
 
 def _revision_from_value(value: object) -> AdjustedOhlcvCaptureRevisionV1:
@@ -3182,13 +3260,13 @@ def compose_capture_forward_plan29_v1(
                 requests.ensure_live()
                 revisions.ensure_live()
             finally:
-                if requests is not None:
-                    requests.close()
-                revisions.close()
+                _close_capture_resources_v1(requests, revisions)
+    except _CaptureCleanupFailureV1:
+        raise
     except (OSError, RuntimeError, _ImmutableEvidenceConflict):
         raise ValueError("capture-forward composition is invalid") from None
     finally:
-        lease.close()
+        _close_capture_resources_v1(lease)
     return _compose_capture_forward_plan29_from_revisions_v1(
         captures, regions=regions, evaluated_at=evaluated_at
     )

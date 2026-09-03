@@ -2572,10 +2572,11 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
         "live",
         "binding_lost",
         "binding_cleanup_failed",
+        "binding_snapshot_cleanup_failed",
         "cleanup_and_binding_lost",
     ],
 )
-def test_all_reuse_capture_clears_retained_provider_cache(
+def test_all_reuse_capture_clears_retained_provider_cache(  # noqa: C901
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, finalization: str
 ) -> None:
     request, selection = _admitted()
@@ -2629,11 +2630,13 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         ),
     )
     binding_snapshot = SimpleNamespace(protected_identities=())
-    monkeypatch.setattr(
-        core,
-        "_snapshot_plan33_binding_v1",
-        lambda _root, _name: binding_snapshot,
-    )
+
+    def snapshot_binding(_root: Path, _name: str) -> object:
+        if finalization == "binding_snapshot_cleanup_failed":
+            raise core._BindingCleanupFailureV1("binding descriptor cleanup failed")
+        return binding_snapshot
+
+    monkeypatch.setattr(core, "_snapshot_plan33_binding_v1", snapshot_binding)
     binding_checks = 0
 
     def binding_live(snapshot: object) -> bool:
@@ -2686,6 +2689,7 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         assert isinstance(result, core.CurrentNifty100ResultV1)
         if finalization in {
             "binding_cleanup_failed",
+            "binding_snapshot_cleanup_failed",
             "cleanup_and_binding_lost",
         }:
             assert [row.reason for row in result.cohorts] == [
@@ -2694,7 +2698,10 @@ def test_all_reuse_capture_clears_retained_provider_cache(
             ]
         else:
             assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
-    assert residue.read_bytes() == b""
+    if finalization == "binding_snapshot_cleanup_failed":
+        assert residue.read_text() == "private"
+    else:
+        assert residue.read_bytes() == b""
     assert list(cache.iterdir()) == [residue]
 
 
@@ -3622,19 +3629,19 @@ def test_cli_rejects_request_substitution_before_capture_effects(
     )
     roots = tuple(tmp_path / f"plan33-review-{index}" for index in range(4))
 
-    assert (
-        cli._run_enabled(
-            json.dumps(
-                {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
-            ).encode(),
-            arguments,
-            roots,
-            (0, 0, 0, 0, 0, 0, 0, 0),
-        )
-        == 1
+    payload, status = cli._run_enabled(
+        json.dumps(
+            {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
+        ).encode(),
+        arguments,
+        roots,
+        (0, 0, 0, 0, 0, 0, 0, 0),
     )
+
+    assert status == 1
     assert effects == []
-    assert json.loads(capsys.readouterr().out)["reason"] == "CONFIGURATION_INVALID"
+    assert payload["reason"] == "CONFIGURATION_INVALID"
+    assert capsys.readouterr().out == ""
 
 
 def test_valid_source_transition_uses_a_distinct_binding_key() -> None:
@@ -4485,7 +4492,8 @@ def test_post_result_missing_root_cleanup_failure_rewrites_both_cohorts(
         "CONFIGURATION_INVALID",
         "CONFIGURATION_INVALID",
     ]
-    assert result.union_reason == "UNION_INCOMPATIBLE"
+    assert result.union_reason is None
+    assert "union_reason" not in core.serialize_capture_result_v1(result)
 
 
 def test_dependency_code_aggregate_rejects_nested_substitution(tmp_path: Path) -> None:
@@ -4650,3 +4658,148 @@ def test_native_dependency_loader_uses_admitted_descriptor_not_path_finder(
         assert specification.origin != str(origin)
     finally:
         cli._close_native_dependency_handles_v1(handles)
+
+
+def test_provider_cache_descriptor_cleanup_attempts_operation_and_lease(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "selection"
+    root.mkdir(mode=0o700)
+    initial = core.StorageRootLease.try_acquire_private_empty(root)
+    assert initial.lease is not None
+    initial.lease.close()
+    authority = core._open_provider_cache_authority_v1(root)
+    target = authority.descriptor
+    original_close = core.os.close
+
+    def close_target_then_fail(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor == target:
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(core.os, "close", close_target_then_fail)
+
+    with pytest.raises(OSError, match="provider cache cleanup failed"):
+        authority.close()
+    monkeypatch.setattr(core.os, "close", original_close)
+
+    metadata = root.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    acquired = core.StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.lease is not None
+    acquired.lease.close()
+
+
+def test_dependency_cleanup_failure_emits_no_staged_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "_reject_preloaded_dependency_modules_v1", lambda: None)
+    monkeypatch.setattr(
+        cli, "_admitted_dependency_origins_v1", lambda: ((), {}, {}, {}, {})
+    )
+    monkeypatch.setattr(
+        cli, "_require_dependency_origins_v1", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_require_loaded_curl_modules_owned_v1", lambda *_args: None
+    )
+    monkeypatch.setattr(cli, "_trusted_import_path_v1", lambda _roots: list(sys.path))
+
+    class FailingLifetime:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            raise OSError("dependency cleanup failed")
+
+    monkeypatch.setattr(
+        cli,
+        "_verified_dependency_import_lifetime_v1",
+        lambda *_args: FailingLifetime(),
+    )
+    arguments = SimpleNamespace(
+        ack_owner_private_yfinance_research=True,
+        request_file=str(tmp_path / "request.json"),
+    )
+    roots = tuple(tmp_path / f"root-{index}" for index in range(4))
+
+    with pytest.raises(OSError, match="dependency cleanup failed"):
+        cli._run_enabled(
+            json.dumps(
+                {"contract_version": core.CONTRACT_VERSION_V1, "enabled": True}
+            ).encode(),
+            arguments,
+            roots,
+            (0, 0, 0, 0, 0, 0, 0, 0),
+        )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_request_authority_cleanup_replaces_staged_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    from swing_trading_ai_assistant.historical_evaluation import (  # noqa: PLC0415
+        capability_validation_cli as request_reader,
+    )
+
+    request_file = tmp_path / "request.json"
+    request_file.write_text(
+        json.dumps({"contract_version": core.CONTRACT_VERSION_V1, "enabled": True})
+    )
+    request_file.chmod(0o600)
+    real_open = request_reader.open_private_request_authority
+
+    class FailingAuthority:
+        def __init__(self) -> None:
+            self.context = real_open(str(request_file), core.MAX_REQUEST_BYTES_V1)
+
+        def __enter__(self) -> object:
+            return self.context.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            self.context.__exit__(*args)
+            raise OSError("request authority cleanup failed")
+
+    monkeypatch.setattr(
+        request_reader,
+        "open_private_request_authority",
+        lambda *_args: FailingAuthority(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_enabled",
+        lambda *_args, **_kwargs: (
+            {"code": "COMPLETE_CURRENT_NIFTY100_CAPTURE"},
+            0,
+        ),
+    )
+    roots = tuple(tmp_path / f"storage-{index}" for index in range(4))
+    argv = [
+        "--request-file",
+        str(request_file),
+        "--selection-root",
+        str(roots[0]),
+        "--nifty50-storage-root",
+        str(roots[1]),
+        "--nifty-next50-storage-root",
+        str(roots[2]),
+        "--schedule-root",
+        str(roots[3]),
+        "--ack-owner-private-yfinance-research",
+        "--output",
+        "json",
+    ]
+
+    assert cli._run(argv) == 1
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert json.loads(output.out) == {
+        "code": "INSUFFICIENT_EVIDENCE",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "CONFIGURATION_INVALID",
+    }
