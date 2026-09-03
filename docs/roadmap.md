@@ -347,11 +347,10 @@ Sprint 16 gate, preserving the locked architecture sequence.
 
 The live tracker has advanced beyond that dependency statement. Sprint 15 /
 #120 and Sprint 16 / #122 are closed/completed with Project status **Done**.
-Sprint 17 / #147 has retained all `4/4` predeclared completed-session
-captures with Project status **In Progress**. No future-session capture remains.
-Its exact retained revisions now support the final unchanged Plan 29
-qualification; that historical lane remains separate from current/live
-delivery. Sprint 18 / #148 delivered current/live Market Structure through
+Sprint 17 / #147 retained all `4/4` predeclared completed-session captures,
+passed unchanged Plan 29 for `OHLCV_ONLY`, and closed/completed through PR #166
+with Project status **Done**. That historical result remains separate from
+current/live delivery. Sprint 18 / #148 delivered current/live Market Structure through
 [Plan 31](plans/31-current-supplied-cohort-market-structure-contract.md) and
 merged PR #149; the Issue is closed/completed and its Project item is **Done**.
 
@@ -373,14 +372,13 @@ path. Issue #154 closed through merged PR #157 and its Delivery Project item is
 **Done**. It changed no runtime, scheduler, store, provider profile, or
 historical qualification.
 [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
-delivers the reviewed Plan 30 runtime prerequisite through its governing merge
-without closing #147. [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-then owns the separately bounded Plan 33 implementation.
+delivered the reviewed Plan 30 runtime prerequisite. Sprint 17 / Issue #147
+subsequently completed its `4/4` temporal captures, passed unchanged Plan 29,
+and closed through PR #166. [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
+owns the separately bounded Plan 33 implementation.
 
 Owner-prioritized Issue #145 remains open **Todo** and follows #156 before
-another product module starts. Sprint 17 / Issue #147 has completed its `4/4`
-temporal captures; its final historical qualification remains a separate
-parallel lane and no longer waits on a future session.
+another product module starts.
 
 [Plan 34](plans/34-swing-research-feature-map.md) owns the necessary-only future
 feature taxonomy. Delivered Market Structure and Price Action remain separate

@@ -322,10 +322,10 @@ cannot atomically bind the removed object to the previously checked identity.
 
 The governing [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
 merge ports the exact reviewed actionable Plan 30 runtime from source candidate
-`54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main without changing
-or closing #147's historical lane.
+`54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main. Issue #147
+subsequently completed its separate historical lane through PR #166.
 [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-then owns only this bounded Plan 33 implementation. It must not copy unreviewed
+owns only this bounded Plan 33 implementation. It must not copy unreviewed
 quarantine bytes, consume #147's retained historical evidence as current Plan 33
 input, or imply a qualification state not established by #147's exact evidence.
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import csv
+import importlib
 import io
 import json
 import logging
 import os
+import py_compile
 import subprocess
 import sys
 import sysconfig
@@ -4297,7 +4298,6 @@ def test_verified_dependency_loader_rejects_forged_adjacent_pyc(
     cache = tmp_path / "__pycache__"
     cache.mkdir()
     pyc = cache / "forged_pyc_fixture.cpython-313.pyc"
-    import py_compile
 
     py_compile.compile(str(source), cfile=str(pyc), doraise=True)
     admitted = b"VALUE = 'admitted'\n"

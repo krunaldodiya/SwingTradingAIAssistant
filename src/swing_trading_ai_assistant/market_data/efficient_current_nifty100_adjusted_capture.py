@@ -696,7 +696,7 @@ def _selection_identity_v1(selection: SelectionRevisionV1) -> str:
     )
 
 
-def admit_selection_v1(
+def admit_selection_v1(  # noqa: C901 - closed official-source admission
     request: CurrentNifty100RequestV1,
     fetcher: SourceFetcherV1,
     *,
@@ -1559,7 +1559,7 @@ def _create_private_root_v1(root: Path) -> None:
         os.close(parent)
 
 
-def resolve_selection_v1(
+def resolve_selection_v1(  # noqa: C901 - immutable selection transaction
     selection: SelectionRevisionV1,
     root: Path,
     *,
@@ -1989,7 +1989,7 @@ def _open_provider_cache_authority_v1(
         raise
 
 
-def prepare_yfinance_runtime_v1(
+def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
     cache_root: Path,
     *,
     protected_identities: frozenset[tuple[int, int]] = frozenset(),
@@ -2056,10 +2056,8 @@ def prepare_yfinance_runtime_v1(
         ):
             raise RuntimeError("provider runtime configuration invalid")
     except BaseException:
-        try:
+        with suppress(Exception):
             session.close()
-        except Exception:
-            pass
         raise
     return session
 
@@ -2777,9 +2775,11 @@ def capture_current_nifty100_v1(  # noqa: C901 - one fail-closed capture transac
     schedule_identity = expected_root_identities.get(schedule_root)
     if not all(
         (
-            low._retained_schedule_matches_request(item, schedule_root)
+            low._retained_schedule_matches_request(  # pyright: ignore[reportPrivateUsage]
+                item, schedule_root
+            )
             if schedule_identity is None
-            else low._retained_schedule_matches_request(
+            else low._retained_schedule_matches_request(  # pyright: ignore[reportPrivateUsage]
                 item,
                 schedule_root,
                 _expected_root_identity=schedule_identity[:2],

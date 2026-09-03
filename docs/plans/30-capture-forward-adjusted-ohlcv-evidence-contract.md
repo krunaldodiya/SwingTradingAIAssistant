@@ -20,8 +20,8 @@ merge and are not attributed to the baseline candidate review.
 This is a delivery-only provenance record. It authorizes no provider call or new
 temporal capture and does not relabel later-acquired values as historical
 point-in-time evidence. Issue #147 later retained all `4/4` predeclared
-completed-session captures. No future-session capture remains; the final
-qualification still uses unchanged Plan 29.
+completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
+closed/completed through PR #166.
 
 ## Decision and authority
 

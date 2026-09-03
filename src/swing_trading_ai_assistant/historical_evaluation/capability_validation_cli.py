@@ -6,7 +6,7 @@ import argparse
 import os
 import stat
 import sys
-from contextlib import ExitStack
+from contextlib import suppress
 from pathlib import Path
 from typing import NoReturn
 
@@ -116,7 +116,7 @@ class PrivateRequestAuthorityV1:
         self.close()
 
 
-def open_private_request_authority(
+def open_private_request_authority(  # noqa: C901 - descriptor-chain admission
     path: str, maximum_bytes: int
 ) -> PrivateRequestAuthorityV1:
     """Descriptor-admit one exact private request and retain its authority."""
@@ -208,10 +208,8 @@ def open_private_request_authority(
         return authority
     except (OSError, ValueError) as exc:
         for descriptor in reversed(descriptors):
-            try:
+            with suppress(OSError):
                 os.close(descriptor)
-            except OSError:
-                pass
         raise ValueError("request path is invalid") from exc
 
 

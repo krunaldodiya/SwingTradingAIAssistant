@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 import argparse
 import hashlib
 import importlib.abc
@@ -14,6 +12,8 @@ import os
 import stat
 import sys
 import sysconfig
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -96,7 +96,7 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
 }
 
 
-def _dependency_code_entries_v1(
+def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admission
     root: Path,
 ) -> tuple[str, dict[Path, bytes]]:
     """Return the admitted package aggregate and descriptor-read Python bytes."""
@@ -161,7 +161,9 @@ def _dependency_code_entries_v1(
     return aggregate.hexdigest(), sources
 
 
-def _dependency_code_aggregate_v1(root: Path) -> str:
+def _dependency_code_aggregate_v1(  # pyright: ignore[reportUnusedFunction]
+    root: Path,
+) -> str:
     """Hash every admitted package code/resource file from descriptor-read bytes."""
 
     return _dependency_code_entries_v1(root)[0]
@@ -222,7 +224,7 @@ class _VerifiedDependencySourceFinderV1(
     def find_spec(
         self,
         fullname: str,
-        path: object = None,
+        path: Sequence[str] | None = None,
         target: object = None,
     ) -> importlib.machinery.ModuleSpec | None:
         del target
@@ -246,8 +248,8 @@ class _VerifiedDependencySourceFinderV1(
             raise ImportError("dependency source module unavailable")
         return None
 
-    def create_module(self, specification: importlib.machinery.ModuleSpec) -> None:
-        del specification
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> None:
+        del spec
         return None
 
     def exec_module(self, module: object) -> None:
@@ -255,19 +257,21 @@ class _VerifiedDependencySourceFinderV1(
         if type(name) is not str or name not in self._sources:
             raise ImportError("dependency source module unavailable")
         origin, raw, is_package = self._sources[name]
-        namespace = cast(dict[str, object], getattr(module, "__dict__"))
+        namespace = cast(dict[str, object], module.__dict__)
         namespace["__file__"] = str(origin)
         namespace["__cached__"] = None
         if is_package:
             namespace["__path__"] = [str(origin.parent)]
-        exec(compile(raw, str(origin), "exec", dont_inherit=True), namespace)
+        exec(  # noqa: S102 - execute descriptor-admitted dependency bytes
+            compile(raw, str(origin), "exec", dont_inherit=True), namespace
+        )
 
 
 @contextmanager
 def _verified_dependency_import_lifetime_v1(
     sources: dict[str, tuple[Path, bytes, bool]],
     native_origins: dict[str, Path],
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Exclude bytecode fallbacks while verified dependency sources are enabled."""
 
     finder = _VerifiedDependencySourceFinderV1(sources, native_origins)
@@ -427,7 +431,8 @@ def _owned_distribution_files_v1(
     return owned
 
 
-def _admitted_dependency_origins_v1() -> tuple[
+def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission boundary
+) -> tuple[
     tuple[Path, ...],
     dict[str, Path],
     dict[Path, _DependencyFileIdentityV1],

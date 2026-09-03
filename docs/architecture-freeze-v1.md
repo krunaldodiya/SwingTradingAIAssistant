@@ -55,18 +55,17 @@ deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
 current delivery sequence; it does not change the module order or authorize
 autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
 Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
-closed/completed. Sprint 17 / #147 has retained all `4/4` predeclared
-completed-session captures; no future-session wait remains. Its historical
-qualification and closure remain separate from current/live work. Sprint 19
-Price Action delivered through PR #153. Closed
-Issue #154 and accepted Plan 33 own only the bounded source decision, benchmark,
-and contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
-PR #157 merged that planning record without changing runtime. Issue #155 owns
-the exact reviewed Plan 30 runtime delivery; its governing merge installs that
-prerequisite without closing #147. Open Project **In Progress** Issue #156 then owns
-the separately bounded Plan 33 implementation. Owner-prioritized maintenance
-Issue #145 follows #156 before another product module starts. Issue #147's
-four-session historical qualification remains a separate parallel lane.
+closed/completed. Sprint 17 / #147 retained all `4/4` predeclared
+completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
+closed/completed through PR #166; its Delivery Project item is **Done**.
+Sprint 19 Price Action delivered through PR #153. Closed Issue #154 and
+accepted Plan 33 own only the bounded source decision, benchmark, and contract
+for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
+merged that planning record without changing runtime. Issue #155 delivered the
+exact reviewed Plan 30 runtime prerequisite. Open Project **In Progress** Issue
+#156 then owns the separately bounded Plan 33 implementation.
+Owner-prioritized maintenance Issue #145 follows #156 before another product
+module starts.
 [Plan 34](plans/34-swing-research-feature-map.md)
 freezes the necessary-only feature taxonomy: no later Price Action, Volume,
 Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
