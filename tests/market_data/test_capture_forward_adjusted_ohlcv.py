@@ -31,6 +31,7 @@ from swing_trading_ai_assistant.market_data import storage_root_lease as lease_c
 from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv import (
     ADJUSTED_PRICE_BASIS_V1,
     SOURCE_PROFILE_V1,
+    VOLUME_BASIS_V1,
     AdjustedOhlcvCaptureRevisionV1,
     CaptureForwardAdjustedOhlcvFailureV1,
     CaptureForwardAdjustedOhlcvMemberV1,
@@ -531,6 +532,74 @@ def test_valid_capture_is_immutable_exact_and_retry_avoids_provider(
     stored = tuple((tmp_path / "revisions").iterdir())
     assert len(stored) == 1
     assert stored[0].stat().st_mode & 0o777 == 0o400
+
+
+def test_provider_adjusted_corporate_action_window_keeps_reported_volume_basis(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+
+    class CorporateActionProvider(_Provider):
+        def download(self, **kwargs: object) -> object:
+            frame = cast(dict[str, object], super().download(**kwargs))
+            sessions = cast(tuple[date, ...], frame["index"])
+            split_position = len(sessions) // 2
+            rows: list[dict[str, object]] = []
+            for position, _session in enumerate(sessions):
+                base = (
+                    Decimal(200 + position)
+                    if position < split_position
+                    else Decimal(100 + position - split_position)
+                )
+                rows.append(
+                    {
+                        "open": base,
+                        "high": base + 2,
+                        "low": base - 1,
+                        "close": base + 1,
+                        "volume": (
+                            3_000 + position
+                            if position < split_position
+                            else 10_000 + position
+                        ),
+                    }
+                )
+            provider_symbols = cast(tuple[str, ...], kwargs["tickers"])
+            frame["ohlcv"] = {symbol: tuple(rows) for symbol in provider_symbols}
+            return frame
+
+    provider = CorporateActionProvider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    result = _invoke(request, provider, tmp_path)
+
+    assert isinstance(result, CaptureForwardAdjustedOhlcvSuccessV1)
+    assert result.revision.provider_source == "yfinance==1.6.0"
+    assert result.revision.source_profile == SOURCE_PROFILE_V1
+    assert result.revision.price_basis == ADJUSTED_PRICE_BASIS_V1
+    assert result.revision.volume_basis == VOLUME_BASIS_V1
+    split_position = len(request.schedule.sessions) // 2
+    before = result.revision.bars[split_position - 1]
+    after = result.revision.bars[split_position]
+    before_base = Decimal(200 + split_position - 1)
+    assert (before.open, before.high, before.low, before.close, before.volume) == (
+        before_base,
+        before_base + 2,
+        before_base - 1,
+        before_base + 1,
+        3_000 + split_position - 1,
+    )
+    assert (after.open, after.high, after.low, after.close, after.volume) == (
+        Decimal("100"),
+        Decimal("102"),
+        Decimal("99"),
+        Decimal("101"),
+        10_000 + split_position,
+    )
+    assert provider.last_kwargs is not None
+    assert provider.last_kwargs["auto_adjust"] is True
+    assert provider.last_kwargs["actions"] is False
 
 
 def test_reused_success_revalidates_child_directories_before_return(
