@@ -338,8 +338,12 @@ def _verified_dependency_import_lifetime_v1(
 
 def _require_acknowledgement(argv: list[str]) -> None:
     positions = [index for index, value in enumerate(argv) if value == _ACKNOWLEDGEMENT]
+    option_terminator = next(
+        (index for index, value in enumerate(argv) if value == "--"), len(argv)
+    )
     if (
         len(positions) != 1
+        or positions[0] > option_terminator
         or any(value.startswith(f"{_ACKNOWLEDGEMENT}=") for value in argv)
         or (
             positions[0] + 1 < len(argv) and not argv[positions[0] + 1].startswith("--")

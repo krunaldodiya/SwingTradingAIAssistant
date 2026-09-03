@@ -935,6 +935,7 @@ class _CaptureCloseableV1(Protocol):
 def _close_capture_resources_v1(
     *resources: _CaptureCloseableV1 | None,
 ) -> None:
+    active_failure = sys.exception()
     failure: BaseException | None = None
     for resource in resources:
         if resource is None:
@@ -943,7 +944,7 @@ def _close_capture_resources_v1(
             resource.close()
         except BaseException as error:
             failure = failure or error
-    if failure is not None:
+    if failure is not None and active_failure is None:
         raise _CaptureCleanupFailureV1("capture cleanup failed") from failure
 
 

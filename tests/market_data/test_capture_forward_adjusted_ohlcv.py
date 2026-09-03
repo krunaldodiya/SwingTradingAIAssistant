@@ -1201,6 +1201,73 @@ def test_correction_parent_is_readmitted_between_publication_effects(
     } == {parent.revision.revision_sha256}
 
 
+def test_publication_conflict_survives_exhaustive_directory_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "publication-conflict-cleanup"
+    root.mkdir(mode=0o700)
+    parent = _capture(root)
+    request = _request(parent_revision_sha256=parent.revision.revision_sha256)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1),
+        price_offset=1,
+    )
+    parent_pointer = (
+        root / "requests" / f"{parent.revision.request_identity_sha256}.json"
+    )
+    original_publish = cast(
+        Callable[..., None],
+        core._publish_prepared_revision,  # pyright: ignore[reportPrivateUsage]
+    )
+    original_close = core._PrivateDirectory.close  # pyright: ignore[reportPrivateUsage]
+    conflict_started = False
+    cleanup_failed = False
+    close_calls: list[str] = []
+
+    def displace_parent_after_prepared(*args: object, **kwargs: object) -> None:
+        nonlocal conflict_started
+        original_publish(*args, **kwargs)
+        parent_pointer.rename(root / "requests" / "parent-pointer-displaced")
+        conflict_started = True
+
+    def close_then_fail_during_conflict(directory: object) -> None:
+        nonlocal cleanup_failed
+        name = cast(core._PrivateDirectory, directory).name  # pyright: ignore[reportPrivateUsage]
+        close_calls.append(name)
+        original_close(cast(core._PrivateDirectory, directory))  # pyright: ignore[reportPrivateUsage]
+        if conflict_started and name == "prepared" and not cleanup_failed:
+            cleanup_failed = True
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(
+        core, "_publish_prepared_revision", displace_parent_after_prepared
+    )
+    monkeypatch.setattr(
+        core._PrivateDirectory,  # pyright: ignore[reportPrivateUsage]
+        "close",
+        close_then_fail_during_conflict,
+    )
+
+    result = _invoke(request, provider, root)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert cleanup_failed is True
+    assert close_calls[-3:] == ["prepared", "requests", "revisions"]
+    identity = core.StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = core.StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.lease is not None
+    acquired.lease.close()
+    assert {
+        item.stem
+        for item in (root / "revisions").iterdir()
+        if not item.name.startswith(".")
+    } == {parent.revision.revision_sha256}
+
+
 def test_reused_correction_requires_its_parent_to_remain_admitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

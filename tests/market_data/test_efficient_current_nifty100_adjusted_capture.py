@@ -541,6 +541,55 @@ def test_provider_transport_pins_proxy_and_ca_authority(
     session.close()
 
 
+def test_internal_provider_ca_path_is_exact_and_not_ambient(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    admitted = tmp_path / "admitted-ca.pem"
+    admitted.write_bytes(Path(core._PROVIDER_CA_BUNDLE_PATH_V1).read_bytes())
+    monkeypatch.setenv(core._PROVIDER_CA_BUNDLE_PATH_ENV_V1, str(admitted))
+
+    core._reject_ambient_transport_authority_v1()
+    assert core._provider_ca_bundle_v1() == (
+        str(admitted),
+        core._PROVIDER_CA_BUNDLE_SHA256_V1,
+    )
+
+    admitted.write_bytes(b"substituted CA authority")
+    with pytest.raises(RuntimeError, match="provider trust configuration invalid"):
+        core._provider_ca_bundle_v1()
+
+
+def test_internal_provider_ca_path_reaches_bounded_session_in_fresh_runtime() -> None:
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if (
+            name.casefold() in cli._AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+            or name.casefold().endswith("_proxy")
+        ):
+            environment.pop(name)
+    environment[core._PROVIDER_CA_BUNDLE_PATH_ENV_V1] = core._PROVIDER_CA_BUNDLE_PATH_V1
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [
+            sys.executable,
+            "-c",
+            (
+                "from swing_trading_ai_assistant.market_data import "
+                "efficient_current_nifty100_adjusted_capture as core\n"
+                "session = core.BoundedYahooSessionV1()\n"
+                "assert session.trust_env is False\n"
+                "assert session.curl_options[core.CurlOpt.PROXY] == ''\n"
+                "session.close()\n"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_encoded_query_target_is_bounded_before_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1519,6 +1568,39 @@ def test_runtime_identity_drift_stops_before_official_source_effect(
     )
 
 
+def test_runtime_identity_rejects_coordinated_source_and_private_manifest_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_relative = (
+        "src/swing_trading_ai_assistant/market_data/"
+        "efficient_current_nifty100_adjusted_capture.py"
+    )
+    manifest_relative = (
+        "src/swing_trading_ai_assistant/market_data/"
+        "efficient_current_nifty100_adjusted_capture_runtime_identity_manifest.py"
+    )
+    replacement_source = b"replacement runtime source"
+    replacement_manifest = b"replacement private manifest"
+    monkeypatch.setitem(
+        core.EFFICIENT_CURRENT_NIFTY100_RUNTIME_SOURCE_SHA256_V1,
+        source_relative,
+        hashlib.sha256(replacement_source).hexdigest(),
+    )
+    original_read = core.read_runtime_source
+
+    def read_substituted(root: Path, relative: str) -> bytes:
+        if relative == source_relative:
+            return replacement_source
+        if relative == manifest_relative:
+            return replacement_manifest
+        return original_read(root, relative)
+
+    monkeypatch.setattr(core, "read_runtime_source", read_substituted)
+
+    with pytest.raises(RuntimeError, match="Plan 33 runtime identity invalid"):
+        core._runtime_code_identity_v1()
+
+
 def test_malformed_input_precedes_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2245,6 +2327,17 @@ def test_malformed_acknowledgement_is_authorization_denied(
         "--ack-owner-private-yfinance-research=false",
     ]
     assert cli.main(arguments) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "AUTHORIZATION_DENIED",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
+    }
+
+
+def test_acknowledgement_after_option_terminator_is_authorization_denied(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["--", "--ack-owner-private-yfinance-research"]) == 1
     assert json.loads(capsys.readouterr().out) == {
         "code": "AUTHORIZATION_DENIED",
         "contract_version": core.CONTRACT_VERSION_V1,
@@ -4052,6 +4145,77 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
     assert not original_identities.intersection(revision_reads)
     assert provider_calls == revision_reads[:1]
     assert selection_root.stat().st_mode & 0o777 == 0o700
+
+
+def test_cohort_reset_resource_limit_returns_ordered_bounded_outcomes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda _request, _root, **_kwargs: True,
+    )
+    monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
+    monkeypatch.setattr(
+        core.low, "read_capture_forward_request_revision_v1", lambda *_args: None
+    )
+    provider_calls = 0
+
+    def capture(
+        _request: object, provider: object, _root: Path, _schedule: Path
+    ) -> object:
+        nonlocal provider_calls
+        if not isinstance(provider, core._UnresolvedProbeV1):
+            provider_calls += 1
+        return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+            "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+        )
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
+    )
+
+    class Session:
+        resource_limited = False
+        rate_limited = False
+        begin_calls = 0
+
+        def begin_cohort(self) -> None:
+            self.begin_calls += 1
+            if self.begin_calls == 2:
+                self.resource_limited = True
+                raise core.ResourceLimitExceeded
+
+        def protect_cleanup_identities(
+            self, _identities: frozenset[tuple[int, int]]
+        ) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    session = Session()
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: session)
+    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [(row.cohort, row.reason) for row in result.cohorts] == [
+        ("NIFTY_50", "PROVIDER_ERROR"),
+        ("NIFTY_NEXT_50", "RESOURCE_LIMIT_EXCEEDED"),
+    ]
+    assert provider_calls == 1
 
 
 def test_later_low_evidence_conflict_stops_before_any_low_effect(

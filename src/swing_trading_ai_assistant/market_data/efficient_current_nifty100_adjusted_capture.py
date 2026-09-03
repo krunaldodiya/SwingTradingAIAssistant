@@ -31,6 +31,7 @@ from .efficient_current_nifty100_adjusted_capture_runtime_identity_manifest impo
     EFFICIENT_CURRENT_NIFTY100_RUNTIME_SOURCE_SHA256_V1,
 )
 from .http import HttpResponseBodyTooLarge, HttpTransportError, UrllibHttpTransport
+from .runtime_identity_manifest import MARKET_DATA_RUNTIME_SOURCE_SHA256_V1
 from .runtime_source_verifier import read_runtime_source
 from .storage_root_lease import (
     LeaseOutcome,
@@ -82,6 +83,9 @@ _PROVIDER_CA_BUNDLE_PATH_ENV_V1: Final = (
     "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
 )
 _MAX_PROVIDER_CA_BUNDLE_BYTES_V1: Final = 1_048_576
+_ALLOWED_PROVIDER_CA_BUNDLE_SHA256_V1: Final = frozenset(
+    {"9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f"}
+)
 _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1: Final = frozenset(
     {
         "curl_ca_bundle",
@@ -89,7 +93,6 @@ _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1: Final = frozenset(
         "ssl_cert_dir",
         "ssl_cert_file",
         "sslkeylogfile",
-        _PROVIDER_CA_BUNDLE_PATH_ENV_V1.casefold(),
     }
 )
 
@@ -140,7 +143,10 @@ def _provider_ca_bundle_v1() -> tuple[str, str]:
     if not os.path.isabs(configured):
         raise RuntimeError("provider trust configuration invalid")
     raw = _read_provider_ca_bundle_v1(configured)
-    return configured, hashlib.sha256(raw).hexdigest()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest not in _ALLOWED_PROVIDER_CA_BUNDLE_SHA256_V1:
+        raise RuntimeError("provider trust configuration invalid")
+    return configured, digest
 
 
 _PROVIDER_CA_BUNDLE_PATH_V1, _PROVIDER_CA_BUNDLE_SHA256_V1 = _provider_ca_bundle_v1()
@@ -499,8 +505,21 @@ def _runtime_code_identity_v1() -> str:
     if not source.is_absolute():
         raise RuntimeError("Plan 33 runtime identity invalid")
     root = source.parent.parent
+    private_manifest_relative = (
+        "src/swing_trading_ai_assistant/market_data/"
+        "efficient_current_nifty100_adjusted_capture_runtime_identity_manifest.py"
+    )
     try:
         pairs: list[tuple[str, str]] = []
+        private_manifest_digest = _digest(
+            read_runtime_source(root, private_manifest_relative)
+        )
+        expected_private_manifest_digest = MARKET_DATA_RUNTIME_SOURCE_SHA256_V1.get(
+            "efficient_current_nifty100_adjusted_capture_runtime_identity_manifest.py"
+        )
+        if private_manifest_digest != expected_private_manifest_digest:
+            raise ValueError
+        pairs.append((private_manifest_relative, private_manifest_digest))
         for relative, expected in sorted(
             EFFICIENT_CURRENT_NIFTY100_RUNTIME_SOURCE_SHA256_V1.items()
         ):
@@ -510,8 +529,6 @@ def _runtime_code_identity_v1() -> str:
             pairs.append((relative, actual))
         _, low_runtime_identity, _ = low.capture_forward_current_identities_v1()
         pairs.append(("capture-forward-adjusted-ohlcv@v1", low_runtime_identity))
-        if not pairs:
-            raise ValueError
         return _digest(_canonical(pairs))
     except (OSError, RuntimeError, ValueError):
         raise RuntimeError("Plan 33 runtime identity invalid") from None
@@ -3370,35 +3387,45 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                     )
                     continue
                 active_provider = cast(_Plan33ProviderV1, provider)
-                session.begin_cohort()
-                active_session = session
-                if not effect_roots_live():
-                    cleanup_failed = True
-                    break
                 try:
-                    if root_identity is None or schedule_identity is None:
-                        result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                            low_request,
-                            active_provider,
-                            root,
-                            schedule_root,
-                        )
-                    else:
-                        result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
-                            low_request,
-                            active_provider,
-                            root,
-                            schedule_root,
-                            _expected_store_root_identity=root_identity[:2],
-                            _expected_schedule_root_identity=schedule_identity[:2],
-                        )
-                except low._CaptureCleanupFailureV1:  # pyright: ignore[reportPrivateUsage]
-                    cleanup_failed = True
-                    break
-                except (RuntimeError, ValueError):
+                    session.begin_cohort()
+                except ResourceLimitExceeded:
                     result = low.CaptureForwardAdjustedOhlcvFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
+                        "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
                     )
+                    active_session = session
+                else:
+                    active_session = session
+                    if not effect_roots_live():
+                        cleanup_failed = True
+                        break
+                    try:
+                        if root_identity is None or schedule_identity is None:
+                            result = (
+                                low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                                    low_request,
+                                    active_provider,
+                                    root,
+                                    schedule_root,
+                                )
+                            )
+                        else:
+                            result = low._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+                                low_request,
+                                active_provider,
+                                root,
+                                schedule_root,
+                                _expected_store_root_identity=root_identity[:2],
+                                _expected_schedule_root_identity=schedule_identity[:2],
+                            )
+                    except low._CaptureCleanupFailureV1:  # pyright: ignore[reportPrivateUsage]
+                        cleanup_failed = True
+                        break
+                    except (RuntimeError, ValueError):
+                        result = low.CaptureForwardAdjustedOhlcvFailureV1(
+                            "INSUFFICIENT_EVIDENCE",
+                            "RUNTIME_CONFIGURATION_INVALID",
+                        )
             try:
                 current_snapshots = _snapshot_protected_directories_v1(
                     (root,), require_all=False
