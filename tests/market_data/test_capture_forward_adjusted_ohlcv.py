@@ -799,13 +799,13 @@ def test_root_replacement_before_private_empty_fallback_fails_closed(
     assert tuple(displaced.iterdir()) == ()
 
 
-def test_historical_exact_read_accepts_retained_writer_identity(
+def test_historical_exact_read_preserves_prior_writer_identity(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir(mode=0o700)
     captured = _capture(source_root)
-    writer_identity = "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3"
+    writer_identity = "720baa3615e1cf42efd0e73cec83f3cb524f48f8103cee6a34d71d23569b9e68"
     historical = replace(
         captured.revision,
         runtime_code_identity_sha256=writer_identity,
@@ -841,15 +841,13 @@ def test_historical_exact_read_accepts_retained_writer_identity(
     assert exact == historical
 
 
-def test_revision_rejects_unrelated_prior_writer_identity(tmp_path: Path) -> None:
+def test_revision_rejects_unknown_writer_identity(tmp_path: Path) -> None:
     captured = _capture(tmp_path)
 
     with pytest.raises(ValueError, match="capture revision is invalid"):
         replace(
             captured.revision,
-            runtime_code_identity_sha256=(
-                "720baa3615e1cf42efd0e73cec83f3cb524f48f8103cee6a34d71d23569b9e68"
-            ),
+            runtime_code_identity_sha256="f" * 64,
         )
 
 
