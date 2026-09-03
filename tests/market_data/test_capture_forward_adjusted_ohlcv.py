@@ -76,6 +76,8 @@ def _canonical_digest(value: object) -> str:
 
 def _expected_schedule(
     sessions: tuple[date, ...] = _BASE_SESSIONS,
+    *,
+    source_release: str = _SCHEDULE_RELEASE,
 ) -> ExpectedSessionSchedule:
     schedule_sessions = tuple(
         ScheduleSession(
@@ -98,7 +100,7 @@ def _expected_schedule(
     return ExpectedSessionSchedule(
         schema_version=3,
         source="nse-upstox-composed-calendar",
-        source_release=_SCHEDULE_RELEASE,
+        source_release=source_release,
         as_of=schedule_sessions[-1].close_at + timedelta(hours=1),
         timezone="Asia/Kolkata",
         covered_from=sessions[0],
@@ -269,7 +271,12 @@ def _request(
         schedule=CaptureForwardAdjustedOhlcvScheduleV1(
             sessions=sessions,
             schedule_evidence_sha256=schedule_evidence_sha256
-            or schedule_digest(_expected_schedule(sessions)),
+            or schedule_digest(
+                _expected_schedule(
+                    sessions,
+                    source_release=schedule_source_release,
+                )
+            ),
             schedule_source=schedule_source,
             schedule_source_release=schedule_source_release,
             decision_session_official_close_at=close,
@@ -420,7 +427,11 @@ def _invoke(
 ) -> core.CaptureForwardAdjustedOhlcvResultV1:
     resolved_schedule_root = schedule_root or _retain_schedule(
         root,
-        retained_schedule or _expected_schedule(request.schedule.sessions),
+        retained_schedule
+        or _expected_schedule(
+            request.schedule.sessions,
+            source_release=request.schedule.schedule_source_release,
+        ),
     )
     return core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
         request,
@@ -435,8 +446,12 @@ def _capture(
     *,
     sessions: tuple[date, ...] = _BASE_SESSIONS,
     minute: int = 0,
+    schedule_source_release: str = _SCHEDULE_RELEASE,
 ) -> CaptureForwardAdjustedOhlcvSuccessV1:
-    request = _request(sessions=sessions)
+    request = _request(
+        sessions=sessions,
+        schedule_source_release=schedule_source_release,
+    )
     provider = _Provider(
         retrieved_at=request.schedule.decision_session_official_close_at
         + timedelta(hours=1, minutes=minute)
@@ -824,6 +839,16 @@ def test_historical_exact_read_preserves_prior_writer_identity(
 
     assert exact.runtime_code_identity_sha256 == writer_identity
     assert exact == historical
+
+
+def test_revision_rejects_unknown_writer_identity(tmp_path: Path) -> None:
+    captured = _capture(tmp_path)
+
+    with pytest.raises(ValueError, match="capture revision is invalid"):
+        replace(
+            captured.revision,
+            runtime_code_identity_sha256="f" * 64,
+        )
 
 
 def test_missing_correction_parent_fails_before_provider_or_publication(
@@ -1426,7 +1451,7 @@ def test_public_result_is_redacted(tmp_path: Path) -> None:
     assert "bars" not in encoded
 
 
-def test_four_exact_capture_forward_revisions_approve_unchanged_plan29(
+def test_four_exact_captures_with_distinct_schedule_releases_approve_plan29(
     tmp_path: Path,
 ) -> None:
     windows = (
@@ -1437,7 +1462,16 @@ def test_four_exact_capture_forward_revisions_approve_unchanged_plan29(
     )
     captures: list[CaptureForwardAdjustedOhlcvSuccessV1] = []
     for position, sessions in enumerate(windows):
-        captures.append(_capture(tmp_path, sessions=sessions, minute=position))
+        captures.append(
+            _capture(
+                tmp_path,
+                sessions=sessions,
+                minute=position,
+                schedule_source_release=(
+                    f"composed-calendar@v1={'4567'[position] * 64}"
+                ),
+            )
+        )
 
     qualification = compose_capture_forward_plan29_v1(
         tmp_path,
@@ -1462,6 +1496,18 @@ def test_four_exact_capture_forward_revisions_approve_unchanged_plan29(
         {
             "capture_source_identities": [
                 capture.revision.source_identity_sha256 for capture in captures
+            ],
+            "schedule_lineage": [
+                {
+                    "schedule_identity_sha256": (
+                        capture.revision.schedule.schedule_identity_sha256
+                    ),
+                    "schedule_source": capture.revision.schedule.schedule_source,
+                    "schedule_source_release": (
+                        capture.revision.schedule.schedule_source_release
+                    ),
+                }
+                for capture in captures
             ],
             "composer_runtime_code_identity_sha256": composer_runtime,
             "price_basis": ADJUSTED_PRICE_BASIS_V1,
@@ -1491,9 +1537,8 @@ def test_four_exact_capture_forward_revisions_approve_unchanged_plan29(
     assert qualification.evidence.source_identity_sha256 == expected_source
 
 
-def test_composer_accepts_mixed_explicitly_compatible_writer_runtimes(
+def test_composer_accepts_current_and_latest_retained_writer_runtimes(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     windows = (
         (date(2026, 8, 24), date(2026, 8, 25), date(2026, 8, 26), date(2026, 8, 27)),
@@ -1506,11 +1551,8 @@ def test_composer_accepts_mixed_explicitly_compatible_writer_runtimes(
         for position, sessions in enumerate(windows)
     )
     current_runtime = captures[0].revision.runtime_code_identity_sha256
-    compatible_runtime = "9" * 64
-    monkeypatch.setattr(
-        core,
-        "_compatible_writer_runtime_identities_v1",
-        lambda: frozenset((current_runtime, compatible_runtime)),
+    compatible_runtime = (
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3"
     )
     revisions = tuple(
         replace(

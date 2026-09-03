@@ -517,6 +517,7 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "20f18fa4043742630d317448a1b0f8cc910535be16092f1e8b0669c81d0ebcb2",
         "720baa3615e1cf42efd0e73cec83f3cb524f48f8103cee6a34d71d23569b9e68",
         "84591e7c04f06227430d1511e0008e8136a0d2a83a30325c3ba9e2ef58e7e149",
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
     }
 )
 
@@ -2687,8 +2688,6 @@ def _compose_capture_forward_plan29_from_revisions_v1(  # noqa: C901
         or capture.price_basis != first.price_basis
         or capture.volume_basis != first.volume_basis
         or capture.schedule.schedule_source != first.schedule.schedule_source
-        or capture.schedule.schedule_source_release
-        != first.schedule.schedule_source_release
         or capture.configuration_identity_sha256 != first.configuration_identity_sha256
         or capture.decision_cutoff > evaluated
         for capture in captures
@@ -2725,6 +2724,18 @@ def _compose_capture_forward_plan29_from_revisions_v1(  # noqa: C901
             {
                 "capture_source_identities": [
                     capture.source_identity_sha256 for capture in captures
+                ],
+                "schedule_lineage": [
+                    {
+                        "schedule_identity_sha256": (
+                            capture.schedule.schedule_identity_sha256
+                        ),
+                        "schedule_source": capture.schedule.schedule_source,
+                        "schedule_source_release": (
+                            capture.schedule.schedule_source_release
+                        ),
+                    }
+                    for capture in captures
                 ],
                 "composer_runtime_code_identity_sha256": composer_runtime,
                 "price_basis": ADJUSTED_PRICE_BASIS_V1,

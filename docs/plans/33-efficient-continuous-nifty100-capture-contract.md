@@ -259,9 +259,9 @@ merge ports the exact reviewed actionable Plan 30 runtime from source candidate
 `54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main without changing
 or closing #147's historical lane.
 [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-then owns only this bounded Plan 33 implementation. It may not wait for the three
-unavailable future sessions, copy unreviewed quarantine bytes, or imply that
-#147's historical qualification has passed.
+then owns only this bounded Plan 33 implementation. It must not copy unreviewed
+quarantine bytes, consume #147's retained historical evidence as current Plan 33
+input, or imply a qualification state not established by #147's exact evidence.
 
 ### Later improvements
 
@@ -273,8 +273,7 @@ The following do not block Issue #154 or the first implementation slice:
 - cross-cohort atomic transaction, generalized multi-cohort store, archive replay, durable orchestration state, or recovery engine;
 - historical constituent reconstruction, dated release ingestion, effective-notice composition, backfill, or pre-retrieval point-in-time membership claims;
 - more than 100 instruments, arbitrary index composition, ETF/F&O/crypto/multi-asset support, intraday capture, or tick data;
-- public payload/API/UI/MCP delivery, redistribution, signal, score, recommendation, order, or financial-adviser behaviour; and
-- Sprint 17's remaining three future-session captures or unchanged Plan 29 qualification.
+- public payload/API/UI/MCP delivery, redistribution, signal, score, recommendation, order, or financial-adviser behaviour.
 
 Adding any later item triggers the scope-expansion circuit breaker.
 

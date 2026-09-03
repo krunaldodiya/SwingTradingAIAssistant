@@ -351,11 +351,10 @@ Industry/Packet URL attribution; late
 - Sprint 17 — capture-forward adjusted OHLC historical qualification /
   [Issue #147](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/147)
   is open with Project status **In Progress**, High priority, estimate 1. The
-  implementable Plan-30 slice is complete and reviewed. One of four distinct
-  completed-session captures is retained; three future captures and unchanged
-  Plan 29 remain
-  mandatory for the later historical point-in-time claim and do not block
-  current/live work.
+  Plan-30 runtime and all four distinct completed-session captures are retained.
+  The current Plan 29 qualification evidence approves the `OHLCV_ONLY` profile;
+  exact-byte review and delivery closeout remain. No future-capture wait remains,
+  and this separate historical lane does not block current/live work.
 
 - Sprint 18 — current supplied-cohort Market Structure /
   [Issue #148](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/148)
@@ -369,8 +368,8 @@ Industry/Packet URL attribution; late
 
 - Issue #155's governing merge delivers the reviewed Plan 30 runtime
   prerequisite. The remaining ordered lane is Issue #156, then owner-prioritized
-  maintenance Issue #145 before another product module starts. Issue #147
-  remains a parallel `1/4` temporal-evidence lane.
+  maintenance Issue #145 before another product module starts. Issue #147 has
+  completed its separate parallel temporal-evidence lane at `4/4`.
   [Plan 34](../plans/34-swing-research-feature-map.md) records the necessary-only
   gate for any later swing-research feature; no named pattern, Volume, Relative
   Strength, or Liquidity/SMC possibility is an automatic backlog commitment.

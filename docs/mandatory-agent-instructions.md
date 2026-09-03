@@ -145,6 +145,7 @@ Build a trustworthy, agent-agnostic research tool for listed-equity swing tradin
 - Use an explicit swing horizon and bar frequency. Exclude intraday trading, futures, options, crypto, long-term investing, generic multi-asset features, unsupported evidence, and broker order placement.
 - Never use guaranteed-return, certainty, or financial-adviser language.
 - Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient data as first-class outcomes.
+- Treat Price Action, Liquidity/SMC, Volume Analysis, and Relative Strength as necessary-only feature families. Never import or implement their full catalog blindly. Under [Plan 34](plans/34-swing-research-feature-map.md), build only the smallest objective, non-duplicative facts proven necessary for market research, analysis, scanning, or screening for swing-trading use over the point-in-time Nifty 100 or an explicitly supplied bounded set of one or more supported canonical stocks; every other concept remains deferred.
 
 ## Direction and repository authority
 

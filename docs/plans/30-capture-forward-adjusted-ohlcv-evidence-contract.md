@@ -18,10 +18,10 @@ clarification. These post-baseline bytes require fresh exact-byte review before
 merge and are not attributed to the baseline candidate review.
 
 This is a delivery-only provenance record. It authorizes no provider call or new
-temporal capture, does not relabel later-acquired values as historical
-point-in-time evidence, and does not close Issue #147. Its historical
-qualification remains open at `1/4`, with three future completed-session
-captures and unchanged Plan 29 still mandatory.
+temporal capture and does not relabel later-acquired values as historical
+point-in-time evidence. Issue #147 later retained all `4/4` predeclared
+completed-session captures. No future-session capture remains; the final
+qualification still uses unchanged Plan 29.
 
 ## Decision and authority
 
@@ -209,7 +209,7 @@ A qualification request supplies 4–366 strictly increasing unique decision poi
 - exactly one retained capture revision whose decision session matches;
 - one protected region: `DEVELOPMENT`, `OUT_OF_SAMPLE`, `UNTOUCHED_TEST`, or `WALK_FORWARD`.
 
-All four regions are nonempty, contiguous, and appear exactly in that order. The exact cohort, mapping, source, pricing bases, schedule lineage, schema, and configuration must match across captures. Runtime identity may advance only through an explicitly supported compatible reader; every capture retains its writer identity. The composed evidence source and `runtime_code_identity_sha256` bind one current composer identity calculated from both the capture-forward composer runtime identity and the unchanged Plan 29 runtime identity; the Plan 29 request and report continue to bind the Plan 29 runtime identity itself.
+All four regions are nonempty, contiguous, and appear exactly in that order. The exact cohort, mapping, composed schedule source, pricing bases, schema, and configuration must match across captures. Daily composed-schedule releases MAY differ because each decision session retains its own exact acquisition; every capture's schedule identity, source, and release MUST be independently valid and the complete ordered per-capture schedule lineage MUST be bound into the composed source identity. Runtime identity may advance only through an explicitly supported compatible reader; every capture retains its writer identity. The composed evidence source and `runtime_code_identity_sha256` bind one current composer identity calculated from both the capture-forward composer runtime identity and the unchanged Plan 29 runtime identity; the Plan 29 request and report continue to bind the Plan 29 runtime identity itself.
 
 For each member and decision session the composer emits:
 
