@@ -3150,7 +3150,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
     binding_conflict = len(binding_snapshots) != sum(
         _is_success(outcome) for outcome in outcomes if outcome is not None
     ) or not all(_binding_snapshot_live_v1(item) for item in binding_snapshots)
-    if binding_conflict:
+    if binding_conflict and not cleanup_failed:
         return SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
     if cleanup_failed:
         outcomes = [

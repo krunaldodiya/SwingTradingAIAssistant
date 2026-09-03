@@ -2566,9 +2566,12 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
         core._snapshot_plan33_binding_v1(root, binding.name)
 
 
-@pytest.mark.parametrize("final_binding_live", [True, False])
+@pytest.mark.parametrize(
+    "finalization",
+    ["live", "binding_lost", "cleanup_and_binding_lost"],
+)
 def test_all_reuse_capture_clears_retained_provider_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_binding_live: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, finalization: str
 ) -> None:
     request, selection = _admitted()
     selection_root = tmp_path / "selection"
@@ -2632,7 +2635,7 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         nonlocal binding_checks
         binding_checks += 1
         return snapshot is binding_snapshot and (
-            final_binding_live or binding_checks != 3
+            finalization == "live" or binding_checks != 3
         )
 
     monkeypatch.setattr(core, "_binding_snapshot_live_v1", binding_live)
@@ -2643,6 +2646,21 @@ def test_all_reuse_capture_clears_retained_provider_cache(
             AssertionError("validated reuse must not prepare provider")
         ),
     )
+    if finalization == "cleanup_and_binding_lost":
+        original_open_cache = core._open_provider_cache_authority_v1
+
+        def open_cache_then_fail_close(*args: object, **kwargs: object) -> object:
+            authority = original_open_cache(*args, **kwargs)
+
+            def fail_close() -> None:
+                authority.close()
+                raise OSError("cache cleanup failed")
+
+            return SimpleNamespace(close=fail_close)
+
+        monkeypatch.setattr(
+            core, "_open_provider_cache_authority_v1", open_cache_then_fail_close
+        )
 
     result = core.capture_current_nifty100_v1(
         _request(),
@@ -2653,14 +2671,19 @@ def test_all_reuse_capture_clears_retained_provider_cache(
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
-    if not final_binding_live:
+    if finalization == "binding_lost":
         assert result == core.SharedFailureV1(
             "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
         )
-        assert residue.read_bytes() == b""
-        return
-    assert isinstance(result, core.CurrentNifty100ResultV1)
-    assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
+    else:
+        assert isinstance(result, core.CurrentNifty100ResultV1)
+        if finalization == "cleanup_and_binding_lost":
+            assert [row.reason for row in result.cohorts] == [
+                "CONFIGURATION_INVALID",
+                "CONFIGURATION_INVALID",
+            ]
+        else:
+            assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE", result
     assert residue.read_bytes() == b""
     assert list(cache.iterdir()) == [residue]
 
@@ -4189,9 +4212,12 @@ def test_provider_identity_mismatch_is_not_retention_failure() -> None:
     )
 
 
-@pytest.mark.parametrize("final_binding_live", [True, False])
+@pytest.mark.parametrize(
+    "finalization",
+    ["live", "binding_lost", "cleanup_and_binding_lost"],
+)
 def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, final_binding_live: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, finalization: str
 ) -> None:
     value = json.loads(_request())
     second = core.low.parse_capture_forward_request_v1(
@@ -4218,12 +4244,16 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
         lambda _root, _request: None,
     )
     monkeypatch.setattr(core, "_read_plan33_binding_v1", lambda _root, _name: None)
-    if not final_binding_live:
+    if finalization != "live":
         monkeypatch.setattr(core, "_binding_snapshot_live_v1", lambda _snapshot: False)
 
     def capture(
         low_request: object, _provider: object, _root: Path, _schedule: Path
     ) -> object:
+        if isinstance(_provider, core._UnresolvedProbeV1):
+            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+            )
         revision = SimpleNamespace(
             request_identity_sha256=low_request.request_identity_sha256,
             revision_sha256=low_request.request_identity_sha256,
@@ -4242,6 +4272,25 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
     monkeypatch.setattr(
         core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
     )
+
+    class _Session:
+        def protect_cleanup_identities(
+            self, _identities: frozenset[tuple[int, int]]
+        ) -> None:
+            return None
+
+        def begin_cohort(self) -> None:
+            return None
+
+        def close(self) -> None:
+            if finalization == "cleanup_and_binding_lost":
+                raise OSError("session cleanup failed")
+
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda *_args, **_kwargs: _Session()
+    )
+    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),
         acknowledged=True,
@@ -4251,20 +4300,26 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
         schedule_root=tmp_path / "schedule",
         fetcher=_Fetcher(),
     )
-    if not final_binding_live:
+    if finalization == "binding_lost":
         assert result == core.SharedFailureV1(
             "INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT"
         )
         return
 
     assert isinstance(result, core.CurrentNifty100ResultV1)
-    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
-    assert result.union_reason == "UNION_INCOMPATIBLE"
-    assert [row.code for row in result.cohorts] == ["INSERTED", "INSERTED"]
-    assert (
-        result.cohorts[0].schedule_identity_sha256
-        != result.cohorts[1].schedule_identity_sha256
-    )
+    if finalization == "cleanup_and_binding_lost":
+        assert [row.reason for row in result.cohorts] == [
+            "CONFIGURATION_INVALID",
+            "CONFIGURATION_INVALID",
+        ]
+    else:
+        assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+        assert result.union_reason == "UNION_INCOMPATIBLE"
+        assert [row.code for row in result.cohorts] == ["INSERTED", "INSERTED"]
+        assert (
+            result.cohorts[0].schedule_identity_sha256
+            != result.cohorts[1].schedule_identity_sha256
+        )
 
 
 def test_request_liveness_stops_before_source_or_storage_effects(

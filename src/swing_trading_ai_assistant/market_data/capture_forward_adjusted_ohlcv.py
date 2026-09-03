@@ -1154,6 +1154,7 @@ def _trusted_yfinance_distribution_v1(  # noqa: C901 - closed package admission
         distribution = distributions[0]
         sources: dict[str, _YfinanceSourceV1] = {}
         aggregate_entries: list[tuple[str, int, bytes]] = []
+        admitted_sources: list[tuple[str, Path, bytes, _YfinanceFileIdentityV1]] = []
         package_root: Path | None = None
         for item in distribution.files or ():
             relative = str(item).replace(os.sep, "/")
@@ -1170,27 +1171,14 @@ def _trusted_yfinance_distribution_v1(  # noqa: C901 - closed package admission
             identity = _regular_file_identity(str(origin))
             raw = _read_yfinance_source_v1(origin, identity)
             aggregate_entries.append((relative, len(raw), hashlib.sha256(raw).digest()))
-            if package_root is None:
-                continue
+            admitted_sources.append((relative, origin, raw, identity))
+        if package_root is None:
+            raise RuntimeError
+        for _relative, origin, raw, identity in admitted_sources:
             module_name, is_package = _yfinance_module_name_v1(package_root, origin)
             if module_name in sources:
                 raise RuntimeError
             sources[module_name] = (origin, raw, is_package, identity)
-        if package_root is None:
-            raise RuntimeError
-        if len(sources) != len(aggregate_entries):
-            sources = {}
-            for item in distribution.files or ():
-                relative = str(item).replace(os.sep, "/")
-                if not relative.startswith("yfinance/") or not relative.endswith(".py"):
-                    continue
-                origin = Path(str(distribution.locate_file(item))).resolve(strict=True)
-                identity = _regular_file_identity(str(origin))
-                raw = _read_yfinance_source_v1(origin, identity)
-                module_name, is_package = _yfinance_module_name_v1(package_root, origin)
-                if module_name in sources:
-                    raise RuntimeError
-                sources[module_name] = (origin, raw, is_package, identity)
         aggregate = hashlib.sha256()
         for relative, size, digest in sorted(aggregate_entries):
             aggregate.update(relative.encode("utf-8"))

@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pandas as pd
@@ -2251,6 +2252,85 @@ def test_yfinance_transitive_child_executes_admitted_bytes_after_path_swap(
         f"Path({str(marker)!r}).write_text('executed')\n"
         "VALUE = 'substituted'\n"
     )
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            sys.modules.pop(name, None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("yfinance")
+        assert module.VALUE == "admitted"
+        assert not marker.exists()
+    finally:
+        sys.meta_path.remove(finder)
+        for name in tuple(sys.modules):
+            if name == "yfinance" or name.startswith("yfinance."):
+                sys.modules.pop(name, None)
+
+
+def test_yfinance_distribution_ordering_uses_first_pass_admitted_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package = tmp_path / "yfinance"
+    package.mkdir()
+    parent = package / "__init__.py"
+    child = package / "multi.py"
+    marker = tmp_path / "second-pass-source-executed"
+    parent_raw = b"from .multi import VALUE\n__version__ = '1.6.0'\n"
+    child_raw = b"VALUE = 'admitted'\n"
+    substituted = (
+        b"from pathlib import Path\n"
+        + f"Path({str(marker)!r}).write_text('executed')\n".encode()
+        + b"VALUE = 'substituted'\n"
+    )
+    parent.write_bytes(parent_raw)
+    child.write_bytes(child_raw)
+    distribution = SimpleNamespace(
+        version="1.6.0",
+        metadata={"Name": "yfinance"},
+        files=(
+            Path("yfinance/multi.py"),
+            Path("yfinance/__init__.py"),
+        ),
+        locate_file=lambda item: tmp_path / item,
+    )
+    aggregate = hashlib.sha256()
+    for relative, raw in sorted(
+        (
+            ("yfinance/__init__.py", parent_raw),
+            ("yfinance/multi.py", child_raw),
+        )
+    ):
+        aggregate.update(relative.encode())
+        aggregate.update(b"\0")
+        aggregate.update(len(raw).to_bytes(8, "big"))
+        aggregate.update(hashlib.sha256(raw).digest())
+    expected_aggregate = aggregate.hexdigest()
+    monkeypatch.setattr(core, "_trusted_site_roots_v1", lambda: (tmp_path,))
+    monkeypatch.setattr(
+        core.importlib.metadata,
+        "distributions",
+        lambda *, path: (distribution,),
+    )
+    monkeypatch.setattr(
+        core, "_YFINANCE_CODE_AGGREGATES_V1", frozenset({expected_aggregate})
+    )
+    original_read = core._read_yfinance_source_v1
+
+    def swap_after_first_read(
+        origin: Path, identity: core._YfinanceFileIdentityV1
+    ) -> bytes:
+        raw = original_read(origin, identity)
+        if origin == child:
+            child.write_bytes(substituted)
+        return raw
+
+    monkeypatch.setattr(core, "_read_yfinance_source_v1", swap_after_first_read)
+
+    _, _, code_identity, sources = core._trusted_yfinance_distribution_v1()
+
+    assert code_identity == expected_aggregate
+    assert sources["yfinance.multi"][1] == child_raw
+    finder = core._YfinanceSourceFinderV1(sources)
     for name in tuple(sys.modules):
         if name == "yfinance" or name.startswith("yfinance."):
             sys.modules.pop(name, None)
