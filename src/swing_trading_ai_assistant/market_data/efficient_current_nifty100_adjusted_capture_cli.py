@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import fcntl
 import hashlib
 import importlib.abc
@@ -53,8 +54,12 @@ _ACKNOWLEDGEMENT = "--ack-owner-private-yfinance-research"
 _CONTRACT_VERSION_V1 = "efficient-current-nifty100-adjusted-capture@v1"
 _MAX_REQUEST_BYTES_V1 = 262_144
 _MAX_RESULT_BYTES_V1 = 262_144
-_MAX_DEPENDENCY_FILE_BYTES_V1 = 16_777_216
+_MAX_DEPENDENCY_FILE_BYTES_V1 = 67_108_864
 _MAX_DEPENDENCY_AGGREGATE_BYTES_V1 = 67_108_864
+_MAX_DEPENDENCY_FILES_V1 = 4_096
+_MAX_DEPENDENCY_PATH_BYTES_V1 = 4_096
+_MAX_DEPENDENCY_TOTAL_PATH_BYTES_V1 = 1_048_576
+_NATIVE_COMPANION_HANDLE_PREFIX_V1 = "__plan33_native_companion__:"
 _PROVIDER_CACHE_NAME_V1 = ".plan33-yfinance-cache"
 _CA_BUNDLE_HANDLE_NAME_V1 = "__plan33_ca_bundle__"
 _PROVIDER_CA_BUNDLE_PATH_ENV_V1 = "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
@@ -70,40 +75,13 @@ _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1 = frozenset(
     }
 )
 _DEPENDENCY_REQUIREMENTS_V1 = (
-    (
-        "multitasking",
-        "0.0.13",
-        (("multitasking", "multitasking/__init__.py"),),
-    ),
-    (
-        "certifi",
-        "2026.7.22",
-        (("certifi", "certifi/__init__.py"),),
-    ),
-    (
-        "cffi",
-        "2.1.1",
-        (("cffi", "cffi/__init__.py"),),
-    ),
+    ("beautifulsoup4", "4.15.0", (("bs4", "bs4/__init__.py"),)),
+    ("certifi", "2026.7.22", (("certifi", "certifi/__init__.py"),)),
+    ("cffi", "2.1.1", (("cffi", "cffi/__init__.py"),)),
     (
         "charset-normalizer",
         "3.5.1",
         (("charset_normalizer", "charset_normalizer/__init__.py"),),
-    ),
-    (
-        "idna",
-        "3.19",
-        (("idna", "idna/__init__.py"),),
-    ),
-    (
-        "urllib3",
-        "2.7.0",
-        (("urllib3", "urllib3/__init__.py"),),
-    ),
-    (
-        "requests",
-        "2.34.2",
-        (("requests", "requests/__init__.py"),),
     ),
     (
         "curl-cffi",
@@ -115,6 +93,27 @@ _DEPENDENCY_REQUIREMENTS_V1 = (
             ("curl_cffi.requests.session", "curl_cffi/requests/session.py"),
         ),
     ),
+    ("idna", "3.19", (("idna", "idna/__init__.py"),)),
+    ("lxml", "6.1.2", (("lxml", "lxml/__init__.py"),)),
+    ("multitasking", "0.0.13", (("multitasking", "multitasking/__init__.py"),)),
+    ("numpy", "2.4.6", (("numpy", "numpy/__init__.py"),)),
+    ("pandas", "3.0.5", (("pandas", "pandas/__init__.py"),)),
+    ("peewee", "4.3.0", (("peewee", "peewee.py"),)),
+    ("platformdirs", "4.11.3", (("platformdirs", "platformdirs/__init__.py"),)),
+    ("protobuf", "7.36.0", (("google.protobuf", "google/protobuf/__init__.py"),)),
+    ("pycparser", "3.0", (("pycparser", "pycparser/__init__.py"),)),
+    ("python-dateutil", "2.9.0.post0", (("dateutil", "dateutil/__init__.py"),)),
+    ("pytz", "2026.3.post1", (("pytz", "pytz/__init__.py"),)),
+    ("requests", "2.34.2", (("requests", "requests/__init__.py"),)),
+    ("six", "1.17.0", (("six", "six.py"),)),
+    ("soupsieve", "2.9.2", (("soupsieve", "soupsieve/__init__.py"),)),
+    (
+        "typing-extensions",
+        "4.16.0",
+        (("typing_extensions", "typing_extensions.py"),),
+    ),
+    ("urllib3", "2.7.0", (("urllib3", "urllib3/__init__.py"),)),
+    ("websockets", "17.0.1", (("websockets", "websockets/__init__.py"),)),
 )
 
 _DEPENDENCY_CODE_AGGREGATES_V1 = {
@@ -184,6 +183,242 @@ _ADMITTED_DEPENDENCY_PREFIXES_V1 = frozenset(
         ),
     }
 )
+_DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
+    ("darwin", "x86_64", "3.11", "cpython-311-darwin"): {
+        "beautifulsoup4": (
+            23,
+            406_683,
+            "dc48c8948377f4acad5357b0820c138d7ac9281a1334c6e5c3276013eef9d0d2",
+        ),
+        "certifi": (
+            14,
+            249_105,
+            "daa951a7445e9b0ebe339ce4c4b47967088fe1da7b490f18bba4af4d20f6f8b4",
+        ),
+        "cffi": (
+            33,
+            574_646,
+            "8d5c86becafa53c1e4e80d004d3f520f657831ffa77918a1a724e7966cd2c9c2",
+        ),
+        "charset-normalizer": (
+            23,
+            1_133_571,
+            "bbfabefd7afa1eefe16ab82051ea40bc3ae9901b8fa73e341e597920f75c9b81",
+        ),
+        "curl-cffi": (
+            38,
+            7_367_484,
+            "ec02380e0b9322da931f0d083d75c00e3dbfe1f2f411d526a65aa1fa4fd6b164",
+        ),
+        "idna": (
+            18,
+            337_453,
+            "d7cb6a72b0571ebbd710f3250deb84bb8021ea4d1ac1e8e9f9ad9aedf9243684",
+        ),
+        "lxml": (
+            176,
+            10_756_486,
+            "4922f15cecec57c077559b30585fe26dc03d4c08f5f986e14d54e1908251987b",
+        ),
+        "multitasking": (
+            8,
+            45_832,
+            "3fd7a9aa41d2f17ba6de88360ae7b08f813c57f5a0498c756891ba6e9ed9c9eb",
+        ),
+        "numpy": (
+            1_041,
+            24_064_592,
+            "f0d18d7129db4a8b84b0e1bb5146b97eca62f6ac709b237695b7c8021ea61b25",
+        ),
+        "pandas": (
+            1_523,
+            38_333_860,
+            "eb414d7dfda934e8399e3f274dc755ab00c78eb8ada1b92e00d72e842f6c29b4",
+        ),
+        "peewee": (
+            38,
+            748_857,
+            "2d12614ac720b6db5d862b0414eda72d079462796ae2ecb74e5b5b9043daee70",
+        ),
+        "platformdirs": (
+            16,
+            123_065,
+            "24e4bdb444a846938879251646120053b8d40ade3eee08d2c27eb0ec1e557e96",
+        ),
+        "protobuf": (
+            64,
+            1_650_743,
+            "8fdb9ca66b1c3b33fcaa6662a026415a8ec48548af2d61079c165e177253714c",
+        ),
+        "pycparser": (
+            15,
+            203_921,
+            "0f49a0f5f01196542778ee577fe18aa61de7c24829f0c0777408ab37e50aeb25",
+        ),
+        "python-dateutil": (
+            27,
+            441_783,
+            "541d7335d1a7574c65aa08253eea9cb54ab26f14fa70df87761e3409a117e531",
+        ),
+        "pytz": (
+            618,
+            1_006_425,
+            "c93552ddd376343d44fd2cd16279d92d2bb8654a7c3282246a548234cf8caf2b",
+        ),
+        "requests": (
+            28,
+            234_577,
+            "21afc736574c60d31e3a8a4c0e2e8dc972238d8c04ef0ef4c1e38a7edb8c2258",
+        ),
+        "six": (
+            8,
+            38_145,
+            "04776865d73a061a9a68b3c71adefa5ea6e292c3cc784b8de6aac7e20d390c05",
+        ),
+        "soupsieve": (
+            14,
+            144_415,
+            "b7761c72d692b29878e8b198a55fba6b438551d61771b19d02d60f45121528c1",
+        ),
+        "typing-extensions": (
+            7,
+            182_965,
+            "a8686f6656b6f3003863fd53da96f87ad3d7b0b24036d7834135195ce115ffb2",
+        ),
+        "urllib3": (
+            44,
+            432_560,
+            "2dd76bb5e1259d52f744413895744b9468655874f2b345da2de9bb88692a1fb9",
+        ),
+        "websockets": (
+            64,
+            780_873,
+            "7b95ad16efb02f0da693d7a35881743f996d6e3a241b56fee881826bc8d1de90",
+        ),
+        "yfinance": (
+            42,
+            585_691,
+            "ab6736f1e152fa97af056b8bcfa43185ff652da6f91f93071434e4152d88a225",
+        ),
+    },
+    ("linux", "x86_64", "3.11", "cpython-311-x86_64-linux-gnu"): {
+        "beautifulsoup4": (
+            23,
+            406_683,
+            "dc48c8948377f4acad5357b0820c138d7ac9281a1334c6e5c3276013eef9d0d2",
+        ),
+        "certifi": (
+            14,
+            249_105,
+            "daa951a7445e9b0ebe339ce4c4b47967088fe1da7b490f18bba4af4d20f6f8b4",
+        ),
+        "cffi": (
+            33,
+            719_029,
+            "1c099addc7e2f266fa00246a958f14cab55ab6fb4ba0fbc88007c1279e24109e",
+        ),
+        "charset-normalizer": (
+            23,
+            746_800,
+            "fbb68868a8a0181c09aad3656d7ae9b37f7b00db0952039a58fc4a96d79f81c0",
+        ),
+        "curl-cffi": (
+            38,
+            38_918_002,
+            "28fad6ce0beec7688987b019200e54642415734323dc1b96af9256d7d5c970bd",
+        ),
+        "idna": (
+            18,
+            337_453,
+            "07b09318ede58ae55d57d30ea1ee4865c17830d601c6e2590136717ca26499f1",
+        ),
+        "lxml": (
+            176,
+            11_537_555,
+            "e22b279974ee7c24fd0f856d6225b28dc3b2dd8a3c4f1cc75dbc49dc2a6b7270",
+        ),
+        "multitasking": (
+            8,
+            45_832,
+            "3fd7a9aa41d2f17ba6de88360ae7b08f813c57f5a0498c756891ba6e9ed9c9eb",
+        ),
+        "numpy": (
+            1_044,
+            57_359_508,
+            "87747f0af074173c504708f63de37e9c35cc20ec65cd815974faf56c9ae27f6a",
+        ),
+        "pandas": (
+            1_523,
+            39_724_824,
+            "c810224f2d6a299cf4751a7cd4f04f68aff828081f80eece10bd4807c6cdda95",
+        ),
+        "peewee": (
+            38,
+            748_857,
+            "59d35ab795034ed7d3c8092c372df8a01973aef0f9e2a8de6983d5fad8dcde22",
+        ),
+        "platformdirs": (
+            16,
+            123_065,
+            "24e4bdb444a846938879251646120053b8d40ade3eee08d2c27eb0ec1e557e96",
+        ),
+        "protobuf": (
+            64,
+            1_377_019,
+            "d54ac44a05c3f96eeb96b7c7f1a0e9d28c24ec3522645b55cf767e621177d935",
+        ),
+        "pycparser": (
+            15,
+            203_921,
+            "0f49a0f5f01196542778ee577fe18aa61de7c24829f0c0777408ab37e50aeb25",
+        ),
+        "python-dateutil": (
+            27,
+            441_783,
+            "541d7335d1a7574c65aa08253eea9cb54ab26f14fa70df87761e3409a117e531",
+        ),
+        "pytz": (
+            618,
+            1_006_425,
+            "c93552ddd376343d44fd2cd16279d92d2bb8654a7c3282246a548234cf8caf2b",
+        ),
+        "requests": (
+            28,
+            234_577,
+            "21afc736574c60d31e3a8a4c0e2e8dc972238d8c04ef0ef4c1e38a7edb8c2258",
+        ),
+        "six": (
+            8,
+            38_145,
+            "04776865d73a061a9a68b3c71adefa5ea6e292c3cc784b8de6aac7e20d390c05",
+        ),
+        "soupsieve": (
+            14,
+            144_415,
+            "b7761c72d692b29878e8b198a55fba6b438551d61771b19d02d60f45121528c1",
+        ),
+        "typing-extensions": (
+            7,
+            182_965,
+            "a8686f6656b6f3003863fd53da96f87ad3d7b0b24036d7834135195ce115ffb2",
+        ),
+        "urllib3": (
+            44,
+            432_560,
+            "2dd76bb5e1259d52f744413895744b9468655874f2b345da2de9bb88692a1fb9",
+        ),
+        "websockets": (
+            64,
+            808_733,
+            "41428707ab168a01cd4efd7b26d5280170a49767de5a6c4dce456dd4d807be20",
+        ),
+        "yfinance": (
+            42,
+            585_691,
+            "5747f10cc79873900e8498d31203fb23741cd765a00931419c4c2e7261959df4",
+        ),
+    },
+}
 _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1 = frozenset(
     {
         "backports",
@@ -199,27 +434,7 @@ _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1 = frozenset(
         "socks",
     }
 )
-_ALLOWED_PATH_IMPORT_PREFIXES_V1 = frozenset(
-    {
-        "bs4",
-        "dateutil",
-        "google",
-        "lxml",
-        "numpy",
-        "pandas",
-        "peewee",
-        "platformdirs",
-        "pyarrow",
-        "pycparser",
-        "pytz",
-        "six",
-        "soupsieve",
-        "swing_trading_ai_assistant",
-        "typing_extensions",
-        "websockets",
-        "yfinance",
-    }
-)
+_ALLOWED_PATH_IMPORT_PREFIXES_V1 = frozenset({"swing_trading_ai_assistant"})
 _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1 = frozenset(sys.stdlib_module_names) | frozenset(
     sys.builtin_module_names
 )
@@ -355,6 +570,63 @@ def _dependency_code_aggregate_v1(  # pyright: ignore[reportUnusedFunction]
     return _dependency_code_entries_v1(root)[0]
 
 
+def _is_native_dependency_file_v1(source: Path) -> bool:
+    name = source.name
+    return (
+        source.suffix in {".dylib", ".pyd", ".so"}
+        or ".so." in name
+        or any(
+            name.endswith(suffix) for suffix in importlib.machinery.EXTENSION_SUFFIXES
+        )
+    )
+
+
+def _distribution_code_entries_v1(
+    owned_files: dict[Path, _DependencyFileIdentityV1],
+    roots: tuple[Path, ...],
+) -> tuple[tuple[int, int, str], dict[Path, bytes]]:
+    """Bind every installed distribution-owned regular file before imports."""
+
+    entries: list[tuple[str, int, bytes]] = []
+    payloads: dict[Path, bytes] = {}
+    aggregate_size = 0
+    for source in sorted(owned_files):
+        relative = next(
+            (
+                source.relative_to(root).as_posix()
+                for root in roots
+                if source.is_relative_to(root)
+            ),
+            None,
+        )
+        if relative is None:
+            raise RuntimeError("dependency distribution identity mismatch")
+        if _is_native_dependency_file_v1(source):
+            handle = _open_native_dependency_handle_v1(source, owned_files[source])
+            try:
+                entries.append((relative, handle[3], handle[4]))
+            finally:
+                os.close(handle[1])
+            aggregate_size += owned_files[source][5]
+            if aggregate_size > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1:
+                raise RuntimeError("dependency distribution identity mismatch")
+            continue
+        identity, raw, aggregate_size = _read_dependency_file_v1(
+            source,
+            expected_identity=owned_files[source],
+            aggregate_size=aggregate_size,
+        )
+        entries.append((relative, identity[5], hashlib.sha256(raw).digest()))
+        payloads[source] = raw
+    aggregate = hashlib.sha256()
+    for relative, size, digest in entries:
+        aggregate.update(relative.encode("utf-8"))
+        aggregate.update(b"\0")
+        aggregate.update(size.to_bytes(8, "big"))
+        aggregate.update(digest)
+    return (len(entries), aggregate_size, aggregate.hexdigest()), payloads
+
+
 def _module_name_for_dependency_path_v1(
     package_name: str, package_root: Path, source: Path
 ) -> tuple[str, bool]:
@@ -396,7 +668,7 @@ def _native_module_name_for_dependency_path_v1(
 class _VerifiedDependencySourceFinderV1(
     importlib.abc.MetaPathFinder, importlib.abc.Loader
 ):
-    """Load admitted Python dependency modules from verified descriptor bytes."""
+    """Load only descriptor-admitted dependency modules and namespaces."""
 
     def __init__(
         self,
@@ -406,7 +678,15 @@ class _VerifiedDependencySourceFinderV1(
         self._sources = dict(sources)
         self._native_handles = dict(native_handles or {})
         self._prefixes = frozenset(
-            name.split(".", 1)[0] for name in {*sources, *self._native_handles}
+            name.split(".", 1)[0]
+            for name in {*sources, *self._native_handles}
+            if not name.startswith(_NATIVE_COMPANION_HANDLE_PREFIX_V1)
+        )
+        self._namespaces = frozenset(
+            ".".join(name.split(".")[:length])
+            for name in self._sources
+            for length in range(1, name.count(".") + 1)
+            if ".".join(name.split(".")[:length]) not in self._sources
         )
 
     def find_spec(
@@ -426,6 +706,12 @@ class _VerifiedDependencySourceFinderV1(
             if is_package:
                 specification.submodule_search_locations = [str(origin.parent)]
             return specification
+        if fullname in self._namespaces:
+            specification = importlib.machinery.ModuleSpec(
+                fullname, self, is_package=True
+            )
+            specification.submodule_search_locations = []
+            return specification
         native = self._native_handles.get(fullname)
         if native is not None:
             if not _native_dependency_handle_live_v1(native, require_name=True):
@@ -440,6 +726,8 @@ class _VerifiedDependencySourceFinderV1(
             if specification is None or specification.loader is None:
                 raise ImportError("dependency native module origin mismatch")
             return specification
+        if fullname == "six.moves" or fullname.startswith("six.moves."):
+            return None
         prefix = fullname.split(".", 1)[0]
         if (
             prefix in self._prefixes
@@ -455,9 +743,14 @@ class _VerifiedDependencySourceFinderV1(
 
     def exec_module(self, module: object) -> None:
         name = getattr(module, "__name__", None)
-        if type(name) is not str or name not in self._sources:
+        if type(name) is not str:
             raise ImportError("dependency source module unavailable")
-        origin, raw, is_package = self._sources[name]
+        if name in self._namespaces:
+            return
+        source = self._sources.get(name)
+        if source is None:
+            raise ImportError("dependency source module unavailable")
+        origin, raw, is_package = source
         namespace = cast(dict[str, object], module.__dict__)
         namespace["__file__"] = str(origin)
         namespace["__cached__"] = None
@@ -473,8 +766,6 @@ def _verified_dependency_import_lifetime_v1(
     sources: dict[str, tuple[Path, bytes, bool]],
     native_handles: dict[str, _NativeDependencyHandleV1],
 ) -> Generator[None, None, None]:
-    """Exclude ambient finders and bytecode/pathname dependency fallbacks."""
-
     finder = _VerifiedDependencySourceFinderV1(sources, native_handles)
     prior_meta_path = list(sys.meta_path)
     prior_cache_prefix = sys.pycache_prefix
@@ -502,8 +793,10 @@ def _verified_dependency_import_lifetime_v1(
     sys.path_importer_cache.clear()
     sys.pycache_prefix = os.path.join(os.devnull, "plan33-disabled-pycache")
     sys.dont_write_bytecode = True
+    native_libraries: list[ctypes.CDLL] = []
     failure: BaseException | None = None
     try:
+        native_libraries = _load_native_dependency_companions_v1(native_handles)
         yield
     except BaseException as error:
         failure = error
@@ -517,6 +810,7 @@ def _verified_dependency_import_lifetime_v1(
         _close_native_dependency_handles_v1(native_handles)
     except BaseException as error:
         failure = failure or error
+    native_libraries.clear()
     if failure is not None:
         raise failure
 
@@ -667,6 +961,20 @@ def _native_dependency_descriptor_path_v1(descriptor: int) -> str:
     raise RuntimeError("dependency native descriptor unavailable")
 
 
+def _descriptor_sha256_v1(descriptor: int, size: int) -> bytes:
+    if type(size) is not int or not 0 <= size <= _MAX_DEPENDENCY_FILE_BYTES_V1:
+        raise RuntimeError("dependency distribution identity mismatch")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < size:
+        chunk = os.pread(descriptor, min(65_536, size - offset), offset)
+        if not chunk:
+            raise RuntimeError("dependency distribution identity mismatch")
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.digest()
+
+
 def _native_dependency_handle_live_v1(
     handle: _NativeDependencyHandleV1, *, require_name: bool
 ) -> bool:
@@ -677,7 +985,7 @@ def _native_dependency_handle_live_v1(
         if (
             _dependency_file_identity_v1(held) != identity
             or held.st_size != size
-            or hashlib.sha256(os.pread(descriptor, size, 0)).digest() != digest
+            or _descriptor_sha256_v1(descriptor, size) != digest
         ):
             return False
         return not require_name or (
@@ -695,40 +1003,33 @@ def _ensure_native_dependency_handle_live_v1(
         raise RuntimeError("provider trust configuration invalid")
 
 
-def _reject_ambient_transport_authority_v1() -> None:
-    if any(
-        name.casefold() in _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
-        or name.casefold().endswith("_proxy")
-        for name in os.environ
-    ):
-        raise RuntimeError("ambient transport authority is not allowed")
-
-
 def _open_native_dependency_handle_v1(
     origin: Path,
     identity: _DependencyFileIdentityV1,
-    raw: bytes,
+    raw: bytes | None = None,
 ) -> _NativeDependencyHandleV1:
     if (
         not origin.is_absolute()
         or type(identity) is not tuple
         or len(identity) != 8
         or any(type(value) is not int or value < 0 for value in identity)
-        or type(raw) is not bytes
-        or len(raw) > _MAX_DEPENDENCY_FILE_BYTES_V1
-        or identity[5] != len(raw)
+        or raw is not None
+        and (
+            type(raw) is not bytes
+            or len(raw) > _MAX_DEPENDENCY_FILE_BYTES_V1
+            or identity[5] != len(raw)
+        )
     ):
         raise RuntimeError("dependency distribution identity mismatch")
     descriptor = os.open(origin, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        handle = (
-            origin,
-            descriptor,
-            identity,
-            len(raw),
-            hashlib.sha256(raw).digest(),
+        digest = (
+            hashlib.sha256(raw).digest()
+            if raw is not None
+            else _descriptor_sha256_v1(descriptor, identity[5])
         )
+        handle = (origin, descriptor, identity, identity[5], digest)
         if not _native_dependency_handle_live_v1(handle, require_name=True):
             raise RuntimeError
         return handle
@@ -736,6 +1037,47 @@ def _open_native_dependency_handle_v1(
         with suppress(BaseException):
             os.close(descriptor)
         raise
+
+
+def _load_native_dependency_companions_v1(
+    handles: dict[str, _NativeDependencyHandleV1],
+) -> list[ctypes.CDLL]:
+    pending = [
+        (name, handle)
+        for name, handle in sorted(handles.items())
+        if name.startswith(_NATIVE_COMPANION_HANDLE_PREFIX_V1)
+    ]
+    loaded: list[ctypes.CDLL] = []
+    while pending:
+        remaining: list[tuple[str, _NativeDependencyHandleV1]] = []
+        last_error: OSError | None = None
+        for name, handle in pending:
+            del name
+            _ensure_native_dependency_handle_live_v1(handle)
+            descriptor_origin = _native_dependency_descriptor_path_v1(handle[1])
+            try:
+                library = ctypes.CDLL(descriptor_origin, mode=ctypes.RTLD_GLOBAL)
+            except OSError as error:
+                last_error = error
+                remaining.append(
+                    (
+                        _NATIVE_COMPANION_HANDLE_PREFIX_V1 + handle[0].as_posix(),
+                        handle,
+                    )
+                )
+                continue
+            if (
+                library._name != descriptor_origin
+                or not _native_dependency_handle_live_v1(handle, require_name=True)
+            ):
+                raise RuntimeError("dependency native companion identity mismatch")
+            loaded.append(library)
+        if len(remaining) == len(pending):
+            raise RuntimeError(
+                "dependency native companion unavailable"
+            ) from last_error
+        pending = remaining
+    return loaded
 
 
 def _close_native_dependency_handles_v1(
@@ -758,6 +1100,20 @@ def _close_native_dependency_handles_v1(
             del handles[name]
     if failure is not None:
         raise failure
+
+
+def _ensure_native_dependency_handles_live_v1(
+    handles: dict[str, _NativeDependencyHandleV1],
+) -> None:
+    for handle in handles.values():
+        _ensure_native_dependency_handle_live_v1(handle)
+
+
+def _reject_ambient_transport_authority_v1() -> None:
+    for name in os.environ:
+        folded = name.casefold()
+        if folded in _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1 or folded.endswith("_proxy"):
+            raise RuntimeError("ambient transport authority is not admitted")
 
 
 @contextmanager
@@ -815,40 +1171,67 @@ def _owned_dependency_path_v1(
     relative: str,
     roots: tuple[Path, ...],
 ) -> Path:
-    item = next(
-        item
-        for item in distribution.files or ()
-        if str(item).replace(os.sep, "/") == relative
-    )
-    located = Path(str(distribution.locate_file(item)))
-    if not located.is_absolute():
-        raise RuntimeError
-    metadata = os.stat(located, follow_symlinks=False)
-    resolved = located.resolve(strict=True)
-    if not stat.S_ISREG(metadata.st_mode) or not any(
-        resolved.is_relative_to(root) for root in roots
-    ):
-        raise RuntimeError
-    return resolved
+    owned = _owned_distribution_files_v1(distribution, roots)
+    try:
+        return next(
+            path for path in owned if any(path == root / relative for root in roots)
+        )
+    except StopIteration:
+        raise RuntimeError from None
 
 
 def _owned_distribution_files_v1(
     distribution: importlib.metadata.Distribution, roots: tuple[Path, ...]
 ) -> dict[Path, _DependencyFileIdentityV1]:
     owned: dict[Path, _DependencyFileIdentityV1] = {}
-    for item in distribution.files or ():
+    names: set[str] = set()
+    total_path_bytes = 0
+    items = tuple(distribution.files or ())
+    if not 1 <= len(items) <= _MAX_DEPENDENCY_FILES_V1:
+        raise RuntimeError
+    for item in items:
         located = Path(str(distribution.locate_file(item)))
         if not located.is_absolute():
             raise RuntimeError
         metadata = os.stat(located, follow_symlinks=False)
         resolved = located.resolve(strict=True)
-        if stat.S_ISREG(metadata.st_mode) and any(
-            resolved.is_relative_to(root) for root in roots
+        root = next((root for root in roots if resolved.is_relative_to(root)), None)
+        if root is None:
+            continue
+        relative = resolved.relative_to(root).as_posix()
+        encoded = relative.encode("utf-8")
+        parts = tuple(Path(relative).parts)
+        if (
+            not relative
+            or relative.startswith("/")
+            or "\\" in relative
+            or any(part in ("", ".", "..") for part in parts)
+            or len(encoded) > _MAX_DEPENDENCY_PATH_BYTES_V1
+            or total_path_bytes + len(encoded) > _MAX_DEPENDENCY_TOTAL_PATH_BYTES_V1
+            or relative.casefold() in names
+            or not stat.S_ISREG(metadata.st_mode)
+            or resolved in owned
         ):
-            owned[resolved] = _dependency_file_identity_v1(metadata)
+            raise RuntimeError
+        names.add(relative.casefold())
+        total_path_bytes += len(encoded)
+        owned[resolved] = _dependency_file_identity_v1(metadata)
     if not owned:
         raise RuntimeError
     return owned
+
+
+def _dependency_runtime_key_v1() -> tuple[str, str, str, str]:
+    soabi = sysconfig.get_config_var("SOABI")
+    machine = os.uname().machine
+    if type(soabi) is not str or not soabi or type(machine) is not str or not machine:
+        raise RuntimeError("dependency distribution identity mismatch")
+    return (
+        sys.platform,
+        machine,
+        f"{sys.version_info.major}.{sys.version_info.minor}",
+        soabi,
+    )
 
 
 def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission boundary
@@ -862,11 +1245,15 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
     native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
         roots = _trusted_site_roots_v1()
+        expected_identities = _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1[
+            _dependency_runtime_key_v1()
+        ]
+        required_names = {item[0] for item in _DEPENDENCY_REQUIREMENTS_V1}
+        if set(expected_identities) != required_names | {"yfinance"}:
+            raise RuntimeError
         origins: dict[str, Path] = {}
         owned_files: dict[Path, _DependencyFileIdentityV1] = {}
         sources: dict[str, tuple[Path, bytes, bool]] = {}
-        native_handles = {}
-        curl_admitted = False
         for distribution_name, expected_version, modules in _DEPENDENCY_REQUIREMENTS_V1:
             normalized_name = distribution_name.casefold().replace("_", "-")
             distributions = tuple(
@@ -881,16 +1268,74 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 raise RuntimeError
             distribution = distributions[0]
             distribution_files = _owned_distribution_files_v1(distribution, roots)
+            aggregate, file_bytes = _distribution_code_entries_v1(
+                distribution_files, roots
+            )
+            if aggregate != expected_identities[distribution_name]:
+                raise RuntimeError
+            if any(path in owned_files for path in distribution_files):
+                raise RuntimeError
             owned_files.update(distribution_files)
             for module_name, relative in modules:
+                if module_name in origins:
+                    raise RuntimeError
                 origins[module_name] = _owned_dependency_path_v1(
                     distribution, relative, roots
                 )
-            package_root = origins[modules[0][0]].parent
-            package_name = modules[0][0].split(".", 1)[0]
-            aggregate, file_bytes = _dependency_code_entries_v1(package_root)
-            if aggregate not in _DEPENDENCY_CODE_AGGREGATES_V1[package_name]:
-                raise RuntimeError
+            top_module = modules[0][0]
+            top_origin = origins[top_module]
+            package_name = top_module.split(".", 1)[0]
+            package_root: Path | None = None
+            if top_origin.name == "__init__.py":
+                package_root = top_origin.parent
+                for _unused in top_module.split(".")[1:]:
+                    package_root = package_root.parent
+                for source, raw in file_bytes.items():
+                    if source.suffix != ".py" or not source.is_relative_to(
+                        package_root
+                    ):
+                        continue
+                    module_name, is_package = _module_name_for_dependency_path_v1(
+                        package_name, package_root, source
+                    )
+                    if module_name in sources:
+                        raise RuntimeError
+                    sources[module_name] = (source, raw, is_package)
+            else:
+                sources[top_module] = (top_origin, file_bytes[top_origin], False)
+            if package_root is not None:
+                for origin, identity in distribution_files.items():
+                    if origin == top_origin:
+                        continue
+                    module_name = (
+                        _native_module_name_for_dependency_path_v1(
+                            package_name, package_root, origin
+                        )
+                        if origin.is_relative_to(package_root)
+                        else None
+                    )
+                    if module_name is not None:
+                        if module_name in native_handles:
+                            raise RuntimeError
+                        native_handles[module_name] = _open_native_dependency_handle_v1(
+                            origin, identity
+                        )
+                    elif _is_native_dependency_file_v1(origin) and not (
+                        normalized_name == "cffi"
+                        and origin.parent in roots
+                        and any(
+                            origin.name == f"_cffi_backend{suffix}"
+                            for suffix in importlib.machinery.EXTENSION_SUFFIXES
+                        )
+                    ):
+                        companion_name = (
+                            _NATIVE_COMPANION_HANDLE_PREFIX_V1 + origin.as_posix()
+                        )
+                        if companion_name in native_handles:
+                            raise RuntimeError
+                        native_handles[companion_name] = (
+                            _open_native_dependency_handle_v1(origin, identity)
+                        )
             if normalized_name == "cffi":
                 backend_origins = tuple(
                     origin
@@ -904,81 +1349,23 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 if len(backend_origins) != 1:
                     raise RuntimeError
                 backend_origin = backend_origins[0]
-                backend_identity, backend_raw, _ = _read_dependency_file_v1(
-                    backend_origin,
-                    expected_identity=distribution_files[backend_origin],
-                    aggregate_size=sum(len(raw) for raw in file_bytes.values()),
+                backend_handle = _open_native_dependency_handle_v1(
+                    backend_origin, distribution_files[backend_origin]
                 )
-                if (
-                    hashlib.sha256(backend_raw).hexdigest()
-                    not in _CFFI_BACKEND_CODE_IDENTITIES_V1
-                ):
+                if backend_handle[4].hex() not in _CFFI_BACKEND_CODE_IDENTITIES_V1:
+                    os.close(backend_handle[1])
                     raise RuntimeError
-                native_handles["_cffi_backend"] = _open_native_dependency_handle_v1(
-                    backend_origin,
-                    backend_identity,
-                    backend_raw,
-                )
-            for source, raw in file_bytes.items():
-                if source.suffix != ".py":
-                    continue
-                module_name, is_package = _module_name_for_dependency_path_v1(
-                    package_name, package_root, source
-                )
-                if module_name in sources:
-                    raise RuntimeError
-                sources[module_name] = (source, raw, is_package)
-            for origin in distribution_files:
-                if not origin.is_relative_to(package_root):
-                    continue
-                module_name = _native_module_name_for_dependency_path_v1(
-                    package_name, package_root, origin
-                )
-                if module_name is None:
-                    continue
-                if module_name in native_handles:
-                    raise RuntimeError
-                native_handles[module_name] = _open_native_dependency_handle_v1(
-                    origin,
-                    distribution_files[origin],
-                    file_bytes[origin],
-                )
+                native_handles["_cffi_backend"] = backend_handle
             if normalized_name == "certifi":
-                ca_bundle = package_root / "cacert.pem"
-                ca_identity = distribution_files.get(ca_bundle)
-                ca_bytes = file_bytes.get(ca_bundle)
-                if ca_identity is None or ca_bytes is None:
+                ca_bundle = top_origin.parent / "cacert.pem"
+                if ca_bundle not in distribution_files or ca_bundle not in file_bytes:
                     raise RuntimeError
                 native_handles[_CA_BUNDLE_HANDLE_NAME_V1] = (
                     _open_native_dependency_handle_v1(
-                        ca_bundle,
-                        ca_identity,
-                        ca_bytes,
+                        ca_bundle, distribution_files[ca_bundle]
                     )
                 )
-            if normalized_name == "curl-cffi":
-                curl_admitted = True
-            top_module = modules[0][0]
-            specification = importlib.machinery.PathFinder.find_spec(
-                top_module, [str(root) for root in roots]
-            )
-            expected_origin = origins[top_module]
-            if (
-                specification is None
-                or specification.loader is None
-                or specification.origin is None
-                or specification.submodule_search_locations is None
-                or Path(specification.origin) != expected_origin
-                or Path(specification.origin).resolve(strict=True) != expected_origin
-                or tuple(
-                    Path(location).resolve(strict=True)
-                    for location in specification.submodule_search_locations
-                )
-                != (expected_origin.parent,)
-            ):
-                raise RuntimeError
-        if not curl_admitted:
-            raise RuntimeError
+                del file_bytes[ca_bundle]
         return roots, origins, owned_files, sources, native_handles
     except (
         KeyError,
@@ -1450,7 +1837,7 @@ def _emit(payload: dict[str, object], *, maximum_bytes: int) -> None:
     sys.stdout.write(encoded + "\n")
 
 
-def _run_enabled(
+def _run_enabled(  # noqa: C901 - closed fail-closed admission sequence
     raw: bytes,
     arguments: argparse.Namespace,
     roots: tuple[Path, Path, Path, Path],
@@ -1490,6 +1877,7 @@ def _run_enabled(
             _bind_certifi_ca_bundle_v1(native_handles)
 
             try:
+                from . import capture_forward_adjusted_ohlcv as low  # noqa: PLC0415
                 from . import (  # noqa: PLC0415
                     efficient_current_nifty100_adjusted_capture as core,
                 )
@@ -1513,6 +1901,18 @@ def _run_enabled(
                     or core.MAX_RESULT_BYTES_V1 != _MAX_RESULT_BYTES_V1
                 ):
                     raise RuntimeError("CLI contract identity mismatch")
+
+                def ensure_dependency_authority() -> None:
+                    _ensure_native_dependency_handles_live_v1(native_handles)
+                    _require_dependency_origins_v1(
+                        dependency_origins, owned_files, require_loaded=True
+                    )
+                    _require_loaded_curl_modules_owned_v1(owned_files, native_handles)
+                    yfinance_module = low._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+                    if not core._yfinance_transport_backend_is_exact_v1(  # pyright: ignore[reportPrivateUsage]
+                        yfinance_module
+                    ):
+                        raise RuntimeError("provider backend identity mismatch")
             except (
                 ImportError,
                 KeyError,
@@ -1558,7 +1958,15 @@ def _run_enabled(
                 schedule_root=roots[3],
                 _protected_cleanup_identities=frozenset({request_file_identity[:2]}),
                 _request_live=request_live,
+                _dependency_authority=ensure_dependency_authority,
             )
+            if "yfinance" in sys.modules:
+                try:
+                    ensure_dependency_authority()
+                except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+                    result = core.SharedFailureV1(
+                        "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"
+                    )
             if not request_live():
                 result = core.SharedFailureV1(
                     "INSUFFICIENT_EVIDENCE", "CONFIGURATION_INVALID"

@@ -65,6 +65,13 @@ Stop at the scope-expansion circuit breaker before adding an unplanned subsystem
 
 When work genuinely needs multiple agents or independent R3/R4 review, use Herdr and follow [`docs/herdr-multi-agent-workflow.md`](herdr-multi-agent-workflow.md). Never substitute an invisible or generic subagent launcher.
 
+Every Herdr-spawned worker or reviewer MUST run through OMP using
+`herdr agent start ... --kind omp`. Native Codex CLI sessions and
+`herdr agent start ... --kind codex` are prohibited for repository work.
+Names such as `openai-codex/gpt-5.6-sol` and
+`openai-codex/gpt-5.6-terra` are OMP `--model` identifiers only; they never
+authorize a native Codex runtime.
+
 One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them.
 
 After a complete result is captured and checked, close that reviewer or worker tab immediately when it is `idle` or `done`. Never close, interrupt, or replace an active `working`, `blocked`, or `unknown` agent for cleanup or timeboxing.

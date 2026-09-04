@@ -1280,6 +1280,7 @@ class BoundedYahooSessionV1(CurlSession):
         sleep: Callable[[float], None] = time.sleep,
         owns_provider_admission: bool = False,
         cache_authority: _ProviderCacheAuthorityV1 | None = None,
+        dependency_authority: Callable[[], None] = lambda: None,
     ) -> None:
         _reject_ambient_transport_authority_v1()
         _ensure_provider_ca_bundle_live_v1()
@@ -1301,6 +1302,7 @@ class BoundedYahooSessionV1(CurlSession):
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission
         self._cache_authority = cache_authority
+        self._dependency_authority = dependency_authority
         self._start_boundary_lock = threading.Lock()
         self._clock = clock
         self._sleep = sleep
@@ -1326,6 +1328,9 @@ class BoundedYahooSessionV1(CurlSession):
         if self._cache_authority is None:
             raise RuntimeError("provider runtime configuration invalid")
         self._cache_authority.protected_identities.update(identities)
+
+    def ensure_dependency_authority(self) -> None:
+        self._dependency_authority()
 
     def _acquire_start_boundary(self) -> None:
         self._start_boundary_lock.acquire()
@@ -1367,6 +1372,7 @@ class BoundedYahooSessionV1(CurlSession):
         kwargs["allow_redirects"] = False
         try:
             try:
+                self.ensure_dependency_authority()
                 response = cast(
                     _CurlResponseV1,
                     super().request(
@@ -2496,6 +2502,7 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
     *,
     protected_identities: frozenset[tuple[int, int]] = frozenset(),
     _expected_root_identity: tuple[int, int] | None = None,
+    dependency_authority: Callable[[], None] = lambda: None,
 ) -> BoundedYahooSessionV1:
     """Create and verify one exact exclusive runtime before importing yfinance."""
 
@@ -2527,6 +2534,7 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
         session = BoundedYahooSessionV1(
             owns_provider_admission=True,
             cache_authority=cache,
+            dependency_authority=dependency_authority,
         )
     except BaseException:
         if cache is not None:
@@ -2568,6 +2576,12 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
 class _Plan33ProviderV1:
     def __init__(self, session: BoundedYahooSessionV1) -> None:
         self._session = session
+        dependency_authority = getattr(
+            session, "ensure_dependency_authority", lambda: None
+        )
+        if not callable(dependency_authority):
+            raise RuntimeError("dependency authority invalid")
+        self._dependency_authority = dependency_authority
         self._adapter = low.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
 
     def download(self, **kwargs: object) -> object:
@@ -2580,6 +2594,7 @@ class _Plan33ProviderV1:
             return low.CaptureForwardAdjustedOhlcvFailureV1(
                 "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
             )
+        self._dependency_authority()
         kwargs["threads"] = 8
         kwargs["session"] = self._session
         kwargs["_plan33_normalize_provider_order"] = True
@@ -2590,7 +2605,9 @@ class _Plan33ProviderV1:
                 redirect_stdout(_DiscardOutputV1()),
                 redirect_stderr(_DiscardOutputV1()),
             ):
-                return self._adapter.download(**kwargs)
+                response = self._adapter.download(**kwargs)
+                self._dependency_authority()
+                return response
         finally:
             logging.disable(previous_disable)
 
@@ -3192,6 +3209,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
     fetcher: SourceFetcherV1 | None,
     protected_cleanup_identities: frozenset[tuple[int, int]],
     request_live: Callable[[], bool],
+    dependency_authority: Callable[[], None],
     authority_holder: list[_MissingSelectionRootAuthorityV1],
 ) -> CurrentNifty100ResultV1 | SharedFailureV1:
     """Run one exact operator-triggered current Nifty 100 capture."""
@@ -3565,6 +3583,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                             selection_root,
                             protected_identities=protected_identities,
                             _expected_root_identity=selection_identity[:2],
+                            dependency_authority=dependency_authority,
                         )
                     except Exception:
                         runtime_unavailable = True
@@ -3771,6 +3790,7 @@ def capture_current_nifty100_v1(
     fetcher: SourceFetcherV1 | None = None,
     _protected_cleanup_identities: frozenset[tuple[int, int]] = frozenset(),
     _request_live: Callable[[], bool] = lambda: True,
+    _dependency_authority: Callable[[], None] = lambda: None,
 ) -> CurrentNifty100ResultV1 | SharedFailureV1:
     """Run one exact operator-triggered current Nifty 100 capture."""
 
@@ -3789,6 +3809,7 @@ def capture_current_nifty100_v1(
             fetcher=fetcher,
             protected_cleanup_identities=_protected_cleanup_identities,
             request_live=_request_live,
+            dependency_authority=_dependency_authority,
             authority_holder=authorities,
         )
     except BaseException as error:

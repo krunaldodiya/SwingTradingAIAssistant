@@ -94,10 +94,19 @@ Pinned `multitasking==0.0.13` creates its default CPU-sized pool when yfinance's
 
 Before the enabled core import executes a provider dependency, the CLI requires
 a fresh process with no preloaded admitted dependency or transitive child
-module. It admits the sole `multitasking==0.0.13`, `curl-cffi==0.16.1`,
-`cffi==2.1.1`, `requests==2.34.2`, `urllib3==2.7.0`,
-`charset-normalizer==3.5.1`, `idna==3.19`, and `certifi==2026.7.22`
-distributions beneath the running interpreter's resolved `purelib`/`platlib`.
+module. It admits the exact locked yfinance runtime closure: `yfinance==1.6.0`,
+`beautifulsoup4==4.15.0`, `certifi==2026.7.22`, `cffi==2.1.1`,
+`charset-normalizer==3.5.1`, `curl-cffi==0.16.1`, `idna==3.19`,
+`lxml==6.1.2`, `multitasking==0.0.13`, `numpy==2.4.6`,
+`pandas==3.0.5`, `peewee==4.3.0`, `platformdirs==4.11.3`,
+`protobuf==7.36.0`, `pycparser==3.0`, `python-dateutil==2.9.0.post0`,
+`pytz==2026.3.post1`, `requests==2.34.2`, `six==1.17.0`,
+`soupsieve==2.9.2`, `typing-extensions==4.16.0`, `urllib3==2.7.0`,
+and `websockets==17.0.1` distributions beneath the running interpreter's
+resolved `purelib`/`platlib`. Exact aggregates are admitted only for CPython
+3.11 x86-64 on Darwin or Linux with the bound SOABI; every other runtime fails
+closed. The Linux identity and native-companion path are exercised in the
+locked Debian/Ubuntu-compatible CPython 3.11 environment used by hosted CI.
 The Requests family is admitted because pinned yfinance imports it for its
 dual-backend session-type compatibility surface; it is not an admitted
 provider transport.
@@ -135,23 +144,26 @@ denied as defense in depth.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes. Dependency
-admission allows at most 16,777,216 bytes per file and 67,108,864 bytes across
+admission allows at most 67,108,864 bytes per file and 67,108,864 bytes across
 one package tree. Installed Python source may be hard-linked by the package
 installer; link count is not treated as authenticity. Admission still requires
 the pathname and held descriptor to retain the same complete file identity
 before and after the bounded read, and the descriptor-read bytes must contribute
 to an allowlisted distribution aggregate.
-Each native extension is held by a shared-locked descriptor whose full metadata
-and content identity match the admitted distribution object; the extension loader
-receives only the verified `/dev/fd` or `/proc/self/fd` alias to that held
-object, never a second lookup of its mutable package pathname. This includes
-cffi's top-level `_cffi_backend` native object as well as curl-cffi's package
-extensions. Loaded Python file/spec origins bind to their admitted absolute
-paths, while a loaded native file/spec origin binds to that verified descriptor
-alias and remains live through the operation. The cffi-generated
-`curl_cffi._wrapper.lib` object has no file/spec; it is admitted only when it is
-the exact `lib` object exported by the separately descriptor-bound
-`curl_cffi._wrapper` extension.
+Each native extension and package-owned native companion is held by a
+shared-locked descriptor whose full metadata and content identity match the
+admitted distribution object. The extension loader receives only the verified
+`/dev/fd` or `/proc/self/fd` alias to that held object, never a second lookup of
+its mutable package pathname. Required companion libraries are loaded from the
+same descriptor aliases with global native visibility and retained for the
+verified import lifetime. This includes cffi's top-level `_cffi_backend` native
+object, curl-cffi's package extensions and companions, and NumPy/Pandas native
+extensions and companion libraries. Loaded Python file/spec origins bind to
+their admitted absolute paths, while a loaded native file/spec origin binds to
+that verified descriptor alias and remains live through the operation. The
+cffi-generated `curl_cffi._wrapper.lib` object has no file/spec; it is admitted
+only when it is the exact `lib` object exported by the separately
+descriptor-bound `curl_cffi._wrapper` extension.
 The admitted certifi CA bundle is descriptor-bound before the enabled core
 import, so dependency import cannot reopen that resource through the custom
 source loader.
@@ -167,6 +179,11 @@ removed for the duration of the operation. A package, coherent
 package-plus-metadata, preloaded transitive or optional module, ambient optional
 module, native pathname substitution, missing/replaced backend object, or
 Requests transport fallback is not executed.
+
+The CLI revalidates every retained native descriptor, every loaded dependency
+origin, the complete yfinance distribution and loaded-module set, and the exact
+curl-cffi backend immediately before each provider effect, after each adapter
+response, and before final success.
 
 The official-source opener installs no proxy handler and uses a fresh
 client-verifying TLS context populated only from the same admitted immutable CA

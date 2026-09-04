@@ -19,6 +19,11 @@ The canonical project adapter decides whether this procedure applies. Once
 selected, use this procedure for the assigned multi-agent or independent-review
 work without expanding its scope.
 
+This procedure is OMP-runtime-only. Start every worker and reviewer with
+`herdr agent start ... --kind omp`; never invoke the native Codex CLI or use
+`--kind codex` for repository work. An `openai-codex/...` value below is only
+an OMP model route passed through OMP's `--model` option.
+
 All agents share the current working tree. A separate tab is visibility, not
 filesystem isolation.
 
@@ -28,13 +33,15 @@ filesystem isolation.
   working/later boundary, defines cross-slice contracts, assigns file ownership,
   exclusively integrates shared results, exclusively runs final repository-wide
   gates, and owns delivery claims.
-- **Implementation agent:** use `openai-codex/gpt-5.6-terra` with high thinking
-  for bounded source and behavior-test changes.
-- **Functional/domain reviewer:** use `openai-codex/gpt-5.6-sol` with high
-  thinking; read-only unless a later repair assignment is explicit.
-- **Security/privacy/provenance reviewer:** use
-  `openai-codex/gpt-5.6-sol` with high thinking; use neutral defensive wording
-  and remain read-only.
+- **Implementation agent:** start an OMP agent with `--kind omp`, pass
+  `--model openai-codex/gpt-5.6-terra`, and use high thinking for bounded
+  source and behavior-test changes.
+- **Functional/domain reviewer:** start an OMP agent with `--kind omp`, pass
+  `--model openai-codex/gpt-5.6-sol`, and use high thinking; remain read-only
+  unless a later repair assignment is explicit.
+- **Security/privacy/provenance reviewer:** start an OMP agent with
+  `--kind omp`, pass `--model openai-codex/gpt-5.6-sol`, and use high thinking;
+  use neutral defensive wording and remain read-only.
 - **Mechanical work:** keep with the coordinator unless it is a large,
   exact, non-overlapping transformation with explicit acceptance evidence.
 
@@ -142,12 +149,14 @@ shared integration, repository-wide gates, review, tracker, and delivery actions
 with the coordinator unless those actions and their authority are explicitly
 assigned.
 
-Route a decision-dominant goal to `openai-codex/gpt-5.6-sol` with high
-thinking, and an implementation-ready goal with frozen contracts to
-`openai-codex/gpt-5.6-terra` with high thinking. A Terra goal that encounters a
-consequential architecture, market-logic, source/provider, evidence-policy,
-security, acceptance, or authority decision must pause. The coordinator starts
-a fresh bounded Sol decision agent, captures the decision and its evidence,
+Start a decision-dominant goal as an OMP agent with `--kind omp`, pass
+`--model openai-codex/gpt-5.6-sol`, and use high thinking. Start an
+implementation-ready goal with frozen contracts as an OMP agent with
+`--kind omp`, pass `--model openai-codex/gpt-5.6-terra`, and use high thinking.
+A Terra goal that encounters a consequential architecture, market-logic,
+source/provider, evidence-policy, security, acceptance, or authority decision
+must pause. The coordinator starts a fresh bounded Sol decision agent, captures
+the decision and its evidence,
 updates the governing record, revalidates the shared tree and remaining
 assignment, and only then resumes or restarts Terra. A mid-goal model switch is
 not a substitute for that decision boundary or an independent review.

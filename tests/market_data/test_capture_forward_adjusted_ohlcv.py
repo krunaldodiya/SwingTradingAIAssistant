@@ -2616,6 +2616,19 @@ def test_yfinance_distribution_ordering_uses_first_pass_admitted_bytes(
         aggregate.update(len(raw).to_bytes(8, "big"))
         aggregate.update(hashlib.sha256(raw).digest())
     expected_aggregate = aggregate.hexdigest()
+    synthetic_identity = (
+        2,
+        len(parent_raw) + len(child_raw),
+        expected_aggregate,
+    )
+    monkeypatch.setattr(
+        core,
+        "_YFINANCE_DISTRIBUTION_IDENTITIES_V1",
+        dict.fromkeys(
+            core._YFINANCE_DISTRIBUTION_IDENTITIES_V1,
+            synthetic_identity,
+        ),
+    )
     monkeypatch.setattr(core, "_trusted_site_roots_v1", lambda: (tmp_path,))
     monkeypatch.setattr(
         core.importlib.metadata,
@@ -3614,3 +3627,11 @@ def test_composer_rejects_revision_count_bounds(
             regions=tuple(HistoricalStudyRegionV1),
             evaluated_at=datetime(2026, 9, 1, tzinfo=UTC),
         )
+
+
+def test_yfinance_admission_uses_plan33_dependency_bounds() -> None:
+    assert core._MAX_YFINANCE_FILE_BYTES_V1 == 67_108_864
+    assert core._MAX_YFINANCE_AGGREGATE_BYTES_V1 == 67_108_864
+    assert core._MAX_YFINANCE_FILES_V1 == 4_096
+    assert core._MAX_YFINANCE_PATH_BYTES_V1 == 4_096
+    assert core._MAX_YFINANCE_TOTAL_PATH_BYTES_V1 == 1_048_576

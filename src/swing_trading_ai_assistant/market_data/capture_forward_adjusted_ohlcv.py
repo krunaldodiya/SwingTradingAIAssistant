@@ -73,6 +73,23 @@ _yfinance_code_identities: list[str] = []
 _YFINANCE_CODE_AGGREGATES_V1: Final = frozenset(
     {"c380fb01c2e583112e614091d07a3c3e53a474e3154cc29beb44d403d9e29963"}
 )
+_MAX_YFINANCE_FILE_BYTES_V1: Final = 67_108_864
+_MAX_YFINANCE_AGGREGATE_BYTES_V1: Final = 67_108_864
+_MAX_YFINANCE_FILES_V1: Final = 4_096
+_MAX_YFINANCE_PATH_BYTES_V1: Final = 4_096
+_MAX_YFINANCE_TOTAL_PATH_BYTES_V1: Final = 1_048_576
+_YFINANCE_DISTRIBUTION_IDENTITIES_V1: Final = {
+    ("darwin", "x86_64", "3.11", "cpython-311-darwin"): (
+        42,
+        585_691,
+        "5747f10cc79873900e8498d31203fb23741cd765a00931419c4c2e7261959df4",
+    ),
+    ("linux", "x86_64", "3.11", "cpython-311-x86_64-linux-gnu"): (
+        42,
+        585_691,
+        "5747f10cc79873900e8498d31203fb23741cd765a00931419c4c2e7261959df4",
+    ),
+}
 
 CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv@v1"
 REVISION_CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv-revision@v1"
@@ -1120,7 +1137,7 @@ def _read_yfinance_source_v1(
         metadata = os.fstat(descriptor)
         if (
             _stat_regular_file_identity(metadata) != expected_identity
-            or not 0 <= metadata.st_size <= 1_048_576
+            or not 0 <= metadata.st_size <= _MAX_YFINANCE_FILE_BYTES_V1
         ):
             raise RuntimeError
         payload = bytearray()
@@ -1176,24 +1193,72 @@ def _trusted_yfinance_distribution_v1(  # noqa: C901 - closed package admission
         if len(distributions) != 1 or distributions[0].version != "1.6.0":
             raise RuntimeError
         distribution = distributions[0]
-        sources: dict[str, _YfinanceSourceV1] = {}
+        runtime_key = (
+            sys.platform,
+            os.uname().machine,
+            f"{sys.version_info.major}.{sys.version_info.minor}",
+            sysconfig.get_config_var("SOABI"),
+        )
+        expected_identity = _YFINANCE_DISTRIBUTION_IDENTITIES_V1.get(runtime_key)
+        if expected_identity is None:
+            raise RuntimeError
+        files = tuple(distribution.files or ())
+        if not files or len(files) > _MAX_YFINANCE_FILES_V1:
+            raise RuntimeError
+        owned_paths: set[str] = set()
         aggregate_entries: list[tuple[str, int, bytes]] = []
-        admitted_sources: list[tuple[str, Path, bytes, _YfinanceFileIdentityV1]] = []
-        package_root: Path | None = None
-        for item in distribution.files or ():
+        admitted_files: dict[str, tuple[Path, bytes, _YfinanceFileIdentityV1]] = {}
+        aggregate_size = 0
+        total_path_bytes = 0
+        for item in files:
             relative = str(item).replace(os.sep, "/")
-            if not relative.startswith("yfinance/") or not relative.endswith(".py"):
-                continue
+            relative_bytes = relative.encode("utf-8")
+            if (
+                not relative
+                or len(relative_bytes) > _MAX_YFINANCE_PATH_BYTES_V1
+                or relative in owned_paths
+                or Path(relative).is_absolute()
+                or any(part in {"", ".", ".."} for part in relative.split("/"))
+            ):
+                raise RuntimeError
+            owned_paths.add(relative)
+            total_path_bytes += len(relative_bytes)
+            if total_path_bytes > _MAX_YFINANCE_TOTAL_PATH_BYTES_V1:
+                raise RuntimeError
             located = Path(str(distribution.locate_file(item)))
             if not located.is_absolute() or located.is_symlink():
                 raise RuntimeError
             origin = located.resolve(strict=True)
             if not any(origin.is_relative_to(root) for root in roots):
-                raise RuntimeError
-            if relative == "yfinance/__init__.py":
-                package_root = origin.parent
+                continue
             identity = _regular_file_identity(str(origin))
             raw = _read_yfinance_source_v1(origin, identity)
+            aggregate_size += len(raw)
+            if aggregate_size > _MAX_YFINANCE_AGGREGATE_BYTES_V1:
+                raise RuntimeError
+            aggregate_entries.append((relative, len(raw), hashlib.sha256(raw).digest()))
+            admitted_files[relative] = (origin, raw, identity)
+        aggregate = hashlib.sha256()
+        for relative, size, digest in sorted(aggregate_entries):
+            aggregate.update(relative.encode("utf-8"))
+            aggregate.update(b"\0")
+            aggregate.update(size.to_bytes(8, "big"))
+            aggregate.update(digest)
+        if (
+            len(aggregate_entries),
+            sum(size for _relative, size, _digest in aggregate_entries),
+            aggregate.hexdigest(),
+        ) != expected_identity:
+            raise RuntimeError
+        sources: dict[str, _YfinanceSourceV1] = {}
+        aggregate_entries = []
+        admitted_sources: list[tuple[str, Path, bytes, _YfinanceFileIdentityV1]] = []
+        package_root: Path | None = None
+        for relative, (origin, raw, identity) in admitted_files.items():
+            if not relative.startswith("yfinance/") or not relative.endswith(".py"):
+                continue
+            if relative == "yfinance/__init__.py":
+                package_root = origin.parent
             aggregate_entries.append((relative, len(raw), hashlib.sha256(raw).digest()))
             admitted_sources.append((relative, origin, raw, identity))
         if package_root is None:
@@ -1213,22 +1278,7 @@ def _trusted_yfinance_distribution_v1(  # noqa: C901 - closed package admission
         if code_identity not in _YFINANCE_CODE_AGGREGATES_V1:
             raise RuntimeError
         top_origin, _raw, is_package, top_identity = sources["yfinance"]
-        specification = importlib.machinery.PathFinder.find_spec(
-            "yfinance", [str(root) for root in roots]
-        )
-        if (
-            not is_package
-            or specification is None
-            or specification.loader is None
-            or specification.origin is None
-            or specification.submodule_search_locations is None
-            or Path(specification.origin).resolve(strict=True) != top_origin
-            or tuple(
-                Path(location).resolve(strict=True)
-                for location in specification.submodule_search_locations
-            )
-            != (package_root,)
-        ):
+        if not is_package:
             raise RuntimeError
         return str(top_origin), top_identity, code_identity, sources
     except (KeyError, OSError, RuntimeError, StopIteration, TypeError, ValueError):

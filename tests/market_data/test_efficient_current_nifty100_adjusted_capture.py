@@ -616,6 +616,57 @@ def test_provider_transport_rejects_unapproved_methods_and_hosts_before_effect(
     assert calls == []
 
 
+def test_transport_revalidates_dependency_authority_before_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    effects: list[str] = []
+
+    def forbidden_request(*_args: object, **_kwargs: object) -> object:
+        effects.append("transport")
+        raise AssertionError("provider effect reached")
+
+    def reject_dependency_authority() -> None:
+        raise RuntimeError("dependency authority invalid")
+
+    monkeypatch.setattr(core.CurlSession, "request", forbidden_request)
+    session = core.BoundedYahooSessionV1(
+        dependency_authority=reject_dependency_authority
+    )
+    try:
+        with pytest.raises(RuntimeError, match="dependency authority invalid"):
+            session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
+    finally:
+        session.close()
+    assert effects == []
+
+
+def test_provider_revalidates_dependency_authority_after_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Session:
+        def ensure_dependency_authority(self) -> None:
+            events.append("authority")
+            if events.count("authority") == 2:
+                raise RuntimeError("dependency authority invalid")
+
+    class Adapter:
+        def download(self, **_kwargs: object) -> object:
+            events.append("download")
+            return object()
+
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
+    provider = core._Plan33ProviderV1(Session())  # type: ignore[arg-type]
+    provider._adapter = Adapter()  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="dependency authority invalid"):
+        provider.download(threads=False)
+    assert events == ["authority", "download", "authority"]
+
+
 def test_internal_provider_ca_path_is_exact_and_not_ambient(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -5083,7 +5134,7 @@ def test_dependency_code_admission_rejects_per_file_limit_plus_one(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    assert cli._MAX_DEPENDENCY_FILE_BYTES_V1 == 16_777_216
+    assert cli._MAX_DEPENDENCY_FILE_BYTES_V1 == 67_108_864
     package = tmp_path / "certifi"
     package.mkdir()
     (package / "__init__.py").write_bytes(b"x" * 9)
@@ -5336,29 +5387,8 @@ def test_verified_dependency_loader_denies_every_optional_dependency_prefix() ->
 
 
 def test_path_import_prefixes_are_closed() -> None:
-    assert (
-        frozenset(
-            {
-                "bs4",
-                "dateutil",
-                "google",
-                "lxml",
-                "numpy",
-                "pandas",
-                "peewee",
-                "platformdirs",
-                "pyarrow",
-                "pycparser",
-                "pytz",
-                "six",
-                "soupsieve",
-                "swing_trading_ai_assistant",
-                "typing_extensions",
-                "websockets",
-                "yfinance",
-            }
-        )
-        == cli._ALLOWED_PATH_IMPORT_PREFIXES_V1
+    assert frozenset({"swing_trading_ai_assistant"}) == (
+        cli._ALLOWED_PATH_IMPORT_PREFIXES_V1
     )
 
 
@@ -6101,3 +6131,78 @@ def test_yfinance_cache_cleanup_attempts_every_manager(
         ("is_closed", "isin"),
     ]
     assert all(manager._db is None for manager in managers)
+
+
+def test_dependency_admission_is_the_closed_locked_runtime_closure() -> None:
+    requirements = {
+        distribution: version
+        for distribution, version, _modules in cli._DEPENDENCY_REQUIREMENTS_V1
+    }
+
+    assert requirements == {
+        "beautifulsoup4": "4.15.0",
+        "certifi": "2026.7.22",
+        "cffi": "2.1.1",
+        "charset-normalizer": "3.5.1",
+        "curl-cffi": "0.16.1",
+        "idna": "3.19",
+        "lxml": "6.1.2",
+        "multitasking": "0.0.13",
+        "numpy": "2.4.6",
+        "pandas": "3.0.5",
+        "peewee": "4.3.0",
+        "platformdirs": "4.11.3",
+        "protobuf": "7.36.0",
+        "pycparser": "3.0",
+        "python-dateutil": "2.9.0.post0",
+        "pytz": "2026.3.post1",
+        "requests": "2.34.2",
+        "six": "1.17.0",
+        "soupsieve": "2.9.2",
+        "typing-extensions": "4.16.0",
+        "urllib3": "2.7.0",
+        "websockets": "17.0.1",
+    }
+    assert "pyarrow" not in cli._ALLOWED_PATH_IMPORT_PREFIXES_V1
+    assert "pycparser" not in cli._ALLOWED_PATH_IMPORT_PREFIXES_V1
+    assert cli._MAX_DEPENDENCY_FILES_V1 == 4_096
+    assert cli._MAX_DEPENDENCY_PATH_BYTES_V1 == 4_096
+    assert cli._MAX_DEPENDENCY_TOTAL_PATH_BYTES_V1 == 1_048_576
+
+
+def test_verified_dependency_loader_never_delegates_external_imports() -> None:
+    finder = cli._VerifiedDependencySourceFinderV1({})
+
+    for name in ("pyarrow", "pycparser", "unknown_dependency"):
+        with pytest.raises(ImportError, match="dependency source module unavailable"):
+            finder.find_spec(name)
+
+
+def test_locked_dependency_closure_is_admitted_from_exact_descriptors() -> None:
+    (
+        roots,
+        origins,
+        owned_files,
+        sources,
+        native_handles,
+    ) = cli._admitted_dependency_origins_v1()
+    try:
+        assert roots
+        assert origins
+        assert owned_files
+        assert sources
+        assert all(origin in owned_files for origin in origins.values())
+        assert all(
+            source in owned_files for source, _raw, _is_package in sources.values()
+        )
+        assert "_cffi_backend" in native_handles
+        assert cli._CA_BUNDLE_HANDLE_NAME_V1 in native_handles
+        if sys.platform == "linux":
+            assert any(
+                name.startswith(cli._NATIVE_COMPANION_HANDLE_PREFIX_V1)
+                for name in native_handles
+            )
+        cli._ensure_native_dependency_handles_live_v1(native_handles)
+    finally:
+        cli._close_native_dependency_handles_v1(native_handles)
+    assert native_handles == {}
