@@ -111,6 +111,8 @@ if TYPE_CHECKING:
 
         def close(self) -> None: ...
 
+    _ADMITTED_CURL_REQUESTS_MODULE_V1: ModuleType
+
     def _update_url_params(url: str, params: object) -> str:
         del url, params
         raise NotImplementedError
@@ -118,7 +120,8 @@ if TYPE_CHECKING:
 else:
     CurlOpt = import_module("curl_cffi.const").__dict__["CurlOpt"]
     Curl = import_module("curl_cffi").__dict__["Curl"]
-    CurlSession = import_module("curl_cffi.requests").__dict__["Session"]
+    _ADMITTED_CURL_REQUESTS_MODULE_V1 = import_module("curl_cffi.requests")
+    CurlSession = _ADMITTED_CURL_REQUESTS_MODULE_V1.__dict__["Session"]
     _curl_wrapper = import_module("curl_cffi._wrapper")
     _curl_ffi = _curl_wrapper.__dict__["ffi"]
     _curl_lib = _curl_wrapper.__dict__["lib"]
@@ -2480,9 +2483,11 @@ def _yfinance_transport_backend_is_exact_v1(module: ModuleType) -> bool:
     return bool(
         module.__dict__.get("__version__") == "1.6.0"
         and http_module is not None
+        and curl_requests is not None
+        and curl_requests is _ADMITTED_CURL_REQUESTS_MODULE_V1
         and http_module.__dict__.get("HAS_CURL_CFFI") is True
-        and http_module.__dict__.get("requests") is curl_requests
-        and http_module.__dict__.get("_backend") is curl_requests
+        and http_module.__dict__.get("requests") is _ADMITTED_CURL_REQUESTS_MODULE_V1
+        and http_module.__dict__.get("_backend") is _ADMITTED_CURL_REQUESTS_MODULE_V1
     )
 
 

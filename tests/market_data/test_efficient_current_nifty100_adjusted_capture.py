@@ -18,7 +18,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1321,6 +1321,37 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
         timeout=20,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_yfinance_backend_identity_rejects_missing_curl_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yfinance = ModuleType("yfinance")
+    yfinance.__version__ = "1.6.0"
+    http = ModuleType("yfinance._http")
+    http.HAS_CURL_CFFI = True
+    http.requests = None
+    http._backend = None
+    monkeypatch.setitem(sys.modules, "yfinance._http", http)
+    monkeypatch.delitem(sys.modules, "curl_cffi.requests", raising=False)
+
+    assert not core._yfinance_transport_backend_is_exact_v1(yfinance)
+
+
+def test_yfinance_backend_identity_rejects_replaced_curl_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    yfinance = ModuleType("yfinance")
+    yfinance.__version__ = "1.6.0"
+    substituted = ModuleType("curl_cffi.requests")
+    http = ModuleType("yfinance._http")
+    http.HAS_CURL_CFFI = True
+    http.requests = substituted
+    http._backend = substituted
+    monkeypatch.setitem(sys.modules, "yfinance._http", http)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", substituted)
+
+    assert not core._yfinance_transport_backend_is_exact_v1(yfinance)
 
 
 def test_runtime_disables_yfinance_disk_caches_before_provider_use() -> None:
@@ -5079,6 +5110,101 @@ def test_verified_dependency_loader_binds_nested_child_source(
         sys.meta_path.remove(finder)
         for name in ("nested_fixture.child", "nested_fixture"):
             sys.modules.pop(name, None)
+
+
+def test_verified_dependency_loader_denies_every_optional_dependency_prefix() -> None:
+    expected = frozenset(
+        {
+            "backports",
+            "brotli",
+            "brotlicffi",
+            "chardet",
+            "h2",
+            "markdownify",
+            "orjson",
+            "readability",
+            "simplejson",
+            "socks",
+        }
+    )
+    assert expected == cli._DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+    finder = cli._VerifiedDependencySourceFinderV1({})
+
+    for name in expected:
+        with pytest.raises(ImportError, match="dependency source module unavailable"):
+            finder.find_spec(name)
+
+
+def test_verified_dependency_loader_blocks_hostile_optional_meta_path(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "ambient-orjson-executed"
+
+    class AmbientLoader:
+        def create_module(self, _spec: object) -> None:
+            return None
+
+        def exec_module(self, _module: object) -> None:
+            marker.write_text("executed")
+
+    class AmbientFinder:
+        def find_spec(
+            self,
+            fullname: str,
+            _path: object = None,
+            _target: object = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname == "orjson":
+                return importlib.machinery.ModuleSpec(fullname, AmbientLoader())
+            return None
+
+    verified = cli._VerifiedDependencySourceFinderV1({})
+    ambient = AmbientFinder()
+    sys.modules.pop("orjson", None)
+    sys.meta_path[:0] = [verified, ambient]
+    try:
+        with pytest.raises(ImportError, match="dependency source module unavailable"):
+            importlib.import_module("orjson")
+    finally:
+        sys.meta_path.remove(verified)
+        sys.meta_path.remove(ambient)
+        sys.modules.pop("orjson", None)
+
+    assert not marker.exists()
+
+
+def test_verified_dependency_loader_blocks_hostile_optional_site_root(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "ambient-markdownify-executed"
+    package = tmp_path / "markdownify"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+    )
+    verified = cli._VerifiedDependencySourceFinderV1({})
+    sys.modules.pop("markdownify", None)
+    sys.meta_path.insert(0, verified)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        with pytest.raises(ImportError, match="dependency source module unavailable"):
+            importlib.import_module("markdownify")
+    finally:
+        sys.path.remove(str(tmp_path))
+        sys.meta_path.remove(verified)
+        sys.modules.pop("markdownify", None)
+
+    assert not marker.exists()
+
+
+def test_preloaded_optional_dependency_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_ADMITTED_DEPENDENCY_PREFIXES_V1", frozenset())
+    monkeypatch.setitem(sys.modules, "orjson", ModuleType("orjson"))
+
+    with pytest.raises(RuntimeError, match="dependency module preloaded"):
+        cli._reject_preloaded_dependency_modules_v1()
 
 
 def test_native_dependency_loader_uses_admitted_descriptor_not_path_finder(

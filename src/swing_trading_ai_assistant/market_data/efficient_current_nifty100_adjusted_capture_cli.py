@@ -175,6 +175,20 @@ _ADMITTED_DEPENDENCY_PREFIXES_V1 = frozenset(
         ),
     }
 )
+_DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1 = frozenset(
+    {
+        "backports",
+        "brotli",
+        "brotlicffi",
+        "chardet",
+        "h2",
+        "markdownify",
+        "orjson",
+        "readability",
+        "simplejson",
+        "socks",
+    }
+)
 _REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
     {
         "certifi",
@@ -352,7 +366,9 @@ class _VerifiedDependencySourceFinderV1(
             if specification is None or specification.loader is None:
                 raise ImportError("dependency native module origin mismatch")
             return specification
-        if fullname.split(".", 1)[0] in self._prefixes:
+        if fullname.split(".", 1)[0] in (
+            self._prefixes | _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+        ):
             raise ImportError("dependency source module unavailable")
         return None
 
@@ -876,10 +892,10 @@ def _module_origin_matches_v1(
 
 
 def _reject_preloaded_dependency_modules_v1() -> None:
-    if any(
-        name.split(".", 1)[0] in _ADMITTED_DEPENDENCY_PREFIXES_V1
-        for name in sys.modules
-    ):
+    rejected = (
+        _ADMITTED_DEPENDENCY_PREFIXES_V1 | _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+    )
+    if any(name.split(".", 1)[0] in rejected for name in sys.modules):
         raise RuntimeError("dependency module preloaded")
 
 

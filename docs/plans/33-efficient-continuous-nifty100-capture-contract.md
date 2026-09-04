@@ -102,6 +102,13 @@ The Requests family is admitted because pinned yfinance imports it for its
 dual-backend session-type compatibility surface; it is not an admitted
 provider transport.
 
+Pinned optional probes reachable from that dependency closure are treated as
+absent rather than executable: `orjson`, `markdownify`, `readability`,
+`chardet`, `simplejson`, `brotlicffi`, `brotli`, `backports`, `socks`, and
+`h2`. A preloaded module under any of those prefixes is rejected, and the
+descriptor-byte finder raises before a later ambient meta-path or site-root
+finder can load one.
+
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes. Each
 native extension is held by a shared-locked descriptor whose full metadata and
@@ -117,13 +124,16 @@ the exact `lib` object exported by the separately descriptor-bound
 `curl_cffi._wrapper` extension.
 
 The CLI proves that the exported and inherited `Session` class is the admitted
-`curl_cffi.requests.session` class. `YF_DISABLE_CURL_CFFI` is rejected as
-ambient transport authority, and provider preparation proves that pinned
-yfinance's active `_http` backend and exported `requests` object are the exact
-admitted curl-cffi Requests module before a provider effect. Ambient import
-paths are removed for the duration of the operation. A package, coherent
-package-plus-metadata, preloaded transitive child-module, native pathname
-substitution, or Requests transport fallback is not executed.
+`curl_cffi.requests.session` class. The core retains the exact admitted
+`curl_cffi.requests` module object used to obtain that class.
+`YF_DISABLE_CURL_CFFI` is rejected as ambient transport authority, and provider
+preparation requires the current `sys.modules` entry plus pinned yfinance's
+active `_http` backend and exported `requests` object to remain that same
+non-null admitted object before a provider effect. Ambient import paths are
+removed for the duration of the operation. A package, coherent
+package-plus-metadata, preloaded transitive or optional module, ambient optional
+module, native pathname substitution, missing/replaced backend object, or
+Requests transport fallback is not executed.
 
 The official-source opener installs no proxy handler and uses a fresh
 client-verifying TLS context populated only from the same admitted immutable CA
@@ -430,7 +440,7 @@ only by its own cohort identity and cannot authorize the union claim.
 | Mapping capability is absent | `UNSUPPORTED_CAPABILITY` before provider call | `.NS` inference; wrong ticker call | Missing-capability test |
 | Mapping evidence is stale, conflicting, or substituted | `INSUFFICIENT_EVIDENCE/MAPPING_EVIDENCE_INVALID` before provider call | Mapping repair or wrong ticker call | Mapping interval/identity tests |
 | Invalid schedule, incomplete decision session, wrong close/cutoff, selection retrieved after the decision cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar; untyped temporal failure | Schedule/temporal tests |
-| Pool/session was not created before yfinance import; any `multitasking` or `curl_cffi` module is preloaded; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive child-module substitution; native pathname reopen/substitution; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution and import-order/pool/session/configuration/native-descriptor tests |
+| Pool/session was not created before yfinance import; any admitted or explicitly denied optional dependency module is preloaded; a denied optional import reaches a later ambient meta-path or site-root finder; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, retained active backend module object, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive or optional-module substitution; ambient optional-code execution; native pathname reopen/substitution; missing/replaced backend accepted through `None` identity; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution, hostile optional meta-path/site-root, missing/replaced backend, and import-order/pool/session/configuration/native-descriptor tests |
 | Concurrent actual HTTP-call starts are less than 125 milliseconds apart, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | Sticky `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; no later start, active-response body admission, or cohort reset until every active response closes; callback stops before frame decode; no partial publish | Admission overtake; clustered real calls; limit bypass after first violation; reset with active response; full oversized decode; retry | Concurrent superclass-entry cadence plus clock-controlled bound, limit-plus-one, active-reset, and post-violation tests |
 | First transport response is HTTP 429 | Session stops it before yfinance alternate-cookie handling; `INSUFFICIENT_EVIDENCE/PROVIDER_RATE_LIMITED`; second unresolved cohort still follows precedence | Dependency/operator retry; fallback; partial publish | Session interception/rate-limit test |
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |
