@@ -23,6 +23,9 @@ from typing import Any
 
 import pytest
 
+from swing_trading_ai_assistant.entrypoints import (
+    efficient_current_nifty100_adjusted_capture as entrypoint,
+)
 from swing_trading_ai_assistant.market_data import (
     efficient_current_nifty100_adjusted_capture as core,
 )
@@ -44,6 +47,24 @@ def _clear_ambient_transport_authority(
             or name.casefold().endswith("_proxy")
         ):
             monkeypatch.delenv(name, raising=False)
+
+
+def _run_isolated_cli_script(script: str) -> subprocess.CompletedProcess[str]:
+    roots = entrypoint._isolated_import_roots()
+    isolated_script = (
+        "import sys\n"
+        f"sys.prefix = sys.exec_prefix = {sys.prefix!r}\n"
+        f"sys.path[:0] = {roots!r}\n"
+        "sys._plan33_parent_module_names_v1 = frozenset()\n"
+        f"{script}"
+    )
+    return subprocess.run(  # noqa: S603 - fixed interpreter and supplied test script
+        [sys.executable, "-I", "-S", "-c", isolated_script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
 
 
 class _ProtectedCleanupSessionStub:
@@ -652,12 +673,19 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
             or name.casefold().endswith("_proxy")
         ):
             environment.pop(name)
+
+    isolated_roots = entrypoint._isolated_import_roots()
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
         [
             sys.executable,
+            "-I",
+            "-S",
             "-c",
             (
                 "import sys\n"
+                "sys._plan33_parent_module_names_v1 = frozenset()\n"
+                f"sys.prefix = sys.exec_prefix = {sys.prefix!r}\n"
+                f"sys.path[:0] = {isolated_roots!r}\n"
                 "from swing_trading_ai_assistant.market_data import "
                 "efficient_current_nifty100_adjusted_capture_cli as cli\n"
                 "cli._reject_preloaded_dependency_modules_v1()\n"
@@ -2455,6 +2483,57 @@ raise SystemExit(main([
     assert all(not marker.exists() for marker in markers)
 
 
+def test_preload_guard_requires_isolated_no_site_runtime() -> None:
+    assert not sys.flags.isolated or not sys.flags.no_site
+
+    with pytest.raises(RuntimeError, match="dependency module preloaded"):
+        cli._reject_preloaded_dependency_modules_v1()
+
+
+def test_entrypoint_discards_preimport_json_substitution(tmp_path: Path) -> None:
+    request = tmp_path / "disabled.json"
+    request.write_bytes(_request(enabled=False))
+    request.chmod(0o600)
+    marker = tmp_path / "executed"
+    script = f"""
+import sys
+from types import ModuleType
+fake = ModuleType('json')
+def loads(*_args, **_kwargs):
+    with open({str(marker)!r}, 'w') as stream:
+        stream.write('executed')
+    raise RuntimeError
+fake.loads = loads
+sys.modules['json'] = fake
+from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
+raise SystemExit(main([
+    '--request-file', {str(request)!r},
+    '--selection-root', {str(tmp_path / "selection")!r},
+    '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
+    '--nifty-next50-storage-root', {str(tmp_path / "next50")!r},
+    '--schedule-root', {str(tmp_path / "schedule")!r},
+    '--ack-owner-private-yfinance-research',
+    '--output', 'json',
+]))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and test script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == {
+        "code": "DISABLED",
+        "contract_version": core.CONTRACT_VERSION_V1,
+        "reason": "ADAPTER_DISABLED",
+    }
+    assert completed.stderr == ""
+    assert not marker.exists()
+
+
 def test_yahoo_redirects_are_disabled_before_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3956,8 +4035,8 @@ def swap_after_read(path, maximum_bytes):
     return authority
 reader.open_private_request_authority = swap_after_read
 
-from swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture import main
-raise SystemExit(main([
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+raise SystemExit(cli.main([
     '--request-file', str(request),
     '--selection-root', {str(tmp_path / "selection")!r},
     '--nifty50-storage-root', {str(tmp_path / "nifty50")!r},
@@ -3967,14 +4046,7 @@ raise SystemExit(main([
     '--output', 'json',
 ]))
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        cwd=tmp_path,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 1
     assert json.loads(completed.stdout) == {
@@ -5273,13 +5345,7 @@ importlib.import_module(name + '.payload')
 raise SystemExit(2)
 """
 
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
     assert not marker.exists()
@@ -5324,13 +5390,7 @@ except RuntimeError:
 fake.external_payload()
 raise SystemExit(2)
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
 
@@ -5360,13 +5420,7 @@ except RuntimeError:
     raise SystemExit(0)
 raise SystemExit(2)
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
 
@@ -5400,13 +5454,7 @@ except RuntimeError:
     raise SystemExit(0)
 raise SystemExit(2)
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
 
@@ -5424,13 +5472,76 @@ except RuntimeError:
     raise SystemExit(0)
 raise SystemExit(2)
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_retained_cross_name_module_alias() -> None:
+    script = """
+import email
+import sys
+sys.modules['fractions'] = email
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = _run_isolated_cli_script(script)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_sibling_standard_package_path() -> None:
+    script = """
+import email
+import json
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+collision = list(json.__path__)
+email.__path__ = collision
+email.__spec__.submodule_search_locations = collision
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = _run_isolated_cli_script(script)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_module_added_during_root_resolution() -> None:
+    script = """
+import sys
+import threading
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+assert 'ssl' not in sys.modules
+resolve_roots = cli._trusted_preloaded_roots_v1
+started = threading.Event()
+finished = threading.Event()
+def inject():
+    started.wait()
+    import ssl
+    finished.set()
+thread = threading.Thread(target=inject)
+thread.start()
+def delayed_roots():
+    started.set()
+    assert finished.wait(5)
+    return resolve_roots()
+cli._trusted_preloaded_roots_v1 = delayed_roots
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    thread.join()
+    raise SystemExit(0)
+thread.join()
+raise SystemExit(2)
+"""
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
 
@@ -5448,13 +5559,7 @@ except RuntimeError:
     raise SystemExit(0)
 raise SystemExit(1)
 """
-    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    completed = _run_isolated_cli_script(script)
 
     assert completed.returncode == 0, completed.stderr
 

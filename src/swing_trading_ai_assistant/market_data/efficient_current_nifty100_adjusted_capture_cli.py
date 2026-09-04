@@ -20,6 +20,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import NoReturn, cast
 
+from swing_trading_ai_assistant.historical_evaluation import (
+    capability_validation_cli as request_authority,
+)
+
 
 class _OwnerAcknowledgementDenied(ValueError):
     pass
@@ -224,6 +228,11 @@ _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1 = (
     _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1
     | frozenset({"__main__", "_virtualenv", "swing_trading_ai_assistant"})
 )
+_ALLOWED_PRELOADED_MODULE_ALIASES_V1 = {
+    "importlib._bootstrap": frozenset({"_frozen_importlib"}),
+    "importlib._bootstrap_external": frozenset({"_frozen_importlib_external"}),
+    "os.path": frozenset({"ntpath", "posixpath"}),
+}
 _ALLOWED_PRELOADED_NON_MODULE_NAMES_V1 = frozenset({"typing.io", "typing.re"})
 _MISSING_PRELOADED_MODULE_V1 = object()
 _retained_preloaded_modules_v1: dict[str, object] = {}
@@ -1032,18 +1041,29 @@ def _preloaded_intrinsic_module_owned_v1(
 def _preloaded_package_paths_owned_v1(
     specification: importlib.machinery.ModuleSpec,
     module: ModuleType,
+    origin: str,
     roots: tuple[Path, ...],
 ) -> bool:
     specification_paths = specification.submodule_search_locations
     module_paths = getattr(module, "__path__", None)
     if specification_paths is None:
         return module_paths is None
-    if type(specification_paths) is not list or type(module_paths) is not list:
+    if (
+        type(specification_paths) is not list
+        or type(module_paths) is not list
+        or len(specification_paths) != 1
+        or specification_paths != module_paths
+    ):
         return False
-    path_values = cast(list[object], module_paths)
-    return specification_paths == module_paths and all(
-        _preloaded_path_owned_v1(value, roots, directory=True) for value in path_values
-    )
+    path = specification_paths[0]
+    if type(path) is not str:
+        return False
+    try:
+        expected = Path(origin).resolve(strict=True).parent
+        actual = Path(path).resolve(strict=True)
+    except OSError:
+        return False
+    return actual == expected and _preloaded_path_owned_v1(path, roots, directory=True)
 
 
 def _preloaded_module_owned_v1(
@@ -1059,7 +1079,12 @@ def _preloaded_module_owned_v1(
     if type(specification) is not importlib.machinery.ModuleSpec:
         return False
     specification_name = specification.name
-    if specification_name != name and sys.modules.get(specification_name) is not module:
+    if specification_name != name and (
+        specification_name
+        not in _ALLOWED_PRELOADED_MODULE_ALIASES_V1.get(name, frozenset())
+        or sys.modules.get(specification_name) is not module
+        or not _preloaded_module_identity_retained_v1(specification_name, module)
+    ):
         return False
     loader = cast(object, specification.loader)
     if getattr(module, "__loader__", None) is not loader:
@@ -1088,15 +1113,7 @@ def _preloaded_module_owned_v1(
         or not _preloaded_path_owned_v1(origin, roots, directory=False)
     ):
         return False
-    return _preloaded_package_paths_owned_v1(specification, module, roots)
-
-
-def _retain_expected_preloaded_modules_v1(names: frozenset[str]) -> None:
-    for name in names:
-        module = sys.modules.get(name, _MISSING_PRELOADED_MODULE_V1)
-        if module is _MISSING_PRELOADED_MODULE_V1:
-            raise RuntimeError("dependency module preloaded")
-        _retained_preloaded_modules_v1.setdefault(name, module)
+    return _preloaded_package_paths_owned_v1(specification, module, origin, roots)
 
 
 def _preloaded_module_identity_retained_v1(name: str, module: object) -> bool:
@@ -1152,12 +1169,31 @@ def _trusted_preloaded_roots_v1() -> tuple[tuple[Path, ...], tuple[Path, ...], P
     return standard_roots, site_roots, project_root
 
 
+def _require_isolated_runtime_v1() -> None:
+    parent_module_names = getattr(sys, "_plan33_parent_module_names_v1", None)
+    if (
+        not sys.flags.isolated
+        or not sys.flags.no_site
+        or type(parent_module_names) is not frozenset
+        or any(
+            not _preloaded_name_allowed_v1(name, name.split(".", 1)[0])
+            for name in cast(frozenset[object], parent_module_names)
+            if type(name) is str
+        )
+        or any(
+            type(name) is not str
+            for name in cast(frozenset[object], parent_module_names)
+        )
+    ):
+        raise RuntimeError("dependency module preloaded")
+
+
 def _reject_preloaded_dependency_modules_v1() -> None:
+    _require_isolated_runtime_v1()
     prior_module_names = frozenset(sys.modules)
     standard_roots, site_roots, project_root = _trusted_preloaded_roots_v1()
-    _retain_expected_preloaded_modules_v1(
-        frozenset(sys.modules).difference(prior_module_names)
-    )
+    if frozenset(sys.modules) != prior_module_names:
+        raise RuntimeError("dependency module preloaded")
     for name, module in tuple(sys.modules.items()):
         prefix = name.split(".", 1)[0]
         if not _preloaded_name_allowed_v1(name, prefix):
@@ -1525,16 +1561,7 @@ def _run(argv: list[str] | None) -> int:
 
     authority_entered = False
     try:
-        prior_module_names = frozenset(sys.modules)
-        from swing_trading_ai_assistant.historical_evaluation.capability_validation_cli import (  # noqa: PLC0415
-            open_private_request_authority,
-        )
-
-        _retain_expected_preloaded_modules_v1(
-            frozenset(sys.modules).difference(prior_module_names)
-        )
-
-        with open_private_request_authority(
+        with request_authority.open_private_request_authority(
             request_file, _MAX_REQUEST_BYTES_V1
         ) as authority:
             authority_entered = True
@@ -1576,6 +1603,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
+_trusted_preloaded_roots_v1()
 _retained_preloaded_modules_v1.update(sys.modules)
 
 

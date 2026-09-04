@@ -103,23 +103,35 @@ dual-backend session-type compatibility surface; it is not an admitted
 provider transport.
 
 Import admission is positive rather than an enumeration of known optional
-probes. Only built-in and standard-library prefixes, the project prefix, the
+probes. The public console bootstrap first replaces itself with the same
+interpreter under `-I -S`, restores only the exact package and environment
+site-package roots needed by the installed runtime, and immediately imports
+the CLI. The enabled preload guard refuses to run without both isolated and
+no-site flags. Ambient `sitecustomize`, user-site, `PYTHONPATH`, and parent
+process module objects therefore cannot seed the retained initialization set.
+
+Only built-in and standard-library prefixes, the project prefix, the
 descriptor-admitted dependency prefixes, and the exact path-import prefixes
 required by this capture boundary may resolve. Every other top-level prefix is
-rejected before a later finder can execute it. The enabled boundary rejects
-every preloaded non-standard-library external module. A preloaded built-in,
+rejected before a later finder can execute it. An initialized built-in,
 frozen, standard-library, project, or interpreter-bootstrap module is accepted
-only when its exact standard loader, specification name/origin, module file,
-and every package search path resolve beneath the corresponding interpreter,
-project-package, or site root; standard-library and project-prefix collisions
-therefore fail closed. The accepted module must also be the exact non-null
-object retained when the CLI module or a controlled internal import completed;
-matching metadata cannot substitute a later module object or cross-name alias.
-The boundary then replaces ambient meta-path finders and path hooks with the
-standard built-in, frozen, source, and native-extension machinery, clears
-ambient path-finder cache entries, and restores the prior
-import state only after the verified lifetime ends. Known optional probes
-remain explicitly denied as defense in depth.
+only when its exact standard loader, canonical specification name and origin,
+module file, and package search path match the module. Package search paths
+must equal the directory implied by the module origin, not merely a sibling
+directory beneath the same trusted root. Only the explicit interpreter aliases
+for `os.path` and importlib bootstrap modules may use a distinct specification
+name.
+
+The accepted module must also be the exact non-null object retained when the
+isolated CLI initialization completed; matching metadata cannot substitute a
+later module object or cross-name alias. Root discovery must not add any module
+after that snapshot, and request-authority support is loaded during the same
+isolated initialization rather than through a later open-ended retention
+window. The boundary then replaces ambient meta-path finders and path hooks
+with the standard built-in, frozen, source, and native-extension machinery,
+clears ambient path-finder cache entries, and restores the prior import state
+only after the verified lifetime ends. Known optional probes remain explicitly
+denied as defense in depth.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes.
@@ -460,6 +472,7 @@ only by its own cohort identity and cannot authorize the union claim.
 | Mapping capability is absent | `UNSUPPORTED_CAPABILITY` before provider call | `.NS` inference; wrong ticker call | Missing-capability test |
 | Mapping evidence is stale, conflicting, or substituted | `INSUFFICIENT_EVIDENCE/MAPPING_EVIDENCE_INVALID` before provider call | Mapping repair or wrong ticker call | Mapping interval/identity tests |
 | Invalid schedule, incomplete decision session, wrong close/cutoff, selection retrieved after the decision cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar; untyped temporal failure | Schedule/temporal tests |
+| Parent process preloads a metadata-cloned standard module, `sitecustomize`, user-site, or `PYTHONPATH` shadow before invoking the public command | Public bootstrap replaces the process with immediate `-I -S` initialization; enabled preload admission proceeds only there | Parent module execution inside the capture runtime; inherited module object trust; later open-ended retention | Parent pre-import marker test plus isolated positive dependency import |
 | Pool/session was not created before yfinance import; any admitted, optional, or otherwise unapproved external dependency module is preloaded; an unapproved import is requested; ambient meta-path/path-hook/cache machinery survives inside the verified lifetime; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, retained active backend module object, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive or optional-module substitution; ambient optional-code execution; native pathname reopen/substitution; missing/replaced backend accepted through `None` identity; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution, hostile unapproved meta-path/site-root/path-hook/cache, missing/replaced backend, and import-order/pool/session/configuration/native-descriptor tests |
 | Concurrent actual HTTP-call starts are less than 125 milliseconds apart, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | Sticky `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; no later start, active-response body admission, or cohort reset until every active response closes; callback stops before frame decode; no partial publish | Admission overtake; clustered real calls; limit bypass after first violation; reset with active response; full oversized decode; retry | Concurrent superclass-entry cadence plus clock-controlled bound, limit-plus-one, active-reset, and post-violation tests |
 | First transport response is HTTP 429 | Session stops it before yfinance alternate-cookie handling; `INSUFFICIENT_EVIDENCE/PROVIDER_RATE_LIMITED`; second unresolved cohort still follows precedence | Dependency/operator retry; fallback; partial publish | Session interception/rate-limit test |
