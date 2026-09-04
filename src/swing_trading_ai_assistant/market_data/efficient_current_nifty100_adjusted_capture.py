@@ -48,7 +48,10 @@ from .universe_snapshot import (
 if TYPE_CHECKING:
 
     class CurlOpt:
+        CAINFO_BLOB: object
         PROXY: object
+        SSL_VERIFYHOST: object
+        SSL_VERIFYPEER: object
 
     class CurlSession:
         def __init__(
@@ -56,9 +59,9 @@ if TYPE_CHECKING:
             *,
             impersonate: str,
             retry: int,
-            verify: str,
+            verify: bool | str,
             trust_env: bool,
-            curl_options: dict[object, str],
+            curl_options: dict[object, object],
         ) -> None:
             del impersonate, retry, verify, trust_env, curl_options
 
@@ -150,11 +153,20 @@ def _provider_ca_bundle_v1() -> tuple[str, str]:
 
 
 _PROVIDER_CA_BUNDLE_PATH_V1, _PROVIDER_CA_BUNDLE_SHA256_V1 = _provider_ca_bundle_v1()
+_PROVIDER_CA_BUNDLE_BYTES_V1: Final = _read_provider_ca_bundle_v1(
+    _PROVIDER_CA_BUNDLE_PATH_V1
+)
+if (
+    hashlib.sha256(_PROVIDER_CA_BUNDLE_BYTES_V1).hexdigest()
+    != _PROVIDER_CA_BUNDLE_SHA256_V1
+):
+    raise RuntimeError("provider trust configuration invalid")
 CONFIGURATION_IDENTITY_SHA256_V1: Final = hashlib.sha256(
     (
         "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
         "max_target=16384|max_response=2097152|max_aggregate=134217728|"
-        "retry=0|trust_env=false|proxy=none|ambient_env=reject|ca_sha256="
+        "retry=0|trust_env=false|proxy=none|ambient_env=reject|"
+        "ca_delivery=blob|ssl_verifypeer=1|ssl_verifyhost=2|ca_sha256="
         f"{_PROVIDER_CA_BUNDLE_SHA256_V1}"
     ).encode()
 ).hexdigest()
@@ -1146,9 +1158,14 @@ class BoundedYahooSessionV1(CurlSession):
         super().__init__(
             impersonate="chrome",
             retry=0,
-            verify=_PROVIDER_CA_BUNDLE_PATH_V1,
+            verify=False,
             trust_env=False,
-            curl_options={CurlOpt.PROXY: ""},
+            curl_options={
+                CurlOpt.PROXY: "",
+                CurlOpt.CAINFO_BLOB: _PROVIDER_CA_BUNDLE_BYTES_V1,
+                CurlOpt.SSL_VERIFYPEER: 1,
+                CurlOpt.SSL_VERIFYHOST: 2,
+            },
         )
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission

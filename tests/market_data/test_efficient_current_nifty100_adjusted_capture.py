@@ -506,14 +506,24 @@ def test_provider_transport_pins_proxy_and_ca_authority(
 ) -> None:
     session = core.BoundedYahooSessionV1()
     assert session.trust_env is False
-    assert session.verify == core._PROVIDER_CA_BUNDLE_PATH_V1
-    assert session.curl_options[core.CurlOpt.PROXY] == ""
+    assert session.verify is False
+    assert session.curl_options == {
+        core.CurlOpt.PROXY: "",
+        core.CurlOpt.CAINFO_BLOB: core._PROVIDER_CA_BUNDLE_BYTES_V1,
+        core.CurlOpt.SSL_VERIFYPEER: 1,
+        core.CurlOpt.SSL_VERIFYHOST: 2,
+    }
+    assert (
+        hashlib.sha256(core._PROVIDER_CA_BUNDLE_BYTES_V1).hexdigest()
+        == core._PROVIDER_CA_BUNDLE_SHA256_V1
+    )
     assert (
         hashlib.sha256(
             (
                 "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
                 "max_target=16384|max_response=2097152|max_aggregate=134217728|"
-                "retry=0|trust_env=false|proxy=none|ambient_env=reject|ca_sha256="
+                "retry=0|trust_env=false|proxy=none|ambient_env=reject|"
+                "ca_delivery=blob|ssl_verifypeer=1|ssl_verifyhost=2|ca_sha256="
                 f"{core._PROVIDER_CA_BUNDLE_SHA256_V1}"
             ).encode()
         ).hexdigest()
