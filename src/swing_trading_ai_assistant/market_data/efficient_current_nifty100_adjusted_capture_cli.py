@@ -315,22 +315,22 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "cffi": (
             33,
             719_029,
-            "1c099addc7e2f266fa00246a958f14cab55ab6fb4ba0fbc88007c1279e24109e",
+            "f3733bb850f720f459f5c292fb7eb1206848467970797a09cfcc4ec4c388cf6d",
         ),
         "charset-normalizer": (
             23,
             746_800,
-            "fbb68868a8a0181c09aad3656d7ae9b37f7b00db0952039a58fc4a96d79f81c0",
+            "67d15a1e6e84116d4244b57cfbbb7f21bcfa9f363c0ab3050ad73506f97eb9a3",
         ),
         "curl-cffi": (
             38,
             38_918_002,
-            "28fad6ce0beec7688987b019200e54642415734323dc1b96af9256d7d5c970bd",
+            "656ede05b691d3290ec312d1e68dd22ff9b696fef31667df428a61bdf0c5db52",
         ),
         "idna": (
             18,
             337_453,
-            "07b09318ede58ae55d57d30ea1ee4865c17830d601c6e2590136717ca26499f1",
+            "9c64c964062d642f7736182774f600c26b5eb5af304d57b0d638ccb5c67b78ce",
         ),
         "lxml": (
             176,
@@ -345,7 +345,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "numpy": (
             1_044,
             57_359_508,
-            "87747f0af074173c504708f63de37e9c35cc20ec65cd815974faf56c9ae27f6a",
+            "3e33f8fa8a2cc27e8188d0bf0ba6ac969460f7ce6ce1eeacd942a5e99bf498ba",
         ),
         "pandas": (
             1_523,
@@ -355,7 +355,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "peewee": (
             38,
             748_857,
-            "59d35ab795034ed7d3c8092c372df8a01973aef0f9e2a8de6983d5fad8dcde22",
+            "b7a1bbf3e567cefb30541bf7cd04515767028378b50862cd3eeb42a3cfbf9b6a",
         ),
         "platformdirs": (
             16,
@@ -410,7 +410,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "websockets": (
             64,
             808_733,
-            "41428707ab168a01cd4efd7b26d5280170a49767de5a6c4dce456dd4d807be20",
+            "7d8f96e223bf952eecaabb3e680a3ead277304558956f26451b3ba424cb3ee2e",
         ),
         "yfinance": (
             42,
@@ -979,6 +979,16 @@ def _trusted_standard_roots_v1() -> tuple[Path, ...]:
                 raise RuntimeError
             if root not in roots:
                 roots.append(root)
+        shared_value = sysconfig.get_config_var("DESTSHARED")
+        if type(shared_value) is not str or not Path(shared_value).is_absolute():
+            raise RuntimeError
+        shared_root = Path(shared_value).resolve(strict=True)
+        if not shared_root.is_dir() or not any(
+            shared_root.is_relative_to(root) for root in roots
+        ):
+            raise RuntimeError
+        if shared_root not in roots:
+            roots.append(shared_root)
     except (OSError, RuntimeError):
         raise RuntimeError("trusted import path invalid") from None
     if not roots:
