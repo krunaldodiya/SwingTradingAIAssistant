@@ -2531,6 +2531,47 @@ def test_yfinance_source_accepts_hardlinked_installed_file(tmp_path: Path) -> No
     )
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_yfinance_source_open_rejects_fifo_substitution_without_blocking() -> None:
+    script = """
+import os
+import tempfile
+from pathlib import Path
+from swing_trading_ai_assistant.market_data import capture_forward_adjusted_ohlcv as core
+
+with tempfile.TemporaryDirectory() as temporary:
+    source = Path(temporary) / "module.py"
+    source.write_bytes(b"VALUE = 'admitted'\\n")
+    identity = core._regular_file_identity(str(source))
+    real_open = core.os.open
+
+    def substitute(path, flags, mode=0o777, **kwargs):
+        if os.fspath(path) == os.fspath(source):
+            source.unlink()
+            os.mkfifo(source)
+        return real_open(path, flags, mode, **kwargs)
+
+    core.os.open = substitute
+    try:
+        core._read_yfinance_source_v1(source, identity)
+    except RuntimeError:
+        pass
+    else:
+        raise SystemExit(2)
+    finally:
+        core.os.open = real_open
+raise SystemExit(0)
+"""
+    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_yfinance_transitive_child_executes_admitted_bytes_after_path_swap(
     tmp_path: Path,
 ) -> None:

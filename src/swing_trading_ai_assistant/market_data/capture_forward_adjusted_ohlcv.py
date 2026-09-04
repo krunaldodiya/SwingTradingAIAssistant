@@ -1132,7 +1132,10 @@ def _read_yfinance_source_v1(
     try:
         descriptor = os.open(
             origin,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | os.O_NONBLOCK,
         )
         metadata = os.fstat(descriptor)
         if (
