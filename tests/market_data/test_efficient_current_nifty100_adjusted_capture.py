@@ -5119,6 +5119,7 @@ def test_verified_dependency_loader_denies_every_optional_dependency_prefix() ->
             "brotli",
             "brotlicffi",
             "chardet",
+            "frozendict",
             "h2",
             "markdownify",
             "orjson",
@@ -5135,10 +5136,12 @@ def test_verified_dependency_loader_denies_every_optional_dependency_prefix() ->
             finder.find_spec(name)
 
 
+@pytest.mark.parametrize("module_name", ["frozendict", "orjson"])
 def test_verified_dependency_loader_blocks_hostile_optional_meta_path(
     tmp_path: Path,
+    module_name: str,
 ) -> None:
-    marker = tmp_path / "ambient-orjson-executed"
+    marker = tmp_path / f"ambient-{module_name}-executed"
 
     class AmbientLoader:
         def create_module(self, _spec: object) -> None:
@@ -5154,21 +5157,21 @@ def test_verified_dependency_loader_blocks_hostile_optional_meta_path(
             _path: object = None,
             _target: object = None,
         ) -> importlib.machinery.ModuleSpec | None:
-            if fullname == "orjson":
+            if fullname == module_name:
                 return importlib.machinery.ModuleSpec(fullname, AmbientLoader())
             return None
 
     verified = cli._VerifiedDependencySourceFinderV1({})
     ambient = AmbientFinder()
-    sys.modules.pop("orjson", None)
+    sys.modules.pop(module_name, None)
     sys.meta_path[:0] = [verified, ambient]
     try:
         with pytest.raises(ImportError, match="dependency source module unavailable"):
-            importlib.import_module("orjson")
+            importlib.import_module(module_name)
     finally:
         sys.meta_path.remove(verified)
         sys.meta_path.remove(ambient)
-        sys.modules.pop("orjson", None)
+        sys.modules.pop(module_name, None)
 
     assert not marker.exists()
 

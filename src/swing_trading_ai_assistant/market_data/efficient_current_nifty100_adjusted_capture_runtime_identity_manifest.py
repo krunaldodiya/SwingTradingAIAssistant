@@ -10,7 +10,7 @@ EFFICIENT_CURRENT_NIFTY100_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "51587692742ce6f375b21b49cf56f1c79a4f82ed77e94e5add7b65f38c7a783f",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv_runtime_identity_manifest.py": "662ae3daeeaab70e8f72e48dfc98ec82077b7d7166d3d96ea896e950e97c95bc",
     "src/swing_trading_ai_assistant/market_data/efficient_current_nifty100_adjusted_capture.py": "a42b00589851d0a0f99854d3bda59377eafe8209a542ab60ba3e16e22bbea897",
-    "src/swing_trading_ai_assistant/market_data/efficient_current_nifty100_adjusted_capture_cli.py": "c6a25d21ef465e95f07982d1f5889324d006b1cf3f2aa4c6c2aa3d5b951666b0",
+    "src/swing_trading_ai_assistant/market_data/efficient_current_nifty100_adjusted_capture_cli.py": "b24af49798406322f2ea38c401b2caa2b34b62b39d13c2994d207c6d982db3ef",
     "src/swing_trading_ai_assistant/market_data/http.py": "ef5becb9960502f2808c3353099fc285de4d908d2eae7da65816266e2d02cd6e",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "a20d2e4e68b0788bcd3118a8ffb3e15b53b99e181a800c353a1e3a4b7b5ae942",

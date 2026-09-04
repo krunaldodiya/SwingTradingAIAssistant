@@ -103,11 +103,11 @@ dual-backend session-type compatibility surface; it is not an admitted
 provider transport.
 
 Pinned optional probes reachable from that dependency closure are treated as
-absent rather than executable: `orjson`, `markdownify`, `readability`,
-`chardet`, `simplejson`, `brotlicffi`, `brotli`, `backports`, `socks`, and
-`h2`. A preloaded module under any of those prefixes is rejected, and the
-descriptor-byte finder raises before a later ambient meta-path or site-root
-finder can load one.
+absent rather than executable: `orjson`, `frozendict`, `markdownify`,
+`readability`, `chardet`, `simplejson`, `brotlicffi`, `brotli`, `backports`,
+`socks`, and `h2`. A preloaded module under any of those prefixes is rejected,
+and the descriptor-byte finder raises before a later ambient meta-path or
+site-root finder can load one.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes.

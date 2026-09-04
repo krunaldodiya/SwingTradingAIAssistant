@@ -183,6 +183,7 @@ _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1 = frozenset(
         "brotli",
         "brotlicffi",
         "chardet",
+        "frozendict",
         "h2",
         "markdownify",
         "orjson",
