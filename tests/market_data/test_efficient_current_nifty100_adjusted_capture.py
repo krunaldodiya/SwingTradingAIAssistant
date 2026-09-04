@@ -5109,6 +5109,76 @@ def test_dependency_code_admission_rejects_aggregate_limit_plus_one(
         cli._dependency_code_entries_v1(package)
 
 
+def test_cffi_backend_admission_rejects_post_open_path_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "_cffi_backend.so"
+    source.write_bytes(b"trusted backend")
+    identity = cli._dependency_file_identity_v1(source.stat(follow_symlinks=False))
+    replacement = tmp_path / "replacement.so"
+    replacement.write_bytes(b"trusted backend")
+    original_read = os.read
+    replaced = False
+
+    def replace_path_then_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            os.replace(replacement, source)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(os, "read", replace_path_then_read)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._read_dependency_file_v1(source, expected_identity=identity)
+
+
+def test_cffi_backend_admission_rejects_per_file_limit_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "_cffi_backend.so"
+    source.write_bytes(b"x" * 9)
+    identity = cli._dependency_file_identity_v1(source.stat(follow_symlinks=False))
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_FILE_BYTES_V1", 8)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._read_dependency_file_v1(source, expected_identity=identity)
+
+
+def test_cffi_backend_admission_rejects_aggregate_limit_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "_cffi_backend.so"
+    source.write_bytes(b"x" * 9)
+    identity = cli._dependency_file_identity_v1(source.stat(follow_symlinks=False))
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_FILE_BYTES_V1", 16)
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_AGGREGATE_BYTES_V1", 16)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._read_dependency_file_v1(
+            source,
+            expected_identity=identity,
+            aggregate_size=8,
+        )
+
+
+def test_native_dependency_handle_rejects_per_file_limit_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "_cffi_backend.so"
+    raw = b"x" * 9
+    source.write_bytes(raw)
+    identity = cli._dependency_file_identity_v1(source.stat(follow_symlinks=False))
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_FILE_BYTES_V1", 8)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._open_native_dependency_handle_v1(source, identity, raw)
+
+
 def test_cleanup_value_error_abandons_cache_without_truncation_or_lock_leak(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

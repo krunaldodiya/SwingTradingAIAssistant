@@ -250,6 +250,57 @@ _REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
 )
 
 
+def _read_dependency_file_v1(
+    candidate: Path,
+    *,
+    expected_identity: _DependencyFileIdentityV1 | None = None,
+    aggregate_size: int = 0,
+) -> tuple[_DependencyFileIdentityV1, bytes, int]:
+    if (
+        not candidate.is_absolute()
+        or candidate.is_symlink()
+        or type(aggregate_size) is not int
+        or aggregate_size < 0
+    ):
+        raise RuntimeError("dependency distribution identity mismatch")
+    metadata = candidate.stat(follow_symlinks=False)
+    identity = _dependency_file_identity_v1(metadata)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or (expected_identity is not None and identity != expected_identity)
+        or metadata.st_size > _MAX_DEPENDENCY_FILE_BYTES_V1
+        or aggregate_size + metadata.st_size > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1
+    ):
+        raise RuntimeError("dependency distribution identity mismatch")
+    descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    content = bytearray()
+    failure: BaseException | None = None
+    try:
+        held = os.fstat(descriptor)
+        if _dependency_file_identity_v1(held) != identity:
+            raise RuntimeError("dependency distribution identity mismatch")
+        while len(content) < held.st_size:
+            chunk = os.read(descriptor, held.st_size - len(content))
+            if not chunk:
+                raise RuntimeError("dependency distribution identity mismatch")
+            content.extend(chunk)
+        if (
+            _dependency_file_identity_v1(os.fstat(descriptor)) != identity
+            or _dependency_file_identity_v1(candidate.stat(follow_symlinks=False))
+            != identity
+        ):
+            raise RuntimeError("dependency distribution identity mismatch")
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        failure = failure or error
+    if failure is not None:
+        raise failure
+    return identity, bytes(content), aggregate_size + metadata.st_size
+
+
 def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admission
     root: Path,
 ) -> tuple[str, dict[Path, bytes]]:
@@ -275,54 +326,18 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
             if name.endswith(".pyc"):
                 continue
             candidate = current / name
-            metadata = candidate.stat(follow_symlinks=False)
-            identity = _dependency_file_identity_v1(metadata)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_size > _MAX_DEPENDENCY_FILE_BYTES_V1
-                or aggregate_size + metadata.st_size
-                > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1
-            ):
-                raise RuntimeError("dependency distribution identity mismatch")
-            descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-            held = metadata
-            content = bytearray()
-            failure: BaseException | None = None
-            try:
-                held = os.fstat(descriptor)
-                if _dependency_file_identity_v1(held) != identity:
-                    raise RuntimeError("dependency distribution identity mismatch")
-                while len(content) < held.st_size:
-                    chunk = os.read(descriptor, held.st_size - len(content))
-                    if not chunk:
-                        raise RuntimeError("dependency distribution identity mismatch")
-                    content.extend(chunk)
-                if (
-                    _dependency_file_identity_v1(os.fstat(descriptor)) != identity
-                    or _dependency_file_identity_v1(
-                        candidate.stat(follow_symlinks=False)
-                    )
-                    != identity
-                ):
-                    raise RuntimeError("dependency distribution identity mismatch")
-            except BaseException as error:
-                failure = error
-            try:
-                os.close(descriptor)
-            except BaseException as error:
-                failure = failure or error
-            if failure is not None:
-                raise failure
-            raw = bytes(content)
+            identity, raw, aggregate_size = _read_dependency_file_v1(
+                candidate,
+                aggregate_size=aggregate_size,
+            )
             entries.append(
                 (
                     candidate.relative_to(root.parent).as_posix(),
-                    held.st_size,
+                    identity[5],
                     hashlib.sha256(raw).digest(),
                 )
             )
             payloads[candidate] = raw
-            aggregate_size += held.st_size
     aggregate = hashlib.sha256()
     for relative, size, digest in sorted(entries):
         aggregate.update(relative.encode("utf-8"))
@@ -694,6 +709,16 @@ def _open_native_dependency_handle_v1(
     identity: _DependencyFileIdentityV1,
     raw: bytes,
 ) -> _NativeDependencyHandleV1:
+    if (
+        not origin.is_absolute()
+        or type(identity) is not tuple
+        or len(identity) != 8
+        or any(type(value) is not int or value < 0 for value in identity)
+        or type(raw) is not bytes
+        or len(raw) > _MAX_DEPENDENCY_FILE_BYTES_V1
+        or identity[5] != len(raw)
+    ):
+        raise RuntimeError("dependency distribution identity mismatch")
     descriptor = os.open(origin, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -879,7 +904,11 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                 if len(backend_origins) != 1:
                     raise RuntimeError
                 backend_origin = backend_origins[0]
-                backend_raw = backend_origin.read_bytes()
+                backend_identity, backend_raw, _ = _read_dependency_file_v1(
+                    backend_origin,
+                    expected_identity=distribution_files[backend_origin],
+                    aggregate_size=sum(len(raw) for raw in file_bytes.values()),
+                )
                 if (
                     hashlib.sha256(backend_raw).hexdigest()
                     not in _CFFI_BACKEND_CODE_IDENTITIES_V1
@@ -887,7 +916,7 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
                     raise RuntimeError
                 native_handles["_cffi_backend"] = _open_native_dependency_handle_v1(
                     backend_origin,
-                    distribution_files[backend_origin],
+                    backend_identity,
                     backend_raw,
                 )
             for source, raw in file_bytes.items():
