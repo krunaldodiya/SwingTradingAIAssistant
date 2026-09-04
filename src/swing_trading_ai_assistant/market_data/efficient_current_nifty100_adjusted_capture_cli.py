@@ -192,6 +192,37 @@ _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1 = frozenset(
         "socks",
     }
 )
+_ALLOWED_PATH_IMPORT_PREFIXES_V1 = frozenset(
+    {
+        "bs4",
+        "dateutil",
+        "google",
+        "lxml",
+        "numpy",
+        "pandas",
+        "peewee",
+        "platformdirs",
+        "pyarrow",
+        "pycparser",
+        "pytz",
+        "six",
+        "soupsieve",
+        "swing_trading_ai_assistant",
+        "typing_extensions",
+        "websockets",
+        "yfinance",
+    }
+)
+_BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1 = frozenset(sys.stdlib_module_names) | frozenset(
+    sys.builtin_module_names
+)
+_ALLOWED_FALLTHROUGH_IMPORT_PREFIXES_V1 = (
+    _ALLOWED_PATH_IMPORT_PREFIXES_V1 | _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1
+)
+_ALLOWED_PRELOADED_IMPORT_PREFIXES_V1 = (
+    _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1
+    | frozenset({"__main__", "_virtualenv", "swing_trading_ai_assistant"})
+)
 _REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
     {
         "certifi",
@@ -369,8 +400,11 @@ class _VerifiedDependencySourceFinderV1(
             if specification is None or specification.loader is None:
                 raise ImportError("dependency native module origin mismatch")
             return specification
-        if fullname.split(".", 1)[0] in (
-            self._prefixes | _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+        prefix = fullname.split(".", 1)[0]
+        if (
+            prefix in self._prefixes
+            or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+            or prefix not in _ALLOWED_FALLTHROUGH_IMPORT_PREFIXES_V1
         ):
             raise ImportError("dependency source module unavailable")
         return None
@@ -399,13 +433,33 @@ def _verified_dependency_import_lifetime_v1(
     sources: dict[str, tuple[Path, bytes, bool]],
     native_handles: dict[str, _NativeDependencyHandleV1],
 ) -> Generator[None, None, None]:
-    """Exclude bytecode and pathname native fallbacks during verified imports."""
+    """Exclude ambient finders and bytecode/pathname dependency fallbacks."""
 
     finder = _VerifiedDependencySourceFinderV1(sources, native_handles)
     prior_meta_path = list(sys.meta_path)
     prior_cache_prefix = sys.pycache_prefix
+    prior_path_hooks = list(sys.path_hooks)
+    prior_path_importer_cache = dict(sys.path_importer_cache)
     prior_dont_write_bytecode = sys.dont_write_bytecode
-    sys.meta_path.insert(0, finder)
+    sys.meta_path[:] = [
+        finder,
+        importlib.machinery.BuiltinImporter,
+        importlib.machinery.FrozenImporter,
+        importlib.machinery.PathFinder,
+    ]
+    sys.path_hooks[:] = [
+        importlib.machinery.FileFinder.path_hook(
+            (
+                importlib.machinery.SourceFileLoader,
+                importlib.machinery.SOURCE_SUFFIXES,
+            ),
+            (
+                importlib.machinery.ExtensionFileLoader,
+                importlib.machinery.EXTENSION_SUFFIXES,
+            ),
+        )
+    ]
+    sys.path_importer_cache.clear()
     sys.pycache_prefix = os.path.join(os.devnull, "plan33-disabled-pycache")
     sys.dont_write_bytecode = True
     failure: BaseException | None = None
@@ -415,6 +469,9 @@ def _verified_dependency_import_lifetime_v1(
         failure = error
     sys.dont_write_bytecode = prior_dont_write_bytecode
     sys.pycache_prefix = prior_cache_prefix
+    sys.path_hooks[:] = prior_path_hooks
+    sys.path_importer_cache.clear()
+    sys.path_importer_cache.update(prior_path_importer_cache)
     sys.meta_path[:] = prior_meta_path
     try:
         _close_native_dependency_handles_v1(native_handles)
@@ -895,10 +952,13 @@ def _module_origin_matches_v1(
 
 
 def _reject_preloaded_dependency_modules_v1() -> None:
-    rejected = (
-        _ADMITTED_DEPENDENCY_PREFIXES_V1 | _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
-    )
-    if any(name.split(".", 1)[0] in rejected for name in sys.modules):
+    permitted = _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1
+    if any(
+        (prefix := name.split(".", 1)[0]) in _ADMITTED_DEPENDENCY_PREFIXES_V1
+        or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+        or prefix not in permitted
+        for name in sys.modules
+    ):
         raise RuntimeError("dependency module preloaded")
 
 

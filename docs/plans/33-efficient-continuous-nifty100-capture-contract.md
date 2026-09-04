@@ -102,12 +102,16 @@ The Requests family is admitted because pinned yfinance imports it for its
 dual-backend session-type compatibility surface; it is not an admitted
 provider transport.
 
-Pinned optional probes reachable from that dependency closure are treated as
-absent rather than executable: `orjson`, `frozendict`, `markdownify`,
-`readability`, `chardet`, `simplejson`, `brotlicffi`, `brotli`, `backports`,
-`socks`, and `h2`. A preloaded module under any of those prefixes is rejected,
-and the descriptor-byte finder raises before a later ambient meta-path or
-site-root finder can load one.
+Import admission is positive rather than an enumeration of known optional
+probes. Only built-in and standard-library prefixes, the project prefix, the
+descriptor-admitted dependency prefixes, and the exact path-import prefixes
+required by this capture boundary may resolve. Every other top-level prefix is
+rejected before a later finder can execute it. The enabled boundary also
+rejects any preloaded non-standard-library external module, replaces ambient
+meta-path finders and path hooks with the standard built-in, frozen, source,
+and native-extension machinery, clears ambient path-finder cache entries, and
+restores the prior import state only after the verified lifetime ends. Known
+optional probes remain explicitly denied as defense in depth.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes.
@@ -448,7 +452,7 @@ only by its own cohort identity and cannot authorize the union claim.
 | Mapping capability is absent | `UNSUPPORTED_CAPABILITY` before provider call | `.NS` inference; wrong ticker call | Missing-capability test |
 | Mapping evidence is stale, conflicting, or substituted | `INSUFFICIENT_EVIDENCE/MAPPING_EVIDENCE_INVALID` before provider call | Mapping repair or wrong ticker call | Mapping interval/identity tests |
 | Invalid schedule, incomplete decision session, wrong close/cutoff, selection retrieved after the decision cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar; untyped temporal failure | Schedule/temporal tests |
-| Pool/session was not created before yfinance import; any admitted or explicitly denied optional dependency module is preloaded; a denied optional import reaches a later ambient meta-path or site-root finder; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, retained active backend module object, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive or optional-module substitution; ambient optional-code execution; native pathname reopen/substitution; missing/replaced backend accepted through `None` identity; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution, hostile optional meta-path/site-root, missing/replaced backend, and import-order/pool/session/configuration/native-descriptor tests |
+| Pool/session was not created before yfinance import; any admitted, optional, or otherwise unapproved external dependency module is preloaded; an unapproved import is requested; ambient meta-path/path-hook/cache machinery survives inside the verified lifetime; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, retained active backend module object, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive or optional-module substitution; ambient optional-code execution; native pathname reopen/substitution; missing/replaced backend accepted through `None` identity; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution, hostile unapproved meta-path/site-root/path-hook/cache, missing/replaced backend, and import-order/pool/session/configuration/native-descriptor tests |
 | Concurrent actual HTTP-call starts are less than 125 milliseconds apart, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | Sticky `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; no later start, active-response body admission, or cohort reset until every active response closes; callback stops before frame decode; no partial publish | Admission overtake; clustered real calls; limit bypass after first violation; reset with active response; full oversized decode; retry | Concurrent superclass-entry cadence plus clock-controlled bound, limit-plus-one, active-reset, and post-violation tests |
 | First transport response is HTTP 429 | Session stops it before yfinance alternate-cookie handling; `INSUFFICIENT_EVIDENCE/PROVIDER_RATE_LIMITED`; second unresolved cohort still follows precedence | Dependency/operator retry; fallback; partial publish | Session interception/rate-limit test |
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |

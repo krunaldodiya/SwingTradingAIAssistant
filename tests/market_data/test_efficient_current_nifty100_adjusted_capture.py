@@ -660,6 +660,7 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
                 "import sys\n"
                 "from swing_trading_ai_assistant.market_data import "
                 "efficient_current_nifty100_adjusted_capture_cli as cli\n"
+                "cli._reject_preloaded_dependency_modules_v1()\n"
                 "original_import_path = list(sys.path)\n"
                 "handles = {}\n"
                 "site_roots, origins, owned, sources, handles = "
@@ -5134,6 +5135,117 @@ def test_verified_dependency_loader_denies_every_optional_dependency_prefix() ->
     for name in expected:
         with pytest.raises(ImportError, match="dependency source module unavailable"):
             finder.find_spec(name)
+
+
+def test_path_import_prefixes_are_closed() -> None:
+    assert (
+        frozenset(
+            {
+                "bs4",
+                "dateutil",
+                "google",
+                "lxml",
+                "numpy",
+                "pandas",
+                "peewee",
+                "platformdirs",
+                "pyarrow",
+                "pycparser",
+                "pytz",
+                "six",
+                "soupsieve",
+                "swing_trading_ai_assistant",
+                "typing_extensions",
+                "websockets",
+                "yfinance",
+            }
+        )
+        == cli._ALLOWED_PATH_IMPORT_PREFIXES_V1
+    )
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "MySQLdb",
+        "bottleneck",
+        "cchardet",
+        "cloudpickle",
+        "html5lib",
+        "numexpr",
+        "org",
+        "psycopg",
+        "psycopg2",
+        "psycopg2cffi",
+        "pymysql",
+        "pysqlite3",
+        "python_socks",
+        "rnc2rng",
+    ],
+)
+def test_verified_dependency_loader_denies_unapproved_top_level(
+    module_name: str,
+) -> None:
+    with pytest.raises(ImportError, match="dependency source module unavailable"):
+        cli._VerifiedDependencySourceFinderV1({}).find_spec(module_name)
+
+
+def test_enabled_boundary_rejects_preloaded_unapproved_top_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_ADMITTED_DEPENDENCY_PREFIXES_V1", frozenset())
+    monkeypatch.setattr(cli, "_DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1", frozenset())
+    monkeypatch.setattr(
+        cli,
+        "_ALLOWED_PRELOADED_IMPORT_PREFIXES_V1",
+        frozenset(name.split(".", 1)[0] for name in sys.modules),
+    )
+    monkeypatch.setitem(sys.modules, "MySQLdb", ModuleType("MySQLdb"))
+
+    with pytest.raises(RuntimeError, match="dependency module preloaded"):
+        cli._reject_preloaded_dependency_modules_v1()
+
+    monkeypatch.delitem(sys.modules, "MySQLdb")
+    cli._reject_preloaded_dependency_modules_v1()
+
+
+def test_verified_dependency_lifetime_discards_ambient_meta_path() -> None:
+    class AmbientFinder:
+        pass
+
+    original = list(sys.meta_path)
+    ambient = AmbientFinder()
+    sys.meta_path.insert(0, ambient)  # pyright: ignore[reportArgumentType]
+    try:
+        with cli._verified_dependency_import_lifetime_v1({}, {}):
+            assert ambient not in sys.meta_path
+    finally:
+        sys.meta_path[:] = original
+
+
+def test_verified_dependency_lifetime_discards_ambient_path_finders(
+    tmp_path: Path,
+) -> None:
+    class AmbientPathFinder:
+        pass
+
+    def ambient_path_hook(_path: str) -> AmbientPathFinder:
+        return ambient
+
+    original_hooks = list(sys.path_hooks)
+    original_cache = dict(sys.path_importer_cache)
+    ambient = AmbientPathFinder()
+    cache_key = str(tmp_path)
+    sys.path_hooks.insert(0, ambient_path_hook)
+    sys.path_importer_cache[cache_key] = ambient
+    try:
+        with cli._verified_dependency_import_lifetime_v1({}, {}):
+            assert ambient_path_hook not in sys.path_hooks
+            assert ambient not in sys.path_importer_cache.values()
+    finally:
+        sys.path_hooks[:] = original_hooks
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache.update(original_cache)
 
 
 @pytest.mark.parametrize("module_name", ["frozendict", "orjson"])
