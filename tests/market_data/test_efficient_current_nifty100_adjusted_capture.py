@@ -56,6 +56,7 @@ def _run_isolated_cli_script(script: str) -> subprocess.CompletedProcess[str]:
         f"sys.prefix = sys.exec_prefix = {sys.prefix!r}\n"
         f"sys.path[:0] = {roots!r}\n"
         "sys._plan33_parent_module_names_v1 = frozenset()\n"
+        "sys._plan33_ambient_sysconfig_authority_v1 = False\n"
         f"{script}"
     )
     return subprocess.run(  # noqa: S603 - fixed interpreter and supplied test script
@@ -735,6 +736,7 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
             (
                 "import sys\n"
                 "sys._plan33_parent_module_names_v1 = frozenset()\n"
+                "sys._plan33_ambient_sysconfig_authority_v1 = False\n"
                 f"sys.prefix = sys.exec_prefix = {sys.prefix!r}\n"
                 f"sys.path[:0] = {isolated_roots!r}\n"
                 "from swing_trading_ai_assistant.market_data import "
@@ -776,6 +778,36 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
         timeout=20,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_distribution_record_identity_ignores_external_script_install_bytes(
+    tmp_path: Path,
+) -> None:
+    site_root = tmp_path / "site-packages"
+    record = site_root / "example-1.0.dist-info" / "RECORD"
+    record.parent.mkdir(parents=True)
+    internal = "example/__init__.py,sha256=internal,10\n"
+    first = f"../bin/example,sha256=first,100\n{internal}".encode()
+    second = f"../bin/example,sha256=second,200\n{internal}".encode()
+    changed_internal = (
+        b"../bin/example,sha256=third,300\nexample/__init__.py,sha256=changed,10\n"
+    )
+
+    first_identity = cli._distribution_identity_payload_v1(
+        record,
+        first,
+        (site_root,),
+    )
+    assert first_identity == cli._distribution_identity_payload_v1(
+        record,
+        second,
+        (site_root,),
+    )
+    assert first_identity != cli._distribution_identity_payload_v1(
+        record,
+        changed_internal,
+        (site_root,),
+    )
 
 
 def test_encoded_query_target_is_bounded_before_transport(
@@ -3790,6 +3822,100 @@ raise SystemExit(main([
         "contract_version": core.CONTRACT_VERSION_V1,
         "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
     }
+    assert completed.stderr == ""
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "authority_name",
+    [
+        "_PYTHON_HOST_PLATFORM",
+        "_PYTHON_PROJECT_BASE",
+        "_PYTHON_SYSCONFIGDATA_NAME",
+    ],
+)
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_cli_rejects_ambient_sysconfig_authority_before_execution(
+    tmp_path: Path,
+    authority_name: str,
+    acknowledged: bool,
+) -> None:
+    request = tmp_path / "malformed-enabled.json"
+    request.write_bytes(
+        json.dumps(
+            {
+                "cohorts": [],
+                "contract_version": core.CONTRACT_VERSION_V1,
+                "enabled": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    request.chmod(0o600)
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    marker = tmp_path / "sysconfigdata-executed"
+    module_name = "_sysconfigdata_plan33_hostile"
+    (shadow / f"{module_name}.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "build_time_vars = {}\n"
+    )
+    roots = entrypoint._isolated_import_roots()
+    arguments = [
+        "--request-file",
+        str(request),
+        "--selection-root",
+        str(tmp_path / "selection"),
+        "--nifty50-storage-root",
+        str(tmp_path / "nifty50"),
+        "--nifty-next50-storage-root",
+        str(tmp_path / "next50"),
+        "--schedule-root",
+        str(tmp_path / "schedule"),
+        "--output",
+        "json",
+    ]
+    if acknowledged:
+        arguments.insert(-2, "--ack-owner-private-yfinance-research")
+    script = (
+        "import sys\n"
+        f"sys.prefix = sys.exec_prefix = {sys.prefix!r}\n"
+        f"sys.path[:0] = {(str(shadow), *roots)!r}\n"
+        "sys._plan33_parent_module_names_v1 = frozenset()\n"
+        "from swing_trading_ai_assistant.entrypoints."
+        "efficient_current_nifty100_adjusted_capture import main\n"
+        f"raise SystemExit(main({arguments!r}))\n"
+    )
+    environment = os.environ.copy()
+    environment[authority_name] = (
+        module_name if authority_name == "_PYTHON_SYSCONFIGDATA_NAME" else str(shadow)
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and script
+        [sys.executable, "-I", "-S", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=tmp_path,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert json.loads(completed.stdout) == (
+        {
+            "code": "INSUFFICIENT_EVIDENCE",
+            "contract_version": core.CONTRACT_VERSION_V1,
+            "reason": "CONFIGURATION_INVALID",
+        }
+        if acknowledged
+        else {
+            "code": "AUTHORIZATION_DENIED",
+            "contract_version": core.CONTRACT_VERSION_V1,
+            "reason": "OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED",
+        }
+    )
     assert completed.stderr == ""
     assert not marker.exists()
 

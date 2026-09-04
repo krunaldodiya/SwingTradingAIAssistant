@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import ctypes
 import fcntl
 import hashlib
@@ -63,6 +64,7 @@ _NATIVE_COMPANION_HANDLE_PREFIX_V1 = "__plan33_native_companion__:"
 _PROVIDER_CACHE_NAME_V1 = ".plan33-yfinance-cache"
 _CA_BUNDLE_HANDLE_NAME_V1 = "__plan33_ca_bundle__"
 _PROVIDER_CA_BUNDLE_PATH_ENV_V1 = "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
+_AMBIENT_SYSCONFIG_AUTHORITY_STATE_V1 = "_plan33_ambient_sysconfig_authority_v1"
 _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1 = frozenset(
     {
         "curl_ca_bundle",
@@ -198,22 +200,22 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "cffi": (
             33,
             574_646,
-            "8d5c86becafa53c1e4e80d004d3f520f657831ffa77918a1a724e7966cd2c9c2",
+            "1d4423fce9dd3184b1c4a3cf6774c30c10d632d1fdc0fd0998a4c7b06edd41d8",
         ),
         "charset-normalizer": (
             23,
             1_133_571,
-            "bbfabefd7afa1eefe16ab82051ea40bc3ae9901b8fa73e341e597920f75c9b81",
+            "ccfe15296107ad23ac25f546732387e35b586af9e665104a0d61fbdbb32844bb",
         ),
         "curl-cffi": (
             38,
             7_367_484,
-            "ec02380e0b9322da931f0d083d75c00e3dbfe1f2f411d526a65aa1fa4fd6b164",
+            "828756a20365571767df3ad65949578e93ed7fc75fff5301953435ac289c4152",
         ),
         "idna": (
             18,
             337_453,
-            "d7cb6a72b0571ebbd710f3250deb84bb8021ea4d1ac1e8e9f9ad9aedf9243684",
+            "30481ef8b3095e91517d4b5e53229d68027af8827890e93a902ca4709b85f070",
         ),
         "lxml": (
             176,
@@ -228,7 +230,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "numpy": (
             1_041,
             24_064_592,
-            "f0d18d7129db4a8b84b0e1bb5146b97eca62f6ac709b237695b7c8021ea61b25",
+            "1b9a74c796588cd6a943ac1fbf87c84b25eeda472024f0afb08a6e4b69b7f926",
         ),
         "pandas": (
             1_523,
@@ -238,7 +240,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "peewee": (
             38,
             748_857,
-            "2d12614ac720b6db5d862b0414eda72d079462796ae2ecb74e5b5b9043daee70",
+            "b98298bfb9aec93a90e751c97c61ea968ef4520a5c5a6d278f9856a38d051b2b",
         ),
         "platformdirs": (
             16,
@@ -293,7 +295,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "websockets": (
             64,
             780_873,
-            "7b95ad16efb02f0da693d7a35881743f996d6e3a241b56fee881826bc8d1de90",
+            "ed760b11c0ac0aa4a3461cd8999f0fb38228d4f0ea1e0687a8f45610c0cf6032",
         ),
         "yfinance": (
             42,
@@ -315,22 +317,22 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "cffi": (
             33,
             719_029,
-            "f3733bb850f720f459f5c292fb7eb1206848467970797a09cfcc4ec4c388cf6d",
+            "38553ee8bb7be76ce48c665b4cd5c9f6b779cc3e7c22d7fa9d921f4a6c2a89a9",
         ),
         "charset-normalizer": (
             23,
             746_800,
-            "67d15a1e6e84116d4244b57cfbbb7f21bcfa9f363c0ab3050ad73506f97eb9a3",
+            "d52b4de27a372186c51d7faf473a43eeef10ec75fd9f054c4271cb45ffadb0c5",
         ),
         "curl-cffi": (
             38,
             38_918_002,
-            "656ede05b691d3290ec312d1e68dd22ff9b696fef31667df428a61bdf0c5db52",
+            "c9059a25f8feef8956e6693c8d7c21e9326f1e00980be9f745bb9cd27faddec4",
         ),
         "idna": (
             18,
             337_453,
-            "9c64c964062d642f7736182774f600c26b5eb5af304d57b0d638ccb5c67b78ce",
+            "30481ef8b3095e91517d4b5e53229d68027af8827890e93a902ca4709b85f070",
         ),
         "lxml": (
             176,
@@ -345,7 +347,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "numpy": (
             1_044,
             57_359_508,
-            "3e33f8fa8a2cc27e8188d0bf0ba6ac969460f7ce6ce1eeacd942a5e99bf498ba",
+            "661cdf893f749d9e3665ce82159d4cd9683bc90a37558dc84a51bc1e3eee15e3",
         ),
         "pandas": (
             1_523,
@@ -355,7 +357,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "peewee": (
             38,
             748_857,
-            "b7a1bbf3e567cefb30541bf7cd04515767028378b50862cd3eeb42a3cfbf9b6a",
+            "b98298bfb9aec93a90e751c97c61ea968ef4520a5c5a6d278f9856a38d051b2b",
         ),
         "platformdirs": (
             16,
@@ -410,7 +412,7 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         "websockets": (
             64,
             808_733,
-            "7d8f96e223bf952eecaabb3e680a3ead277304558956f26451b3ba424cb3ee2e",
+            "07e15663e012b20bc6f61212301745ff064ada314c0b78e582543ead77735e72",
         ),
         "yfinance": (
             42,
@@ -581,6 +583,40 @@ def _is_native_dependency_file_v1(source: Path) -> bool:
     )
 
 
+def _distribution_identity_payload_v1(
+    source: Path,
+    raw: bytes,
+    roots: tuple[Path, ...],
+) -> bytes:
+    if source.name != "RECORD" or not source.parent.name.endswith(".dist-info"):
+        return raw
+    root = next((root for root in roots if source.is_relative_to(root)), None)
+    if root is None:
+        raise RuntimeError("dependency distribution identity mismatch")
+    try:
+        rows = tuple(csv.reader(raw.decode("utf-8").splitlines()))
+    except (csv.Error, UnicodeDecodeError):
+        raise RuntimeError("dependency distribution identity mismatch") from None
+    canonical_rows: list[tuple[str, str, str]] = []
+    external = False
+    for row in rows:
+        if len(row) != 3 or not row[0]:
+            raise RuntimeError("dependency distribution identity mismatch")
+        located = (root / row[0]).resolve(strict=False)
+        if not located.is_relative_to(root):
+            canonical_rows.append((row[0], "", ""))
+            external = True
+        else:
+            canonical_rows.append((row[0], row[1], row[2]))
+    if not external:
+        return raw
+    return json.dumps(
+        canonical_rows,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _distribution_code_entries_v1(
     owned_files: dict[Path, _DependencyFileIdentityV1],
     roots: tuple[Path, ...],
@@ -616,7 +652,10 @@ def _distribution_code_entries_v1(
             expected_identity=owned_files[source],
             aggregate_size=aggregate_size,
         )
-        entries.append((relative, identity[5], hashlib.sha256(raw).digest()))
+        identity_payload = _distribution_identity_payload_v1(source, raw, roots)
+        entries.append(
+            (relative, identity[5], hashlib.sha256(identity_payload).digest())
+        )
         payloads[source] = raw
     aggregate = hashlib.sha256()
     for relative, size, digest in entries:
@@ -1190,6 +1229,16 @@ def _reject_ambient_transport_authority_v1() -> None:
             raise RuntimeError("ambient transport authority is not admitted")
 
 
+def _reject_ambient_sysconfig_authority_v1() -> None:
+    ambient_authority = getattr(
+        sys,
+        _AMBIENT_SYSCONFIG_AUTHORITY_STATE_V1,
+        False,
+    )
+    if ambient_authority is not False:
+        raise RuntimeError("ambient sysconfig authority is not admitted")
+
+
 @contextmanager
 def _provider_trust_environment_v1(
     handles: dict[str, _NativeDependencyHandleV1],
@@ -1673,10 +1722,16 @@ def _trusted_preloaded_roots_v1() -> tuple[tuple[Path, ...], tuple[Path, ...], P
 
 def _require_isolated_runtime_v1() -> None:
     parent_module_names = getattr(sys, "_plan33_parent_module_names_v1", None)
+    ambient_sysconfig_authority = getattr(
+        sys,
+        _AMBIENT_SYSCONFIG_AUTHORITY_STATE_V1,
+        None,
+    )
     if (
         not sys.flags.isolated
         or not sys.flags.no_site
         or type(parent_module_names) is not frozenset
+        or type(ambient_sysconfig_authority) is not bool
         or any(
             not _preloaded_name_allowed_v1(name, name.split(".", 1)[0])
             for name in cast(frozenset[object], parent_module_names)
@@ -1923,6 +1978,7 @@ def _run_enabled(  # noqa: C901 - closed fail-closed admission sequence
     native_handles: dict[str, _NativeDependencyHandleV1] = {}
     try:
         _reject_ambient_transport_authority_v1()
+        _reject_ambient_sysconfig_authority_v1()
         _reject_preloaded_dependency_modules_v1()
         (
             site_roots,
