@@ -225,6 +225,8 @@ _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1 = (
     | frozenset({"__main__", "_virtualenv", "swing_trading_ai_assistant"})
 )
 _ALLOWED_PRELOADED_NON_MODULE_NAMES_V1 = frozenset({"typing.io", "typing.re"})
+_MISSING_PRELOADED_MODULE_V1 = object()
+_retained_preloaded_modules_v1: dict[str, object] = {}
 _REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
     {
         "certifi",
@@ -1089,6 +1091,25 @@ def _preloaded_module_owned_v1(
     return _preloaded_package_paths_owned_v1(specification, module, roots)
 
 
+def _retain_expected_preloaded_modules_v1(names: frozenset[str]) -> None:
+    for name in names:
+        module = sys.modules.get(name, _MISSING_PRELOADED_MODULE_V1)
+        if module is _MISSING_PRELOADED_MODULE_V1:
+            raise RuntimeError("dependency module preloaded")
+        _retained_preloaded_modules_v1.setdefault(name, module)
+
+
+def _preloaded_module_identity_retained_v1(name: str, module: object) -> bool:
+    retained_module = _retained_preloaded_modules_v1.get(
+        name, _MISSING_PRELOADED_MODULE_V1
+    )
+    return (
+        retained_module is not _MISSING_PRELOADED_MODULE_V1
+        and retained_module is not None
+        and retained_module is module
+    )
+
+
 def _preloaded_module_roots_v1(
     name: str,
     prefix: str,
@@ -1108,7 +1129,18 @@ def _preloaded_module_roots_v1(
     return None
 
 
-def _reject_preloaded_dependency_modules_v1() -> None:
+def _preloaded_name_allowed_v1(name: str, prefix: str) -> bool:
+    return (
+        prefix not in _ADMITTED_DEPENDENCY_PREFIXES_V1
+        and prefix not in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+        and (
+            prefix in _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1
+            or (name.startswith("_sysconfigdata_") and "." not in name)
+        )
+    )
+
+
+def _trusted_preloaded_roots_v1() -> tuple[tuple[Path, ...], tuple[Path, ...], Path]:
     try:
         standard_roots = _trusted_standard_roots_v1()
         site_roots = _trusted_site_roots_v1()
@@ -1117,16 +1149,20 @@ def _reject_preloaded_dependency_modules_v1() -> None:
             raise RuntimeError
     except (IndexError, OSError, RuntimeError):
         raise RuntimeError("dependency module preloaded") from None
+    return standard_roots, site_roots, project_root
+
+
+def _reject_preloaded_dependency_modules_v1() -> None:
+    prior_module_names = frozenset(sys.modules)
+    standard_roots, site_roots, project_root = _trusted_preloaded_roots_v1()
+    _retain_expected_preloaded_modules_v1(
+        frozenset(sys.modules).difference(prior_module_names)
+    )
     for name, module in tuple(sys.modules.items()):
         prefix = name.split(".", 1)[0]
-        if (
-            prefix in _ADMITTED_DEPENDENCY_PREFIXES_V1
-            or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
-            or (
-                prefix not in _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1
-                and not (name.startswith("_sysconfigdata_") and "." not in name)
-            )
-        ):
+        if not _preloaded_name_allowed_v1(name, prefix):
+            raise RuntimeError("dependency module preloaded")
+        if not _preloaded_module_identity_retained_v1(name, module):
             raise RuntimeError("dependency module preloaded")
         if name == "__main__":
             if type(module) is not ModuleType or hasattr(module, "__path__"):
@@ -1489,8 +1525,13 @@ def _run(argv: list[str] | None) -> int:
 
     authority_entered = False
     try:
+        prior_module_names = frozenset(sys.modules)
         from swing_trading_ai_assistant.historical_evaluation.capability_validation_cli import (  # noqa: PLC0415
             open_private_request_authority,
+        )
+
+        _retain_expected_preloaded_modules_v1(
+            frozenset(sys.modules).difference(prior_module_names)
         )
 
         with open_private_request_authority(
@@ -1533,6 +1574,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001 - sanitize unexpected runtime failures
         sys.stderr.write("internal_error\n")
         return 2
+
+
+_retained_preloaded_modules_v1.update(sys.modules)
 
 
 if __name__ == "__main__":

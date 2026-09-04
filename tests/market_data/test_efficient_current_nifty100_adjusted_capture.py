@@ -5285,6 +5285,156 @@ raise SystemExit(2)
     assert not marker.exists()
 
 
+@pytest.mark.parametrize("module_name", ["json", "ssl"])
+def test_enabled_boundary_rejects_preloaded_exact_origin_metadata_spoof(
+    module_name: str,
+) -> None:
+    script = f"""
+import importlib
+import importlib.machinery
+import importlib.util
+import sys
+from types import ModuleType
+import {module_name}
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+name = {module_name!r}
+real = sys.modules[name]
+origin = real.__file__
+paths = getattr(real, '__path__', None)
+loader = importlib.machinery.SourceFileLoader(name, origin)
+spec = importlib.util.spec_from_file_location(
+    name,
+    origin,
+    loader=loader,
+    submodule_search_locations=None if paths is None else list(paths),
+)
+fake = ModuleType(name)
+fake.__file__ = origin
+fake.__loader__ = loader
+fake.__package__ = real.__package__
+fake.__spec__ = spec
+if paths is not None:
+    fake.__path__ = list(paths)
+fake.external_payload = lambda: None
+sys.modules[name] = fake
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+fake.external_payload()
+raise SystemExit(2)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_late_exact_metadata_stdlib_spoof() -> None:
+    script = """
+import importlib.machinery
+import importlib.util
+import sys
+from types import ModuleType
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+assert 'ssl' not in sys.modules
+found = importlib.machinery.PathFinder.find_spec('ssl')
+assert found is not None
+origin = found.origin
+loader = importlib.machinery.SourceFileLoader('ssl', origin)
+spec = importlib.util.spec_from_file_location('ssl', origin, loader=loader)
+fake = ModuleType('ssl')
+fake.__file__ = origin
+fake.__loader__ = loader
+fake.__package__ = ''
+fake.__spec__ = spec
+sys.modules['ssl'] = fake
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_preloaded_spec_name_alias_spoof() -> None:
+    script = """
+import importlib.machinery
+import importlib.util
+import json
+import sys
+from types import ModuleType
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+real = sys.modules['json']
+origin = real.__file__
+root = str(next(iter(real.__path__)))
+loader = importlib.machinery.SourceFileLoader('json', origin)
+spec = importlib.util.spec_from_file_location(
+    'json', origin, loader=loader, submodule_search_locations=[root]
+)
+fake = ModuleType('json')
+fake.__file__ = origin
+fake.__loader__ = loader
+fake.__package__ = 'json'
+fake.__path__ = [root]
+fake.__spec__ = spec
+sys.modules['json'] = fake
+sys.modules['email'] = fake
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_preloaded_null_alias_spoof() -> None:
+    script = """
+import sys
+import typing
+typing.re = None
+sys.modules['typing.re'] = None
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_enabled_boundary_rejects_foreign_preloaded_package_search_path(
     tmp_path: Path,
 ) -> None:

@@ -112,9 +112,12 @@ frozen, standard-library, project, or interpreter-bootstrap module is accepted
 only when its exact standard loader, specification name/origin, module file,
 and every package search path resolve beneath the corresponding interpreter,
 project-package, or site root; standard-library and project-prefix collisions
-therefore fail closed. The boundary then replaces ambient meta-path finders
-and path hooks with the standard built-in, frozen, source, and native-extension
-machinery, clears ambient path-finder cache entries, and restores the prior
+therefore fail closed. The accepted module must also be the exact non-null
+object retained when the CLI module or a controlled internal import completed;
+matching metadata cannot substitute a later module object or cross-name alias.
+The boundary then replaces ambient meta-path finders and path hooks with the
+standard built-in, frozen, source, and native-extension machinery, clears
+ambient path-finder cache entries, and restores the prior
 import state only after the verified lifetime ends. Known optional probes
 remain explicitly denied as defense in depth.
 
