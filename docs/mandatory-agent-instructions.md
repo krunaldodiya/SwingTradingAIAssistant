@@ -105,6 +105,12 @@ Permissions do not enlarge authority. Enforce read-only review through the assig
 
 Agents pause only for genuine blockers: unresolved owner decisions, credentials or protected effects, destructive or irreversible actions, scope expansion, release authority, unavailable external evidence, or another boundary named above.
 
+Missing or delayed tool/session state, a lifecycle artifact that appears only
+after startup input, and a routine approval dialog are operational conditions,
+not owner decisions. Inspect, wait, retry, restart, or use the documented
+no-work bootstrap; apply the standing pre-approval to an in-scope routine
+dialog. Never ask the owner merely to authorize ordinary continuation.
+
 ## Additional standing owner instructions
 
 These active owner instructions exist beyond the six execution controls.
