@@ -571,6 +571,30 @@ def _provider_trust_environment_v1(
         raise failure
 
 
+def _bind_certifi_ca_bundle_v1(
+    handles: dict[str, _NativeDependencyHandleV1],
+) -> None:
+    try:
+        handle = handles[_CA_BUNDLE_HANDLE_NAME_V1]
+    except KeyError:
+        raise RuntimeError("provider trust configuration invalid") from None
+    _ensure_native_dependency_handle_live_v1(handle)
+    descriptor_path = _native_dependency_descriptor_path_v1(handle[1])
+    certifi_core = importlib.import_module("certifi.core")
+    certifi_module = sys.modules.get("certifi")
+    if (
+        certifi_module is None
+        or certifi_core.__dict__.get("_CACERT_PATH") is not None
+        or getattr(certifi_module, "where", None)
+        is not getattr(certifi_core, "where", None)
+    ):
+        raise RuntimeError("provider trust configuration invalid")
+    certifi_core.__dict__["_CACERT_PATH"] = descriptor_path
+    if certifi_core.where() != descriptor_path:
+        raise RuntimeError("provider trust configuration invalid")
+    _ensure_native_dependency_handle_live_v1(handle)
+
+
 def _owned_dependency_path_v1(
     distribution: importlib.metadata.Distribution,
     relative: str,
@@ -976,6 +1000,8 @@ def _run_enabled(
                 from . import (  # noqa: PLC0415
                     efficient_current_nifty100_adjusted_capture as core,
                 )
+
+                _bind_certifi_ca_bundle_v1(native_handles)
 
                 _require_dependency_origins_v1(
                     dependency_origins, owned_files, require_loaded=True

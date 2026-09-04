@@ -590,6 +590,56 @@ def test_internal_provider_ca_path_reaches_bounded_session_in_fresh_runtime() ->
     assert completed.returncode == 0, completed.stderr
 
 
+def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if (
+            name.casefold() in cli._AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1
+            or name.casefold().endswith("_proxy")
+        ):
+            environment.pop(name)
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                "from swing_trading_ai_assistant.market_data import "
+                "efficient_current_nifty100_adjusted_capture_cli as cli\n"
+                "original_import_path = list(sys.path)\n"
+                "handles = {}\n"
+                "site_roots, origins, owned, sources, handles = "
+                "cli._admitted_dependency_origins_v1()\n"
+                "cli._require_dependency_origins_v1("
+                "origins, owned, require_loaded=False)\n"
+                "sys.path[:] = cli._trusted_import_path_v1(site_roots)\n"
+                "try:\n"
+                "    with (\n"
+                "        cli._verified_dependency_import_lifetime_v1("
+                "sources, handles),\n"
+                "        cli._provider_trust_environment_v1(handles),\n"
+                "    ):\n"
+                "        from swing_trading_ai_assistant.market_data import "
+                "efficient_current_nifty100_adjusted_capture as core\n"
+                "        cli._bind_certifi_ca_bundle_v1(handles)\n"
+                "        module = core.low._load_yfinance_module()\n"
+                "        assert module.__version__ == '1.6.0'\n"
+                "        session = core.BoundedYahooSessionV1()\n"
+                "        session.close()\n"
+                "finally:\n"
+                "    sys.path[:] = original_import_path\n"
+                "    cli._close_native_dependency_handles_v1(handles)\n"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_encoded_query_target_is_bounded_before_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
