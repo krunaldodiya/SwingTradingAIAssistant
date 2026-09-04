@@ -665,6 +665,68 @@ def _native_module_name_for_dependency_path_v1(
     return ".".join(parts)
 
 
+def _trusted_standard_spec_v1(  # noqa: C901 - fail-closed origin validation
+    fullname: str, path: Sequence[str] | None
+) -> importlib.machinery.ModuleSpec:
+    for importer in (
+        importlib.machinery.BuiltinImporter,
+        importlib.machinery.FrozenImporter,
+    ):
+        specification = importer.find_spec(fullname)
+        if specification is not None:
+            return specification
+    roots = _trusted_standard_roots_v1()
+    search_path = [str(root) for root in roots] if path is None else list(path)
+    try:
+        for value in search_path:
+            if type(value) is not str:
+                raise RuntimeError
+            candidate = Path(value)
+            if (
+                not candidate.is_absolute()
+                or candidate.resolve(strict=True) != candidate
+                or not candidate.is_dir()
+                or not any(
+                    candidate == root or candidate.is_relative_to(root)
+                    for root in roots
+                )
+            ):
+                raise RuntimeError
+        specification = importlib.machinery.PathFinder.find_spec(fullname, search_path)
+        if specification is None:
+            raise RuntimeError
+        origin_value = specification.origin
+        if type(origin_value) is not str:
+            raise RuntimeError
+        origin = Path(origin_value)
+        metadata = os.stat(origin, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or origin.resolve(strict=True) != origin
+            or not any(origin.is_relative_to(root) for root in roots)
+        ):
+            raise RuntimeError
+        locations = specification.submodule_search_locations
+        if locations is not None:
+            for value in locations:
+                location = Path(value)
+                if (
+                    not location.is_absolute()
+                    or location.resolve(strict=True) != location
+                    or not location.is_dir()
+                    or not any(
+                        location == root or location.is_relative_to(root)
+                        for root in roots
+                    )
+                ):
+                    raise RuntimeError
+        return specification
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise ModuleNotFoundError(
+            "standard-library module unavailable", name=fullname
+        ) from None
+
+
 class _VerifiedDependencySourceFinderV1(
     importlib.abc.MetaPathFinder, importlib.abc.Loader
 ):
@@ -729,6 +791,8 @@ class _VerifiedDependencySourceFinderV1(
         if fullname == "six.moves" or fullname.startswith("six.moves."):
             return None
         prefix = fullname.split(".", 1)[0]
+        if prefix in _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1:
+            return _trusted_standard_spec_v1(fullname, path)
         if (
             prefix in self._prefixes
             or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1

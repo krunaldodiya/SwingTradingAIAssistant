@@ -6178,6 +6178,28 @@ def test_verified_dependency_loader_never_delegates_external_imports() -> None:
             finder.find_spec(name)
 
 
+def test_verified_loader_blocks_unavailable_stdlib_name_collision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    marker = tmp_path / "external-winreg-executed"
+    (tmp_path / "winreg.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("winreg", None)
+
+    try:
+        with (
+            cli._verified_dependency_import_lifetime_v1({}, {}),
+            pytest.raises(ImportError, match="standard-library module unavailable"),
+        ):
+            importlib.import_module("winreg")
+    finally:
+        sys.modules.pop("winreg", None)
+
+    assert not marker.exists()
+
+
 def test_locked_dependency_closure_is_admitted_from_exact_descriptors() -> None:
     (
         roots,
