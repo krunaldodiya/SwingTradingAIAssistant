@@ -1120,7 +1120,6 @@ def _read_yfinance_source_v1(
         metadata = os.fstat(descriptor)
         if (
             _stat_regular_file_identity(metadata) != expected_identity
-            or metadata.st_nlink != 1
             or not 0 <= metadata.st_size <= 1_048_576
         ):
             raise RuntimeError

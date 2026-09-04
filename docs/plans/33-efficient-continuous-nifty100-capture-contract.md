@@ -110,9 +110,14 @@ descriptor-byte finder raises before a later ambient meta-path or site-root
 finder can load one.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
-and every Python module executes from descriptor-read admitted bytes. Each
-native extension is held by a shared-locked descriptor whose full metadata and
-content identity match the admitted distribution object; the extension loader
+and every Python module executes from descriptor-read admitted bytes.
+Installed Python source may be hard-linked by the package installer; link count
+is not treated as authenticity. Admission still requires the pathname and held
+descriptor to retain the same complete file identity before and after the
+bounded read, and the descriptor-read bytes must contribute to an allowlisted
+distribution aggregate.
+Each native extension is held by a shared-locked descriptor whose full metadata
+and content identity match the admitted distribution object; the extension loader
 receives only the verified `/dev/fd` or `/proc/self/fd` alias to that held
 object, never a second lookup of its mutable package pathname. This includes
 cffi's top-level `_cffi_backend` native object as well as curl-cffi's package
@@ -122,6 +127,9 @@ alias and remains live through the operation. The cffi-generated
 `curl_cffi._wrapper.lib` object has no file/spec; it is admitted only when it is
 the exact `lib` object exported by the separately descriptor-bound
 `curl_cffi._wrapper` extension.
+The admitted certifi CA bundle is descriptor-bound before the enabled core
+import, so dependency import cannot reopen that resource through the custom
+source loader.
 
 The CLI proves that the exported and inherited `Session` class is the admitted
 `curl_cffi.requests.session` class. The core retains the exact admitted

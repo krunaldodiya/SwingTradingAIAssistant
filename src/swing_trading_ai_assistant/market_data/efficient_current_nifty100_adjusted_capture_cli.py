@@ -121,6 +121,7 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
         {
             "74fcfd761def90939ea448f23ceef2d2a677bcbabf6952b3a4f5fd12bc7faeda",
             "c8f466ab4d807535f41248aeea43b1d2b79143d5e6e8b7b7eccf1fbe0a1668bc",
+            "90a7cff26266778a694bef1361710a492000f8fc094f8cbbcb436a60178c7e64",
         }
     ),
     "idna": frozenset(
@@ -163,6 +164,7 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
 _CFFI_BACKEND_CODE_IDENTITIES_V1 = frozenset(
     {
         "192828af4429c83d5cd92c40275ffd3c71459c3dc7a58e43cf4b5c346d78dc8e",
+        "4c9cc2e8119b5eefa3c534f8c242f0d455d178f251a3072c8ba8a99eea99c62f",
         "8e9a26a7544f15a080e489fe7a733ec76f0bec5a6bf616576f1819bbba28d06d",
     }
 )
@@ -1118,12 +1120,12 @@ def _run_enabled(
             _verified_dependency_import_lifetime_v1(sources, native_handles),
             _provider_trust_environment_v1(native_handles),
         ):
+            _bind_certifi_ca_bundle_v1(native_handles)
+
             try:
                 from . import (  # noqa: PLC0415
                     efficient_current_nifty100_adjusted_capture as core,
                 )
-
-                _bind_certifi_ca_bundle_v1(native_handles)
 
                 _require_dependency_origins_v1(
                     dependency_origins, owned_files, require_loaded=True

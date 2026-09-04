@@ -673,9 +673,9 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
                 "sources, handles),\n"
                 "        cli._provider_trust_environment_v1(handles),\n"
                 "    ):\n"
+                "        cli._bind_certifi_ca_bundle_v1(handles)\n"
                 "        from swing_trading_ai_assistant.market_data import "
                 "efficient_current_nifty100_adjusted_capture as core\n"
-                "        cli._bind_certifi_ca_bundle_v1(handles)\n"
                 "        module = core.low._load_yfinance_module()\n"
                 "        assert '_cffi_backend' in handles\n"
                 "        assert '_cffi_backend' in sys.modules\n"
@@ -1495,7 +1495,7 @@ def test_cache_cleanup_never_unlinks_a_finally_substituted_protected_file(
     assert lease is not None
     lease.close()
     authority = core._open_provider_cache_authority_v1(root)
-    candidate = authority.location / "candidate"
+    candidate = root / authority.name / "candidate"
     candidate.write_text("discard")
     protected = tmp_path / "request.json"
     protected.write_text("preserve")

@@ -2514,6 +2514,23 @@ def test_coherent_pythonpath_distribution_cannot_supply_yfinance(
     assert not marker.exists()
 
 
+def test_yfinance_source_accepts_hardlinked_installed_file(tmp_path: Path) -> None:
+    source = tmp_path / "module.py"
+    raw = b"VALUE = 'admitted'\n"
+    source.write_bytes(raw)
+    os.link(source, tmp_path / "uv-cache-hardlink.py")
+    identity = core._regular_file_identity(  # pyright: ignore[reportPrivateUsage]
+        str(source)
+    )
+
+    assert (
+        core._read_yfinance_source_v1(  # pyright: ignore[reportPrivateUsage]
+            source, identity
+        )
+        == raw
+    )
+
+
 def test_yfinance_transitive_child_executes_admitted_bytes_after_path_swap(
     tmp_path: Path,
 ) -> None:

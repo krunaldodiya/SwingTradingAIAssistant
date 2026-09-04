@@ -10,7 +10,7 @@ CAPTURE_FORWARD_ADJUSTED_OHLCV_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_cli.py": "7b975993e3ae9846fcb6331f4889b865a7862fb2ff720190e84ce0cf3f4806e3",
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_runtime_identity_manifest.py": "2048837a17741c4bbde7014d3b2f0985bb5e11d3cdf95e8d1ae33f202cccb0ec",
     "src/swing_trading_ai_assistant/market_data/__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
-    "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "88a32e46294aee612e48c1ef4ac99300151dbb8af0c719991d6059a8edadd506",
+    "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "51587692742ce6f375b21b49cf56f1c79a4f82ed77e94e5add7b65f38c7a783f",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv_cli.py": "a53012cae9b72069e17bfda8f382f9b042a2512d2cc4f73044bb1aeff481665a",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "0abde4536d131e04d21534b1688c8aa1640bb80e1dc2700d650fd28b1c9d3ff2",
