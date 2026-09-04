@@ -609,7 +609,7 @@ class CaptureForwardAdjustedOhlcvRequestV1:
                 self.schedule.sessions[0] < member.mapping_valid_from
                 or (
                     member.mapping_valid_through is not None
-                    and self.decision_session > member.mapping_valid_through
+                    and cutoff.date() > member.mapping_valid_through
                 )
                 for member in self.cohort
             )
@@ -691,7 +691,7 @@ def parse_capture_forward_request_v1(
                 schedule.sessions[0] < member.mapping_valid_from
                 or (
                     member.mapping_valid_through is not None
-                    and decision_session > member.mapping_valid_through
+                    and decision_cutoff.date() > member.mapping_valid_through
                 )
                 for member in cohort
             )

@@ -523,7 +523,9 @@ def test_provider_transport_pins_proxy_and_ca_authority(
                 "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
                 "max_target=16384|max_response=2097152|max_aggregate=134217728|"
                 "retry=0|trust_env=false|proxy=none|ambient_env=reject|"
-                "ca_delivery=blob|ssl_verifypeer=1|ssl_verifyhost=2|ca_sha256="
+                "ca_delivery=blob-native-copy|ssl_verifypeer=1|ssl_verifyhost=2|"
+                "provider_method=get|provider_hosts=fc-query1-query2.yahoo.com|"
+                "official_proxy=none|official_ca=cadata|ca_sha256="
                 f"{core._PROVIDER_CA_BUNDLE_SHA256_V1}"
             ).encode()
         ).hexdigest()
@@ -549,6 +551,48 @@ def test_provider_transport_pins_proxy_and_ca_authority(
         with pytest.raises(RuntimeError, match="provider trust configuration invalid"):
             session.request("GET", "https://query1.finance.yahoo.com/v8/chart")
     session.close()
+
+
+def test_provider_transport_applies_real_ca_blob_setopt() -> None:
+    session = core.BoundedYahooSessionV1()
+    try:
+        assert (
+            session.curl.setopt(
+                core.CurlOpt.CAINFO_BLOB,
+                core._PROVIDER_CA_BUNDLE_BYTES_V1,
+            )
+            == 0
+        )
+    finally:
+        session.close()
+
+
+def test_provider_transport_rejects_unapproved_methods_and_hosts_before_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def forbidden_request(
+        _self: object, method: str, url: str, **_kwargs: object
+    ) -> object:
+        calls.append((method, url))
+        raise AssertionError("unauthorized provider effect")
+
+    monkeypatch.setattr(core.CurlSession, "request", forbidden_request)
+    session = core.BoundedYahooSessionV1()
+    try:
+        for method, url in (
+            ("POST", "https://consent.yahoo.com/v2/collectConsent"),
+            ("GET", "https://guce.yahoo.com/consent"),
+            ("GET", "https://example.test/"),
+        ):
+            with pytest.raises(
+                RuntimeError, match="provider request authority invalid"
+            ):
+                session.request(method, url)
+    finally:
+        session.close()
+    assert calls == []
 
 
 def test_internal_provider_ca_path_is_exact_and_not_ambient(
@@ -845,6 +889,27 @@ def test_official_source_redirect_handler_denies_every_redirect() -> None:
             object(), object(), 302, "found", object(), "https://example.test/"
         )
         is None
+    )
+
+
+def test_official_source_opener_has_no_proxy_and_only_admitted_ca() -> None:
+    opener = core._official_source_opener_v1()
+    https = next(
+        handler for handler in opener.handlers if isinstance(handler, core.HTTPSHandler)
+    )
+    context = https._context
+    expected = core.SSLContext(core.PROTOCOL_TLS_CLIENT)
+    expected.load_verify_locations(
+        cadata=core._PROVIDER_CA_BUNDLE_BYTES_V1.decode("ascii")
+    )
+
+    assert not any(
+        isinstance(handler, core.ProxyHandler) for handler in opener.handlers
+    )
+    assert context.check_hostname is True
+    assert context.verify_mode == core.CERT_REQUIRED
+    assert frozenset(context.get_ca_certs(binary_form=True)) == frozenset(
+        expected.get_ca_certs(binary_form=True)
     )
 
 
@@ -2421,10 +2486,12 @@ def test_missing_mapping_does_not_hide_later_malformed_member(tmp_path: Path) ->
     assert result == core.SharedFailureV1("MALFORMED_INPUT", None)
 
 
-def test_stale_mapping_is_mapping_evidence_invalid(tmp_path: Path) -> None:
+def test_mapping_expiring_on_decision_session_before_cutoff_is_invalid(
+    tmp_path: Path,
+) -> None:
     value = json.loads(_request())
     member = value["cohorts"][0]["request"]["cohort"][0]
-    member["mapping_valid_through"] = "2026-01-02"
+    member["mapping_valid_through"] = _SESSIONS[-1].isoformat()
     member["mapping_identity_sha256"] = core.low.mapping_identity_v1(
         isin=member["isin"],
         exchange=member["exchange"],

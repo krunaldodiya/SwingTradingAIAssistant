@@ -16,13 +16,28 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout, suppress
+from ctypes import (
+    Structure,
+    addressof,
+    c_size_t,
+    c_uint,
+    c_void_p,
+    create_string_buffer,
+)
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
+from ssl import CERT_REQUIRED, PROTOCOL_TLS_CLIENT, SSLContext
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
-from urllib.request import HTTPRedirectHandler, build_opener
+from urllib.parse import urlsplit
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    build_opener,
+)
 
 import multitasking as _untyped_multitasking  # pyright: ignore[reportMissingImports,reportUnknownVariableType]
 
@@ -47,6 +62,24 @@ from .universe_snapshot import (
 
 if TYPE_CHECKING:
 
+    class Curl:
+        _curl: object | None
+
+        def __init__(self, *, debug: bool = False) -> None:
+            del debug
+
+        def setopt(self, option: object, value: object) -> int:
+            del option, value
+            raise NotImplementedError
+
+        def _check_error(self, errcode: int, *args: object) -> None:
+            del errcode, args
+
+        def close(self) -> None: ...
+
+    _curl_ffi: Any
+    _curl_lib: Any
+
     class CurlOpt:
         CAINFO_BLOB: object
         PROXY: object
@@ -54,6 +87,11 @@ if TYPE_CHECKING:
         SSL_VERIFYPEER: object
 
     class CurlSession:
+        debug: bool
+        trust_env: bool
+        verify: bool | str
+        curl_options: dict[object, object]
+
         def __init__(
             self,
             *,
@@ -65,6 +103,9 @@ if TYPE_CHECKING:
         ) -> None:
             del impersonate, retry, verify, trust_env, curl_options
 
+        @property
+        def curl(self) -> Curl: ...
+
         def request(self, method: str, url: str, **kwargs: object) -> object: ...
 
         def close(self) -> None: ...
@@ -75,7 +116,11 @@ if TYPE_CHECKING:
 
 else:
     CurlOpt = import_module("curl_cffi.const").__dict__["CurlOpt"]
+    Curl = import_module("curl_cffi").__dict__["Curl"]
     CurlSession = import_module("curl_cffi.requests").__dict__["Session"]
+    _curl_wrapper = import_module("curl_cffi._wrapper")
+    _curl_ffi = _curl_wrapper.__dict__["ffi"]
+    _curl_lib = _curl_wrapper.__dict__["lib"]
     _update_url_params = cast(
         Callable[[str, object], str],
         import_module("curl_cffi.requests.utils").__dict__["update_url_params"],
@@ -166,7 +211,9 @@ CONFIGURATION_IDENTITY_SHA256_V1: Final = hashlib.sha256(
         "plan33_yfinance_8|threads=8|interval=0.125|max_starts=256|"
         "max_target=16384|max_response=2097152|max_aggregate=134217728|"
         "retry=0|trust_env=false|proxy=none|ambient_env=reject|"
-        "ca_delivery=blob|ssl_verifypeer=1|ssl_verifyhost=2|ca_sha256="
+        "ca_delivery=blob-native-copy|ssl_verifypeer=1|ssl_verifyhost=2|"
+        "provider_method=get|provider_hosts=fc-query1-query2.yahoo.com|"
+        "official_proxy=none|official_ca=cadata|ca_sha256="
         f"{_PROVIDER_CA_BUNDLE_SHA256_V1}"
     ).encode()
 ).hexdigest()
@@ -179,6 +226,83 @@ def _ensure_provider_ca_bundle_live_v1() -> None:
         raise RuntimeError("provider trust configuration invalid") from None
     if path != _PROVIDER_CA_BUNDLE_PATH_V1 or digest != _PROVIDER_CA_BUNDLE_SHA256_V1:
         raise RuntimeError("provider trust configuration invalid")
+
+
+_CURL_BLOB_COPY_V1: Final = 1
+_PROVIDER_HOSTS_V1: Final = frozenset(
+    {
+        "fc.yahoo.com",
+        "query1.finance.yahoo.com",
+        "query2.finance.yahoo.com",
+    }
+)
+
+
+class _CurlBlobV1(Structure):
+    _fields_ = (
+        ("data", c_void_p),
+        ("length", c_size_t),
+        ("flags", c_uint),
+    )
+
+
+class _Plan33CurlV1(Curl):
+    """Pinned curl-cffi handle with exact libcurl CA blob support."""
+
+    def setopt(self, option: object, value: object) -> int:
+        if option != CurlOpt.CAINFO_BLOB:
+            return super().setopt(option, value)
+        if type(value) is not bytes or value != _PROVIDER_CA_BUNDLE_BYTES_V1:
+            raise RuntimeError("provider trust configuration invalid")
+        if self._curl is None:
+            return 0
+        payload = create_string_buffer(value, len(value))
+        blob = _CurlBlobV1(
+            c_void_p(addressof(payload)),
+            len(value),
+            _CURL_BLOB_COPY_V1,
+        )
+        result = cast(
+            int,
+            _curl_lib._curl_easy_setopt(
+                self._curl,
+                CurlOpt.CAINFO_BLOB,
+                _curl_ffi.cast("void *", addressof(blob)),
+            ),
+        )
+        self._check_error(result, "setopt", CurlOpt.CAINFO_BLOB)
+        return result
+
+
+def _ensure_provider_request_authorized_v1(
+    method: str, url: str, kwargs: dict[str, object]
+) -> None:
+    try:
+        target = urlsplit(url)
+        authorized = (
+            method == "GET"
+            and target.scheme == "https"
+            and target.hostname in _PROVIDER_HOSTS_V1
+            and target.port in (None, 443)
+            and target.username is None
+            and target.password is None
+            and not target.fragment
+            and not any(
+                kwargs.get(name) is not None
+                for name in (
+                    "cert",
+                    "doh_url",
+                    "interface",
+                    "proxy",
+                    "proxies",
+                    "verify",
+                )
+            )
+        )
+    except (TypeError, ValueError):
+        authorized = False
+    if not authorized:
+        raise RuntimeError("provider request authority invalid")
 
 
 _PROVIDER_CACHE_NAME_V1: Final = ".plan33-yfinance-cache"
@@ -1167,6 +1291,9 @@ class BoundedYahooSessionV1(CurlSession):
                 CurlOpt.SSL_VERIFYHOST: 2,
             },
         )
+        local = cast(Any, self)._local
+        local.curl.close()
+        local.curl = _Plan33CurlV1(debug=self.debug)
         self._ledger = TransportLedgerV1(clock=clock, sleep=sleep)
         self._owns_provider_admission = owns_provider_admission
         self._cache_authority = cache_authority
@@ -1174,6 +1301,17 @@ class BoundedYahooSessionV1(CurlSession):
         self._clock = clock
         self._sleep = sleep
         self._last_transport_release: float | None = None
+
+    @property
+    def curl(self) -> Curl:
+        local = cast(Any, self)._local
+        current = getattr(local, "curl", None)
+        if current is None:
+            current = _Plan33CurlV1(debug=self.debug)
+            local.curl = current
+        if type(current) is not _Plan33CurlV1:
+            raise RuntimeError("provider runtime configuration invalid")
+        return cast(Curl, current)
 
     def begin_cohort(self) -> None:
         self._ledger.begin_cohort()
@@ -1196,6 +1334,7 @@ class BoundedYahooSessionV1(CurlSession):
             self._sleep(remaining)
 
     def request(self, method: str, url: str, **kwargs: object) -> object:
+        _ensure_provider_request_authorized_v1(method, url, kwargs)
         _reject_ambient_transport_authority_v1()
         _ensure_provider_ca_bundle_live_v1()
         target_url = _request_target_v1(url, kwargs)
@@ -1464,6 +1603,23 @@ class _RejectRedirectHandlerV1(HTTPRedirectHandler):
         del req, fp, code, msg, headers, newurl
 
 
+def _official_source_opener_v1() -> Any:
+    try:
+        context = SSLContext(PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(
+            cadata=_PROVIDER_CA_BUNDLE_BYTES_V1.decode("ascii")
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
+        raise RuntimeError("official source trust configuration invalid") from None
+    if context.verify_mode != CERT_REQUIRED or not context.check_hostname:
+        raise RuntimeError("official source trust configuration invalid")
+    return build_opener(
+        ProxyHandler({}),
+        HTTPSHandler(context=context),
+        _RejectRedirectHandlerV1(),
+    )
+
+
 class OfficialSourceFetcherV1:
     """Fixed-endpoint official source fetcher with a 256-KiB body ceiling."""
 
@@ -1471,11 +1627,16 @@ class OfficialSourceFetcherV1:
         self._transport = UrllibHttpTransport(
             timeout_seconds=10.0,
             max_body_bytes=MAX_SOURCE_BYTES_V1,
-            opener=build_opener(_RejectRedirectHandlerV1()).open,
+            opener=_official_source_opener_v1().open,
         )
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def get(self, url: str) -> SourceResponseV1:
+        try:
+            _reject_ambient_transport_authority_v1()
+            _ensure_provider_ca_bundle_live_v1()
+        except RuntimeError:
+            raise OSError("official source trust configuration invalid") from None
         try:
             response = self._transport.get(url, {})
         except HttpResponseBodyTooLarge as error:

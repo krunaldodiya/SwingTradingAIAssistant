@@ -112,7 +112,18 @@ exported and inherited `Session` class is the admitted
 duration of the operation. A package, coherent package-plus-metadata, preloaded
 transitive child-module, or native pathname substitution is not executed.
 
+The official-source opener installs no proxy handler and uses a fresh
+client-verifying TLS context populated only from the same admitted immutable CA
+bytes. The provider session copies those exact bytes into each thread-local
+native curl handle through `CURLOPT_CAINFO_BLOB`, explicitly restores peer and
+hostname verification after curl-cffi option preparation, and accepts only
+`GET` requests to the exact `fc.yahoo.com`, `query1.finance.yahoo.com`, and
+`query2.finance.yahoo.com` hosts. Consent hosts, non-`GET` methods, request-level
+transport overrides, ambient proxy variables, and mutable system trust roots
+are not authorities.
+
 The supplied session is one `curl_cffi.requests.Session(impersonate="chrome", retry=0)` subtype with a shared locked transport ledger and a non-overtakable call-start boundary. A worker holds that boundary from ledger admission through entry into the superclass HTTP call and releases it only at the first response-body callback or terminal return/failure. Thus concurrent scheduling cannot reorder admissions or cluster actual HTTP-call starts. It admits only:
+
 
 - a minimum 125-millisecond monotonic-clock interval between actual HTTP-call
   starts across all workers;
