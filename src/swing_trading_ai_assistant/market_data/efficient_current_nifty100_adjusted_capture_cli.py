@@ -17,6 +17,7 @@ import sysconfig
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from types import ModuleType
 from typing import NoReturn, cast
 
 
@@ -223,6 +224,7 @@ _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1 = (
     _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1
     | frozenset({"__main__", "_virtualenv", "swing_trading_ai_assistant"})
 )
+_ALLOWED_PRELOADED_NON_MODULE_NAMES_V1 = frozenset({"typing.io", "typing.re"})
 _REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
     {
         "certifi",
@@ -565,6 +567,26 @@ def _trusted_site_roots_v1() -> tuple[Path, ...]:
         raise RuntimeError("dependency distribution identity mismatch") from None
     if not roots:
         raise RuntimeError("dependency distribution identity mismatch")
+    return tuple(roots)
+
+
+def _trusted_standard_roots_v1() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    try:
+        paths = sysconfig.get_paths()
+        for key in ("stdlib", "platstdlib"):
+            value = paths.get(key)
+            if type(value) is not str or not Path(value).is_absolute():
+                raise RuntimeError
+            root = Path(value).resolve(strict=True)
+            if not root.is_dir():
+                raise RuntimeError
+            if root not in roots:
+                roots.append(root)
+    except (OSError, RuntimeError):
+        raise RuntimeError("trusted import path invalid") from None
+    if not roots:
+        raise RuntimeError("trusted import path invalid")
     return tuple(roots)
 
 
@@ -951,15 +973,190 @@ def _module_origin_matches_v1(
         return False
 
 
-def _reject_preloaded_dependency_modules_v1() -> None:
-    permitted = _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1
-    if any(
-        (prefix := name.split(".", 1)[0]) in _ADMITTED_DEPENDENCY_PREFIXES_V1
-        or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
-        or prefix not in permitted
-        for name in sys.modules
+def _preloaded_path_owned_v1(
+    value: object,
+    roots: tuple[Path, ...],
+    *,
+    directory: bool,
+) -> bool:
+    if type(value) is not str:
+        return False
+    path = Path(value)
+    if not path.is_absolute():
+        return False
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+        expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+        return (
+            expected_type(metadata.st_mode)
+            and path.resolve(strict=True) == path
+            and any(path == root or path.is_relative_to(root) for root in roots)
+        )
+    except OSError:
+        return False
+
+
+def _preloaded_intrinsic_module_owned_v1(
+    origin: object,
+    loader: object,
+    module_file: object,
+    specification: importlib.machinery.ModuleSpec,
+    module: ModuleType,
+    roots: tuple[Path, ...],
+    *,
+    allow_frozen: bool,
+) -> bool:
+    if origin == "built-in":
+        return (
+            allow_frozen
+            and loader is importlib.machinery.BuiltinImporter
+            and module_file is None
+            and specification.submodule_search_locations is None
+            and not hasattr(module, "__path__")
+        )
+    return (
+        origin == "frozen"
+        and allow_frozen
+        and loader is importlib.machinery.FrozenImporter
+        and (
+            module_file is None
+            or _preloaded_path_owned_v1(module_file, roots, directory=False)
+        )
+        and specification.submodule_search_locations is None
+        and not hasattr(module, "__path__")
+    )
+
+
+def _preloaded_package_paths_owned_v1(
+    specification: importlib.machinery.ModuleSpec,
+    module: ModuleType,
+    roots: tuple[Path, ...],
+) -> bool:
+    specification_paths = specification.submodule_search_locations
+    module_paths = getattr(module, "__path__", None)
+    if specification_paths is None:
+        return module_paths is None
+    if type(specification_paths) is not list or type(module_paths) is not list:
+        return False
+    path_values = cast(list[object], module_paths)
+    return specification_paths == module_paths and all(
+        _preloaded_path_owned_v1(value, roots, directory=True) for value in path_values
+    )
+
+
+def _preloaded_module_owned_v1(
+    name: str,
+    module: object,
+    *,
+    roots: tuple[Path, ...],
+    allow_frozen: bool,
+) -> bool:
+    if type(module) is not ModuleType:
+        return False
+    specification = getattr(module, "__spec__", None)
+    if type(specification) is not importlib.machinery.ModuleSpec:
+        return False
+    specification_name = specification.name
+    if specification_name != name and sys.modules.get(specification_name) is not module:
+        return False
+    loader = cast(object, specification.loader)
+    if getattr(module, "__loader__", None) is not loader:
+        return False
+    origin = specification.origin
+    module_file = getattr(module, "__file__", None)
+    if origin in ("built-in", "frozen"):
+        return _preloaded_intrinsic_module_owned_v1(
+            origin,
+            loader,
+            module_file,
+            specification,
+            module,
+            roots,
+            allow_frozen=allow_frozen,
+        )
+    if type(loader) not in (
+        importlib.machinery.SourceFileLoader,
+        importlib.machinery.ExtensionFileLoader,
     ):
-        raise RuntimeError("dependency module preloaded")
+        return False
+    if (
+        type(origin) is not str
+        or module_file != origin
+        or getattr(loader, "path", None) != origin
+        or not _preloaded_path_owned_v1(origin, roots, directory=False)
+    ):
+        return False
+    return _preloaded_package_paths_owned_v1(specification, module, roots)
+
+
+def _preloaded_module_roots_v1(
+    name: str,
+    prefix: str,
+    *,
+    standard_roots: tuple[Path, ...],
+    project_root: Path,
+    site_roots: tuple[Path, ...],
+) -> tuple[tuple[Path, ...], bool] | None:
+    if prefix in _BUILTIN_AND_STDLIB_IMPORT_PREFIXES_V1:
+        return standard_roots, True
+    if prefix == "swing_trading_ai_assistant":
+        return (project_root,), False
+    if name == "_virtualenv":
+        return site_roots, False
+    if name.startswith("_sysconfigdata_") and "." not in name:
+        return standard_roots, False
+    return None
+
+
+def _reject_preloaded_dependency_modules_v1() -> None:
+    try:
+        standard_roots = _trusted_standard_roots_v1()
+        site_roots = _trusted_site_roots_v1()
+        project_root = Path(__file__).resolve(strict=True).parents[1]
+        if not project_root.is_dir():
+            raise RuntimeError
+    except (IndexError, OSError, RuntimeError):
+        raise RuntimeError("dependency module preloaded") from None
+    for name, module in tuple(sys.modules.items()):
+        prefix = name.split(".", 1)[0]
+        if (
+            prefix in _ADMITTED_DEPENDENCY_PREFIXES_V1
+            or prefix in _DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1
+            or (
+                prefix not in _ALLOWED_PRELOADED_IMPORT_PREFIXES_V1
+                and not (name.startswith("_sysconfigdata_") and "." not in name)
+            )
+        ):
+            raise RuntimeError("dependency module preloaded")
+        if name == "__main__":
+            if type(module) is not ModuleType or hasattr(module, "__path__"):
+                raise RuntimeError("dependency module preloaded")
+            continue
+        if type(module) is not ModuleType:
+            parent_name, separator, child_name = name.rpartition(".")
+            parent = sys.modules.get(parent_name)
+            if (
+                name not in _ALLOWED_PRELOADED_NON_MODULE_NAMES_V1
+                or not separator
+                or type(parent) is not ModuleType
+                or getattr(parent, child_name, None) is not module
+            ):
+                raise RuntimeError("dependency module preloaded")
+            continue
+        ownership = _preloaded_module_roots_v1(
+            name,
+            prefix,
+            standard_roots=standard_roots,
+            project_root=project_root,
+            site_roots=site_roots,
+        )
+        if ownership is None or not _preloaded_module_owned_v1(
+            name,
+            module,
+            roots=ownership[0],
+            allow_frozen=ownership[1],
+        ):
+            raise RuntimeError("dependency module preloaded")
 
 
 def _require_native_dependency_module_owned_v1(
@@ -1040,17 +1237,7 @@ def _trusted_import_path_v1(  # noqa: C901 - closed trusted-path admission
 ) -> list[str]:
     try:
         project_root = Path(__file__).resolve(strict=True).parents[2]
-        configured = sysconfig.get_paths()
-        standard_roots: list[Path] = []
-        for key in ("stdlib", "platstdlib"):
-            value = configured.get(key)
-            if type(value) is not str or not Path(value).is_absolute():
-                raise RuntimeError
-            root = Path(value).resolve(strict=True)
-            if not root.is_dir():
-                raise RuntimeError
-            if root not in standard_roots:
-                standard_roots.append(root)
+        standard_roots = _trusted_standard_roots_v1()
         candidates: list[Path] = [project_root, *standard_roots]
         for value in sys.path:
             if not value or not Path(value).is_absolute():

@@ -5190,23 +5190,27 @@ def test_verified_dependency_loader_denies_unapproved_top_level(
         cli._VerifiedDependencySourceFinderV1({}).find_spec(module_name)
 
 
-def test_enabled_boundary_rejects_preloaded_unapproved_top_level(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cli, "_ADMITTED_DEPENDENCY_PREFIXES_V1", frozenset())
-    monkeypatch.setattr(cli, "_DENIED_OPTIONAL_DEPENDENCY_PREFIXES_V1", frozenset())
-    monkeypatch.setattr(
-        cli,
-        "_ALLOWED_PRELOADED_IMPORT_PREFIXES_V1",
-        frozenset(name.split(".", 1)[0] for name in sys.modules),
-    )
-    monkeypatch.setitem(sys.modules, "MySQLdb", ModuleType("MySQLdb"))
-
-    with pytest.raises(RuntimeError, match="dependency module preloaded"):
-        cli._reject_preloaded_dependency_modules_v1()
-
-    monkeypatch.delitem(sys.modules, "MySQLdb")
+def test_enabled_boundary_rejects_preloaded_unapproved_top_level() -> None:
+    script = """
+import sys
+from types import ModuleType
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+sys.modules['MySQLdb'] = ModuleType('MySQLdb')
+try:
     cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_verified_dependency_lifetime_discards_ambient_meta_path() -> None:
@@ -5221,6 +5225,88 @@ def test_verified_dependency_lifetime_discards_ambient_meta_path() -> None:
             assert ambient not in sys.meta_path
     finally:
         sys.meta_path[:] = original
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["email", "ssl", "swing_trading_ai_assistant"],
+)
+def test_enabled_boundary_rejects_preloaded_prefix_collision_before_child_import(
+    tmp_path: Path,
+    module_name: str,
+) -> None:
+    package = tmp_path / module_name.replace(".", "-")
+    package.mkdir()
+    initializer = package / "__init__.py"
+    initializer.write_text("", encoding="utf-8")
+    marker = package / "executed"
+    (package / "payload.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    script = f"""
+import importlib
+import importlib.machinery
+import importlib.util
+import sys
+from types import ModuleType
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+name = {module_name!r}
+root = {str(package)!r}
+origin = {str(initializer)!r}
+loader = importlib.machinery.SourceFileLoader(name, origin)
+spec = importlib.util.spec_from_file_location(
+    name, origin, loader=loader, submodule_search_locations=[root]
+)
+fake = ModuleType(name)
+fake.__file__ = origin
+fake.__loader__ = loader
+fake.__package__ = name
+fake.__path__ = [root]
+fake.__spec__ = spec
+sys.modules[name] = fake
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+importlib.import_module(name + '.payload')
+raise SystemExit(2)
+"""
+
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not marker.exists()
+
+
+def test_enabled_boundary_rejects_foreign_preloaded_package_search_path(
+    tmp_path: Path,
+) -> None:
+    script = f"""
+import email
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+email.__path__.append({str(tmp_path)!r})
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and literal script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_verified_dependency_lifetime_discards_ambient_path_finders(

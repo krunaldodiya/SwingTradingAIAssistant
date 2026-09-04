@@ -106,12 +106,17 @@ Import admission is positive rather than an enumeration of known optional
 probes. Only built-in and standard-library prefixes, the project prefix, the
 descriptor-admitted dependency prefixes, and the exact path-import prefixes
 required by this capture boundary may resolve. Every other top-level prefix is
-rejected before a later finder can execute it. The enabled boundary also
-rejects any preloaded non-standard-library external module, replaces ambient
-meta-path finders and path hooks with the standard built-in, frozen, source,
-and native-extension machinery, clears ambient path-finder cache entries, and
-restores the prior import state only after the verified lifetime ends. Known
-optional probes remain explicitly denied as defense in depth.
+rejected before a later finder can execute it. The enabled boundary rejects
+every preloaded non-standard-library external module. A preloaded built-in,
+frozen, standard-library, project, or interpreter-bootstrap module is accepted
+only when its exact standard loader, specification name/origin, module file,
+and every package search path resolve beneath the corresponding interpreter,
+project-package, or site root; standard-library and project-prefix collisions
+therefore fail closed. The boundary then replaces ambient meta-path finders
+and path hooks with the standard built-in, frozen, source, and native-extension
+machinery, clears ambient path-finder cache entries, and restores the prior
+import state only after the verified lifetime ends. Known optional probes
+remain explicitly denied as defense in depth.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
 and every Python module executes from descriptor-read admitted bytes.
