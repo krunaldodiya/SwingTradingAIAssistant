@@ -787,27 +787,65 @@ def test_distribution_record_identity_ignores_external_script_install_bytes(
     record = site_root / "example-1.0.dist-info" / "RECORD"
     record.parent.mkdir(parents=True)
     internal = "example/__init__.py,sha256=internal,10\n"
-    first = f"../bin/example,sha256=first,100\n{internal}".encode()
-    second = f"../bin/example,sha256=second,200\n{internal}".encode()
+    first = f"../bin/example,sha256=short,9\n{internal}".encode()
+    second = f"../bin/example,sha256=much-longer-value,1000\n{internal}".encode()
     changed_internal = (
         b"../bin/example,sha256=third,300\nexample/__init__.py,sha256=changed,10\n"
     )
 
-    first_identity = cli._distribution_identity_payload_v1(
-        record,
-        first,
-        (site_root,),
-    )
-    assert first_identity == cli._distribution_identity_payload_v1(
-        record,
-        second,
-        (site_root,),
-    )
-    assert first_identity != cli._distribution_identity_payload_v1(
-        record,
-        changed_internal,
-        (site_root,),
-    )
+    def aggregate(raw: bytes) -> tuple[int, int, str]:
+        record.write_bytes(raw)
+        owned = {
+            record.resolve(strict=True): cli._dependency_file_identity_v1(record.stat())
+        }
+        identity, _payloads = cli._distribution_code_entries_v1(
+            owned,
+            (site_root.resolve(strict=True),),
+        )
+        return identity
+
+    first_identity = aggregate(first)
+    assert first_identity == aggregate(second)
+    assert first_identity != aggregate(changed_internal)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_dependency_open_rejects_fifo_substitution_without_blocking(
+    native: bool,
+) -> None:
+    script = f"""
+import os
+import tempfile
+from pathlib import Path
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+
+with tempfile.TemporaryDirectory() as temporary:
+    candidate = Path(temporary) / 'dependency'
+    candidate.write_bytes(b'admitted')
+    identity = cli._dependency_file_identity_v1(candidate.stat())
+    real_open = cli.os.open
+    def substitute(path, flags, mode=0o777, **kwargs):
+        if os.fspath(path) == os.fspath(candidate):
+            candidate.unlink()
+            os.mkfifo(candidate)
+        return real_open(path, flags, mode, **kwargs)
+    cli.os.open = substitute
+    rejected = False
+    try:
+        if {native!r}:
+            cli._open_native_dependency_handle_v1(candidate, identity)
+        else:
+            cli._read_dependency_file_v1(candidate, expected_identity=identity)
+    except (OSError, RuntimeError):
+        rejected = True
+    finally:
+        cli.os.open = real_open
+    if not rejected:
+        raise SystemExit(2)
+raise SystemExit(0)
+"""
+    completed = _run_isolated_cli_script(script)
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_encoded_query_target_is_bounded_before_transport(

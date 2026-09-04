@@ -199,23 +199,23 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "cffi": (
             33,
-            574_646,
-            "1d4423fce9dd3184b1c4a3cf6774c30c10d632d1fdc0fd0998a4c7b06edd41d8",
+            574_866,
+            "d5681f23e38bf590e9fd68950920067ed855588fb38a8e40dfcdc20ca34e2502",
         ),
         "charset-normalizer": (
             23,
-            1_133_571,
-            "ccfe15296107ad23ac25f546732387e35b586af9e665104a0d61fbdbb32844bb",
+            1_133_711,
+            "f9f0415f7082f3d04dacc9f36e8e1367f79858703db03c6440da2299f7f2aeb1",
         ),
         "curl-cffi": (
             38,
-            7_367_484,
-            "828756a20365571767df3ad65949578e93ed7fc75fff5301953435ac289c4152",
+            7_367_744,
+            "35275c0026c2ea9b8f7c6d3c002f32a95ec48e1527299f1ea0da1a340ee30471",
         ),
         "idna": (
             18,
-            337_453,
-            "30481ef8b3095e91517d4b5e53229d68027af8827890e93a902ca4709b85f070",
+            337_553,
+            "a1b8fb9a707207fb09952d59c83d2395ab9f6d67af0a8246387ff9053462e832",
         ),
         "lxml": (
             176,
@@ -229,8 +229,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "numpy": (
             1_041,
-            24_064_592,
-            "1b9a74c796588cd6a943ac1fbf87c84b25eeda472024f0afb08a6e4b69b7f926",
+            24_072_831,
+            "91f7990782a91073d9c0f4a72c44761785f1a7a55652c531781547c0d19ffb7c",
         ),
         "pandas": (
             1_523,
@@ -239,8 +239,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "peewee": (
             38,
-            748_857,
-            "b98298bfb9aec93a90e751c97c61ea968ef4520a5c5a6d278f9856a38d051b2b",
+            749_117,
+            "3cb2507c026a62fa7d4f55f30dddc9cf1e46045766ca69eedff5c9f1a7222fce",
         ),
         "platformdirs": (
             16,
@@ -294,8 +294,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "websockets": (
             64,
-            780_873,
-            "ed760b11c0ac0aa4a3461cd8999f0fb38228d4f0ea1e0687a8f45610c0cf6032",
+            781_341,
+            "a82d6b340f630f252bebc409467cf0f0c90c05d3dc95b9a3783b9013344c89bf",
         ),
         "yfinance": (
             42,
@@ -316,23 +316,23 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "cffi": (
             33,
-            719_029,
-            "38553ee8bb7be76ce48c665b4cd5c9f6b779cc3e7c22d7fa9d921f4a6c2a89a9",
+            719_249,
+            "fac3daf702e5e34cdf77b3a0251b3e61c63bd268abaeceea48692fe6b5d2e4b9",
         ),
         "charset-normalizer": (
             23,
-            746_800,
-            "d52b4de27a372186c51d7faf473a43eeef10ec75fd9f054c4271cb45ffadb0c5",
+            746_940,
+            "26e91a57e9fa94d931305e796e88d1dcbf96421194d0c957c30be6058ebdc358",
         ),
         "curl-cffi": (
             38,
-            38_918_002,
-            "c9059a25f8feef8956e6693c8d7c21e9326f1e00980be9f745bb9cd27faddec4",
+            38_918_262,
+            "2e09ec84808d9fcc4b947282a654d0bd4a20c4e1c3ad1b323f69547ce480305d",
         ),
         "idna": (
             18,
-            337_453,
-            "30481ef8b3095e91517d4b5e53229d68027af8827890e93a902ca4709b85f070",
+            337_553,
+            "a1b8fb9a707207fb09952d59c83d2395ab9f6d67af0a8246387ff9053462e832",
         ),
         "lxml": (
             176,
@@ -346,8 +346,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "numpy": (
             1_044,
-            57_359_508,
-            "661cdf893f749d9e3665ce82159d4cd9683bc90a37558dc84a51bc1e3eee15e3",
+            57_367_771,
+            "b4c1a8d0f0d7736b261e3d7b5f40434bd31975fe41ed04f9625307d73a743ec0",
         ),
         "pandas": (
             1_523,
@@ -356,8 +356,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "peewee": (
             38,
-            748_857,
-            "b98298bfb9aec93a90e751c97c61ea968ef4520a5c5a6d278f9856a38d051b2b",
+            749_117,
+            "3cb2507c026a62fa7d4f55f30dddc9cf1e46045766ca69eedff5c9f1a7222fce",
         ),
         "platformdirs": (
             16,
@@ -411,8 +411,8 @@ _DEPENDENCY_DISTRIBUTION_IDENTITIES_V1 = {
         ),
         "websockets": (
             64,
-            808_733,
-            "07e15663e012b20bc6f61212301745ff064ada314c0b78e582543ead77735e72",
+            809_201,
+            "5249d17f80df928185eb15c53bc3c699b9dbbcadd8903438f9201928a71f6f60",
         ),
         "yfinance": (
             42,
@@ -489,7 +489,10 @@ def _read_dependency_file_v1(
         or aggregate_size + metadata.st_size > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1
     ):
         raise RuntimeError("dependency distribution identity mismatch")
-    descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    descriptor = os.open(
+        candidate,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+    )
     content = bytearray()
     failure: BaseException | None = None
     try:
@@ -625,7 +628,8 @@ def _distribution_code_entries_v1(
 
     entries: list[tuple[str, int, bytes]] = []
     payloads: dict[Path, bytes] = {}
-    aggregate_size = 0
+    resource_aggregate_size = 0
+    identity_aggregate_size = 0
     for source in sorted(owned_files):
         relative = next(
             (
@@ -643,18 +647,21 @@ def _distribution_code_entries_v1(
                 entries.append((relative, handle[3], handle[4]))
             finally:
                 os.close(handle[1])
-            aggregate_size += owned_files[source][5]
-            if aggregate_size > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1:
+            resource_aggregate_size += owned_files[source][5]
+            identity_aggregate_size += handle[3]
+            if resource_aggregate_size > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1:
                 raise RuntimeError("dependency distribution identity mismatch")
             continue
-        identity, raw, aggregate_size = _read_dependency_file_v1(
+        _, raw, resource_aggregate_size = _read_dependency_file_v1(
             source,
             expected_identity=owned_files[source],
-            aggregate_size=aggregate_size,
+            aggregate_size=resource_aggregate_size,
         )
         identity_payload = _distribution_identity_payload_v1(source, raw, roots)
+        identity_size = len(identity_payload)
+        identity_aggregate_size += identity_size
         entries.append(
-            (relative, identity[5], hashlib.sha256(identity_payload).digest())
+            (relative, identity_size, hashlib.sha256(identity_payload).digest())
         )
         payloads[source] = raw
     aggregate = hashlib.sha256()
@@ -663,7 +670,10 @@ def _distribution_code_entries_v1(
         aggregate.update(b"\0")
         aggregate.update(size.to_bytes(8, "big"))
         aggregate.update(digest)
-    return (len(entries), aggregate_size, aggregate.hexdigest()), payloads
+    return (
+        (len(entries), identity_aggregate_size, aggregate.hexdigest()),
+        payloads,
+    )
 
 
 def _module_name_for_dependency_path_v1(
@@ -1134,7 +1144,10 @@ def _open_native_dependency_handle_v1(
         )
     ):
         raise RuntimeError("dependency distribution identity mismatch")
-    descriptor = os.open(origin, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    descriptor = os.open(
+        origin,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+    )
     try:
         fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
         digest = (
