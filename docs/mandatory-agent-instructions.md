@@ -135,17 +135,65 @@ These active owner instructions exist beyond the six execution controls.
 
 ## Product mission and scope
 
-Build a trustworthy, agent-agnostic research tool for listed-equity swing trading. Product research, qualification, and default workflows focus on the point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an autonomous trading bot.
+Build a trustworthy, agent-agnostic research tool for listed-equity swing
+trading. Product research, qualification, and default workflows focus on the
+point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an
+autonomous trading bot.
 
-- Reusable feature cores accept an explicit bounded list of canonical listed-equity instruments independently of index membership.
-- Point-in-time index membership and universe selection are separate higher-level policies.
-- Canonical equity identity is ISIN plus exchange, effective symbol, and versioned provider mappings.
-- Each feature declares required data capabilities and returns explicit unsupported or insufficient-evidence outcomes instead of embedding an index-membership check.
-- Explicitly supplied supported stocks outside the Nifty 100 may use the same capabilities when canonical identity and required evidence exist; they are not the primary roadmap or qualification focus.
-- Use an explicit swing horizon and bar frequency. Exclude intraday trading, futures, options, crypto, long-term investing, generic multi-asset features, unsupported evidence, and broker order placement.
+- Treat every index, sector, Industry, theme, watchlist, and caller selection
+  as a higher-level policy that produces an exact dynamic list of canonical
+  stocks. Names such as Nifty 50, Nifty Next 50, Nifty 100, Nifty Bank, Private
+  Bank, PSU Bank, Financial Services, and an explicit user list MUST NOT select
+  a different research algorithm or become a reusable-core admission rule.
+- Reusable feature cores accept an explicit bounded list of one or more
+  canonical listed-equity instruments independently of index, sector,
+  Industry, theme, or watchlist membership. Point-in-time membership, list
+  discovery, and list labels remain separate higher-level policies.
+- Canonical equity identity is ISIN plus exchange, effective symbol, and
+  versioned provider mappings. Every result binds the exact ordered stock-list
+  identity. A union, intersection, difference, or reordered list is a new
+  selection with its own identity and provenance.
+- Category lists may overlap. Never infer a category, hierarchy, official
+  taxonomy, or membership claim from stock names or another list. Preserve the
+  selector's exact source, retrieval/knowledge time, revision, methodology
+  claim, and members when the result claims that selector.
+- Each feature declares its finite resource bound and required data
+  capabilities. A limit is a processing bound, not an index rule. An oversized
+  list may be partitioned only when the contract preserves exact whole-list
+  semantics; never average or combine batch verdicts when the calculation
+  depends on the complete cohort.
+- Keep stock selection separate from stock eligibility. The default research
+  focus is Nifty 100. Nifty 500 is at most a carefully screened discovery
+  universe, never blanket admission, and the product does not target every NSE
+  listing.
+- Every selected stock, including an explicitly supplied stock or a Nifty 500
+  member, must pass objective versioned eligibility, history, canonical
+  identity, provider-mapping, data-quality, liquidity/turnover, price
+  integrity, event-risk, and other capability-specific gates before the
+  affected research claim. Newly listed, very small-cap, penny/very-low-priced,
+  thinly traded, or otherwise manipulation-susceptible stocks fail closed when
+  the applicable evidence-backed gate is not satisfied. Do not infer
+  manipulation from price or capitalization alone.
+- A supported stock outside Nifty 100 may use the same capabilities when it
+  passes those gates. It must not be rejected solely for index non-membership;
+  conversely, Nifty 100 or Nifty 500 membership never bypasses a gate.
+- Return explicit malformed, unsupported, or insufficient-evidence outcomes
+  instead of embedding an index/category check, omitting a member, weakening a
+  threshold, or silently substituting another stock.
+- Use an explicit swing horizon and bar frequency. Exclude intraday trading,
+  futures, options, crypto, long-term investing, generic multi-asset features,
+  unsupported evidence, and broker order placement.
 - Never use guaranteed-return, certainty, or financial-adviser language.
-- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient data as first-class outcomes.
-- Treat Price Action, Liquidity/SMC, Volume Analysis, and Relative Strength as necessary-only feature families. Never import or implement their full catalog blindly. Under [Plan 34](plans/34-swing-research-feature-map.md), build only the smallest objective, non-duplicative facts proven necessary for market research, analysis, scanning, or screening for swing-trading use over the point-in-time Nifty 100 or an explicitly supplied bounded set of one or more supported canonical stocks; every other concept remains deferred.
+- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient
+  data as first-class outcomes.
+- Treat Price Action, Liquidity/SMC, Volume Analysis, and Relative Strength as
+  necessary-only feature families. Never import or implement their full
+  catalog blindly. Under
+  [Plan 34](plans/34-swing-research-feature-map.md), build only the smallest
+  objective, non-duplicative facts proven necessary for market research,
+  analysis, scanning, or screening for swing-trading use over an admitted
+  dynamic list of one or more supported canonical stocks; every other concept
+  remains deferred.
 
 ## Direction and repository authority
 

@@ -92,25 +92,38 @@ The documented `download` boundary accepts a ticker list and `threads: bool | in
 
 Pinned `multitasking==0.0.13` creates its default CPU-sized pool when yfinance's threaded function is decorated, and `set_max_threads()` affects only new pools. Therefore `threads=8` alone does not impose an eight-worker ceiling. Plan 33 requires a fresh single-purpose operator process to import `multitasking`, call `createPool(name="plan33_yfinance_8", threads=8, engine="thread")`, assert the active pool name/engine/count, construct the bounded session, and only then import yfinance. The same assertions run immediately before each cohort call. An earlier yfinance import, another active pool, concurrent Plan 33 invocation in the same process, default/`True` threads, debug logging, or any pool value other than eight is a configuration failure before provider work.
 
-Before the enabled core import executes either dependency, the CLI requires a
-fresh process with no preloaded `multitasking` or `curl_cffi` module, admits the
-sole `multitasking==0.0.13` and `curl-cffi==0.16.1` distributions beneath the
-running interpreter's resolved `purelib`/`platlib`, and binds every
-distribution-owned package file into an allowlisted aggregate. Every Python
-module executes from descriptor-read admitted bytes. Each native extension is
-held by a shared-locked descriptor whose full metadata and content identity
-match the admitted distribution object; the extension loader receives only the
-verified `/dev/fd` or `/proc/self/fd` alias to that held object, never a second
-lookup of its mutable package pathname. Loaded Python file/spec origins bind to
-their admitted absolute paths, while a loaded native file/spec origin binds to
-that verified descriptor alias and remains live through the operation. The
-cffi-generated `curl_cffi._wrapper.lib` object has no file/spec; it is admitted
-only when it is the exact `lib` object exported by the separately
-descriptor-bound `curl_cffi._wrapper` extension. The CLI also proves that the
-exported and inherited `Session` class is the admitted
-`curl_cffi.requests.session` class. Ambient import paths are removed for the
-duration of the operation. A package, coherent package-plus-metadata, preloaded
-transitive child-module, or native pathname substitution is not executed.
+Before the enabled core import executes a provider dependency, the CLI requires
+a fresh process with no preloaded admitted dependency or transitive child
+module. It admits the sole `multitasking==0.0.13`, `curl-cffi==0.16.1`,
+`cffi==2.1.1`, `requests==2.34.2`, `urllib3==2.7.0`,
+`charset-normalizer==3.5.1`, `idna==3.19`, and `certifi==2026.7.22`
+distributions beneath the running interpreter's resolved `purelib`/`platlib`.
+The Requests family is admitted because pinned yfinance imports it for its
+dual-backend session-type compatibility surface; it is not an admitted
+provider transport.
+
+Every distribution-owned package file is bound into an allowlisted aggregate,
+and every Python module executes from descriptor-read admitted bytes. Each
+native extension is held by a shared-locked descriptor whose full metadata and
+content identity match the admitted distribution object; the extension loader
+receives only the verified `/dev/fd` or `/proc/self/fd` alias to that held
+object, never a second lookup of its mutable package pathname. This includes
+cffi's top-level `_cffi_backend` native object as well as curl-cffi's package
+extensions. Loaded Python file/spec origins bind to their admitted absolute
+paths, while a loaded native file/spec origin binds to that verified descriptor
+alias and remains live through the operation. The cffi-generated
+`curl_cffi._wrapper.lib` object has no file/spec; it is admitted only when it is
+the exact `lib` object exported by the separately descriptor-bound
+`curl_cffi._wrapper` extension.
+
+The CLI proves that the exported and inherited `Session` class is the admitted
+`curl_cffi.requests.session` class. `YF_DISABLE_CURL_CFFI` is rejected as
+ambient transport authority, and provider preparation proves that pinned
+yfinance's active `_http` backend and exported `requests` object are the exact
+admitted curl-cffi Requests module before a provider effect. Ambient import
+paths are removed for the duration of the operation. A package, coherent
+package-plus-metadata, preloaded transitive child-module, native pathname
+substitution, or Requests transport fallback is not executed.
 
 The official-source opener installs no proxy handler and uses a fresh
 client-verifying TLS context populated only from the same admitted immutable CA

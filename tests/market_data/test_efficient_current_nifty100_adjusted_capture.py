@@ -677,6 +677,10 @@ def test_cli_internal_ca_supports_verified_yfinance_import() -> None:
                 "efficient_current_nifty100_adjusted_capture as core\n"
                 "        cli._bind_certifi_ca_bundle_v1(handles)\n"
                 "        module = core.low._load_yfinance_module()\n"
+                "        assert '_cffi_backend' in handles\n"
+                "        assert '_cffi_backend' in sys.modules\n"
+                "        assert cli._native_dependency_handle_live_v1("
+                "handles['_cffi_backend'], require_name=True)\n"
                 "        assert module.__version__ == '1.6.0'\n"
                 "        session = core.BoundedYahooSessionV1()\n"
                 "        session.close()\n"
@@ -1293,7 +1297,12 @@ with TemporaryDirectory(dir=Path.home()) as temporary:
     session = core.prepare_yfinance_runtime_v1(root)
     assert 'yfinance' in sys.modules
     assert core._pool_is_exact_v1()
+    from curl_cffi import requests as curl_requests
+    from yfinance import _http
     from yfinance.data import is_supported_session
+    assert _http.HAS_CURL_CFFI is True
+    assert _http.requests is curl_requests
+    assert _http._backend is curl_requests
     assert is_supported_session(session)
     cache = [path for path in root.iterdir() if path.name != '.ingestion.lock']
     assert len(cache) == 1 and cache[0].is_dir()
@@ -2534,6 +2543,7 @@ def noisy_import():
 core._pool_is_exact_v1 = lambda: True
 
 core.low._load_yfinance_module = noisy_import
+core._yfinance_transport_backend_is_exact_v1 = lambda _module: True
 core._disable_yfinance_disk_caches_v1 = lambda: None
 with __import__('tempfile').TemporaryDirectory(dir=__import__('pathlib').Path.home()) as temporary:
     root = __import__('pathlib').Path(temporary)
@@ -3691,6 +3701,7 @@ raise SystemExit(main([
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "SSLKEYLOGFILE",
+        "YF_DISABLE_CURL_CFFI",
     ],
 )
 def test_enabled_cli_rejects_ambient_transport_authority(
@@ -3826,7 +3837,7 @@ raise SystemExit(main([
 
 @pytest.mark.parametrize(
     "module_name",
-    ["curl_cffi.requests.headers", "curl_cffi.requests.cookies"],
+    ["_cffi_backend", "curl_cffi.requests.headers", "curl_cffi.requests.cookies"],
 )
 def test_enabled_cli_rejects_any_preloaded_curl_child(
     tmp_path: Path, module_name: str
@@ -4195,6 +4206,17 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
         for cohort in request.cohorts
     )
     original_identities = {item.request_identity_sha256 for item in originals}
+    compatible_writer_identity = "e" * 64
+    original_compatible = core.low._revision_matches_compatible_request_v1
+
+    def compatible_request(low_request: object, revision: object) -> bool:
+        if revision.request_identity_sha256 == compatible_writer_identity:
+            return True
+        return original_compatible(low_request, revision)
+
+    monkeypatch.setattr(
+        core.low, "_revision_matches_compatible_request_v1", compatible_request
+    )
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
@@ -4217,7 +4239,11 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
         low_request: object, provider: object, _root: Path, _schedule: Path
     ) -> object:
         revision = SimpleNamespace(
-            request_identity_sha256=low_request.request_identity_sha256,
+            request_identity_sha256=(
+                compatible_writer_identity
+                if isinstance(provider, core._UnresolvedProbeV1) and provider_calls
+                else low_request.request_identity_sha256
+            ),
             revision_sha256=low_request.request_identity_sha256,
             cohort=low_request.cohort,
             schedule=low_request.schedule,

@@ -30,6 +30,7 @@ from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
 from ssl import CERT_REQUIRED, PROTOCOL_TLS_CLIENT, SSLContext
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -2473,6 +2474,18 @@ def _open_provider_cache_authority_v1(
         raise
 
 
+def _yfinance_transport_backend_is_exact_v1(module: ModuleType) -> bool:
+    http_module = sys.modules.get("yfinance._http")
+    curl_requests = sys.modules.get("curl_cffi.requests")
+    return bool(
+        module.__dict__.get("__version__") == "1.6.0"
+        and http_module is not None
+        and http_module.__dict__.get("HAS_CURL_CFFI") is True
+        and http_module.__dict__.get("requests") is curl_requests
+        and http_module.__dict__.get("_backend") is curl_requests
+    )
+
+
 def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
     cache_root: Path,
     *,
@@ -2534,7 +2547,7 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
         finally:
             logging.disable(previous_disable)
         if (
-            module.__dict__.get("__version__") != "1.6.0"
+            not _yfinance_transport_backend_is_exact_v1(module)
             or not _pool_is_exact_v1()
             or multitasking.get_active_tasks()
             or not _dependency_logging_is_safe_v1()
@@ -3564,7 +3577,14 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                         "CONFIGURATION_INVALID",
                     )
                     continue
-                active_provider = cast(_Plan33ProviderV1, provider)
+                if provider is None:
+                    outcomes[index] = CohortOutcomeV1(
+                        cohort.name,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CONFIGURATION_INVALID",
+                    )
+                    continue
+                active_provider = provider
                 try:
                     session.begin_cohort()
                 except ResourceLimitExceeded:
@@ -3655,12 +3675,14 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                 )
                 break
             outcomes[index] = outcome
-            if _is_success(outcome):
+            if _is_success(outcome) and isinstance(
+                result, low.CaptureForwardAdjustedOhlcvSuccessV1
+            ):
                 try:
                     snapshot = _snapshot_plan33_binding_v1(
                         selection_root,
                         _plan33_binding_name_v1(
-                            cohort, selection, low_request.request_identity_sha256
+                            cohort, selection, result.revision.request_identity_sha256
                         ),
                     )
                     binding_snapshots.append(snapshot)

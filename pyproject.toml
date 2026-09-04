@@ -5,14 +5,20 @@ build-backend = "hatchling.build"
 [project]
 name = "swing-trading-ai-assistant"
 version = "0.1.0"
-description = "Deterministic market-data and research foundations for Nifty 50 swing trading"
+description = "Deterministic market-data and research foundations for NSE listed-equity swing trading"
 requires-python = ">=3.11"
 dependencies = [
+    "certifi==2026.7.22",
+    "cffi==2.1.1",
+    "charset-normalizer==3.5.1",
     "curl-cffi==0.16.1",
     "duckdb>=1.5.5,<1.6",
+    "idna==3.19",
     "multitasking==0.0.13",
     "pyarrow>=25,<26",
     "python-dotenv>=1.1",
+    "requests==2.34.2",
+    "urllib3==2.7.0",
     "yfinance==1.6.0",
 ]
 

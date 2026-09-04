@@ -402,6 +402,43 @@ It must never:
 - generate opinions; or
 - perform LLM-style reasoning.
 
+## Dynamic stock-list and eligibility boundary
+
+Index, sector, Industry, thematic, watchlist, and explicit caller inputs are
+selection policies. Each produces an exact dynamic canonical stock list; none
+defines a separate Market Regime, Sector Analysis, Market Structure, Price
+Action, Volume, Relative Strength, or Risk algorithm. A reusable feature core
+consumes the list and its declared evidence capabilities without importing an
+index resolver or requiring category membership.
+
+The official [NSE Indices sectoral catalogue](https://www.niftyindices.com/indices/equity/sectoral-indices)
+and [NSE sectoral-indices page](https://www.nseindia.com/static/products-services/indices-sectoral)
+demonstrate why this separation is mandatory. Nifty Bank, Private Bank, PSU
+Bank, Financial Services, Financial Services Ex-Bank, NBFC, Housing Finance,
+Insurance, and MidSmall Financial Services are overlapping named index
+methodologies, not one mutually exclusive taxonomy. A Bank research list may
+come from any one authorized selector, an explicit union/intersection/difference,
+or a caller-supplied list. The tool preserves that exact list identity and
+provenance; it never infers or hard-codes the category from its members.
+
+The default product selector remains point-in-time Nifty 100. Nifty 500 is at
+most a carefully screened discovery universe, not blanket feature admission,
+and the product does not target every NSE listing. Selection is followed by a
+separate objective, versioned stock-eligibility boundary covering sufficient
+listing/history evidence, canonical identity and provider mappings, data
+quality, liquidity/turnover, price integrity, event risk, and every
+feature-specific requirement. Newly listed, very small-cap,
+penny/very-low-priced, thinly traded, or otherwise
+manipulation-susceptible stocks fail closed when an applicable evidence-backed
+gate is unsatisfied. Category membership never bypasses those gates, and price
+or capitalization alone never proves manipulation.
+
+Every feature owns a finite resource bound rather than a magic index
+cardinality. Oversized lists may be partitioned only through a versioned
+orchestrator that preserves exact whole-list semantics and one selection
+identity. Per-batch verdicts must not be averaged or combined when the feature
+depends on the complete cohort.
+
 ## Locked pipeline
 
 ```text

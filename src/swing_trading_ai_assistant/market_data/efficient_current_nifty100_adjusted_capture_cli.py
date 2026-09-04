@@ -58,6 +58,7 @@ _AMBIENT_TRANSPORT_AUTHORITY_NAMES_V1 = frozenset(
         "ssl_cert_dir",
         "ssl_cert_file",
         "sslkeylogfile",
+        "yf_disable_curl_cffi",
         _PROVIDER_CA_BUNDLE_PATH_ENV_V1.casefold(),
     }
 )
@@ -71,6 +72,31 @@ _DEPENDENCY_REQUIREMENTS_V1 = (
         "certifi",
         "2026.7.22",
         (("certifi", "certifi/__init__.py"),),
+    ),
+    (
+        "cffi",
+        "2.1.1",
+        (("cffi", "cffi/__init__.py"),),
+    ),
+    (
+        "charset-normalizer",
+        "3.5.1",
+        (("charset_normalizer", "charset_normalizer/__init__.py"),),
+    ),
+    (
+        "idna",
+        "3.19",
+        (("idna", "idna/__init__.py"),),
+    ),
+    (
+        "urllib3",
+        "2.7.0",
+        (("urllib3", "urllib3/__init__.py"),),
+    ),
+    (
+        "requests",
+        "2.34.2",
+        (("requests", "requests/__init__.py"),),
     ),
     (
         "curl-cffi",
@@ -88,8 +114,26 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
     "certifi": frozenset(
         {"c0bd210d45178498029f61dffd180212f3e6e4161e9b94994d49dcb0476dcb4a"}
     ),
+    "cffi": frozenset(
+        {"57ee79d0e35442708236eca131384b2366cf2fb82fc3930d4f0d935d1b3e73b6"}
+    ),
+    "charset_normalizer": frozenset(
+        {
+            "74fcfd761def90939ea448f23ceef2d2a677bcbabf6952b3a4f5fd12bc7faeda",
+            "c8f466ab4d807535f41248aeea43b1d2b79143d5e6e8b7b7eccf1fbe0a1668bc",
+        }
+    ),
+    "idna": frozenset(
+        {"4b3c9b8fbe48bc1c5f60febe9fa338f3020aae04cb9bcd66dd760880dd7eb05a"}
+    ),
     "multitasking": frozenset(
         {"e655ad7c1c9d055102c00c8ab5f7db66849672705435c182638eed490d60176b"}
+    ),
+    "requests": frozenset(
+        {"67dd7ac23fff11ba687cad4807084de625bc836afdf01c45208c0dd9b57f6048"}
+    ),
+    "urllib3": frozenset(
+        {"c3b5d73b75f785ebc68cbd3e9094a3e4e5f9d441abd46c8946f1af92f932af10"}
     ),
     "curl_cffi": frozenset(
         {
@@ -116,6 +160,31 @@ _DEPENDENCY_CODE_AGGREGATES_V1 = {
         }
     ),
 }
+_CFFI_BACKEND_CODE_IDENTITIES_V1 = frozenset(
+    {
+        "192828af4429c83d5cd92c40275ffd3c71459c3dc7a58e43cf4b5c346d78dc8e",
+        "8e9a26a7544f15a080e489fe7a733ec76f0bec5a6bf616576f1819bbba28d06d",
+    }
+)
+_ADMITTED_DEPENDENCY_PREFIXES_V1 = frozenset(
+    {
+        "_cffi_backend",
+        *(
+            modules[0][0].split(".", 1)[0]
+            for _distribution, _version, modules in _DEPENDENCY_REQUIREMENTS_V1
+        ),
+    }
+)
+_REQUIRED_EAGER_DEPENDENCY_MODULES_V1 = frozenset(
+    {
+        "certifi",
+        "curl_cffi",
+        "curl_cffi.requests",
+        "curl_cffi.requests.session",
+        "curl_cffi.requests.utils",
+        "multitasking",
+    }
+)
 
 
 def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admission
@@ -676,6 +745,30 @@ def _admitted_dependency_origins_v1(  # noqa: C901 - dependency admission bounda
             aggregate, file_bytes = _dependency_code_entries_v1(package_root)
             if aggregate not in _DEPENDENCY_CODE_AGGREGATES_V1[package_name]:
                 raise RuntimeError
+            if normalized_name == "cffi":
+                backend_origins = tuple(
+                    origin
+                    for origin in distribution_files
+                    if origin.parent in roots
+                    and any(
+                        origin.name == f"_cffi_backend{suffix}"
+                        for suffix in importlib.machinery.EXTENSION_SUFFIXES
+                    )
+                )
+                if len(backend_origins) != 1:
+                    raise RuntimeError
+                backend_origin = backend_origins[0]
+                backend_raw = backend_origin.read_bytes()
+                if (
+                    hashlib.sha256(backend_raw).hexdigest()
+                    not in _CFFI_BACKEND_CODE_IDENTITIES_V1
+                ):
+                    raise RuntimeError
+                native_handles["_cffi_backend"] = _open_native_dependency_handle_v1(
+                    backend_origin,
+                    distribution_files[backend_origin],
+                    backend_raw,
+                )
             for source, raw in file_bytes.items():
                 if source.suffix != ".py":
                     continue
@@ -784,13 +877,29 @@ def _module_origin_matches_v1(
 
 def _reject_preloaded_dependency_modules_v1() -> None:
     if any(
-        name in {"certifi", "multitasking"}
-        or name.startswith("certifi.")
-        or name == "curl_cffi"
-        or name.startswith("curl_cffi.")
+        name.split(".", 1)[0] in _ADMITTED_DEPENDENCY_PREFIXES_V1
         for name in sys.modules
     ):
         raise RuntimeError("dependency module preloaded")
+
+
+def _require_native_dependency_module_owned_v1(
+    name: str,
+    native_handles: dict[str, _NativeDependencyHandleV1],
+) -> None:
+    try:
+        module = sys.modules[name]
+        handle = native_handles[name]
+        descriptor_origin = _native_dependency_descriptor_path_v1(handle[1])
+        specification = getattr(module, "__spec__", None)
+        if (
+            getattr(module, "__file__", None) != descriptor_origin
+            or getattr(specification, "origin", None) != descriptor_origin
+            or not _native_dependency_handle_live_v1(handle, require_name=True)
+        ):
+            raise RuntimeError
+    except KeyError:
+        raise RuntimeError("dependency module origin mismatch") from None
 
 
 def _require_loaded_curl_modules_owned_v1(
@@ -805,16 +914,8 @@ def _require_loaded_curl_modules_owned_v1(
             if parent is None or getattr(parent, "lib", None) is not module:
                 raise RuntimeError("dependency module origin mismatch")
             continue
-        native = native_handles.get(name)
-        if native is not None:
-            descriptor_origin = _native_dependency_descriptor_path_v1(native[1])
-            specification = getattr(module, "__spec__", None)
-            if (
-                getattr(module, "__file__", None) != descriptor_origin
-                or getattr(specification, "origin", None) != descriptor_origin
-                or not _native_dependency_handle_live_v1(native, require_name=True)
-            ):
-                raise RuntimeError("dependency module origin mismatch")
+        if name in native_handles:
+            _require_native_dependency_module_owned_v1(name, native_handles)
             continue
         origin = getattr(module, "__file__", None)
         specification = getattr(module, "__spec__", None)
@@ -835,6 +936,7 @@ def _require_loaded_curl_modules_owned_v1(
             or _dependency_file_identity_v1(metadata) != owned_files.get(resolved)
         ):
             raise RuntimeError("dependency module origin mismatch")
+    _require_native_dependency_module_owned_v1("_cffi_backend", native_handles)
 
 
 def _require_dependency_origins_v1(
@@ -844,7 +946,11 @@ def _require_dependency_origins_v1(
     require_loaded: bool,
 ) -> None:
     for module_name, expected in origins.items():
-        if require_loaded and module_name not in sys.modules:
+        if (
+            require_loaded
+            and module_name in _REQUIRED_EAGER_DEPENDENCY_MODULES_V1
+            and module_name not in sys.modules
+        ):
             raise RuntimeError("dependency module missing")
         if not _module_origin_matches_v1(module_name, expected, owned_files):
             raise RuntimeError("dependency module origin mismatch")
