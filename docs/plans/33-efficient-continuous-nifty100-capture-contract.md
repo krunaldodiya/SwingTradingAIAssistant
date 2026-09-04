@@ -134,12 +134,13 @@ only after the verified lifetime ends. Known optional probes remain explicitly
 denied as defense in depth.
 
 Every distribution-owned package file is bound into an allowlisted aggregate,
-and every Python module executes from descriptor-read admitted bytes.
-Installed Python source may be hard-linked by the package installer; link count
-is not treated as authenticity. Admission still requires the pathname and held
-descriptor to retain the same complete file identity before and after the
-bounded read, and the descriptor-read bytes must contribute to an allowlisted
-distribution aggregate.
+and every Python module executes from descriptor-read admitted bytes. Dependency
+admission allows at most 16,777,216 bytes per file and 67,108,864 bytes across
+one package tree. Installed Python source may be hard-linked by the package
+installer; link count is not treated as authenticity. Admission still requires
+the pathname and held descriptor to retain the same complete file identity
+before and after the bounded read, and the descriptor-read bytes must contribute
+to an allowlisted distribution aggregate.
 Each native extension is held by a shared-locked descriptor whose full metadata
 and content identity match the admitted distribution object; the extension loader
 receives only the verified `/dev/fd` or `/proc/self/fd` alias to that held

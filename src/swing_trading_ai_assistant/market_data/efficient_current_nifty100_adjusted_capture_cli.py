@@ -53,6 +53,8 @@ _ACKNOWLEDGEMENT = "--ack-owner-private-yfinance-research"
 _CONTRACT_VERSION_V1 = "efficient-current-nifty100-adjusted-capture@v1"
 _MAX_REQUEST_BYTES_V1 = 262_144
 _MAX_RESULT_BYTES_V1 = 262_144
+_MAX_DEPENDENCY_FILE_BYTES_V1 = 16_777_216
+_MAX_DEPENDENCY_AGGREGATE_BYTES_V1 = 67_108_864
 _PROVIDER_CACHE_NAME_V1 = ".plan33-yfinance-cache"
 _CA_BUNDLE_HANDLE_NAME_V1 = "__plan33_ca_bundle__"
 _PROVIDER_CA_BUNDLE_PATH_ENV_V1 = "SWING_TRADING_AI_ASSISTANT_PLAN33_CA_BUNDLE_PATH"
@@ -257,6 +259,7 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
         raise RuntimeError("dependency distribution identity mismatch")
     entries: list[tuple[str, int, bytes]] = []
     payloads: dict[Path, bytes] = {}
+    aggregate_size = 0
     for directory, names, files in os.walk(root, followlinks=False):
         current = Path(directory)
         if current.is_symlink():
@@ -273,7 +276,13 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
                 continue
             candidate = current / name
             metadata = candidate.stat(follow_symlinks=False)
-            if not stat.S_ISREG(metadata.st_mode):
+            identity = _dependency_file_identity_v1(metadata)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > _MAX_DEPENDENCY_FILE_BYTES_V1
+                or aggregate_size + metadata.st_size
+                > _MAX_DEPENDENCY_AGGREGATE_BYTES_V1
+            ):
                 raise RuntimeError("dependency distribution identity mismatch")
             descriptor = os.open(candidate, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
             held = metadata
@@ -281,18 +290,20 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
             failure: BaseException | None = None
             try:
                 held = os.fstat(descriptor)
-                if (
-                    held.st_dev != metadata.st_dev
-                    or held.st_ino != metadata.st_ino
-                    or held.st_size != metadata.st_size
-                ):
+                if _dependency_file_identity_v1(held) != identity:
                     raise RuntimeError("dependency distribution identity mismatch")
                 while len(content) < held.st_size:
                     chunk = os.read(descriptor, held.st_size - len(content))
                     if not chunk:
                         raise RuntimeError("dependency distribution identity mismatch")
                     content.extend(chunk)
-                if os.fstat(descriptor).st_size != held.st_size:
+                if (
+                    _dependency_file_identity_v1(os.fstat(descriptor)) != identity
+                    or _dependency_file_identity_v1(
+                        candidate.stat(follow_symlinks=False)
+                    )
+                    != identity
+                ):
                     raise RuntimeError("dependency distribution identity mismatch")
             except BaseException as error:
                 failure = error
@@ -311,6 +322,7 @@ def _dependency_code_entries_v1(  # noqa: C901 - closed dependency tree admissio
                 )
             )
             payloads[candidate] = raw
+            aggregate_size += held.st_size
     aggregate = hashlib.sha256()
     for relative, size, digest in sorted(entries):
         aggregate.update(relative.encode("utf-8"))
@@ -1188,8 +1200,14 @@ def _require_isolated_runtime_v1() -> None:
         raise RuntimeError("dependency module preloaded")
 
 
+def _require_retained_module_name_set_v1() -> None:
+    if frozenset(sys.modules) != frozenset(_retained_preloaded_modules_v1):
+        raise RuntimeError("dependency module preloaded")
+
+
 def _reject_preloaded_dependency_modules_v1() -> None:
     _require_isolated_runtime_v1()
+    _require_retained_module_name_set_v1()
     prior_module_names = frozenset(sys.modules)
     standard_roots, site_roots, project_root = _trusted_preloaded_roots_v1()
     if frozenset(sys.modules) != prior_module_names:

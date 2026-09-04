@@ -5053,6 +5053,62 @@ def test_dependency_code_aggregate_rejects_nested_substitution(tmp_path: Path) -
     assert cli._dependency_code_aggregate_v1(package) != admitted
 
 
+def test_dependency_code_admission_rejects_post_open_path_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "curl_cffi"
+    package.mkdir()
+    source = package / "__init__.py"
+    source.write_bytes(b"trusted = True\n")
+    replacement = tmp_path / "replacement.py"
+    replacement.write_bytes(b"trusted = True\n")
+    original_read = os.read
+    replaced = False
+
+    def replace_path_then_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            os.replace(replacement, source)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(os, "read", replace_path_then_read)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._dependency_code_entries_v1(package)
+
+
+def test_dependency_code_admission_rejects_per_file_limit_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    assert cli._MAX_DEPENDENCY_FILE_BYTES_V1 == 16_777_216
+    package = tmp_path / "certifi"
+    package.mkdir()
+    (package / "__init__.py").write_bytes(b"x" * 9)
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_FILE_BYTES_V1", 8)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._dependency_code_entries_v1(package)
+
+
+def test_dependency_code_admission_rejects_aggregate_limit_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    assert cli._MAX_DEPENDENCY_AGGREGATE_BYTES_V1 == 67_108_864
+    package = tmp_path / "multitasking"
+    package.mkdir()
+    (package / "__init__.py").write_bytes(b"x" * 8)
+    (package / "config.py").write_bytes(b"y" * 9)
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_FILE_BYTES_V1", 16)
+    monkeypatch.setattr(cli, "_MAX_DEPENDENCY_AGGREGATE_BYTES_V1", 16)
+
+    with pytest.raises(RuntimeError, match="dependency distribution identity mismatch"):
+        cli._dependency_code_entries_v1(package)
+
+
 def test_cleanup_value_error_abandons_cache_without_truncation_or_lock_leak(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -5483,6 +5539,23 @@ import email
 import sys
 sys.modules['fractions'] = email
 from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+try:
+    cli._reject_preloaded_dependency_modules_v1()
+except RuntimeError:
+    raise SystemExit(0)
+raise SystemExit(2)
+"""
+    completed = _run_isolated_cli_script(script)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_enabled_boundary_rejects_retained_module_deletion() -> None:
+    script = """
+import sys
+from swing_trading_ai_assistant.market_data import efficient_current_nifty100_adjusted_capture_cli as cli
+assert 'email' in cli._retained_preloaded_modules_v1
+sys.modules.pop('email')
 try:
     cli._reject_preloaded_dependency_modules_v1()
 except RuntimeError:
