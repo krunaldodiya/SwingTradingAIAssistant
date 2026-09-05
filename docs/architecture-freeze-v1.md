@@ -570,9 +570,11 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
   evidence rejection. Known validation and decoder errors are converted only at
   their narrow input/data boundary.
-  Schedule consumers, partition recovery, and current-cohort identity resolution
-  follow the same distinction: an implementation fault does not justify
-  invalidating or quarantining retained evidence.
+  Schedule consumers, partition recovery, range ingestion, and current-cohort
+  dependencies follow the same distinction: an execution fault stops the invocation
+  without invalidating or quarantining retained evidence. Cleanup preserves
+  an active primary failure when cleanup also fails; an unexpected standalone
+  cleanup failure propagates.
 - Expected schedule and snapshot validation signals retain `ValueError`
   compatibility through explicit subclasses. Expected lease-authority failures
   use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection

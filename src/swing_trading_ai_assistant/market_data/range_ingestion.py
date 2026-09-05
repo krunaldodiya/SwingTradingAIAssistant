@@ -32,7 +32,9 @@ from .manifest_lifecycle import FailureCategory, ManifestState, PartitionManifes
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
 from .partition_ingestion import (
     PartitionCatalogFailure,
+    PartitionClockFailure,
     PartitionIngestionExecutor,
+    PartitionLifecycleConflict,
     PartitionLifecycleOutcome,
     PartitionLifecycleResult,
 )
@@ -617,7 +619,7 @@ class IngestionCoordinator:
             )
         try:
             plans = _canonical_plans(command)
-        except Exception:
+        except ValueError:
             return self._report(
                 IngestionRunOutcome.REJECTED,
                 RunFailureCode.SCHEDULE_UNSUPPORTED,
@@ -647,7 +649,7 @@ class IngestionCoordinator:
             )
         try:
             policy = EquityMonthValidationPolicy(command.validation_policy_version)
-        except Exception:
+        except ValueError:
             return self._report(
                 IngestionRunOutcome.REJECTED,
                 RunFailureCode.SCHEDULE_UNSUPPORTED,
@@ -1041,7 +1043,12 @@ class IngestionCoordinator:
                 None,
                 run_id,
             )
-        except Exception as error:
+        except (
+            PartitionCatalogFailure,
+            PartitionClockFailure,
+            PartitionLifecycleConflict,
+            _LifecycleResultUnsupported,
+        ) as error:
             attempts = _attempt_delta(remaining_before, fetcher.remaining_attempts)
             manifest = _current_run_manifest(catalog, decision.plan, run_id)
             result, fatal = _partition_from_lifecycle_exception(
@@ -1064,25 +1071,20 @@ class IngestionCoordinator:
             return None, RunFailureCode.AUTHENTICATION_FAILED
         except ProviderSessionAuthorizationError:
             return None, RunFailureCode.AUTHORIZATION_FAILED
-        except Exception:
-            return None, RunFailureCode.AUTHENTICATION_FAILED
-        try:
-            return (
-                HistoricalRequestExecutor(
-                    session=session,
-                    limiter=self._limiter,
-                    retry_policy=command.retry_policy,
-                    clock=self._clock,
-                    sleeper=self._sleeper,
-                    jitter=self._jitter,
-                    cancellation=self._cancellation,
-                    event_sink=self._event_sink,
-                    run_id=self._run_id_factory(),
-                ),
-                RunFailureCode.NONE,
-            )
-        except Exception:
-            return None, RunFailureCode.AUTHENTICATION_FAILED
+        return (
+            HistoricalRequestExecutor(
+                session=session,
+                limiter=self._limiter,
+                retry_policy=command.retry_policy,
+                clock=self._clock,
+                sleeper=self._sleeper,
+                jitter=self._jitter,
+                cancellation=self._cancellation,
+                event_sink=self._event_sink,
+                run_id=self._run_id_factory(),
+            ),
+            RunFailureCode.NONE,
+        )
 
     def _safe_acquire_lease(self, storage_root: Path) -> LeaseResult | None:
         try:
@@ -1095,7 +1097,7 @@ class IngestionCoordinator:
             ):
                 return None
             return result
-        except Exception:
+        except StorageRootLeaseError:
             return None
 
     def _finish_fatal(
@@ -1211,22 +1213,16 @@ class IngestionCoordinator:
         )
 
     def _now(self) -> datetime:
-        try:
-            value = self._clock.now()
-            if type(value) is datetime and value.tzinfo is not None:
-                return value.astimezone(UTC)
-        except Exception:
-            return datetime.now(UTC)
+        value = self._clock.now()
+        if type(value) is datetime and value.tzinfo is not None:
+            return value.astimezone(UTC)
         return datetime.now(UTC)
 
     def _local_date(self) -> date:
         return self._now().astimezone(_IST).date()
 
     def _is_cancelled(self) -> bool:
-        try:
-            return self._cancellation.is_cancelled()
-        except Exception:
-            return True
+        return self._cancellation.is_cancelled()
 
 
 _FATAL_CODES = frozenset(
@@ -1361,11 +1357,8 @@ def _run_code(code: str | None) -> RunFailureCode | None:
 
 
 def _recovery_stops_run(result: object) -> bool:
-    try:
-        code = _run_code(result.error_code)  # type: ignore[union-attr]
-        return code is RunFailureCode.CANCELLED or code in _FATAL_CODES
-    except Exception:
-        return True
+    code = _run_code(result.error_code)  # type: ignore[union-attr]
+    return code is RunFailureCode.CANCELLED or code in _FATAL_CODES
 
 
 def _failed_partition_result(
@@ -1414,16 +1407,21 @@ def _partition_from_lifecycle_exception(
             ),
             RunFailureCode.CATALOG_UNAVAILABLE,
         )
-    result = _failed_partition_result(
-        plan,
-        reasons,
-        ingestion_run_id=ingestion_run_id,
-        provider_attempts=provider_attempts,
-        final_manifest=final_manifest,
-        failure_category=failure_category,
-    )
+    if type(error) not in {
+        PartitionClockFailure,
+        PartitionLifecycleConflict,
+        _LifecycleResultUnsupported,
+    }:
+        raise error
     return (
-        result,
+        _failed_partition_result(
+            plan,
+            reasons,
+            ingestion_run_id=ingestion_run_id,
+            provider_attempts=provider_attempts,
+            final_manifest=final_manifest,
+            failure_category=failure_category,
+        ),
         RunFailureCode.PARTITION_FAILURE
         if provider_attempts or type(error) is _LifecycleResultUnsupported
         else None,
@@ -1449,7 +1447,7 @@ def _current_run_manifest(
             and manifest.ingestion_run_id == run_id
         ):
             return manifest
-    except Exception:
+    except CatalogError:
         return None
     return None
 

@@ -189,6 +189,34 @@ def test_current_service_propagates_unrelated_snapshot_resolver_fault(
 
 
 @pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_current_service_propagates_unrelated_universe_resolver_fault(
+    tmp_path: Path, fault_type: type[BaseException]
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    error = fault_type("universe defect")
+    service = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1((member,)),
+        _FaultingUniverseResolver(error),
+        _Resolver(),
+        _QueryPort(_query_report()),
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+
+    with pytest.raises(fault_type) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
     ("snapshot_error", "reason"),
     (
         (SnapshotInstrumentAmbiguousError, CurrentCohortReasonV1.IDENTITY_AMBIGUOUS),
@@ -1369,6 +1397,414 @@ def test_default_cohort_cli_reports_retained_resolver_defect_as_internal_error(
     assert not (root / ".current-fact-archive-v1").exists()
 
 
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_universe_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    error = fault_type("universe execution defect")
+    fault_reached = False
+
+    def fail_universe(
+        _self: object, _cutoff: datetime, _lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        fail_universe,
+    )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize("boundary", ("factory", "port"))
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_query_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    boundary: str,
+    fault_type: type[BaseException],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    error = fault_type(f"query {boundary} defect")
+    fault_reached = False
+    _patch_default_cohort_admission(monkeypatch)
+
+    if boundary == "factory":
+
+        def fail_factory(
+            _self: object,
+            _member: CurrentCohortMemberV1,
+            _cutoff: datetime,
+        ) -> QueryRequestV1:
+            nonlocal fault_reached
+            fault_reached = True
+            raise error
+
+        monkeypatch.setattr(
+            cohort_module.CurrentCohortQueryRequestFactoryV1,
+            "__call__",
+            fail_factory,
+        )
+    else:
+
+        def fail_query(*_args: object) -> QueryReportV1:
+            nonlocal fault_reached
+            fault_reached = True
+            raise error
+
+        monkeypatch.setattr(
+            cohort_module.CurrentCohortRetainedQueryPortV1,
+            "query_under_lease",
+            fail_query,
+        )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+def test_default_cohort_cli_propagates_unclassified_query_failure_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    query_reached = False
+    generic_failure = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.FAILED,
+        PublicFailureV1(
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE, None, None, None, None, ()
+        ),
+        0,
+        None,
+    )
+
+    def returned_generic_failure(*_args: object) -> QueryReportV1:
+        nonlocal query_reached
+        query_reached = True
+        return generic_failure
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_generic_failure,
+    )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert query_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_closed_month_catalog_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+) -> None:
+    monkeypatch.setitem(globals(), "_CUTOFF", datetime(2026, 9, 1, 10, tzinfo=UTC))
+    monkeypatch.setitem(globals(), "_PUBLISHED_AT", datetime(2026, 9, 1, 8, tzinfo=UTC))
+    monkeypatch.setitem(
+        globals(), "_FIRST_BAR", datetime(2026, 8, 31, 3, 45, tzinfo=UTC)
+    )
+    monkeypatch.setitem(
+        globals(), "_LAST_BAR", datetime(2026, 8, 31, 3, 46, tzinfo=UTC)
+    )
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes().replace(b"2026-08-17", b"2026-09-01"))
+    root = _protected_root(tmp_path)
+    member = _member()
+    _persist_verified_closed_month_manifest(root, member)
+    _patch_default_cohort_admission(monkeypatch)
+    error = fault_type("closed-month catalog defect")
+    fault_reached = False
+
+    def returned_closed_month(*_args: object) -> QueryReportV1:
+        return _closed_month_query_report()
+
+    def fail_manifest(_self: object, _plan: object) -> object:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_closed_month,
+    )
+    monkeypatch.setattr(DuckDBCatalog, "get_manifest", fail_manifest)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-09-01T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize("cleanup_fault", (False, True))
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_archive_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+    cleanup_fault: bool,
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    error = fault_type("archive defect")
+    fault_reached = False
+    failed_descriptors: set[int] = set()
+    real_close = cohort_module.os.close
+
+    def returned_query(*_args: object) -> QueryReportV1:
+        return _query_report()
+
+    def fail_publish(_parent: int, _name: str, _raw: bytes) -> bool:
+        nonlocal fault_reached
+        fault_reached = True
+        if cleanup_fault:
+            failed_descriptors.add(_parent)
+        raise error
+
+    def close_descriptor(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in failed_descriptors:
+            failed_descriptors.remove(descriptor)
+            raise OSError("secondary archive cleanup failure")
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_query,
+    )
+    monkeypatch.setattr(cohort_module, "_publish_archive_object", fail_publish)
+    monkeypatch.setattr(cohort_module.os, "close", close_descriptor)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    archive_directory = root / ".current-fact-archive-v1"
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not archive_directory.exists() or not tuple(archive_directory.iterdir())
+    assert failed_descriptors == set()
+
+
+@pytest.mark.parametrize("cleanup_stage", ("close", "unlink"))
+def test_default_cohort_cli_preserves_archive_write_fault_during_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    cleanup_stage: str,
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    error = AssertionError("archive write defect")
+    fault_reached = False
+    cleanup_reached = False
+    archive_descriptors: set[int] = set()
+    archive_names: set[str] = set()
+    real_open = cohort_module.os.open
+    real_write = cohort_module.os.write
+    real_close = cohort_module.os.close
+    real_unlink = cohort_module.os.unlink
+
+    def open_file(
+        path: str | Path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if isinstance(path, str) and ".json." in path and path.endswith(".tmp"):
+            archive_descriptors.add(descriptor)
+            archive_names.add(path)
+        return descriptor
+
+    def write_file(descriptor: int, raw: bytes) -> int:
+        nonlocal fault_reached
+        if descriptor in archive_descriptors:
+            fault_reached = True
+            raise error
+        return real_write(descriptor, raw)
+
+    def close_file(descriptor: int) -> None:
+        nonlocal cleanup_reached
+        real_close(descriptor)
+        if descriptor in archive_descriptors and cleanup_stage == "close":
+            archive_descriptors.remove(descriptor)
+            cleanup_reached = True
+            raise OSError("secondary archive close failure")
+
+    def unlink_file(path: str, *, dir_fd: int | None = None) -> None:
+        nonlocal cleanup_reached
+        real_unlink(path, dir_fd=dir_fd)
+        if path in archive_names and cleanup_stage == "unlink":
+            cleanup_reached = True
+            raise OSError("secondary archive unlink failure")
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        lambda *_args: _query_report(),
+    )
+    monkeypatch.setattr(cohort_module.os, "open", open_file)
+    monkeypatch.setattr(cohort_module.os, "write", write_file)
+    monkeypatch.setattr(cohort_module.os, "close", close_file)
+    monkeypatch.setattr(cohort_module.os, "unlink", unlink_file)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached and cleanup_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not tuple((root / ".current-fact-archive-v1").iterdir())
+
+
+def test_default_cohort_cli_preserves_archive_read_fault_during_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        lambda *_args: _query_report(),
+    )
+    arguments = _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z")
+    assert main(arguments, trusted_clock=_FixedClock(_CUTOFF)) == 0
+    capsys.readouterr()
+    archive_directory = root / ".current-fact-archive-v1"
+    retained = {path.name: path.read_bytes() for path in archive_directory.iterdir()}
+    error = AssertionError("archive read defect")
+    fault_reached = False
+    cleanup_reached = False
+    archive_descriptors: set[int] = set()
+    real_open = cohort_module.os.open
+    real_read = cohort_module.os.read
+    real_close = cohort_module.os.close
+
+    def open_file(
+        path: str | Path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path in retained:
+            archive_descriptors.add(descriptor)
+        return descriptor
+
+    def read_file(descriptor: int, size: int) -> bytes:
+        nonlocal fault_reached
+        if descriptor in archive_descriptors:
+            fault_reached = True
+            raise error
+        return real_read(descriptor, size)
+
+    def close_file(descriptor: int) -> None:
+        nonlocal cleanup_reached
+        real_close(descriptor)
+        if descriptor in archive_descriptors:
+            archive_descriptors.remove(descriptor)
+            cleanup_reached = True
+            raise OSError("secondary archive close failure")
+
+    monkeypatch.setattr(cohort_module.os, "open", open_file)
+    monkeypatch.setattr(cohort_module.os, "read", read_file)
+    monkeypatch.setattr(cohort_module.os, "close", close_file)
+
+    exit_code = main(arguments, trusted_clock=_FixedClock(_CUTOFF))
+
+    captured = capsys.readouterr()
+    assert fault_reached and cleanup_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert {
+        path.name: path.read_bytes() for path in archive_directory.iterdir()
+    } == retained
+
+
 def test_cohort_current_cli_rejects_future_cutoff_before_service_or_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1631,6 +2067,113 @@ def _query_report() -> QueryReportV1:
     return _report(QueryPayloadV1(request, 2, (month,), rows))
 
 
+def _closed_month_query_report() -> QueryReportV1:
+    request = PublicQueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 25),
+        date(2026, 9, 1),
+        "1m",
+        tuple(CandleFieldV1),
+        10_000,
+    )
+    current_bar = _CUTOFF.replace(hour=3, minute=45)
+    rows = (
+        PublicQueryRowV1(_FIRST_BAR, 100.0, 101.0, 99.0, 100.5, 10),
+        PublicQueryRowV1(_LAST_BAR, 100.5, 103.0, 100.0, 102.0, 15),
+        PublicQueryRowV1(current_bar, 102.0, 104.0, 101.0, 103.0, 5),
+    )
+    month = PublicCoverageMonthV1(
+        "2026-08",
+        CoverageStateV1.VERIFIED,
+        _FIRST_BAR,
+        _LAST_BAR,
+        2,
+        _DIGEST,
+        1,
+        f"nse-equity-month@v1+sessions-sha256:{'d' * 64}",
+        "d" * 64,
+        None,
+        ValidationReason.NONE,
+        None,
+        None,
+        None,
+        None,
+    )
+    current_month = replace(
+        month,
+        month="2026-09",
+        coverage_state=CoverageStateV1.PROVISIONAL,
+        actual_from_ts=current_bar,
+        actual_to_ts=current_bar,
+        row_count=1,
+        checksum_sha256="e" * 64,
+        validation_policy_version=None,
+        validation_reason=None,
+        data_cutoff=current_bar,
+        session_complete=False,
+        evidence_published_at=_PUBLISHED_AT,
+        evidence_known_at=_PUBLISHED_AT,
+    )
+    return _report(QueryPayloadV1(request, 3, (month, current_month), rows))
+
+
+def _persist_verified_closed_month_manifest(
+    root: Path, member: CurrentCohortMemberV1
+) -> None:
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    instrument = _Resolver().resolve_under_lease(member, acquired.lease).instrument
+    plan = PlannedInstrumentMonth(
+        "upstox",
+        instrument.instrument_key,
+        instrument.security_id,
+        instrument.symbol,
+        instrument.exchange,
+        instrument.segment,
+        instrument.instrument_type,
+        "1m",
+        2026,
+        8,
+        date(2026, 8, 1),
+        date(2026, 8, 31),
+    )
+    active = PartitionManifest(
+        1,
+        plan,
+        "current-cohort-test",
+        None,
+        ManifestState.IN_PROGRESS,
+        ValidationOutcome.NOT_RUN,
+        f"nse-equity-month@v1+sessions-sha256:{'d' * 64}",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "upstox-historical-v3",
+        _PUBLISHED_AT,
+        _PUBLISHED_AT,
+        _PUBLISHED_AT,
+        None,
+    )
+    verified = verify_manifest(
+        active,
+        _PUBLISHED_AT,
+        _FIRST_BAR,
+        _LAST_BAR,
+        2,
+        _DIGEST,
+        "verified.parquet",
+    )
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            catalog.create_manifest(active)
+            catalog.transition_manifest(active, verified)
+    finally:
+        acquired.lease.close()
+
+
 def _empty_query_report() -> QueryReportV1:
     full = _query_report()
     assert type(full.payload) is QueryPayloadV1
@@ -1680,6 +2223,17 @@ class _UniverseResolver:
         return frozenset(self.members)
 
 
+class _FaultingUniverseResolver:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def members_under_lease(
+        self, cutoff: datetime, lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        del cutoff, lease
+        raise self.error
+
+
 def _service(
     root: Path,
     member: CurrentCohortMemberV1,
@@ -1710,6 +2264,29 @@ def _cli_args(cohort_file: Path, root: Path, cutoff: str) -> list[str]:
         "--output",
         "json",
     ]
+
+
+def _patch_default_cohort_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    def admitted_members(
+        _self: object, _cutoff: datetime, _lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        return frozenset((_member(),))
+
+    def resolve_member(
+        _self: object, member: CurrentCohortMemberV1, lease: StorageRootLease
+    ) -> CurrentCohortResolvedIdentityV1:
+        return _Resolver().resolve_under_lease(member, lease)
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        admitted_members,
+    )
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentCohortInstrumentResolverV1,
+        "resolve_under_lease",
+        resolve_member,
+    )
 
 
 class _Resolver:

@@ -57,6 +57,7 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
     ExpectedSessionSchedule,
+    ScheduleEvidenceValidationError,
     parse_canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
     schedule_digest,
@@ -1506,7 +1507,7 @@ def _retained_schedule_matches_request(
             and retained_sessions[-1].close_at
             == request.schedule.decision_session_official_close_at
         )
-    except (OSError, ValueError, _ImmutableEvidenceConflict):
+    except (OSError, ScheduleEvidenceValidationError, _ImmutableEvidenceConflict):
         return False
     finally:
         _close_capture_resources_v1(lease)

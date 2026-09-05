@@ -73,6 +73,7 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     LeaseResult,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 
 
@@ -240,6 +241,9 @@ class _Catalog:
         return self
 
     def __exit__(self, *_args: object) -> None:
+        return None
+
+    def get_manifest(self, _plan: PlannedInstrumentMonth) -> None:
         return None
 
 
@@ -1035,6 +1039,54 @@ def test_session_open_errors_are_typed_sanitized_and_stop_later_plans(
     assert "secret" not in report.failure_code.value
 
 
+@pytest.mark.parametrize("stage", ("open", "request_executor"))
+def test_unknown_provider_setup_faults_escape_before_fetch(
+    tmp_path: Path, stage: str
+) -> None:
+    failure = RuntimeError("private-provider-implementation-fault")
+    session_calls: list[object] = []
+    fetches: list[object] = []
+
+    def open_session() -> object:
+        session_calls.append(object())
+        if stage == "open":
+            raise failure
+        return SimpleNamespace(
+            fetch=lambda request: fetches.append(request) or HistoricalResponse(500, [])
+        )
+
+    def run_id() -> str:
+        if stage == "request_executor":
+            raise failure
+        return "run"
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=open_session),  # type: ignore[arg-type]
+        run_id_factory=run_id,
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert len(session_calls) == 1
+    assert fetches == []
+
+
 def test_invalid_validation_policy_rejects_before_lease_or_other_side_effects(
     tmp_path: Path,
 ) -> None:
@@ -1296,6 +1348,55 @@ def test_child_h_catalog_failure_stops_later_lifecycle_work(
     assert report.results[1].error_code == "CATALOG_UNAVAILABLE"
 
 
+def test_real_lifecycle_catalog_defect_escapes_before_later_fetch(
+    tmp_path: Path,
+) -> None:
+    failure = AssertionError("private-catalog-implementation-fault")
+    created: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            return None
+
+        def create_manifest(self, manifest: PartitionManifest) -> None:
+            created.append(manifest.plan.from_date)
+            if manifest.plan.from_date == date(2026, 1, 1):
+                raise failure
+
+    catalog = Catalog()
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(
+                fetch=lambda request: (
+                    fetches.append(request) or HistoricalResponse(500, [])
+                )
+            )
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: catalog,  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert created == [date(2026, 1, 1)]
+    assert fetches == []
+
+
 def test_first_local_fatal_stops_observation_and_marks_later_plans_not_attempted(
     tmp_path: Path,
 ) -> None:
@@ -1401,7 +1502,7 @@ def test_hostile_lease_port_rejects_before_schedule_catalog_or_provider(
 
     def acquire(_root: object) -> object:
         if raises:
-            raise RuntimeError("lease secret")
+            raise StorageRootLeaseError("storage authority unavailable")
         return SimpleNamespace(outcome=LeaseOutcome.ACQUIRED, lease=_Lease())
 
     report = IngestionCoordinator(
@@ -1424,6 +1525,38 @@ def test_hostile_lease_port_rejects_before_schedule_catalog_or_provider(
     assert report.outcome is IngestionRunOutcome.REJECTED
     assert report.failure_code is RunFailureCode.STORAGE_UNSAFE
     assert report.not_attempted_count == 1
+    assert schedule_calls == []
+    assert catalog_calls == []
+    assert provider_calls == []
+
+
+def test_unknown_lease_acquisition_fault_escapes_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("private-lease-implementation-fault")
+    schedule_calls: list[object] = []
+    catalog_calls: list[object] = []
+    provider_calls: list[object] = []
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=lambda: provider_calls.append(object())),  # type: ignore[arg-type]
+        lease_acquirer=lambda _root: (_ for _ in ()).throw(failure),  # type: ignore[arg-type]
+        schedule_store_factory=lambda *_args: schedule_calls.append(object()),  # type: ignore[arg-type]
+        catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
     assert schedule_calls == []
     assert catalog_calls == []
     assert provider_calls == []
@@ -1831,7 +1964,7 @@ def test_post_attempt_exception_category_evidence_matrix(
 
         def get_manifest(self, _plan: object) -> PartitionManifest | None:
             if self.unreadable:
-                raise RuntimeError("catalog secret")
+                raise CatalogPersistenceError("catalog unavailable")
             return self.manifest
 
     catalog = Catalog()
@@ -1869,7 +2002,7 @@ def test_post_attempt_exception_category_evidence_matrix(
             else:
                 catalog.unreadable = True
             kwargs["fetcher"]._remaining_attempts -= 1  # type: ignore[union-attr,reportPrivateUsage]
-            raise RuntimeError("secret")
+            raise PartitionClockFailure("clock unavailable")
 
         return SimpleNamespace(execute=execute)
 
@@ -1914,8 +2047,6 @@ def test_post_attempt_exception_category_evidence_matrix(
     [
         (PartitionClockFailure, RunFailureCode.PARTITION_FAILURE),
         (PartitionLifecycleConflict, RunFailureCode.PARTITION_FAILURE),
-        (RuntimeError, RunFailureCode.PARTITION_FAILURE),
-        (ValueError, RunFailureCode.PARTITION_FAILURE),
         (PartitionCatalogFailure, RunFailureCode.CATALOG_UNAVAILABLE),
     ],
 )
@@ -1978,6 +2109,99 @@ def test_post_attempt_lifecycle_exceptions_are_fatal_and_preserve_current_eviden
     assert report.results[0].final_manifest is catalog.manifest
     assert report.not_attempted_count == 2
     assert "secret" not in report.results[0].error_code  # type: ignore[operator]
+
+
+def test_typed_current_manifest_lookup_failure_preserves_lifecycle_primary(
+    tmp_path: Path,
+) -> None:
+    executed: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            raise CatalogPersistenceError("catalog unavailable")
+
+    def lifecycle_factory(**_kwargs: object) -> SimpleNamespace:
+        def execute(plan: object) -> None:
+            executed.append(plan.from_date)  # type: ignore[union-attr]
+            raise PartitionClockFailure("clock unavailable")
+
+        return SimpleNamespace(execute=execute)
+
+    report = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=fetches.append)
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        lifecycle_executor_factory=lifecycle_factory,  # type: ignore[arg-type]
+    ).run(
+        IngestionCommand(
+            _instrument(),
+            date(2026, 1, 1),
+            date(2026, 2, 28),
+            "1m",
+            tmp_path,
+            _wide_schedule(),
+            "nse-equity-month@v1",
+            max_total_provider_attempts=2,
+        )
+    )
+
+    assert report.failure_code is RunFailureCode.PARTITION_FAILURE
+    assert executed == [date(2026, 1, 1), date(2026, 2, 1)]
+    assert fetches == []
+    assert report.failed_count == 2
+    assert report.not_attempted_count == 0
+
+
+def test_unknown_current_manifest_lookup_fault_escapes_lifecycle_mapping(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("private-current-manifest-implementation-fault")
+    executed: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            raise failure
+
+    def lifecycle_factory(**_kwargs: object) -> SimpleNamespace:
+        def execute(plan: object) -> None:
+            executed.append(plan.from_date)  # type: ignore[union-attr]
+            raise PartitionClockFailure("clock unavailable")
+
+        return SimpleNamespace(execute=execute)
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=fetches.append)
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        lifecycle_executor_factory=lifecycle_factory,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert executed == [date(2026, 1, 1)]
+    assert fetches == []
 
 
 def test_between_partition_cancellation_marks_every_remaining_plan_cancelled(

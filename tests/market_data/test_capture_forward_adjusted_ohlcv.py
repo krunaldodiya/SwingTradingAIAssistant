@@ -2750,6 +2750,42 @@ def test_yfinance_distribution_mismatch_precedes_import_and_provider(
     assert provider_called is False
 
 
+@pytest.mark.parametrize(
+    "fault_stage", ("schedule_digest", "schedule_covers_full_calendar_range")
+)
+def test_retained_schedule_computation_fault_is_not_evidence_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault_stage: str
+) -> None:
+    request = _request()
+    schedule_root = _retain_schedule(tmp_path, _expected_schedule())
+    retained_before = {
+        path.relative_to(schedule_root): path.read_bytes()
+        for path in schedule_root.rglob("*")
+        if path.is_file()
+    }
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    failure = ValueError("private schedule computation defect")
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise failure
+
+    monkeypatch.setattr(core, fault_stage, fail)
+    with pytest.raises(ValueError) as raised:
+        _invoke(request, provider, tmp_path, schedule_root=schedule_root)
+
+    assert raised.value is failure
+    assert provider.calls == 0
+    assert tuple(tmp_path.iterdir()) == ()
+    assert {
+        path.relative_to(schedule_root): path.read_bytes()
+        for path in schedule_root.rglob("*")
+        if path.is_file()
+    } == retained_before
+
+
 def test_retained_schedule_substitution_fails_before_store_and_provider(
     tmp_path: Path,
 ) -> None:
