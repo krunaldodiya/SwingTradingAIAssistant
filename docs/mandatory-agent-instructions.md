@@ -4,7 +4,9 @@ Status: **CANONICAL PROJECT ADAPTER**
 
 Owner: repository owner and product direction authority
 Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
-OMP routing revision: [#168](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168)
+Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/170)
+
+This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
 These instructions apply to every task in this repository, including resumed work, discussion that becomes delivery work, and work that appears routine. Every agent MUST read and follow this file before planning, editing, delegation, or delivery. Prior-session familiarity, summaries, memories, and restored harness state do not substitute for the current file.
 
@@ -62,26 +64,19 @@ External temporal windows, future-session captures, retrospective point-in-time 
 
 Stop at the scope-expansion circuit breaker before adding an unplanned subsystem, persistence or replay model, attestation mechanism, provider, generalized abstraction, delivery surface, or threat model. Resume only when it is the least costly adequate correction for a current blocker or the owner explicitly changes scope.
 
-### 4. Use Herdr for multi-agent work and independent R3/R4 review
+### 4. Use accountable coordination and independent R3/R4 review
 
-When work genuinely needs multiple agents or independent R3/R4 review, use Herdr and follow [`docs/herdr-multi-agent-workflow.md`](herdr-multi-agent-workflow.md). Never substitute an invisible or generic subagent launcher.
+Use any available AI agent harness that can satisfy the task's controls, including Pi, Oh My Pi, Codex, or OpenCode. No harness, provider, terminal manager, model family, plugin, or global configuration file is mandatory. Follow [the portable agent workflow](agent-workflow.md) for capability selection, assignment, coordination, and review mechanics. Herdr is one optional implementation described in [its adapter](herdr-multi-agent-workflow.md).
 
-Every Herdr-spawned worker or reviewer MUST run through OMP using
-`herdr agent start ... --kind omp`. Native Codex CLI sessions and
-`herdr agent start ... --kind codex` are prohibited for repository work.
-Names such as `openai-codex/gpt-5.6-sol` and
-`openai-codex/gpt-5.6-terra` are OMP `--model` identifiers only; they never
-authorize a native Codex runtime.
+One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them. Native delegated agents, separate sessions, and qualified human reviewers are acceptable when identity, assignment, independence, complete results, and candidate immutability can be established. A writer's second pass is not independent review.
 
-One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them.
+After a complete result is captured and checked, close or release completed task-owned execution resources when the harness supports it. Retain durable review evidence. Never close, interrupt, or replace an active, blocked, or unknown agent for cleanup or timeboxing; a completed message alone does not prove a persistent task has stopped.
 
-After a complete result is captured and checked, close that reviewer or worker tab immediately when it is `idle` or `done`. Never close, interrupt, or replace an active `working`, `blocked`, or `unknown` agent for cleanup or timeboxing.
-
-If Herdr is unavailable, continue single-agent work where proportionate and pause only the exact work whose risk tier requires unavailable independent agents.
+If a required capability or independent reviewer is unavailable, continue authorized single-agent work where proportionate and pause only the dependent review, acceptance, or release. Do not claim a missing review passed or require installing a preferred harness merely to continue independent work.
 
 ### 5. Use bounded goal mode when available
 
-Attempt the harness's persistent `/goal` or equivalent by default for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
+Use the harness's persistent goal or equivalent continuation facility when available, permitted, and useful for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
 
 Goal mode grants continuity, not authority. It MUST pause at the next safe boundary for:
 
@@ -96,15 +91,15 @@ Goal mode grants continuity, not authority. It MUST pause at the next safe bound
 
 Resuming a goal requires rechecking tracker state, branch and working tree, material decisions, external prerequisites, and whether earlier evidence still applies. Never continue merely because the harness restored a session.
 
-Route goal work through the [OMP model routing](#omp-model-routing) boundaries below. Terra/high may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
+Route goal work through the [capability and responsibility rules](#capability-and-responsibility-selection) below. An implementation agent may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
 
 For R3/R4 evidence, persistence, revision, security, or state-transition contracts, freeze the adversarial matrix before implementation. Cover positive behavior, malformed/unsupported/insufficient/conflicting outcomes, bounds and limit-plus-one, combined-failure precedence, interruption/retry/rollback, provenance substitution, concurrency where applicable, historical compatibility, and external temporal or authority gates.
 
 If goal mode is unavailable or cannot preserve these controls, record the constraint and use the ordinary bounded workflow.
 
-### 6. Start every spawned agent and reviewer with routine permissions pre-approved
+### 6. Prepare task-scoped permissions within host controls
 
-Start OMP workers and reviewers in full-permission/yolo autonomous mode. Do not override the normal yolo mode with `write` or `always-ask` approval modes. Routine reads, searches, scoped edits, commands, tests, hashes, and read-only review MUST NOT stall on permission dialogs.
+Configure available permissions for already-authorized routine work before starting an assignment, within the host sandbox, account policy, and owner authority. Prefer scoped permissions sufficient for the task; no unrestricted, yolo, or other named mode is required. Avoid redundant confirmation for routine reads, searches, scoped edits, commands, tests, hashes, and review. Honor any mandatory host approval or access restriction; never disable a security control to eliminate a dialog.
 
 Permissions do not enlarge authority. Enforce read-only review through the assignment contract, any available reviewer-specific capability restriction, and immutable candidate evidence—not approval prompts. Every reviewer targets a clean committed candidate. The coordinator MUST perform pre-review and post-review checks of the full commit SHA, tree identity, and clean worktree; any mismatch or unexpected mutation invalidates the review and requires a fresh review after repair.
 
@@ -113,29 +108,29 @@ Agents pause only for genuine blockers: unresolved owner decisions, credentials 
 Missing or delayed tool/session state, a lifecycle artifact that appears only
 after startup input, and a routine approval dialog are operational conditions,
 not owner decisions. Inspect, wait, retry, restart, or use the documented
-no-work bootstrap; apply the standing pre-approval to an in-scope routine
-dialog. Never ask the owner merely to authorize ordinary continuation.
+no-work bootstrap; apply existing authorization to an in-scope routine
+dialog only where the host permits the agent to do so. Never ask the owner merely to authorize ordinary continuation.
 
-## OMP model routing
+## Capability and responsibility selection
 
-This routing applies to OMP only. Use `openai-codex/` model identifiers inside OMP; do not configure or substitute native Codex or another harness. The coordinator selects the lane from the actual responsibility and risk; these settings are not an automatic risk-classification router.
+Select from the current harness's available, authorized models and tools according to the responsibility and risk. Honor an explicit owner model choice when available; otherwise use a capable configured default and escalate only when the task needs more capability. Model names, reasoning-setting names, session-log schemas, and provider prefixes are not portable requirements.
 
-| Responsibility | OMP assignment | Required model and thinking |
-|---|---|---|
-| Routine coordination, integration, reporting, and R1/R2 code review | `modelRoles.default`; `task.agentModelOverrides.reviewer` | `openai-codex/gpt-5.6-sol:high` |
-| Consequential framing, architecture, market/source/evidence/security decisions, adversarial acceptance, and difficult escalation | `modelRoles.plan`, `slow`, `advisor` | `openai-codex/gpt-6-astra:high` |
-| R3/R4 final functional/domain review, independent of the writer | Explicit Herdr launch; do not inherit the generic Sol reviewer assignment | `openai-codex/gpt-6-astra:high` |
-| Security/privacy/provenance review | `task.agentModelOverrides.security-reviewer`; explicit Herdr launch | `openai-codex/gpt-6-astra:high` |
-| Bounded implementation, discovery, source research, and design | `modelRoles.smol`, `designer`, `vision`; agent overrides `task`, `scout`, `librarian`, `designer` | `openai-codex/gpt-5.6-terra:high` |
-| Exact, interpretation-free mechanical work | `modelRoles.tiny`; `task.agentModelOverrides.sonic` | `openai-codex/gpt-5.6-luna:high` |
+| Responsibility | Required capability and boundary |
+|---|---|
+| Coordination and integration | Interpret authority, freeze scope and contracts, serialize shared work, verify evidence, and own final delivery claims. |
+| Consequential design or escalation | Reason about architecture, domain, source/evidence/security decisions and adversarial acceptance before implementation. |
+| Bounded implementation | Implement the frozen contract and focused checks; return consequential ambiguity to the coordinator. |
+| Independent functional/domain review | Inspect the complete exact candidate, trace current acceptance and failure paths, and report blockers with evidence; remain independent of the writer. |
+| Security/privacy/provenance review | Perform authorized defensive analysis of the exact candidate and its trust boundaries; remain independent and read-only. |
+| Mechanical work | Perform an exact transformation with explicit acceptance evidence; escalate semantic interpretation. |
 
-Routine work under an unchanged accepted contract does not require another Astra planning pass. Semantic ambiguity leaves Luna; consequential ambiguity or repeated failure in Terra/Sol pauses the affected work for a bounded Astra decision before implementation resumes. A required Astra lane being unavailable is a blocker, not permission to downgrade silently.
+Record the actual harness/session, model and reasoning setting when exposed, permissions, assignment, and result source. Verify any explicitly required configuration through the host's supported metadata; do not invent unavailable telemetry or require another harness's JSONL format. Missing optional telemetry is a disclosed limit; inability to establish a required capability, independence, or candidate identity blocks only the dependent claim. A model change alone does not create reviewer independence.
 
-The active local profile lives in `~/.omp/agent/config.yml`; preserve unrelated settings, credentials, model restrictions, and its existing global storage scope. Back up before changing it and verify effective assignments plus a fresh process's exact model/high-thinking/no-fallback evidence. Explicit Herdr launch flags must match this table. Existing sessions retain their selected models; new settings do not retroactively change them.
+Do not modify global harness profiles, credentials, or unrelated settings as part of normal repository work. Apply configuration choices to new assignments; do not switch another agent's in-flight work or relabel historical review evidence.
 
-Apply the new routes to new assignments. Do not switch in-flight work or relabel historical model/review evidence. A new candidate or restarted review needs fresh exact-byte review under the current route. A provider safety pause/refusal is **INVALID / NO VERDICT** regardless of an apparent idle state: pause the affected task, retain its evidence, and obtain explicit interactive owner approval where required. Never retry, rephrase, switch models, dismiss a restriction, or use a new review to bypass the provider boundary.
+A provider safety pause/refusal is **INVALID / NO VERDICT**, regardless of an apparent idle state. Preserve its evidence and follow the provider/host's authorized resolution or support path. Never retry, rephrase, switch models or harnesses, dismiss a restriction, or use a new review to bypass that boundary. Owner approval does not override provider policy. Ordinary transport or lifecycle failures may be diagnosed and retried once their cause is addressed, with prior failures retained.
 
-Optimize accepted work per unit of usage, including retries and reviews, rather than token count alone. API list prices are not ChatGPT allowance multipliers; zero or missing OMP cost metadata is not free usage. Do not claim measured savings or native-Codex-only capabilities without OMP evidence. The dated capability, price, and scope decision is retained in [Issue #168](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168).
+Optimize accepted work per unit of usage, including retries and reviews. Missing cost metadata is unknown, not free usage. Do not equate API list prices with subscription allowances or claim measured savings or capabilities without evidence from the actual environment.
 
 ## Additional standing owner instructions
 
@@ -153,8 +148,8 @@ These active owner instructions exist beyond the six execution controls.
 - Explain progress, blockers, failures, and bottlenecks in plain language. Translate necessary engineering or market jargon immediately; lead with the concrete effect.
 - Keep general discussion out of sprint delivery todos. Only work needed to build, test, review, publish, or close the active delivery belongs there.
 - When a discussion becomes authorized delivery, create or update its own governed Issue and delivery tasks at that point.
-- Use one OMP session per sprint: run `/new` before starting a new sprint, use `/compact` only within the active sprint when needed, and otherwise allow automatic compaction.
-- Do not use Orca for this repository unless the owner explicitly reverses this instruction. Use repository tools, direct GitHub integration, and Herdr where required.
+- Keep session context scoped to the active sprint or bounded task. At a new sprint, use a fresh session or equivalent explicit context reset; preserve an evidence-bearing handoff before compaction, session changes, or switching harnesses. No slash command or proprietary session format is required.
+- Use available repository tools, direct GitHub integration, and coordination facilities that satisfy the controls above. Tool availability does not authorize unrelated work or changes to another active agent.
 
 ### Tracker and lifecycle
 
@@ -298,7 +293,8 @@ Only this file owns project-wide agent behavior. Other sources retain the narrow
 |---|---|---|
 | `AGENTS.md` | Bootstrap only | Requires this file before work; MUST NOT duplicate the canonical rules. |
 | `docs/mandatory-agent-instructions.md` | Canonical project adapter | Owns active project-wide agent instructions, precedence, and update rules. |
-| `docs/herdr-multi-agent-workflow.md` | Specialized Herdr procedure | Owns current Herdr commands, assignment format, coordination mechanics, and tab lifecycle under this file's Herdr policy. |
+| `docs/agent-workflow.md` | Portable operating procedure | Owns bootstrap, capability mapping, assignment, coordination, handoff, and review mechanics under this canonical policy. |
+| `docs/herdr-multi-agent-workflow.md` | Optional Herdr adapter | Maps the portable procedure to Herdr when selected; does not mandate Herdr, OMP, models, or global permissions. |
 | `docs/architecture-freeze-v1.md` | Product architecture authority | Owns accepted product and architecture boundaries; process-history passages are records, not a second agent policy. |
 | `docs/roadmap.md` and `docs/upcoming_sprints_overview.md` | Delivery sequencing | Own current roadmap dependencies and lifecycle summaries; they do not define general agent behavior. |
 | `docs/plans/` and `docs/sprints/` | Scoped contracts and historical records | Accepted Plans govern their feature scope; Sprint records preserve evidence and decisions. Repeated workflow wording is historical unless incorporated here. |
