@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime
 
@@ -926,6 +928,110 @@ def test_bounded_read_rejects_entry_replacement_before_or_after_read(
             universe_module._read_bounded(Operation(), descriptor, "snapshot.json", 2)
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_immutable_read_fifo_substitution_after_admission_fails_promptly(
+    tmp_path,
+) -> None:
+    environment = {
+        **os.environ,
+        "PLAN33_FIFO_SUBPROCESS_ROOT": str(tmp_path.resolve()),
+    }
+    script = """
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+from swing_trading_ai_assistant.market_data import universe_snapshot as universe
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+
+
+for stage in ("existing", "temporary", "final", "bounded"):
+    with tempfile.TemporaryDirectory(
+        dir=os.environ["PLAN33_FIFO_SUBPROCESS_ROOT"]
+    ) as temporary:
+        root = Path(temporary) / "root"
+        root.mkdir(mode=0o700)
+        lease = StorageRootLease.try_acquire_private_empty(root).lease
+        assert lease is not None
+        name = "snapshot.json"
+        payload = b"expected"
+        target = root / name
+        with lease.root_operation(root) as operation:
+            if stage in {"existing", "bounded"}:
+                descriptor = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o400,
+                    dir_fd=operation.descriptor,
+                )
+                try:
+                    os.write(descriptor, payload)
+                finally:
+                    os.close(descriptor)
+            real_open = universe.os.open
+            replacement = [None]
+
+            def substitute(path, flags, mode=0o777, **kwargs):
+                path_text = os.fspath(path)
+                readonly = (flags & os.O_ACCMODE) == os.O_RDONLY
+                temporary_readback = (
+                    stage == "temporary"
+                    and readonly
+                    and path_text.startswith(f".{name}.")
+                    and path_text.endswith(".tmp")
+                )
+                final_readback = (
+                    stage == "final"
+                    and readonly
+                    and path_text == name
+                    and target.exists()
+                )
+                direct_read = (
+                    stage in {"existing", "bounded"}
+                    and readonly
+                    and path_text == name
+                )
+                if replacement[0] is None and (
+                    temporary_readback or final_readback or direct_read
+                ):
+                    os.unlink(path_text, dir_fd=kwargs["dir_fd"])
+                    os.mkfifo(path_text, mode=0o400, dir_fd=kwargs["dir_fd"])
+                    replacement[0] = root / path_text
+                return real_open(path, flags, mode, **kwargs)
+
+            universe.os.open = substitute
+            try:
+                try:
+                    if stage == "bounded":
+                        universe._read_bounded(operation, operation.descriptor, name, len(payload))
+                    else:
+                        universe._publish_exact(
+                            operation, operation.descriptor, name, payload
+                        )
+                except ValueError:
+                    pass
+                else:
+                    raise SystemExit(f"{stage} FIFO was accepted")
+            finally:
+                universe.os.open = real_open
+            if replacement[0] is None or not stat.S_ISFIFO(
+                replacement[0].lstat().st_mode
+            ):
+                raise SystemExit(f"{stage} FIFO was not preserved")
+        lease.close()
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and test script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_catalog_universe_boundaries_and_conflicts_fail_closed(tmp_path) -> None:

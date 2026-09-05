@@ -2761,7 +2761,7 @@ def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
             directory_metadata = os.fstat(directory)
             descriptor = os.open(
                 name,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=directory,
             )
             held = os.fstat(descriptor)
@@ -2842,7 +2842,7 @@ def _binding_snapshot_live_v1(snapshot: _BindingSnapshotV1) -> bool:
                 return False
             descriptor = os.open(
                 snapshot.name,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=directory,
             )
             held = os.fstat(descriptor)

@@ -3082,6 +3082,104 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
         core._snapshot_plan33_binding_v1(root, binding.name)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_plan33_binding_fifo_substitution_after_admission_fails_promptly(
+    tmp_path: Path,
+) -> None:
+    environment = {
+        **os.environ,
+        "PLAN33_FIFO_SUBPROCESS_ROOT": str(tmp_path.resolve()),
+    }
+    script = """
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+from swing_trading_ai_assistant.market_data import (
+    efficient_current_nifty100_adjusted_capture as core,
+)
+
+
+def prepared_binding() -> tuple[Path, Path, Path]:
+    root = Path(
+        tempfile.mkdtemp(dir=os.environ["PLAN33_FIFO_SUBPROCESS_ROOT"])
+    ) / "root"
+    root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(root).lease
+    assert lease is not None
+    lease.close()
+    directory = root / "plan33_bindings"
+    directory.mkdir(mode=0o700)
+    binding = directory / "binding.json"
+    binding.write_bytes(b"{}")
+    binding.chmod(0o400)
+    return root, directory, binding
+
+
+for stage in ("missing", "snapshot", "liveness"):
+    root, directory, binding = prepared_binding()
+    target = directory / ("missing.json" if stage == "missing" else "binding.json")
+    if stage == "missing":
+        binding.unlink()
+    snapshot = (
+        core._snapshot_plan33_binding_v1(root, binding.name)
+        if stage == "liveness"
+        else None
+    )
+    if stage == "liveness":
+        assert snapshot is not None
+        if not core._binding_snapshot_live_v1(snapshot):
+            raise SystemExit("valid binding snapshot was not live")
+    real_open = core.os.open
+    replaced = [False]
+
+    def substitute(path, flags, mode=0o777, **kwargs):
+        if (
+            not replaced[0]
+            and os.fspath(path) == target.name
+            and kwargs.get("dir_fd") is not None
+        ):
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            os.mkfifo(target, mode=0o400)
+            replaced[0] = True
+        return real_open(path, flags, mode, **kwargs)
+
+    core.os.open = substitute
+    try:
+        if stage == "missing":
+            try:
+                core._read_plan33_binding_v1(root, target.name)
+            except core.EvidenceConflict:
+                pass
+            else:
+                raise SystemExit("missing FIFO binding was accepted")
+        elif stage == "snapshot":
+            try:
+                core._snapshot_plan33_binding_v1(root, target.name)
+            except core.EvidenceConflict:
+                pass
+            else:
+                raise SystemExit("FIFO snapshot binding was accepted")
+        elif core._binding_snapshot_live_v1(snapshot):
+            raise SystemExit("FIFO liveness binding was accepted")
+    finally:
+        core.os.open = real_open
+    if not replaced[0] or not stat.S_ISFIFO(target.lstat().st_mode):
+        raise SystemExit("substituted FIFO was not preserved")
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and test script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     "finalization",
     [

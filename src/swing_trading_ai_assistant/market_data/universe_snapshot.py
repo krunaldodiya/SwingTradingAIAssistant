@@ -594,7 +594,11 @@ def _publish_exact(
 ) -> None:
     _ensure_private_operation(operation)
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
     except FileNotFoundError:
         temporary, fd = _open_private_temporary(parent, name)
         temporary_identity: tuple[int, ...] | None = None
@@ -611,7 +615,7 @@ def _publish_exact(
             fd = -1
             verify_fd = os.open(
                 temporary,
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
             try:
@@ -800,7 +804,11 @@ def _rename_noreplace(
 def _verify_published_object(
     operation: StorageRootLeaseOperation, parent: int, name: str, payload: bytes
 ) -> None:
-    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+    fd = os.open(
+        name,
+        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=parent,
+    )
     try:
         _verify_open_object(operation, parent, name, fd, payload)
     finally:
@@ -836,7 +844,11 @@ def _read_bounded(
     operation: StorageRootLeaseOperation, parent: int, name: str, maximum: int
 ) -> bytes:
     _ensure_private_operation(operation)
-    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+    fd = os.open(
+        name,
+        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=parent,
+    )
     try:
         identity = _private_object_identity(fd)
         if os.fstat(fd).st_nlink != 1:
