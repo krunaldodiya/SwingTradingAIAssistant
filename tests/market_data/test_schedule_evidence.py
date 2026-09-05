@@ -586,3 +586,32 @@ def test_resolve_preserves_primary_fault_when_descriptor_close_also_fails(
             schedule_module.os.fstat(descriptors[0])
     finally:
         lease.close()
+
+
+def test_calendar_classification_propagates_computation_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule = _schedule(
+        schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+        covered_to=date(2026, 1, 2),
+        sessions=(
+            _session(
+                trade_date=date(2026, 1, 1),
+                open_at=datetime(2026, 1, 1, 3, 45, tzinfo=UTC),
+                close_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+                kind="REGULAR",
+            ),
+            _session(kind="REGULAR"),
+        ),
+    )
+    failure = RuntimeError("private/path/token")
+
+    def fail_increment(**_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(schedule_module, "timedelta", fail_increment)
+    with pytest.raises(RuntimeError) as raised:
+        schedule_module.schedule_covers_full_calendar_range(
+            schedule, schedule.covered_from, schedule.covered_to
+        )
+    assert raised.value is failure

@@ -1873,3 +1873,167 @@ def test_preparation_rejects_incomplete_or_future_schedule_evidence(
     )
     assert report.failure_code is PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE
     assert list(tmp_path.iterdir()) == []
+
+
+def _inject_unknown_snapshot_file_fault(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> tuple[AssertionError, list[int | str]]:
+    primary = AssertionError(f"{fault} primary")
+    cleanup_attempts: list[int | str] = []
+    journal_names = {
+        "pending-observation-v1.json",
+        ".pending-observation-v1.json.tmp",
+    }
+    if fault in ("read", "write"):
+        _inject_snapshot_io_fault(
+            monkeypatch, fault, journal_names, primary, cleanup_attempts
+        )
+    else:
+        _inject_snapshot_link_fault(
+            monkeypatch, journal_names, primary, cleanup_attempts
+        )
+    return primary, cleanup_attempts
+
+
+def _inject_snapshot_io_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+    journal_names: set[str],
+    primary: AssertionError,
+    cleanup_attempts: list[int | str],
+) -> None:
+    real_open = snapshot_module.os.open
+    real_close = snapshot_module.os.close
+    target_descriptors: set[int] = set()
+    faulted_descriptors: set[int] = set()
+
+    def track_journal_descriptor(
+        name: str | Path, flags: int, *args: object, **kwargs: object
+    ) -> int:
+        descriptor = real_open(name, flags, *args, **kwargs)
+        if name in journal_names:
+            target_descriptors.add(descriptor)
+        return descriptor
+
+    def close_after_primary(descriptor: int) -> None:
+        real_close(descriptor)
+        target_descriptors.discard(descriptor)
+        if descriptor in faulted_descriptors:
+            faulted_descriptors.remove(descriptor)
+            cleanup_attempts.append(descriptor)
+            raise OSError("secondary close failure")
+
+    monkeypatch.setattr(snapshot_module.os, "open", track_journal_descriptor)
+    monkeypatch.setattr(snapshot_module.os, "close", close_after_primary)
+    if fault == "read":
+
+        def fail_read(descriptor: int, size: int) -> bytes:
+            if descriptor not in target_descriptors:
+                return real_read(descriptor, size)
+            faulted_descriptors.add(descriptor)
+            raise primary
+
+        real_read = snapshot_module.os.read
+        monkeypatch.setattr(snapshot_module.os, "read", fail_read)
+    else:
+
+        def fail_write(descriptor: int, value: bytes) -> int:
+            if descriptor not in target_descriptors:
+                return real_write(descriptor, value)
+            faulted_descriptors.add(descriptor)
+            raise primary
+
+        real_write = snapshot_module.os.write
+        monkeypatch.setattr(snapshot_module.os, "write", fail_write)
+
+
+def _inject_snapshot_link_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    journal_names: set[str],
+    primary: AssertionError,
+    cleanup_attempts: list[int | str],
+) -> None:
+    real_link = snapshot_module.os.link
+    real_unlink = snapshot_module.os.unlink
+
+    def fail_link(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int,
+        dst_dir_fd: int,
+        follow_symlinks: bool,
+    ) -> None:
+        if dst not in journal_names:
+            real_link(
+                src,
+                dst,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+            return
+        raise primary
+
+    def unlink_after_primary(name: str, *, dir_fd: int | None = None) -> None:
+        real_unlink(name, dir_fd=dir_fd)
+        if name in journal_names:
+            cleanup_attempts.append(name)
+            raise OSError("secondary unlink failure")
+
+    monkeypatch.setattr(snapshot_module.os, "link", fail_link)
+    monkeypatch.setattr(snapshot_module.os, "unlink", unlink_after_primary)
+
+
+@pytest.mark.parametrize("fault", ("read", "write", "link"))
+def test_snapshot_store_preserves_unknown_file_fault_over_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str
+) -> None:
+    primary, cleanup_attempts = _inject_unknown_snapshot_file_fault(monkeypatch, fault)
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    fetched = client.fetch()
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(AssertionError) as raised:
+            InstrumentSnapshotStoreV1(tmp_path, lease, catalog).retain(fetched)
+
+        assert raised.value is primary
+        assert cleanup_attempts
+        assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
+
+    assert not (
+        tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    ).exists()
+
+
+@pytest.mark.parametrize("fault", ("read", "write", "link"))
+def test_preparation_does_not_succeed_after_unknown_snapshot_file_fault(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str
+) -> None:
+    primary, cleanup_attempts = _inject_unknown_snapshot_file_fault(monkeypatch, fault)
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    source = CountingSnapshotSource(client)
+    with pytest.raises(AssertionError) as raised:
+        DownloadPreparationServiceV1(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+            StaticScheduleSource(_schedule_input()),
+            source,
+        ).prepare(
+            DownloadPreparationRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 7, 31),
+                tmp_path,
+                datetime(2026, 8, 10, 4, 0, tzinfo=UTC),
+            )
+        )
+
+    assert cleanup_attempts
+    assert source.calls == 1
+    assert raised.value is primary
+    assert not (
+        tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    ).exists()

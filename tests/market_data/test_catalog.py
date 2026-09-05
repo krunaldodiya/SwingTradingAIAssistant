@@ -242,6 +242,68 @@ def test_leased_writable_catalog_never_writes_replacement_root(tmp_path: Path) -
     acquired.lease.close()
 
 
+@pytest.mark.parametrize(
+    "publication_helper",
+    ("_copy_exact_catalog", "_publish_catalog_entry_conditionally"),
+)
+def test_leased_catalog_propagates_unknown_publication_fault_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_helper: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = AssertionError()
+
+    def fail_publication(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+        connection = catalog.connection
+        monkeypatch.setattr(catalog_module, publication_helper, fail_publication)
+        with pytest.raises(AssertionError) as raised:
+            catalog.close()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
+def test_leased_catalog_close_fault_propagates_without_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = AssertionError()
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+        connection = catalog.connection
+
+        class ConnectionCloseProxy:
+            def close(self) -> None:
+                connection.close()
+                raise failure
+
+        catalog._connection = ConnectionCloseProxy()
+        with pytest.raises(AssertionError) as raised:
+            catalog.close()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
 @pytest.mark.parametrize("existing_source", (False, True))
 def test_leased_catalog_conditional_publish_never_overwrites_final_race(
     tmp_path: Path,

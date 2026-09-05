@@ -866,3 +866,103 @@ def test_unknown_post_acquisition_fault_releases_the_new_private_lease(
     reacquired = StorageRootLease.try_acquire_existing(root)
     assert reacquired.lease is not None
     reacquired.lease.close()
+
+
+@pytest.mark.parametrize("error_type", (KeyError, KeyboardInterrupt))
+def test_lease_exit_preserves_primary_after_real_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    lease = acquired.lease
+    failure = error_type("primary")
+    real_close = lease.close
+
+    def close_then_fail() -> None:
+        real_close()
+        raise RuntimeError("secondary")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(lease, "close", close_then_fail)
+        with pytest.raises(error_type) as raised, lease:
+            raise failure
+        assert raised.value is failure
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_operation_exit_preserves_primary_after_real_descriptor_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    failure = KeyError("primary")
+    real_close = lease_module._close_descriptor
+    with acquired.lease:
+        operation = acquired.lease.root_operation(tmp_path)
+        with monkeypatch.context() as scoped:
+            with pytest.raises(KeyError) as raised, operation:
+                descriptor = operation.descriptor
+
+                def close_then_fail(value: int | None) -> bool:
+                    result = real_close(value)
+                    if value == descriptor:
+                        raise RuntimeError("secondary")
+                    return result
+
+                scoped.setattr(lease_module, "_close_descriptor", close_then_fail)
+                raise failure
+            assert raised.value is failure
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("method", ("try_acquire", "try_admit_read_existing"))
+def test_admission_preserves_primary_and_closes_both_owned_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    seeded = lease_module.StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    failure = KeyError("primary")
+    armed = False
+    owned: list[int] = []
+    real_open = lease_module.os.open
+    real_close = lease_module._close_descriptor
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == lease_module._LOCK_NAME:
+            assert dir_fd is not None
+            owned.extend((descriptor, dir_fd))
+        return descriptor
+
+    def fail_identity(*_args: object) -> bool:
+        nonlocal armed
+        armed = True
+        raise failure
+
+    def close_then_fail(descriptor: int | None) -> bool:
+        result = real_close(descriptor)
+        if armed and descriptor is not None:
+            raise RuntimeError("secondary")
+        return result
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(lease_module.os, "open", track_open)
+        scoped.setattr(lease_module, "_valid_lock_identity", fail_identity)
+        scoped.setattr(lease_module, "_close_descriptor", close_then_fail)
+        with pytest.raises(KeyError) as raised:
+            getattr(lease_module.StorageRootLease, method)(tmp_path)
+        assert raised.value is failure
+    assert owned
+    for descriptor in owned:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)

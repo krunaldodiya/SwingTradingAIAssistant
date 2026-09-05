@@ -98,7 +98,10 @@ class StorageRootLeaseOperation:
     def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
         descriptor = self._descriptor
         self._descriptor = None
-        if not _close_descriptor(descriptor) and _exc is None:
+        if _exc is not None:
+            with suppress(BaseException):
+                _close_descriptor(descriptor)
+        elif not _close_descriptor(descriptor):
             raise StorageRootLeaseError("descriptor cleanup failed")
 
 
@@ -154,6 +157,7 @@ class StorageRootLease:
             return None
         descriptor: int | None = None
         identity: tuple[int, int] | None = None
+        primary_error: BaseException | None = None
         try:
             descriptor = _open_directory_without_symlink_components(root)
             metadata = os.fstat(descriptor)
@@ -166,9 +170,16 @@ class StorageRootLease:
             identity = (metadata.st_dev, metadata.st_ino)
         except (OSError, StorageRootLeaseError):
             identity = None
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            if not _close_descriptor(descriptor):
-                identity = None
+            try:
+                if not _close_descriptor(descriptor):
+                    identity = None
+            except BaseException:
+                if primary_error is None:
+                    raise
         return identity
 
     @classmethod
@@ -184,6 +195,7 @@ class StorageRootLease:
         root_descriptor: int | None = None
         lock_descriptor: int | None = None
         result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        primary_error: BaseException | None = None
         try:
             root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
@@ -203,8 +215,11 @@ class StorageRootLease:
             path_descriptor = _open_directory_without_symlink_components(root)
             try:
                 root_final_stat = os.fstat(path_descriptor)
-            finally:
-                os.close(path_descriptor)
+            except BaseException:
+                with suppress(BaseException):
+                    os.close(path_descriptor)
+                raise
+            os.close(path_descriptor)
             if not _same_inode(root_descriptor_stat, root_final_stat):
                 raise StorageRootLeaseError
             authority = cls(
@@ -219,14 +234,13 @@ class StorageRootLease:
             )
         except (OSError, StorageRootLeaseError):
             result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            lock_closed = _close_descriptor(lock_descriptor)
-            root_closed = _close_descriptor(root_descriptor)
-            if not lock_closed or not root_closed:
-                if result.lease is not None:
-                    with suppress(StorageRootLeaseError):
-                        result.lease.close()
-                result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+            result = _finish_lease_acquisition(
+                lock_descriptor, root_descriptor, result, primary_error
+            )
         return result
 
     @classmethod
@@ -271,6 +285,7 @@ class StorageRootLease:
         root_descriptor: int | None = None
         lock_descriptor: int | None = None
         result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        primary_error: BaseException | None = None
         try:
             root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
@@ -316,19 +331,18 @@ class StorageRootLease:
                         root, root_descriptor, root_descriptor_stat
                     )
                 except BaseException:
-                    with suppress(StorageRootLeaseError):
+                    with suppress(BaseException):
                         _rollback_private_lock(result.lease)
                     raise
         except (OSError, StorageRootLeaseError):
             result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            lock_closed = _close_descriptor(lock_descriptor)
-            root_closed = _close_descriptor(root_descriptor)
-            if not lock_closed or not root_closed:
-                if result.lease is not None:
-                    with suppress(StorageRootLeaseError):
-                        result.lease.close()
-                result = _failed(LeaseFailureCode.STORAGE_UNSAFE)
+            result = _finish_lease_acquisition(
+                lock_descriptor, root_descriptor, result, primary_error
+            )
         return result
 
     def close(self) -> None:
@@ -339,8 +353,11 @@ class StorageRootLease:
         self._root_descriptor = None
         try:
             lock_closed = _close_descriptor(descriptor)
-        finally:
-            root_closed = _close_descriptor(root_descriptor)
+        except BaseException:
+            with suppress(BaseException):
+                _close_descriptor(root_descriptor)
+            raise
+        root_closed = _close_descriptor(root_descriptor)
         if not lock_closed or not root_closed:
             raise StorageRootLeaseError("descriptor cleanup failed")
 
@@ -366,7 +383,8 @@ class StorageRootLease:
                 raise StorageRootLeaseError
             return descriptor
         except BaseException as error:
-            _close_descriptor(descriptor)
+            with suppress(BaseException):
+                _close_descriptor(descriptor)
             if isinstance(error, (OSError, StorageRootLeaseError)):
                 raise StorageRootLeaseError(
                     "storage lease authority unavailable"
@@ -384,10 +402,15 @@ class StorageRootLease:
                 descriptor_stat, self._root_identity
             ) or not _valid_root_identity(path_stat, self._root_identity):
                 raise StorageRootLeaseError
-        except (OSError, StorageRootLeaseError):
-            raise StorageRootLeaseError("storage lease authority unavailable") from None
-        finally:
-            _close_descriptor(path_descriptor)
+        except BaseException as error:
+            with suppress(BaseException):
+                _close_descriptor(path_descriptor)
+            if isinstance(error, (OSError, StorageRootLeaseError)):
+                raise StorageRootLeaseError(
+                    "storage lease authority unavailable"
+                ) from None
+            raise
+        _close_descriptor(path_descriptor)
 
     def _assert_lease_open(self) -> None:
         descriptor = self._descriptor
@@ -417,9 +440,9 @@ class StorageRootLease:
         except BaseException as error:
             self._descriptor = None
             self._root_descriptor = None
-            try:
+            with suppress(BaseException):
                 _close_descriptor(descriptor)
-            finally:
+            with suppress(BaseException):
                 _close_descriptor(root_descriptor)
             if isinstance(error, (OSError, StorageRootLeaseError)):
                 raise StorageRootLeaseError from None
@@ -434,7 +457,7 @@ class StorageRootLease:
         if _exc is None:
             self.close()
         else:
-            with suppress(StorageRootLeaseError):
+            with suppress(BaseException):
                 self.close()
 
 
@@ -475,45 +498,59 @@ def _acquire_lock(
             return _failed(
                 LeaseFailureCode.ALREADY_RUNNING, already_running=True
             ), lock_descriptor
-        if not _close_descriptor(lock_descriptor):
-            raise StorageRootLeaseError from None
+        with suppress(BaseException):
+            _close_descriptor(lock_descriptor)
         raise StorageRootLeaseError from None
     except BaseException:
-        _close_descriptor(lock_descriptor)
+        with suppress(BaseException):
+            _close_descriptor(lock_descriptor)
         raise
     try:
         root_copy = fcntl.fcntl(root_descriptor, fcntl.F_DUPFD_CLOEXEC, 0)
     except OSError:
-        _close_descriptor(lock_descriptor)
+        with suppress(BaseException):
+            _close_descriptor(lock_descriptor)
         raise StorageRootLeaseError from None
     except BaseException:
-        _close_descriptor(lock_descriptor)
+        with suppress(BaseException):
+            _close_descriptor(lock_descriptor)
         raise
-    lease = StorageRootLease(
-        lock_descriptor,
-        root_copy,
-        root_identity,
-        root_private=root_private,
-    )
+    try:
+        lease = StorageRootLease(
+            lock_descriptor,
+            root_copy,
+            root_identity,
+            root_private=root_private,
+        )
+    except BaseException:
+        with suppress(BaseException):
+            _close_descriptor(lock_descriptor)
+        with suppress(BaseException):
+            _close_descriptor(root_copy)
+        raise
     return LeaseResult(LeaseOutcome.ACQUIRED, LeaseFailureCode.NONE, lease), None
 
 
 def _open_directory_without_symlink_components(root: Path) -> int:
     if not root.is_absolute() or any(part in {".", ".."} for part in root.parts):
         raise StorageRootLeaseError
-    descriptor: int | None = os.open(os.sep, _ROOT_FLAGS)
+    descriptor = os.open(os.sep, _ROOT_FLAGS)
     try:
         for component in root.parts[1:]:
             opened = os.open(component, _ROOT_FLAGS, dir_fd=descriptor)
-            if not _close_descriptor(descriptor):
-                _close_descriptor(opened)
-                raise StorageRootLeaseError
+            try:
+                if not _close_descriptor(descriptor):
+                    raise StorageRootLeaseError
+            except BaseException:
+                with suppress(BaseException):
+                    _close_descriptor(opened)
+                raise
             descriptor = opened
-        result = descriptor
-        descriptor = None
-        return result
-    finally:
-        _close_descriptor(descriptor)
+    except BaseException:
+        with suppress(BaseException):
+            _close_descriptor(descriptor)
+        raise
+    return descriptor
 
 
 def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
@@ -575,3 +612,28 @@ def _close_descriptor(descriptor: int | None) -> bool:
         except OSError:
             return False
     return True
+
+
+def _finish_lease_acquisition(
+    lock_descriptor: int | None,
+    root_descriptor: int | None,
+    result: LeaseResult,
+    primary_error: BaseException | None,
+) -> LeaseResult:
+    closed = True
+    cleanup_error: BaseException | None = None
+    for descriptor in (lock_descriptor, root_descriptor):
+        try:
+            closed = _close_descriptor(descriptor) and closed
+        except BaseException as error:
+            closed = False
+            if cleanup_error is None:
+                cleanup_error = error
+    if closed:
+        return result
+    if result.lease is not None:
+        with suppress(BaseException):
+            result.lease.close()
+    if primary_error is None and cleanup_error is not None:
+        raise cleanup_error
+    return _failed(LeaseFailureCode.STORAGE_UNSAFE)

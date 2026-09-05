@@ -468,31 +468,48 @@ class DuckDBCatalog:
     def close(self) -> None:
         publish = self._write_publish_ready
         self._write_publish_ready = False
-        publication_error: CatalogError | None = None
+        primary_error: BaseException | None = None
         if self._connection is not None:
-            with suppress(Exception):
+            try:
                 self._connection.close()
+            except _OPERATIONAL_DUCKDB_ERRORS:
+                pass
+            except BaseException as error:
+                primary_error = error
             self._connection = None
-        if publish:
+        if publish and primary_error is None:
             try:
                 self._publish_leased_catalog()
-            except CatalogError as error:
-                publication_error = error
+            except BaseException as error:
+                primary_error = error
+        primary_error = self._close_catalog_snapshot(primary_error)
+        if primary_error is not None:
+            raise primary_error
+
+    def _close_catalog_snapshot(
+        self, primary_error: BaseException | None
+    ) -> BaseException | None:
         self._connection_descriptor = None
         if self._database_descriptor is not None:
-            with suppress(OSError):
-                os.close(self._database_descriptor)
+            try:
+                _close_catalog_descriptor(self._database_descriptor, primary_error)
+            except BaseException as error:
+                primary_error = error
             self._database_descriptor = None
         self._database_identity = None
         self._snapshot_path = None
         self._snapshot_identity = None
         self._source_catalog_identity = None
         if self._snapshot_directory is not None:
-            with suppress(Exception):
+            try:
                 self._snapshot_directory.cleanup()
+            except OSError:
+                pass
+            except BaseException as error:
+                if primary_error is None:
+                    primary_error = error
             self._snapshot_directory = None
-        if publication_error is not None:
-            raise publication_error
+        return primary_error
 
     def ensure_read_identity(self) -> None:
         """Prove the live read-only connection still owns the admitted inode."""
@@ -580,6 +597,7 @@ class DuckDBCatalog:
         if self._lease is None or not isinstance(self._storage_root, Path):
             raise CatalogStorageError("catalog admission is unavailable")
         descriptor: int | None = None
+        opening_error: BaseException | None = None
         try:
             with self._lease.root_operation(self._storage_root) as operation:
                 try:
@@ -627,14 +645,17 @@ class DuckDBCatalog:
             ):
                 raise CatalogStorageError("catalog identity is invalid")
             os.chmod(snapshot_path, 0o600, follow_symlinks=False)
-        except CatalogError:
+        except CatalogError as error:
+            opening_error = error
             raise
         except (*_OPERATIONAL_DUCKDB_ERRORS, OSError, StorageRootLeaseError):
-            raise CatalogStorageError("catalog identity is invalid") from None
+            opening_error = CatalogStorageError("catalog identity is invalid")
+            raise opening_error from None
+        except BaseException as error:
+            opening_error = error
+            raise
         finally:
-            if descriptor is not None:
-                with suppress(OSError):
-                    os.close(descriptor)
+            _close_catalog_descriptor(descriptor, opening_error)
 
     def _publish_leased_catalog(self) -> None:
         if (
@@ -645,67 +666,73 @@ class DuckDBCatalog:
             raise CatalogPersistenceError("catalog publication failed")
         temporary_name = f".catalog.duckdb.{uuid4().hex}.tmp"
         quarantine_name = f".catalog.duckdb.{uuid4().hex}.retained"
+        snapshot_descriptor: int | None = None
         target_descriptor: int | None = None
+        publication_error: BaseException | None = None
         try:
             snapshot_descriptor = os.open(
                 self._snapshot_path, _READ_ONLY_DATABASE_FLAGS
             )
-            try:
-                snapshot_identity = _catalog_identity(os.fstat(snapshot_descriptor))
-                _validate_read_only_catalog_identity(snapshot_identity)
-                with self._lease.root_operation(self._storage_root) as operation:
-                    _assert_catalog_source_unchanged(
-                        operation.descriptor, self._source_catalog_identity
-                    )
-                    operation.ensure_live()
-                    target_descriptor = os.open(
-                        temporary_name,
-                        _CATALOG_PUBLISH_FLAGS,
-                        0o600,
-                        dir_fd=operation.descriptor,
-                    )
-                    _copy_exact_catalog(
-                        snapshot_descriptor,
-                        target_descriptor,
-                        snapshot_identity[2],
-                    )
-                    os.fsync(target_descriptor)
-                    _validate_read_only_catalog_identity(
-                        _catalog_identity(os.fstat(target_descriptor))
-                    )
-                    _assert_catalog_source_unchanged(
-                        operation.descriptor, self._source_catalog_identity
-                    )
-                    operation.ensure_live()
-                    _publish_catalog_entry_conditionally(
-                        operation.descriptor,
-                        temporary_name,
-                        quarantine_name,
-                        self._source_catalog_identity,
-                        target_descriptor,
-                    )
-                    os.close(target_descriptor)
-                    target_descriptor = None
-                    os.fsync(operation.descriptor)
-                    operation.ensure_live()
-            finally:
-                os.close(snapshot_descriptor)
-        except CatalogError:
+            snapshot_identity = _catalog_identity(os.fstat(snapshot_descriptor))
+            _validate_read_only_catalog_identity(snapshot_identity)
+            with self._lease.root_operation(self._storage_root) as operation:
+                _assert_catalog_source_unchanged(
+                    operation.descriptor, self._source_catalog_identity
+                )
+                operation.ensure_live()
+                target_descriptor = os.open(
+                    temporary_name,
+                    _CATALOG_PUBLISH_FLAGS,
+                    0o600,
+                    dir_fd=operation.descriptor,
+                )
+                _copy_exact_catalog(
+                    snapshot_descriptor,
+                    target_descriptor,
+                    snapshot_identity[2],
+                )
+                os.fsync(target_descriptor)
+                _validate_read_only_catalog_identity(
+                    _catalog_identity(os.fstat(target_descriptor))
+                )
+                _assert_catalog_source_unchanged(
+                    operation.descriptor, self._source_catalog_identity
+                )
+                operation.ensure_live()
+                _publish_catalog_entry_conditionally(
+                    operation.descriptor,
+                    temporary_name,
+                    quarantine_name,
+                    self._source_catalog_identity,
+                    target_descriptor,
+                )
+                os.close(target_descriptor)
+                target_descriptor = None
+                os.fsync(operation.descriptor)
+                operation.ensure_live()
+            os.close(snapshot_descriptor)
+            snapshot_descriptor = None
+        except CatalogError as error:
+            publication_error = error
             raise
-        except Exception:
-            raise CatalogPersistenceError("catalog publication failed") from None
+        except (OSError, StorageRootLeaseError):
+            publication_error = CatalogPersistenceError("catalog publication failed")
+            raise publication_error from None
+        except BaseException as error:
+            publication_error = error
+            raise
         finally:
+            # Live descriptors remain only on an exceptional publication path.
             if target_descriptor is not None:
                 with (
-                    suppress(Exception),
+                    suppress(BaseException),
                     self._lease.root_operation(self._storage_root) as operation,
-                    suppress(FileNotFoundError),
                 ):
                     _unlink_catalog_entry_if_descriptor_matches(
                         operation.descriptor, temporary_name, target_descriptor
                     )
-                with suppress(OSError):
-                    os.close(target_descriptor)
+            _close_catalog_descriptor(target_descriptor, publication_error)
+            _close_catalog_descriptor(snapshot_descriptor, publication_error)
 
     def _copy_catalog_snapshot(
         self,
@@ -719,6 +746,7 @@ class DuckDBCatalog:
         )
         snapshot_path = Path(self._snapshot_directory.name) / "catalog.duckdb"
         snapshot_descriptor: int | None = None
+        copy_error: BaseException | None = None
         try:
             snapshot_descriptor = os.open(snapshot_path, _SNAPSHOT_WRITE_FLAGS, 0o600)
             offset = 0
@@ -750,14 +778,17 @@ class DuckDBCatalog:
             ):
                 raise CatalogStorageError("catalog identity is invalid")
             return snapshot_path, snapshot_identity
-        except CatalogError:
+        except CatalogError as error:
+            copy_error = error
             raise
         except OSError:
-            raise CatalogStorageError("catalog identity is invalid") from None
+            copy_error = CatalogStorageError("catalog identity is invalid")
+            raise copy_error from None
+        except BaseException as error:
+            copy_error = error
+            raise
         finally:
-            if snapshot_descriptor is not None:
-                with suppress(OSError):
-                    os.close(snapshot_descriptor)
+            _close_catalog_descriptor(snapshot_descriptor, copy_error)
 
     def create_manifest(self, manifest: PartitionManifest) -> None:
         """Insert a new physical identity, which must begin IN_PROGRESS."""
@@ -1703,7 +1734,7 @@ class DuckDBCatalog:
 
     def _rollback(self) -> None:
         if self._connection is not None:
-            with suppress(Exception):
+            with suppress(BaseException):
                 self.connection.execute("ROLLBACK")
 
     def _fetch_manifest(self, plan: PlannedInstrumentMonth) -> PartitionManifest | None:
@@ -2874,15 +2905,15 @@ def _publish_catalog_entry_conditionally(
             os.unlink(quarantine_name, dir_fd=root_descriptor)
             retained = False
         os.unlink(temporary_name, dir_fd=root_descriptor)
-    except Exception:
+    except BaseException:
         if exchanged:
-            with suppress(Exception):
+            with suppress(BaseException):
                 _atomic_exchange_catalog_entries(
                     root_descriptor, temporary_name, "catalog.duckdb"
                 )
                 exchanged = False
         if retained:
-            with suppress(Exception):
+            with suppress(BaseException):
                 canonical = _catalog_identity(
                     os.stat(
                         "catalog.duckdb",
@@ -2998,3 +3029,17 @@ def _descriptor_identity(descriptor: int) -> tuple[int, ...] | None:
         return _catalog_identity(os.fstat(descriptor))
     except OSError:
         return None
+
+
+def _close_catalog_descriptor(
+    descriptor: int | None, primary_error: BaseException | None
+) -> None:
+    if descriptor is None:
+        return
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
+    except BaseException:
+        if primary_error is None:
+            raise

@@ -753,25 +753,23 @@ def _close_snapshot_directories(
 def _open_snapshot_directories(
     operation: StorageRootLeaseOperation, digest: str, *, create: bool
 ) -> tuple[int, int]:
-    snapshot_fd = _open_snapshot_root(operation, create=create)
-    current = snapshot_fd
+    snapshot_fd: int | None = _open_snapshot_root(operation, create=create)
     object_fd: int | None = None
     try:
-        current = _open_directory(
+        object_fd = _open_directory(
             operation, snapshot_fd, f"sha256={digest}", create=create
         )
         os.close(snapshot_fd)
-        object_fd = current
+        snapshot_fd = None
         observations_fd = _open_directory(
             operation, object_fd, "observations", create=create
         )
         return object_fd, observations_fd
-    except BaseException:
-        with suppress(BaseException):
-            os.close(current)
-        if object_fd is not None and object_fd != current:
-            with suppress(BaseException):
-                os.close(object_fd)
+    except BaseException as error:
+        if object_fd is not None:
+            _close_snapshot_descriptor(object_fd, error)
+        if snapshot_fd is not None:
+            _close_snapshot_descriptor(snapshot_fd, error)
         raise
 
 
@@ -799,14 +797,17 @@ def _open_directory(
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent_fd,
         )
-    info = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid()
-        or stat.S_IMODE(info.st_mode) & 0o022
-    ):
-        os.close(descriptor)
-        raise InstrumentSnapshotCorruptError("instrument snapshot path unsafe")
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot path unsafe")
+    except BaseException as error:
+        _close_snapshot_descriptor(descriptor, error)
+        raise
     return descriptor
 
 
@@ -838,41 +839,53 @@ def _publish_exact(
         if existing != value:
             raise InstrumentSnapshotCorruptError("instrument snapshot conflicts")
         return
+    _write_snapshot_temp(parent_fd, temp_name, value)
+    reopened = _read_bounded(parent_fd, temp_name, len(value))
+    if reopened != value or _sha256(reopened) != _sha256(value):
+        raise InstrumentSnapshotCorruptError("instrument snapshot temp corrupt")
+    try:
+        try:
+            operation.ensure_live()
+            os.link(
+                temp_name,
+                final_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            if (
+                error.errno != errno.EEXIST
+                or _read_bounded(parent_fd, final_name, len(value)) != value
+            ):
+                raise
+    except BaseException:
+        with suppress(BaseException):
+            os.unlink(temp_name, dir_fd=parent_fd)
+        raise
+    with suppress(FileNotFoundError):
+        os.unlink(temp_name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+
+
+def _write_snapshot_temp(parent_fd: int, temp_name: str, value: bytes) -> None:
     descriptor = os.open(
         temp_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
         0o600,
         dir_fd=parent_fd,
     )
+    active_exception: BaseException | None = None
     try:
         written = 0
         while written < len(value):
             written += os.write(descriptor, value[written:])
         os.fsync(descriptor)
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
-    reopened = _read_bounded(parent_fd, temp_name, len(value))
-    if reopened != value or _sha256(reopened) != _sha256(value):
-        raise InstrumentSnapshotCorruptError("instrument snapshot temp corrupt")
-    try:
-        operation.ensure_live()
-        os.link(
-            temp_name,
-            final_name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-    except OSError as error:
-        if (
-            error.errno != errno.EEXIST
-            or _read_bounded(parent_fd, final_name, len(value)) != value
-        ):
-            raise
-    finally:
-        with suppress(FileNotFoundError):
-            os.unlink(temp_name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
+        _close_snapshot_descriptor(descriptor, active_exception)
 
 
 def _remove_safe_temp(
@@ -927,6 +940,7 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
         dir_fd=parent_fd,
     )
+    active_exception: BaseException | None = None
     try:
         info = os.fstat(descriptor)
         path_info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -948,8 +962,11 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
         if len(value) != info.st_size or len(value) > limit:
             raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
         return value
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_snapshot_descriptor(descriptor, active_exception)
 
 
 def _sanitized_header(value: str | None) -> str | None:

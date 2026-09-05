@@ -509,29 +509,26 @@ def schedule_covers_full_calendar_range(
     schedule: object, covered_from: object, covered_to: object
 ) -> bool:
     """Prove an exact retained V2/V3 schedule classifies each requested date."""
-    try:
-        if (
-            type(schedule) is not ExpectedSessionSchedule
-            or schedule.schema_version
-            not in (SCHEDULE_SCHEMA_VERSION_V2, SCHEDULE_SCHEMA_VERSION_V3)
-            or type(covered_from) is not date
-            or type(covered_to) is not date
-            or covered_from > covered_to
-            or covered_from < schedule.covered_from
-            or covered_to > schedule.covered_to
-        ):
-            return False
-        classified = {session.trade_date for session in schedule.sessions} | {
-            closure.trade_date for closure in schedule.closures
-        }
-        current = covered_from
-        while current <= covered_to:
-            if current not in classified:
-                return False
-            current += timedelta(days=1)
-        return True
-    except Exception:
+    if (
+        type(schedule) is not ExpectedSessionSchedule
+        or schedule.schema_version
+        not in (SCHEDULE_SCHEMA_VERSION_V2, SCHEDULE_SCHEMA_VERSION_V3)
+        or type(covered_from) is not date
+        or type(covered_to) is not date
+        or covered_from > covered_to
+        or covered_from < schedule.covered_from
+        or covered_to > schedule.covered_to
+    ):
         return False
+    classified = {session.trade_date for session in schedule.sessions} | {
+        closure.trade_date for closure in schedule.closures
+    }
+    current = covered_from
+    while current < covered_to:
+        if current not in classified:
+            return False
+        current += timedelta(days=1)
+    return current in classified
 
 
 def parse_canonical_schedule_bytes(value: object) -> ExpectedSessionSchedule:

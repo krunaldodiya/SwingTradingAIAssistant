@@ -189,7 +189,7 @@ def _decode_success_candles(
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_nonstandard_json_constant,
         )
-    except (Exception, MemoryError):
+    except (ValueError, RecursionError, MemoryError):
         return _SuccessDecodeStatus.MALFORMED_JSON, []
     if type(payload) is not dict:
         return _SuccessDecodeStatus.INVALID_ENVELOPE, []

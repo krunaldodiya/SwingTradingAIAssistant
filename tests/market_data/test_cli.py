@@ -10,7 +10,7 @@ from typing import Never
 
 import pytest
 
-from swing_trading_ai_assistant.market_data import cli
+from swing_trading_ai_assistant.market_data import cli, historical
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     Nifty50BatchOutcomeV1,
@@ -850,30 +850,8 @@ def test_invalid_injected_segment_preserves_typed_request_without_mkdir(
     )
 
 
-@pytest.mark.parametrize(
-    "source,payload",
-    (
-        ("historical", b"{"),
-        ("historical", b'{"status":"success","data":[]}'),
-        ("historical", b'{"status":"success","data":{"candles":{}}}'),
-        ("catalog", gzip.compress(b"[" * 2000 + b"]" * 2000, mtime=0)),
-        ("catalog", gzip.compress(b"[" + b"9" * 5000 + b"]", mtime=0)),
-        ("catalog", bytes.fromhex("1f8b0800000000000003070000000000000000")),
-    ),
-    ids=(
-        "historical-json",
-        "historical-envelope",
-        "historical-candles",
-        "catalog-depth",
-        "catalog-integer-limit",
-        "catalog-deflate",
-    ),
-)
-def test_real_probe_keeps_malformed_provider_payloads_recognized(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    source: str,
-    payload: bytes,
+def _install_synthetic_probe(
+    monkeypatch: pytest.MonkeyPatch, source: str, payload: bytes
 ) -> None:
     catalog_payload = gzip.compress(
         json.dumps(
@@ -908,6 +886,34 @@ def test_real_probe_keeps_malformed_provider_payloads_recognized(
     monkeypatch.setattr(cli, "load_dotenv", lambda: False)
     monkeypatch.setattr(cli, "EnvironmentAccessTokenProvider", TokenProvider)
     monkeypatch.setattr(cli, "UrllibHttpTransport", Transport)
+
+
+@pytest.mark.parametrize(
+    "source,payload",
+    (
+        ("historical", b"{"),
+        ("historical", b'{"status":"success","data":[]}'),
+        ("historical", b'{"status":"success","data":{"candles":{}}}'),
+        ("catalog", gzip.compress(b"[" * 2000 + b"]" * 2000, mtime=0)),
+        ("catalog", gzip.compress(b"[" + b"9" * 5000 + b"]", mtime=0)),
+        ("catalog", bytes.fromhex("1f8b0800000000000003070000000000000000")),
+    ),
+    ids=(
+        "historical-json",
+        "historical-envelope",
+        "historical-candles",
+        "catalog-depth",
+        "catalog-integer-limit",
+        "catalog-deflate",
+    ),
+)
+def test_real_probe_keeps_malformed_provider_payloads_recognized(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    source: str,
+    payload: bytes,
+) -> None:
+    _install_synthetic_probe(monkeypatch, source, payload)
     prior_integer_limit = sys.get_int_max_str_digits()
     try:
         sys.set_int_max_str_digits(4300)
@@ -918,3 +924,24 @@ def test_real_probe_keeps_malformed_provider_payloads_recognized(
         sys.set_int_max_str_digits(prior_integer_limit)
     output = capsys.readouterr()
     assert (status, output.out, output.err) == (2, "", "probe_failed\n")
+
+
+def test_real_probe_reports_historical_decoder_defect_as_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_synthetic_probe(
+        monkeypatch, "historical", b'{"status":"success","data":{"candles":[]}}'
+    )
+    failure = RuntimeError("private/path/token")
+    calls: list[str] = []
+
+    def fail_object(_pairs: object) -> Never:
+        calls.append("decode")
+        raise failure
+
+    monkeypatch.setattr(historical, "_unique_json_object", fail_object)
+    status = cli.main(["probe-upstox", "--segment", "NSE_EQ", "--symbol", "RELIANCE"])
+    output = capsys.readouterr()
+    assert calls == ["decode"]
+    assert (status, output.out, output.err) == (2, "", "internal_error\n")
