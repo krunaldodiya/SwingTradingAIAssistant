@@ -11,6 +11,15 @@ insufficient-evidence result.
 The objective is capital preservation, consistency, low drawdown, explainable
 high-quality setups, and repeatability—not maximum returns or frequent trades.
 
+## Developing with an AI agent
+
+Start with [AGENTS.md](AGENTS.md) and the [mandatory project instructions](docs/mandatory-agent-instructions.md).
+The [portable development workflow](docs/agent-workflow.md) applies to Pi,
+Oh My Pi, Codex, OpenCode, and other capable harnesses. If your harness does not
+auto-load repository instructions, explicitly read those links before work.
+No particular harness, model, terminal manager, or unrestricted permission mode
+is required.
+
 ## What this project is—and is not
 
 The product has two strict layers:

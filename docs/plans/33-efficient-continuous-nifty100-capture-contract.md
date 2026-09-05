@@ -1,5 +1,10 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
+> Harness portability: historical named-model review choices below record the
+> original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
+> and [portable review procedure](../agent-workflow.md); independent exact-byte
+> review and every product acceptance criterion remain required.
+
 **Issue:** [#154](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/154)
 **Status:** accepted implementation contract
 **Risk:** R3
