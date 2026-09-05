@@ -304,6 +304,7 @@ class InstrumentSnapshotStoreV1:
         try:
             with self._lease.root_operation(self._root) as operation:
                 snapshot_fd = _open_snapshot_root(operation, create=True)
+                active_exception: BaseException | None = None
                 try:
                     _publish_exact(
                         operation,
@@ -330,13 +331,20 @@ class InstrumentSnapshotStoreV1:
                             f"sha256={metadata.observation_sha256}.json",
                             sidecar,
                         )
+                    except BaseException as error:
+                        active_exception = error
+                        raise
                     finally:
-                        os.close(observations_fd)
-                        os.close(object_fd)
+                        _close_snapshot_directories(
+                            object_fd, observations_fd, active_exception
+                        )
                     self._catalog.save_instrument_snapshot(metadata)
                     _remove_journal(operation, snapshot_fd)
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(snapshot_fd)
+                    _close_snapshot_descriptor(snapshot_fd, active_exception)
             return metadata
         except InstrumentSnapshotError:
             raise
@@ -353,6 +361,7 @@ class InstrumentSnapshotStoreV1:
                     snapshot_fd = _open_snapshot_root(operation, create=False)
                 except FileNotFoundError:
                     return None
+                active_exception: BaseException | None = None
                 try:
                     _remove_safe_temp(
                         operation, snapshot_fd, _RECOVERY_JOURNAL_TEMP_NAME
@@ -406,14 +415,21 @@ class InstrumentSnapshotStoreV1:
                             f"sha256={metadata.observation_sha256}.json",
                             sidecar,
                         )
+                    except BaseException as error:
+                        active_exception = error
+                        raise
                     finally:
-                        os.close(observations_fd)
-                        os.close(object_fd)
+                        _close_snapshot_directories(
+                            object_fd, observations_fd, active_exception
+                        )
                     self._catalog.save_instrument_snapshot(metadata)
                     _remove_journal(operation, snapshot_fd)
                     return metadata
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(snapshot_fd)
+                    _close_snapshot_descriptor(snapshot_fd, active_exception)
         except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
         except (EOFError, OSError):
@@ -446,6 +462,7 @@ class InstrumentSnapshotStoreV1:
                 object_fd, observations_fd = _open_snapshot_directories(
                     operation, metadata.compressed_sha256, create=False
                 )
+                active_exception: BaseException | None = None
                 try:
                     sidecar = _read_bounded(
                         observations_fd,
@@ -470,9 +487,13 @@ class InstrumentSnapshotStoreV1:
                     )
                     _ensure_deadline_live(deadline)
                     operation.ensure_live()
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(observations_fd)
-                    os.close(object_fd)
+                    _close_snapshot_directories(
+                        object_fd, observations_fd, active_exception
+                    )
             decompressed = _validate_compressed_object(metadata, compressed)
             _ensure_deadline_live(deadline)
             instrument = _resolve_equity_in_payload(decompressed, segment, symbol)
@@ -703,6 +724,32 @@ def _open_snapshot_root(operation: StorageRootLeaseOperation, *, create: bool) -
     )
 
 
+def _close_snapshot_descriptor(
+    descriptor: int, active_exception: BaseException | None
+) -> None:
+    try:
+        os.close(descriptor)
+    except BaseException:
+        if active_exception is None:
+            raise
+
+
+def _close_snapshot_directories(
+    object_fd: int,
+    observations_fd: int,
+    active_exception: BaseException | None,
+) -> None:
+    cleanup_error: BaseException | None = None
+    for descriptor in (observations_fd, object_fd):
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is not None and active_exception is None:
+        raise cleanup_error
+
+
 def _open_snapshot_directories(
     operation: StorageRootLeaseOperation, digest: str, *, create: bool
 ) -> tuple[int, int]:
@@ -719,11 +766,11 @@ def _open_snapshot_directories(
             operation, object_fd, "observations", create=create
         )
         return object_fd, observations_fd
-    except Exception:
-        with suppress(OSError):
+    except BaseException:
+        with suppress(BaseException):
             os.close(current)
         if object_fd is not None and object_fd != current:
-            with suppress(OSError):
+            with suppress(BaseException):
                 os.close(object_fd)
         raise
 

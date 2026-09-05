@@ -1232,6 +1232,102 @@ def test_snapshot_resolution_propagates_unexpected_resolver_fault(
         assert (tmp_path / metadata.relative_object_path).is_file()
 
 
+def test_snapshot_directory_opening_closes_object_fd_on_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    object_descriptors: list[int] = []
+    original_open_directory = snapshot_module._open_directory
+
+    def interrupt_observations(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        name: str,
+        *,
+        create: bool,
+    ) -> int:
+        if name == "observations":
+            raise KeyboardInterrupt
+        descriptor = original_open_directory(operation, parent_fd, name, create=create)
+        if name.startswith("sha256="):
+            object_descriptors.append(descriptor)
+        return descriptor
+
+    with acquired.lease as lease, lease.root_operation(tmp_path) as operation:
+        monkeypatch.setattr(snapshot_module, "_open_directory", interrupt_observations)
+        with pytest.raises(KeyboardInterrupt):
+            snapshot_module._open_snapshot_directories(operation, "a" * 64, create=True)
+
+    assert len(object_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(object_descriptors[0])
+
+
+def test_snapshot_retain_preserves_primary_fault_and_closes_all_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    failure = KeyError("primary")
+    directories: list[tuple[int, int]] = []
+    roots: list[int] = []
+    closed: list[int] = []
+    original_open_directories = snapshot_module._open_snapshot_directories
+    original_open_root = snapshot_module._open_snapshot_root
+    original_publish = snapshot_module._publish_exact
+    real_close = snapshot_module.os.close
+
+    def record_directories(*args: object, **kwargs: object) -> tuple[int, int]:
+        pair = original_open_directories(*args, **kwargs)  # type: ignore[arg-type]
+        directories.append(pair)
+        return pair
+
+    def record_root(
+        operation: snapshot_module.StorageRootLeaseOperation, *, create: bool
+    ) -> int:
+        descriptor = original_open_root(operation, create=create)
+        roots.append(descriptor)
+        return descriptor
+
+    def fail_object_publish(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        temp_name: str,
+        final_name: str,
+        value: bytes,
+    ) -> None:
+        if directories and parent_fd == directories[0][0]:
+            raise failure
+        original_publish(operation, parent_fd, temp_name, final_name, value)
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        if directories and roots and descriptor in (*directories[0], roots[0]):
+            closed.append(descriptor)
+            raise OSError("injected close failure")
+
+    with acquired.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        store = InstrumentSnapshotStoreV1(tmp_path, lease, catalog)
+        monkeypatch.setattr(
+            snapshot_module, "_open_snapshot_directories", record_directories
+        )
+        monkeypatch.setattr(snapshot_module, "_open_snapshot_root", record_root)
+        monkeypatch.setattr(snapshot_module, "_publish_exact", fail_object_publish)
+        monkeypatch.setattr(snapshot_module.os, "close", close_then_fail)
+        with pytest.raises(KeyError) as raised:
+            store.retain(client.fetch())
+
+    assert raised.value is failure
+    assert len(directories) == 1
+    assert len(roots) == 2
+    assert closed == [directories[0][1], directories[0][0], roots[0]]
+    for descriptor in (*directories[0], roots[0]):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
 def test_invalid_schedule_fails_before_lock_or_storage_mutation(tmp_path: Path) -> None:
     policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
     schedule_source = StaticScheduleSource(

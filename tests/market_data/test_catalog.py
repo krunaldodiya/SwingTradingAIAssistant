@@ -513,11 +513,13 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     connection.close()
 
     catalog = DuckDBCatalog(tmp_path)
+    failure = RuntimeError("injected migration failure")
     catalog._after_snapshot_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        RuntimeError("injected migration failure")
+        failure
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         catalog.__enter__()
+    assert raised.value is failure
     connection = duckdb.connect(str(database_path))
     assert connection.execute("SHOW TABLES").fetchall() == [
         ("ingestion_runs",),
@@ -584,8 +586,73 @@ def test_snapshot_catalog_boundaries_fail_closed(tmp_path) -> None:
             catalog.list_instrument_snapshots("upstox-bod-nse")
     with pytest.raises(CatalogSchemaError):
         catalog_module._expected_table_columns("unsupported")
-    with pytest.raises(ValueError):
+    with pytest.raises(CatalogSchemaError):
         catalog_module._snapshot_metadata_from_row((1,))
+    with pytest.raises(CatalogSchemaError):
+        catalog_module._manifest_from_row((1,))
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_snapshot_catalog_preserves_unknown_query_fault_identity(
+    tmp_path, monkeypatch, fault_type: type[Exception]
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = fault_type()
+
+    class FaultingConnection:
+        def execute(self, *_args: object) -> None:
+            raise failure
+
+    monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+
+    with pytest.raises(fault_type) as raised:
+        catalog.list_instrument_snapshots("upstox-bod-nse")
+    assert raised.value is failure
+
+
+def test_catalog_initialization_preserves_unknown_fault_after_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = AssertionError()
+
+    def fail_initialization() -> None:
+        raise failure
+
+    monkeypatch.setattr(catalog, "_initialize_schema", fail_initialization)
+
+    with pytest.raises(AssertionError) as raised:
+        catalog.__enter__()
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection
+
+
+def test_catalog_identity_validation_preserves_unknown_fault_after_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+        catalog.__enter__()
+        failure = AssertionError()
+        real_stat = catalog_module.os.stat
+
+        def fail_catalog_stat(*args: object, **kwargs: object) -> os.stat_result:
+            if args == ("catalog.duckdb",) and "dir_fd" in kwargs:
+                raise failure
+            return real_stat(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(catalog_module.os, "stat", fail_catalog_stat)
+        try:
+            with pytest.raises(AssertionError) as raised:
+                catalog.ensure_read_identity()
+            assert raised.value is failure
+        finally:
+            catalog.close()
 
 
 def test_terminal_transition_is_atomic_and_exact_replay_is_a_no_op(tmp_path) -> None:
@@ -909,3 +976,22 @@ def test_failed_retry_rejects_historical_and_current_run_ids(tmp_path) -> None:
             catalog.transition_manifest(second_failed, historical_retry)
         with pytest.raises(CatalogConflictError):
             catalog.transition_manifest(third_failed, current_retry)
+
+
+def test_catalog_exit_preserves_primary_fault_after_real_close(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = ValueError()
+    real_close = catalog.close
+
+    def close_then_fail() -> None:
+        real_close()
+        raise RuntimeError()
+
+    monkeypatch.setattr(catalog, "close", close_then_fail)
+    with pytest.raises(ValueError) as raised, catalog:
+        raise failure
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection

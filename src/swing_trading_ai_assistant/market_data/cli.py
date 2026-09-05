@@ -69,6 +69,7 @@ from .download_preparation import (
 from .equity_admission import EquityAdmissionPolicyV1
 from .historical import (
     AccountRateLimiter,
+    HistoricalPayloadError,
     HistoricalRequest,
     HistoricalResponse,
     UpstoxV3HistoricalClient,
@@ -1429,6 +1430,7 @@ def _run_probe(args: argparse.Namespace) -> int:
         InstrumentCatalogRequestError,
         InstrumentCatalogPayloadError,
         CatalogPayloadTooLargeError,
+        HistoricalPayloadError,
         HttpTransportError,
         HttpResponseBodyTooLarge,
         HttpResponseHeadersInvalid,

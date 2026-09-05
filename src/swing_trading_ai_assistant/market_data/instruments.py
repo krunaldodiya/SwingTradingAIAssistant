@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import zlib
 from dataclasses import dataclass
 from io import BytesIO
 from typing import cast
@@ -74,7 +75,7 @@ class InstrumentCatalog:
     def from_json_bytes(cls, payload: bytes) -> InstrumentCatalog:
         try:
             records: object = json.loads(payload)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):
             raise InstrumentCatalogPayloadError(
                 "instrument catalog is not valid JSON"
             ) from None
@@ -208,7 +209,7 @@ class InstrumentCatalogClient:
             payload = _decompress_gzip_bounded(
                 response.body, max_decompressed_bytes=self._max_decompressed_bytes
             )
-        except (EOFError, gzip.BadGzipFile):
+        except (EOFError, gzip.BadGzipFile, zlib.error):
             raise InstrumentCatalogPayloadError(
                 "instrument catalog response is not valid gzip"
             ) from None

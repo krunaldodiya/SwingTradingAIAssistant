@@ -300,7 +300,11 @@ class ExistingCoverageAdmissionV1:
         return self
 
     def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        self.close()
+        try:
+            self.close()
+        except BaseException:
+            if _exc is None:
+                raise
 
 
 class StoredCoverageEvaluatorV1:

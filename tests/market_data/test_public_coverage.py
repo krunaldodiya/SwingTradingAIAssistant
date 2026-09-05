@@ -48,7 +48,11 @@ from swing_trading_ai_assistant.market_data.public_coverage import (
     VerifiedPartitionReadHandleV1,
     VerifiedPartitionV1,
 )
-from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.public_query import QueryTimeoutV1
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
@@ -421,6 +425,30 @@ def test_existing_admission_rejects_bad_root_and_fails_closed_after_lease_loss(
         admission.ensure_live(tmp_path)
     admission.close()
     admission.close()
+
+
+def test_existing_admission_preserves_timeout_when_real_lease_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded = StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    admission = ExistingCoverageAdmissionV1.acquire(tmp_path)
+    timeout = QueryTimeoutV1()
+    real_close = coverage_module.StorageRootLease.close
+
+    def close_then_fail(self: StorageRootLease) -> None:
+        real_close(self)
+        raise StorageRootLeaseError("injected lease cleanup failure")
+
+    monkeypatch.setattr(coverage_module.StorageRootLease, "close", close_then_fail)
+    with pytest.raises(QueryTimeoutV1) as raised, admission:
+        raise timeout
+
+    assert raised.value is timeout
+    replacement = StorageRootLease.try_acquire(tmp_path)
+    assert replacement.lease is not None
+    real_close(replacement.lease)
 
 
 def test_evaluator_rejects_open_month_before_existing_root_admission(tmp_path) -> None:

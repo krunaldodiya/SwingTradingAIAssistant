@@ -338,6 +338,7 @@ class ScheduleEvidenceStore:
         ):
             return result, False
         target_root = self._storage_root if root is None else root
+        active_exception: BaseException | None = None
         try:
             with self._lease.read_operation(target_root) as operation:
                 parent = _open_parent(operation, create=False)
@@ -349,8 +350,15 @@ class ScheduleEvidenceStore:
                     except FileNotFoundError:
                         return result, True
                     return result, False
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(parent)
+                    try:
+                        os.close(parent)
+                    except BaseException:
+                        if active_exception is None:
+                            raise
         except (OSError, StorageRootLeaseError):
             return result, False
 
@@ -380,6 +388,7 @@ class ScheduleEvidenceStore:
                 parent_fd = _open_parent(operation, create=supplied_bytes is not None)
                 if parent_fd is None:
                     return _failure()
+                active_exception: BaseException | None = None
                 try:
                     try:
                         result = _resolve_in_parent(
@@ -389,8 +398,15 @@ class ScheduleEvidenceStore:
                         return _failure()
                     _ensure_deadline_live(deadline)
                     return result
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(parent_fd)
+                    try:
+                        os.close(parent_fd)
+                    except BaseException:
+                        if active_exception is None:
+                            raise
         except (OSError, StorageRootLeaseError):
             _ensure_deadline_live(deadline)
             return _failure()
@@ -672,8 +688,8 @@ def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int |
             os.close(current)
             current = child
         return current
-    except Exception:
-        with suppress(OSError):
+    except BaseException:
+        with suppress(BaseException):
             os.close(current)
         raise
 
@@ -682,6 +698,7 @@ def _read_existing(
     parent_fd: int, digest: str
 ) -> tuple[bytes, ExpectedSessionSchedule] | None:
     descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
         try:
             descriptor = os.open(f"{digest}.json", _READ_FLAGS, dir_fd=parent_fd)
@@ -701,9 +718,16 @@ def _read_existing(
             raise ScheduleEvidenceValidationError
         schedule = _parse_canonical_bytes(value)
         return value, schedule
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except BaseException:
+                if active_exception is None:
+                    raise
 
 
 def _read_bounded(descriptor: int) -> bytes:
@@ -729,6 +753,7 @@ def _publish_bytes(
     temp_name = f".schedule-{secrets.token_hex(16)}.tmp"
     descriptor: int | None = None
     visible = False
+    active_exception: BaseException | None = None
     try:
         operation.ensure_live()
         descriptor = os.open(
@@ -767,16 +792,13 @@ def _publish_bytes(
         operation.ensure_live()
         os.fsync(parent_fd)
         return True
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        if descriptor is not None:
-            with suppress(OSError):
-                os.close(descriptor)
-        with suppress(OSError):
-            operation.ensure_live()
-            os.unlink(temp_name, dir_fd=parent_fd)
-        if visible:
-            operation.ensure_live()
-            os.fsync(parent_fd)
+        _finish_publication(
+            operation, parent_fd, temp_name, descriptor, visible, active_exception
+        )
 
 
 def _success(
@@ -874,3 +896,36 @@ def _parse_instant(value: object) -> datetime:
     if _format_instant(parsed) != value:
         raise ScheduleEvidenceValidationError
     return parsed
+
+
+def _finish_publication(
+    operation: StorageRootLeaseOperation,
+    parent_fd: int,
+    temp_name: str,
+    descriptor: int | None,
+    visible: bool,
+    active_exception: BaseException | None,
+) -> None:
+    if descriptor is not None:
+        if active_exception is None:
+            with suppress(OSError):
+                os.close(descriptor)
+        else:
+            with suppress(BaseException):
+                os.close(descriptor)
+    if active_exception is None:
+        with suppress(OSError):
+            operation.ensure_live()
+            os.unlink(temp_name, dir_fd=parent_fd)
+    else:
+        with suppress(BaseException):
+            operation.ensure_live()
+            os.unlink(temp_name, dir_fd=parent_fd)
+    if visible:
+        if active_exception is None:
+            operation.ensure_live()
+            os.fsync(parent_fd)
+        else:
+            with suppress(BaseException):
+                operation.ensure_live()
+                os.fsync(parent_fd)

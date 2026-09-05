@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Never
@@ -13,8 +15,10 @@ from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     Nifty50BatchOutcomeV1,
 )
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import (
     DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES,
+    HttpResponse,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
     DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
@@ -844,3 +848,73 @@ def test_invalid_injected_segment_preserves_typed_request_without_mkdir(
     assert json.loads(capsys.readouterr().out)["failure"]["code"] == (
         "UNSUPPORTED_PREVIEW_INSTRUMENT"
     )
+
+
+@pytest.mark.parametrize(
+    "source,payload",
+    (
+        ("historical", b"{"),
+        ("historical", b'{"status":"success","data":[]}'),
+        ("historical", b'{"status":"success","data":{"candles":{}}}'),
+        ("catalog", gzip.compress(b"[" * 2000 + b"]" * 2000, mtime=0)),
+        ("catalog", gzip.compress(b"[" + b"9" * 5000 + b"]", mtime=0)),
+        ("catalog", bytes.fromhex("1f8b0800000000000003070000000000000000")),
+    ),
+    ids=(
+        "historical-json",
+        "historical-envelope",
+        "historical-candles",
+        "catalog-depth",
+        "catalog-integer-limit",
+        "catalog-deflate",
+    ),
+)
+def test_real_probe_keeps_malformed_provider_payloads_recognized(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    source: str,
+    payload: bytes,
+) -> None:
+    catalog_payload = gzip.compress(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "exchange": "NSE",
+                    "isin": "INE002A01018",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|INE002A01018",
+                    "trading_symbol": "RELIANCE",
+                }
+            ]
+        ).encode()
+    )
+
+    class TokenProvider:
+        def get_access_token(self) -> AccessToken:
+            return AccessToken("synthetic-probe-token")
+
+    class Transport:
+        def __init__(self, *, max_body_bytes: int) -> None:
+            del max_body_bytes
+
+        def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+            if url.endswith("/NSE.json.gz"):
+                body = payload if source == "catalog" else catalog_payload
+            else:
+                body = payload
+            return HttpResponse(status_code=200, body=body)
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda: False)
+    monkeypatch.setattr(cli, "EnvironmentAccessTokenProvider", TokenProvider)
+    monkeypatch.setattr(cli, "UrllibHttpTransport", Transport)
+    prior_integer_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(4300)
+        status = cli.main(
+            ["probe-upstox", "--segment", "NSE_EQ", "--symbol", "RELIANCE"]
+        )
+    finally:
+        sys.set_int_max_str_digits(prior_integer_limit)
+    output = capsys.readouterr()
+    assert (status, output.out, output.err) == (2, "", "probe_failed\n")

@@ -42,6 +42,10 @@ _V3_INTERVAL_LIMITS = {
 _MAX_PROVIDER_JSON_NESTING = 64
 
 
+class HistoricalPayloadError(ValueError):
+    """A provider success response failed historical payload validation."""
+
+
 def _empty_headers() -> HttpResponseHeaders:
     return HttpResponseHeaders()
 
@@ -234,15 +238,19 @@ def _json_nesting_within_limit(value: bytes) -> bool:
 
 
 def _raise_malformed_historical_json() -> NoReturn:
-    raise ValueError("historical response is not valid JSON") from None
+    raise HistoricalPayloadError("historical response is not valid JSON") from None
 
 
 def _raise_invalid_success_envelope() -> NoReturn:
-    raise ValueError("historical response is not a valid success envelope") from None
+    raise HistoricalPayloadError(
+        "historical response is not a valid success envelope"
+    ) from None
 
 
 def _raise_invalid_candles_array() -> NoReturn:
-    raise ValueError("historical response does not contain a candles array") from None
+    raise HistoricalPayloadError(
+        "historical response does not contain a candles array"
+    ) from None
 
 
 def _raise_body_too_large() -> NoReturn:

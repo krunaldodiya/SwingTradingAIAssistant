@@ -889,3 +889,23 @@ def test_evaluator_rejects_future_and_temporally_contradictory_provenance(
     schedule = StoredCoverageEvaluatorV1().evaluate(_request(schedule_root), NOW)
     assert schedule.months[0].coverage_state is CoverageStateV1.CORRUPT
     assert schedule.verified_partitions == ()
+
+
+@pytest.mark.parametrize(
+    "reader", ("_snapshot_metadata_from_row", "_manifest_from_row")
+)
+def test_catalog_row_fault_preserves_unknown_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
+) -> None:
+    _seed(tmp_path)
+    failure = AssertionError()
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        f"swing_trading_ai_assistant.market_data.catalog.{reader}", fail
+    )
+    with pytest.raises(AssertionError) as raised:
+        StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+    assert raised.value is failure

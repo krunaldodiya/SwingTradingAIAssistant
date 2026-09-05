@@ -553,3 +553,36 @@ def test_serialization_has_only_approved_top_level_and_session_fields() -> None:
         "close_at",
         "kind",
     }
+
+
+def test_resolve_preserves_primary_fault_when_descriptor_close_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    failure = ValueError()
+    descriptors: list[int] = []
+    real_close = schedule_module.os.close
+
+    def fail_resolve(_operation: object, parent_fd: int, *_args: object) -> None:
+        descriptors.append(parent_fd)
+        raise failure
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in descriptors:
+            raise OSError()
+
+    try:
+        retained = store.retain(_schedule())
+        assert retained.digest is not None
+        with monkeypatch.context() as scoped:
+            scoped.setattr(schedule_module, "_resolve_in_parent", fail_resolve)
+            scoped.setattr(schedule_module.os, "close", close_then_fail)
+            with pytest.raises(ValueError) as raised:
+                store.resolve(retained.digest)
+            assert raised.value is failure
+        assert len(descriptors) == 1
+        with pytest.raises(OSError):
+            schedule_module.os.fstat(descriptors[0])
+    finally:
+        lease.close()
