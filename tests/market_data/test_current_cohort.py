@@ -1202,6 +1202,32 @@ def test_cohort_current_cli_emits_canonical_complete_report(
     assert service.request is not None
 
 
+def test_cohort_cli_execution_fault_is_not_malformed_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = tmp_path / "retained"
+    service = _CompleteService()
+
+    def fail_execution(_request: object) -> object:
+        raise ValueError("private/path/token")
+
+    monkeypatch.setattr(service, "evaluate", fail_execution)
+    assert (
+        main(
+            _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+            current_cohort_service=service,
+            trusted_clock=_FixedClock(_CUTOFF),
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert tuple(root.iterdir()) == ()
+
+
 def test_cohort_current_cli_rejects_future_cutoff_before_service_or_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -377,8 +377,12 @@ subsequently completed its `4/4` temporal captures, passed unchanged Plan 29,
 and closed through PR #166. [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
 owns the separately bounded Plan 33 implementation.
 
-Owner-prioritized Issue #145 remains open **Todo** and follows #156 before
-another product module starts.
+Owner-prioritized [Issue #145](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/145)
+implements the [cross-module internal-error policy](architecture-freeze-v1.md#internal-errors-and-operator-diagnostics):
+unexpected implementation failures do not become asserted market-evidence
+states, and operators receive bounded diagnostics. It adds no product module,
+provider acquisition, or new evidence enum. Its exact review and release
+evidence remain tracked in the Issue.
 
 [Plan 34](plans/34-swing-research-feature-map.md) owns the necessary-only future
 feature taxonomy. Delivered Market Structure and Price Action remain separate

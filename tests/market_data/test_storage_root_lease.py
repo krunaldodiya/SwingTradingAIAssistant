@@ -795,3 +795,74 @@ def test_acquisition_attempts_root_and_lock_cleanup_when_both_close_fail(
     assert result.outcome is LeaseOutcome.FAILED
     assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
     assert len(set(closed)) >= 2
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, TypeError, ValueError, Exception),
+)
+def test_unknown_admission_fault_is_not_reported_as_unsafe_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    error = error_type("private/path/token")
+
+    def fail_identity(*_args: object) -> bool:
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lease_module, "_valid_lock_identity", fail_identity)
+        with pytest.raises(error_type) as caught:
+            StorageRootLease.try_acquire(tmp_path)
+        assert caught.value is error
+
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_unknown_live_authority_fault_propagates_after_releasing_the_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    error = RuntimeError("private/path/token")
+
+    def fail_identity(*_args: object) -> bool:
+        raise error
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(lease_module, "_valid_root_identity", fail_identity)
+            with (
+                pytest.raises(RuntimeError) as caught,
+                acquired.lease.root_operation(tmp_path),
+            ):
+                pytest.fail("a failed authority check must not admit an operation")
+            assert caught.value is error
+    finally:
+        acquired.lease.close()
+
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_unknown_post_acquisition_fault_releases_the_new_private_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "private-root"
+    root.mkdir(mode=0o700)
+    error = RuntimeError("private/path/token")
+
+    def fail_identity(*_args: object) -> None:
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lease_module, "_assert_private_locked_root", fail_identity)
+        with pytest.raises(RuntimeError) as caught:
+            StorageRootLease.try_acquire_private_empty(root)
+        assert caught.value is error
+
+    reacquired = StorageRootLease.try_acquire_existing(root)
+    assert reacquired.lease is not None
+    reacquired.lease.close()

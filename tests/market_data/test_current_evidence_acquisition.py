@@ -259,6 +259,7 @@ def test_month_start_schedule_reaches_real_default_download_on_empty_cross_month
     root.mkdir(mode=0o700)
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.lease is not None
+    failure = RuntimeError("empty cache reached exact snapshot boundary")
 
     class Clock:
         def now(self) -> datetime:
@@ -269,24 +270,26 @@ def test_month_start_schedule_reaches_real_default_download_on_empty_cross_month
 
         def fetch(self) -> object:
             self.calls += 1
-            raise RuntimeError("empty cache reached exact snapshot boundary")
+            raise failure
 
     monkeypatch.setattr(cli_module, "_SystemClock", Clock)
     service = cli_module._default_download_service(schedule_file, schedule_file)
     snapshot_source = FailingSnapshotSource()
     service._closed_service._preparation._snapshot_source = snapshot_source
-    prepared = service._closed_service._preparation.prepare_under_lease(
-        DownloadPreparationRequestV1(
-            "NSE_EQ",
-            "RELIANCE",
-            date(2026, 7, 28),
-            date(2026, 7, 31),
-            root,
-            _NOW,
-        ),
-        acquired.lease,
-    )
-    assert snapshot_source.calls == 1, prepared
+    with pytest.raises(RuntimeError) as raised:
+        service._closed_service._preparation.prepare_under_lease(
+            DownloadPreparationRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 28),
+                date(2026, 7, 31),
+                root,
+                _NOW,
+            ),
+            acquired.lease,
+        )
+    assert raised.value is failure
+    assert snapshot_source.calls == 1
     try:
         report = service.download_under_lease(
             SingleSymbolDownloadRequestV1(

@@ -536,6 +536,29 @@ def test_coverage_service_fails_closed_for_bad_clock_and_evaluator_shape(
     assert malformed.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
 
 
+def test_coverage_service_envelopes_unknown_evaluator_fault_without_evidence(
+    tmp_path: Path,
+) -> None:
+    class FaultingEvaluator:
+        def evaluate(self, *_args: object) -> CoverageEvaluationV1:
+            raise KeyError("private-evaluator-fault")
+
+    report = StoredCoverageServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        FaultingEvaluator(),  # type: ignore[arg-type]
+        clock=_Clock(),
+    ).coverage(
+        CoverageRequestV1(
+            "NSE_EQ", "RELIANCE", date(2026, 7, 1), date(2026, 7, 31), tmp_path
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.payload is None
+
+
 def test_coverage_service_rejects_open_month_and_mutation_before_evaluation(
     tmp_path,
 ) -> None:
@@ -640,19 +663,22 @@ def test_default_coverage_cli_creates_storage_then_requires_retained_universe(
     assert root.is_dir()
 
 
-def test_partition_hardlink_is_rejected_and_changes_identity(tmp_path: Path) -> None:
+def test_partition_hardlink_is_rejected_at_read_boundary(tmp_path: Path) -> None:
     partition = tmp_path / "bars.parquet"
     partition.write_bytes(b"retained-partition")
     partition.chmod(0o600)
-    original = os.stat(partition)
     linked = tmp_path / "linked.parquet"
     os.link(partition, linked)
+    acquisition = coverage_module.StorageRootLease.try_acquire(tmp_path)
+    assert acquisition.lease is not None
 
-    with pytest.raises(coverage_module._PartitionReadFailure):  # pyright: ignore[reportPrivateUsage]
-        coverage_module._validate_partition_stat(os.stat(partition))  # pyright: ignore[reportPrivateUsage]
+    with (
+        acquisition.lease as lease,
+        pytest.raises(coverage_module.PartitionReadFailureV1) as raised,
+    ):
+        coverage_module.read_partition_under_lease(tmp_path, lease, "bars.parquet")
 
-    assert coverage_module._partition_identity(
-        original
-    ) != coverage_module._partition_identity(  # pyright: ignore[reportPrivateUsage]
-        os.stat(partition)
+    assert (
+        raised.value.category
+        is coverage_module.FailureCategory.PATH_INVALID_OR_MISMATCHED
     )

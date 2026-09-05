@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import zlib
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -24,9 +25,14 @@ from .instruments import (
     AmbiguousInstrumentError,
     Instrument,
     InstrumentCatalog,
+    InstrumentCatalogPayloadError,
     InstrumentNotFoundError,
 )
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 
 SNAPSHOT_SOURCE_V1: Final = "upstox-bod-nse"
 MAX_OBSERVATION_JSON_BYTES_V1: Final = 4096
@@ -46,6 +52,10 @@ def _ensure_deadline_live(deadline: InstrumentSnapshotDeadlinePortV1 | None) -> 
 
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
+
+
+class InstrumentSnapshotValidationError(ValueError):
+    """An explicitly rejected snapshot input or canonical representation."""
 
 
 class InstrumentSnapshotError(RuntimeError):
@@ -103,7 +113,9 @@ class FetchedInstrumentSnapshotV1:
             or not _valid_header(self.etag)
             or not _valid_header(self.last_modified)
         ):
-            raise ValueError("invalid fetched instrument snapshot")
+            raise InstrumentSnapshotValidationError(
+                "invalid fetched instrument snapshot"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
 
@@ -155,7 +167,9 @@ class InstrumentSnapshotMetadataV1:
             or not _valid_header(self.etag)
             or not _valid_header(self.last_modified)
         ):
-            raise ValueError("invalid instrument snapshot metadata")
+            raise InstrumentSnapshotValidationError(
+                "invalid instrument snapshot metadata"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
 
@@ -198,21 +212,26 @@ class InstrumentSnapshotClientV1:
         try:
             with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
                 decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
-            if len(decompressed) > DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES:
-                raise ValueError
-            catalog = InstrumentCatalog.from_json_bytes(decompressed)
-            retrieved_at = self._clock()
-            if (
-                type(retrieved_at) is not datetime
-                or retrieved_at.tzinfo is None
-                or retrieved_at.utcoffset() is None
-            ):
-                raise ValueError
-            retrieved_at = retrieved_at.astimezone(UTC)
-        except Exception:
+        except (EOFError, gzip.BadGzipFile, zlib.error):
             raise InstrumentSnapshotUnavailableError(
                 "instrument snapshot unavailable"
             ) from None
+        if len(decompressed) > DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES:
+            raise InstrumentSnapshotUnavailableError("instrument snapshot unavailable")
+        try:
+            catalog = InstrumentCatalog.from_json_bytes(decompressed)
+        except InstrumentCatalogPayloadError:
+            raise InstrumentSnapshotUnavailableError(
+                "instrument snapshot unavailable"
+            ) from None
+        retrieved_at = self._clock()
+        if (
+            type(retrieved_at) is not datetime
+            or retrieved_at.tzinfo is None
+            or retrieved_at.utcoffset() is None
+        ):
+            raise InstrumentSnapshotUnavailableError("instrument snapshot unavailable")
+        retrieved_at = retrieved_at.astimezone(UTC)
         return FetchedInstrumentSnapshotV1(
             retrieved_at=retrieved_at,
             observation_date=retrieved_at.astimezone(_IST).date(),
@@ -246,12 +265,12 @@ class InstrumentSnapshotStoreV1:
     ) -> InstrumentSnapshotMetadataV1:
         try:
             if type(fetched) is not FetchedInstrumentSnapshotV1:
-                raise ValueError
+                raise InstrumentSnapshotValidationError
             if (
                 _sha256(fetched.compressed_bytes) != fetched.compressed_sha256
                 or _sha256(fetched.decompressed_bytes) != fetched.decompressed_sha256
             ):
-                raise ValueError
+                raise InstrumentSnapshotValidationError
             partial = _metadata_without_observation(fetched)
             sidecar = _canonical_observation_bytes(partial)
             observation_sha256 = _sha256(sidecar)
@@ -278,6 +297,11 @@ class InstrumentSnapshotStoreV1:
             )
             sidecar = _canonical_observation_bytes(_metadata_without_digest(metadata))
             journal = _canonical_journal_bytes(metadata)
+        except InstrumentSnapshotValidationError:
+            raise InstrumentSnapshotCorruptError(
+                "instrument snapshot corrupt"
+            ) from None
+        try:
             with self._lease.root_operation(self._root) as operation:
                 snapshot_fd = _open_snapshot_root(operation, create=True)
                 try:
@@ -316,7 +340,7 @@ class InstrumentSnapshotStoreV1:
             return metadata
         except InstrumentSnapshotError:
             raise
-        except Exception:
+        except (OSError, StorageRootLeaseError):
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
@@ -390,9 +414,9 @@ class InstrumentSnapshotStoreV1:
                     return metadata
                 finally:
                     os.close(snapshot_fd)
-        except InstrumentSnapshotError:
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except Exception:
+        except (EOFError, OSError):
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
@@ -436,7 +460,9 @@ class InstrumentSnapshotStoreV1:
                         sidecar != expected
                         or _sha256(sidecar) != metadata.observation_sha256
                     ):
-                        raise ValueError
+                        raise InstrumentSnapshotCorruptError(
+                            "instrument snapshot corrupt"
+                        )
                     compressed = _read_bounded(
                         object_fd,
                         "snapshot.json.gz",
@@ -452,9 +478,9 @@ class InstrumentSnapshotStoreV1:
             instrument = _resolve_equity_in_payload(decompressed, segment, symbol)
             _ensure_deadline_live(deadline)
             return ResolvedInstrumentSnapshotV1(metadata, instrument)
-        except InstrumentSnapshotError:
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except Exception:
+        except (EOFError, OSError):
             _ensure_deadline_live(deadline)
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
@@ -493,6 +519,8 @@ def _resolve_equity_in_payload(
         raise SnapshotInstrumentNotFoundError("instrument not found") from None
     except AmbiguousInstrumentError:
         raise SnapshotInstrumentAmbiguousError("instrument ambiguous") from None
+    except InstrumentCatalogPayloadError:
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
     if (
         instrument.exchange != "NSE"
         or instrument.segment != "NSE_EQ"
@@ -508,7 +536,7 @@ def _resolve_equity_in_payload(
             )
         )
     ):
-        raise ValueError
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
     return instrument
 
 
@@ -548,14 +576,14 @@ def _canonical_observation_bytes(values: tuple[object, ...]) -> bytes:
     value["observation_date"] = values[2].isoformat()  # type: ignore[union-attr]
     instant = values[3]
     if type(instant) is not datetime:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     value["retrieved_at"] = instant.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     encoded = (
         json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         + "\n"
     ).encode()
     if len(encoded) > MAX_OBSERVATION_JSON_BYTES_V1:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     return encoded
 
 
@@ -582,30 +610,40 @@ def _canonical_journal_bytes(metadata: InstrumentSnapshotMetadataV1) -> bytes:
         + "\n"
     ).encode()
     if len(encoded) > MAX_RECOVERY_JOURNAL_BYTES_V1:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     return encoded
 
 
 def _parse_canonical_journal(value: bytes) -> InstrumentSnapshotMetadataV1:
     try:
-        parsed_object: object = json.loads(
-            value,
-            object_pairs_hook=_unique_object,
-            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
-        )
+        try:
+            parsed_object: object = json.loads(
+                value,
+                object_pairs_hook=_unique_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(
+                    InstrumentSnapshotValidationError()
+                ),
+            )
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise InstrumentSnapshotValidationError from None
         if type(parsed_object) is not dict:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         parsed = cast(dict[str, object], parsed_object)
         expected_keys = tuple(InstrumentSnapshotMetadataV1.__dataclass_fields__)
         if tuple(parsed) != expected_keys or not _valid_journal_value_types(parsed):
-            raise ValueError
+            raise InstrumentSnapshotValidationError
+        try:
+            observation_date = date.fromisoformat(cast(str, parsed["observation_date"]))
+            retrieved_at = datetime.strptime(
+                cast(str, parsed["retrieved_at"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+            ).replace(tzinfo=UTC)
+        except ValueError:
+            raise InstrumentSnapshotValidationError from None
         metadata = InstrumentSnapshotMetadataV1(
             cast(int, parsed["schema_version"]),
             cast(str, parsed["source"]),
-            date.fromisoformat(cast(str, parsed["observation_date"])),
-            datetime.strptime(
-                cast(str, parsed["retrieved_at"]), "%Y-%m-%dT%H:%M:%S.%fZ"
-            ).replace(tzinfo=UTC),
+            observation_date,
+            retrieved_at,
             cast(str, parsed["observation_sha256"]),
             cast(str, parsed["compressed_sha256"]),
             cast(str, parsed["decompressed_sha256"]),
@@ -617,9 +655,9 @@ def _parse_canonical_journal(value: bytes) -> InstrumentSnapshotMetadataV1:
             cast(str | None, parsed["last_modified"]),
         )
         if _canonical_journal_bytes(metadata) != value:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         return metadata
-    except Exception:
+    except InstrumentSnapshotValidationError:
         raise InstrumentSnapshotCorruptError(
             "instrument snapshot journal corrupt"
         ) from None
@@ -654,7 +692,7 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
         if key in value:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         value[key] = item
     return value
 
@@ -817,20 +855,23 @@ def _remove_journal(operation: StorageRootLeaseOperation, snapshot_fd: int) -> N
 def _validate_compressed_object(
     metadata: InstrumentSnapshotMetadataV1, compressed: bytes
 ) -> bytes:
-    if (
-        len(compressed) != metadata.compressed_byte_count
-        or _sha256(compressed) != metadata.compressed_sha256
-    ):
-        raise ValueError
-    with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
-        decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
-    if (
-        len(decompressed) != metadata.decompressed_byte_count
-        or _sha256(decompressed) != metadata.decompressed_sha256
-    ):
-        raise ValueError
-    InstrumentCatalog.from_json_bytes(decompressed)
-    return decompressed
+    try:
+        if (
+            len(compressed) != metadata.compressed_byte_count
+            or _sha256(compressed) != metadata.compressed_sha256
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
+        with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
+            decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
+        if (
+            len(decompressed) != metadata.decompressed_byte_count
+            or _sha256(decompressed) != metadata.decompressed_sha256
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
+        InstrumentCatalog.from_json_bytes(decompressed)
+        return decompressed
+    except (EOFError, gzip.BadGzipFile, zlib.error, InstrumentCatalogPayloadError):
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
 
 
 def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
@@ -847,7 +888,7 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
             or (info.st_dev, info.st_ino) != (path_info.st_dev, path_info.st_ino)
             or info.st_size > limit
         ):
-            raise ValueError
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
         chunks: list[bytes] = []
         total = 0
         while total <= limit:
@@ -858,7 +899,7 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
             total += len(chunk)
         value = b"".join(chunks)
         if len(value) != info.st_size or len(value) > limit:
-            raise ValueError
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
         return value
     finally:
         os.close(descriptor)

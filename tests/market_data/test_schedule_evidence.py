@@ -415,6 +415,48 @@ def test_atomic_link_failure_is_sanitized_and_leaves_no_final_object(
         _close(lease)
 
 
+def test_unexpected_retain_fault_propagates_after_publication_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    failure = ValueError("synthetic implementation fault")
+    try:
+        monkeypatch.setattr(
+            schedule_module.os,
+            "write",
+            lambda *_args: (_ for _ in ()).throw(failure),
+        )
+        with pytest.raises(ValueError) as raised:
+            store.retain(_schedule())
+        assert raised.value is failure
+        assert not list(tmp_path.rglob("*.json"))
+        assert not list(tmp_path.rglob(".schedule-*.tmp"))
+    finally:
+        _close(lease)
+
+
+def test_unexpected_resolve_fault_does_not_fabricate_schedule_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule = _schedule()
+    store, lease = _store(tmp_path)
+    try:
+        retained = store.retain(schedule)
+        assert retained.digest is not None
+        monkeypatch.setattr(
+            schedule_module,
+            "_read_existing",
+            lambda *_args: (_ for _ in ()).throw(KeyError()),
+        )
+        with pytest.raises(KeyError):
+            store.resolve(retained.digest)
+        assert _path(
+            tmp_path, retained.digest
+        ).read_bytes() == canonical_schedule_bytes(schedule)
+    finally:
+        _close(lease)
+
+
 def test_lease_closure_before_publication_fails_closed_without_final_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

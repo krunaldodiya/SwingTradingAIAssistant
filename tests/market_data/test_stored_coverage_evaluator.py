@@ -759,6 +759,85 @@ def test_evaluator_rejects_row_bound_and_validation_policy_drift(
     assert policy.months[0].coverage_state is CoverageStateV1.CORRUPT
 
 
+def test_evaluator_propagates_internal_policy_fault_without_mutating_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path)
+    before = _bytes(tmp_path)
+
+    class FaultingPolicy:
+        def __init__(self, _policy: str) -> None:
+            pass
+
+        def validate(self, *_args: object) -> object:
+            raise KeyError("internal-policy-fault")
+
+    monkeypatch.setattr(coverage_module, "EquityMonthValidationPolicy", FaultingPolicy)
+
+    with pytest.raises(KeyError, match="internal-policy-fault"):
+        StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+
+    assert _bytes(tmp_path) == before
+
+
+def test_partition_reader_propagates_internal_decode_fault_and_releases_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+
+    def fail_decode(_file_descriptor: int) -> tuple[str, tuple[CanonicalCandle, ...]]:
+        raise RuntimeError("internal-decode-fault")
+
+    monkeypatch.setattr(coverage_module, "_decode_partition", fail_decode)
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(RuntimeError, match="internal-decode-fault"),
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+
+    assert _bytes(tmp_path) == before
+    with evaluator.admit(tmp_path) as admission:
+        admission.ensure_live(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        pa.ArrowMemoryError("synthetic resource exhaustion"),
+        pa.ArrowCancelled("synthetic cancellation"),
+    ),
+)
+def test_partition_resource_failure_does_not_assert_corrupt_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+
+    def fail_decode(_file_descriptor: int) -> tuple[str, tuple[CanonicalCandle, ...]]:
+        raise failure
+
+    monkeypatch.setattr(coverage_module, "_decode_partition", fail_decode)
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(type(failure)) as raised,
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+
+    assert raised.value is failure
+    assert _bytes(tmp_path) == before
+    with evaluator.admit(tmp_path) as admission:
+        admission.ensure_live(tmp_path)
+
+
 def test_evaluator_revalidates_scheduled_minutes_and_point_in_time_freshness(
     tmp_path: Path,
 ) -> None:

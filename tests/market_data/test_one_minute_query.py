@@ -482,6 +482,21 @@ def test_query_service_maps_sanitized_dependency_failures(
     assert report.payload is None
 
 
+def test_query_service_envelopes_unknown_engine_fault_and_releases_admission(
+    tmp_path: Path,
+) -> None:
+    evaluator = _Evaluator()
+    report = _service(evaluator, _Engine(RuntimeError("private-engine-fault"))).query(
+        _request(tmp_path)
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.payload is None
+    assert not evaluator.admission.live
+
+
 def _candles() -> tuple[CanonicalCandle, ...]:
     return tuple(
         CanonicalCandle(
@@ -709,6 +724,7 @@ def test_duckdb_engine_returns_empty_success_for_verified_dates_without_bars(
         (duckdb.InterruptException("deadline"), QueryTimeoutV1),
         (duckdb.OutOfMemoryException("memory"), QueryResourceLimitV1),
         (duckdb.IOException("read"), QueryExecutionFailureV1),
+        (AssertionError("internal-query-fault"), AssertionError),
     ),
 )
 def test_duckdb_engine_maps_execution_errors_and_closes_connection(

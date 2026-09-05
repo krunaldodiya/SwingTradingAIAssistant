@@ -660,6 +660,21 @@ def test_daily_service_maps_bounded_engine_failures_and_releases_admission(
     assert not evaluator.admission.live
 
 
+def test_daily_service_envelopes_unknown_engine_fault_and_releases_admission(
+    tmp_path: Path,
+) -> None:
+    evaluator = _Evaluator()
+    report = _service(
+        evaluator, _Resolver(), _Engine(RuntimeError("private-engine-fault"))
+    ).query(_raw_request(tmp_path))
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.payload is None
+    assert not evaluator.admission.live
+
+
 def test_timeframe_router_invokes_exactly_one_service(tmp_path: Path) -> None:
     class Port:
         def __init__(self, label: str) -> None:
@@ -1034,11 +1049,12 @@ def test_daily_engine_fails_closed_on_invalid_boundaries_and_open_failure(
 ) -> None:
     engine = DuckDBDailyOHLCVEngineV1()
     admission = _Admission()
+    failure = RuntimeError("synthetic implementation fault")
 
     class FailingEvaluator:
         @contextmanager
         def open_verified_partition_under_admission(self, *_args: object):
-            raise RuntimeError("sanitized test failure")
+            raise failure
             yield
 
     with admission:
@@ -1071,7 +1087,7 @@ def test_daily_engine_fails_closed_on_invalid_boundaries_and_open_failure(
             )
             == ()
         )
-        with pytest.raises(QueryExecutionFailureV1):
+        with pytest.raises(RuntimeError) as raised:
             engine.execute(
                 _public_request(),
                 tmp_path,
@@ -1080,6 +1096,7 @@ def test_daily_engine_fails_closed_on_invalid_boundaries_and_open_failure(
                 FailingEvaluator(),  # type: ignore[arg-type]
                 admission,  # type: ignore[arg-type]
             )
+        assert raised.value is failure
 
 
 @pytest.mark.parametrize(
@@ -1259,7 +1276,7 @@ def test_daily_duckdb_engine_interrupts_at_deadline_and_closes_connection(
             daily_module.duckdb.OutOfMemoryException("bounded memory"),
             QueryResourceLimitV1,
         ),
-        (RuntimeError("sanitized test failure"), QueryExecutionFailureV1),
+        (RuntimeError("internal-database-fault"), RuntimeError),
     ),
 )
 def test_daily_duckdb_engine_maps_database_failures(
@@ -1277,7 +1294,7 @@ def test_daily_duckdb_engine_maps_database_failures(
 
     monkeypatch.setattr(daily_module.duckdb, "connect", fail_connect)
 
-    with admission, pytest.raises(expected):
+    with admission, pytest.raises(expected) as exc_info:
         DuckDBDailyOHLCVEngineV1().execute(
             _public_request(),
             tmp_path,
@@ -1286,6 +1303,7 @@ def test_daily_duckdb_engine_maps_database_failures(
             _DescriptorEvaluator(parquet_path),  # type: ignore[arg-type]
             admission,  # type: ignore[arg-type]
         )
+    assert type(exc_info.value) is expected
 
 
 def test_daily_payload_and_json_freeze_provenance_and_requested_fields() -> None:

@@ -18,6 +18,14 @@ pa: Any = cast(Any, _pyarrow)
 pc: Any = cast(Any, _pyarrow_compute)
 pq: Any = cast(Any, _pyarrow_parquet)
 
+# Resource exhaustion and cancellation do not assert malformed persisted data.
+ARROW_DATA_ERRORS: Final[tuple[type[Exception], ...]] = (
+    pa.ArrowInvalid,
+    pa.ArrowTypeError,
+    pa.ArrowNotImplementedError,
+    pa.ArrowSerializationError,
+)
+
 CANDLE_SCHEMA_VERSION_METADATA_KEY: Final[bytes] = (
     b"swing_trading_ai_assistant.candle_schema_version"
 )
@@ -273,9 +281,7 @@ def _validate_parquet_resource_bounds(
                 raise CandleParquetConversionError(
                     "Parquet uncompressed byte ceiling exceeded"
                 )
-    except CandleParquetConversionError:
-        raise
-    except Exception as exc:
+    except ARROW_DATA_ERRORS as exc:
         raise CandleParquetConversionError(
             "Parquet resource metadata is invalid"
         ) from exc
@@ -300,9 +306,7 @@ def _validate_decoded_batch_bounds(
                     raise CandleParquetConversionError(
                         "Parquet text field byte ceiling exceeded"
                     )
-    except CandleParquetConversionError:
-        raise
-    except Exception as exc:
+    except ARROW_DATA_ERRORS as exc:
         raise CandleParquetConversionError(
             "Parquet decoded resource bounds are invalid"
         ) from exc

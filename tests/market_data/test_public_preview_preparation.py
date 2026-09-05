@@ -585,6 +585,21 @@ def test_snapshot_client_fails_closed_for_bad_responses_and_clock() -> None:
         ).fetch()
 
 
+def test_snapshot_client_propagates_unexpected_parser_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    failure = ValueError("synthetic implementation fault")
+    monkeypatch.setattr(
+        snapshot_module.InstrumentCatalog,
+        "from_json_bytes",
+        lambda _value: (_ for _ in ()).throw(failure),
+    )
+    with pytest.raises(ValueError) as raised:
+        client.fetch()
+    assert raised.value is failure
+
+
 def test_snapshot_client_enforces_decompressed_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -940,6 +955,24 @@ def test_snapshot_store_refuses_divergent_existing_object(tmp_path: Path) -> Non
             store.retain(fetched)
 
 
+def test_snapshot_store_propagates_unexpected_catalog_fault_and_retains_journal(
+    tmp_path: Path,
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError) as caught:
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(client.fetch())
+        assert type(caught.value) is RuntimeError
+        assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
+    journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    assert journal.is_file()
+    assert not list(tmp_path.rglob(".*.tmp"))
+
+
 @pytest.mark.parametrize("temp_state", ("none", "safe", "unsafe"))
 def test_preparation_recovers_pending_observation_before_fetch(
     tmp_path: Path, temp_state: str
@@ -948,14 +981,11 @@ def test_preparation_recovers_pending_observation_before_fetch(
     fetched = client.fetch()
     lease_result = StorageRootLease.try_acquire(tmp_path)
     assert lease_result.lease is not None
-    with (
-        lease_result.lease as lease,
-        DuckDBCatalog(tmp_path) as catalog,
-        pytest.raises(InstrumentSnapshotCorruptError),
-    ):
-        InstrumentSnapshotStoreV1(
-            tmp_path, lease, FailingSnapshotCatalog(catalog)
-        ).retain(fetched)
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError):
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(fetched)
         assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
     journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
     assert journal.is_file()
@@ -1012,7 +1042,7 @@ def test_preparation_preflights_fixed_journal_temp_before_fetch(
         with (
             lease_result.lease as lease,
             DuckDBCatalog(tmp_path) as catalog,
-            pytest.raises(InstrumentSnapshotCorruptError),
+            pytest.raises(RuntimeError),
         ):
             InstrumentSnapshotStoreV1(
                 tmp_path, lease, FailingSnapshotCatalog(catalog)
@@ -1066,7 +1096,7 @@ def test_pending_journal_handles_missing_object_without_fetching_blindly(
     with (
         lease_result.lease as lease,
         DuckDBCatalog(tmp_path) as catalog,
-        pytest.raises(InstrumentSnapshotCorruptError),
+        pytest.raises(RuntimeError),
     ):
         InstrumentSnapshotStoreV1(
             tmp_path, lease, FailingSnapshotCatalog(catalog)
@@ -1132,6 +1162,29 @@ def test_pending_recovery_rejects_corrupt_journal_before_fetch(tmp_path: Path) -
     assert report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT
 
 
+def test_snapshot_recovery_propagates_unexpected_parser_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError):
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(client.fetch())
+        journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+        assert journal.is_file()
+        monkeypatch.setattr(
+            snapshot_module,
+            "_parse_canonical_journal",
+            lambda _value: (_ for _ in ()).throw(KeyError()),
+        )
+        with pytest.raises(KeyError):
+            InstrumentSnapshotStoreV1(tmp_path, lease, catalog).recover_pending()
+        assert journal.is_file()
+
+
 def test_snapshot_store_rejects_ambiguous_latest_observations(tmp_path: Path) -> None:
     retrieved_at = datetime(2026, 8, 10, 3, 0, tzinfo=UTC)
     first, _ = _snapshot_client(retrieved_at)
@@ -1155,9 +1208,35 @@ def test_snapshot_store_rejects_ambiguous_latest_observations(tmp_path: Path) ->
             )
 
 
+def test_snapshot_resolution_propagates_unexpected_resolver_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        store = InstrumentSnapshotStoreV1(tmp_path, lease, catalog)
+        metadata = store.retain(client.fetch())
+        monkeypatch.setattr(
+            snapshot_module,
+            "_resolve_equity_in_payload",
+            lambda *_args: (_ for _ in ()).throw(AssertionError()),
+        )
+        with pytest.raises(AssertionError):
+            store.resolve_equity(
+                source=metadata.source,
+                segment="NSE_EQ",
+                symbol="RELIANCE",
+                as_of=datetime(2026, 8, 10, 3, 30, tzinfo=UTC),
+            )
+        assert (tmp_path / metadata.relative_object_path).is_file()
+
+
 def test_invalid_schedule_fails_before_lock_or_storage_mutation(tmp_path: Path) -> None:
     policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
-    schedule_source = StaticScheduleSource(ValueError("invalid schedule"))
+    schedule_source = StaticScheduleSource(
+        preparation_module.ScheduleEvidenceValidationError("invalid schedule")
+    )
     client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
     snapshot_source = CountingSnapshotSource(client)
     service = DownloadPreparationServiceV1(policy, schedule_source, snapshot_source)
@@ -1294,6 +1373,41 @@ def test_preparation_maps_snapshot_unavailability_without_leaking_response(
         report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE
     )
     assert report.prepared is None
+
+
+def test_preparation_propagates_unexpected_snapshot_source_fault(
+    tmp_path: Path,
+) -> None:
+    failure = ValueError("synthetic implementation fault")
+
+    class FailingSnapshotSource:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch(self) -> object:
+            self.calls += 1
+            raise failure
+
+    source = FailingSnapshotSource()
+    service = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(_schedule_input()),
+        source,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValueError) as raised:
+        service.prepare(
+            DownloadPreparationRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 7, 31),
+                tmp_path,
+                datetime(2026, 8, 10, 4, 0, tzinfo=UTC),
+            )
+        )
+    assert raised.value is failure
+    assert source.calls == 1
+    assert not (tmp_path / "instrument_snapshots").exists()
 
 
 def test_preparation_contracts_and_schedule_retention_failure_fail_closed(

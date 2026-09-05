@@ -16,7 +16,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol, cast
 
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 
 SCHEDULE_SCHEMA_VERSION_V1: Final = 1
 SCHEDULE_SCHEMA_VERSION_V2: Final = 2
@@ -41,6 +45,10 @@ _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 _RELATIVE_PREFIX: Final = "calendar-schedules/sha256/"
 _FAILURE_MESSAGE: Final = "schedule evidence unsupported"
+
+
+class ScheduleEvidenceValidationError(ValueError):
+    """A recognized invalid schedule input or retained representation."""
 
 
 def exact_nse_schedule_source_release_pair_v1(source: object, release: object) -> bool:
@@ -88,7 +96,7 @@ class ScheduleSession:
             or type(self.close_at) is not datetime
             or not _is_nonempty_ascii(self.kind)
         ):
-            raise ValueError("invalid schedule session")
+            raise ScheduleEvidenceValidationError("invalid schedule session")
         open_at = _as_utc(self.open_at, "open_at")
         close_at = _as_utc(self.close_at, "close_at")
         if (
@@ -100,7 +108,7 @@ class ScheduleSession:
             or open_at.astimezone(_IST).date() != self.trade_date
             or close_at.astimezone(_IST).date() != self.trade_date
         ):
-            raise ValueError("invalid schedule session")
+            raise ScheduleEvidenceValidationError("invalid schedule session")
         object.__setattr__(self, "open_at", open_at)
         object.__setattr__(self, "close_at", close_at)
 
@@ -117,7 +125,7 @@ class ScheduleClosure:
 
     def __post_init__(self) -> None:
         if type(self.trade_date) is not date or not _is_nonempty_ascii(self.reason):
-            raise ValueError("invalid schedule closure")
+            raise ScheduleEvidenceValidationError("invalid schedule closure")
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,15 +174,17 @@ class ExpectedSessionSchedule:
                 and not (self.sessions or self.closures)
             )
         ):
-            raise ValueError("invalid expected session schedule")
+            raise ScheduleEvidenceValidationError("invalid expected session schedule")
         as_of = _as_utc(self.as_of, "as_of")
         if self.covered_to > as_of.astimezone(_IST).date():
-            raise ValueError("invalid expected session schedule")
+            raise ScheduleEvidenceValidationError("invalid expected session schedule")
         previous: ScheduleSession | None = None
         seen_dates: set[date] = set()
         for session in self.sessions:
             if not self.covered_from <= session.trade_date <= self.covered_to:
-                raise ValueError("invalid expected session schedule")
+                raise ScheduleEvidenceValidationError(
+                    "invalid expected session schedule"
+                )
             if session.trade_date in seen_dates or (
                 previous is not None
                 and (
@@ -182,12 +192,16 @@ class ExpectedSessionSchedule:
                     or session.open_at < previous.close_at
                 )
             ):
-                raise ValueError("invalid expected session schedule")
+                raise ScheduleEvidenceValidationError(
+                    "invalid expected session schedule"
+                )
             if session.close_at > as_of and not (
                 self.schema_version == SCHEDULE_SCHEMA_VERSION_V3
                 and session.trade_date == as_of.astimezone(_IST).date()
             ):
-                raise ValueError("invalid expected session schedule")
+                raise ScheduleEvidenceValidationError(
+                    "invalid expected session schedule"
+                )
             seen_dates.add(session.trade_date)
             previous = session
         previous_closure: ScheduleClosure | None = None
@@ -200,7 +214,9 @@ class ExpectedSessionSchedule:
                     and closure.trade_date <= previous_closure.trade_date
                 )
             ):
-                raise ValueError("invalid expected session schedule")
+                raise ScheduleEvidenceValidationError(
+                    "invalid expected session schedule"
+                )
             seen_dates.add(closure.trade_date)
             previous_closure = closure
         object.__setattr__(self, "as_of", as_of)
@@ -273,14 +289,14 @@ class ScheduleEvidenceStore:
         """Validate and retain one schedule, without replacing present evidence."""
         try:
             if type(schedule) is not ExpectedSessionSchedule:
-                raise ValueError
+                raise ScheduleEvidenceValidationError
             canonical = canonical_schedule_bytes(schedule)
             if supplied_bytes is not None and supplied_bytes != canonical:
-                raise ValueError
+                raise ScheduleEvidenceValidationError
             digest = _digest_bytes(canonical)
-            return self._retain_or_resolve(digest, canonical, root)
-        except Exception:
+        except ScheduleEvidenceValidationError:
             return _failure()
+        return self._retain_or_resolve(digest, canonical, root)
 
     def resolve(
         self,
@@ -291,22 +307,21 @@ class ScheduleEvidenceStore:
         deadline: ScheduleDeadlinePortV1 | None = None,
     ) -> ScheduleEvidenceResult:
         """Resolve one exact digest, optionally restoring a missing object."""
+        _ensure_deadline_live(deadline)
         try:
-            _ensure_deadline_live(deadline)
             if type(digest) is not str or _DIGEST_RE.fullmatch(digest) is None:
-                raise ValueError
+                raise ScheduleEvidenceValidationError
             canonical = None
             if supplied_bytes is not None:
                 schedule = _parse_canonical_bytes(supplied_bytes)
                 canonical = canonical_schedule_bytes(schedule)
                 if canonical != supplied_bytes or _digest_bytes(canonical) != digest:
-                    raise ValueError
-            result = self._retain_or_resolve(digest, canonical, root, deadline)
-            _ensure_deadline_live(deadline)
-            return result
-        except Exception:
-            _ensure_deadline_live(deadline)
+                    raise ScheduleEvidenceValidationError
+        except ScheduleEvidenceValidationError:
             return _failure()
+        result = self._retain_or_resolve(digest, canonical, root, deadline)
+        _ensure_deadline_live(deadline)
+        return result
 
     def _resolve_raw_history(
         self,
@@ -336,7 +351,7 @@ class ScheduleEvidenceStore:
                     return result, False
                 finally:
                     os.close(parent)
-        except Exception:
+        except (OSError, StorageRootLeaseError):
             return result, False
 
     def _retain_or_resolve(
@@ -348,29 +363,35 @@ class ScheduleEvidenceStore:
     ) -> ScheduleEvidenceResult:
         target_root = self._storage_root if root is None else root
         try:
-            _ensure_deadline_live(deadline)
             if supplied_bytes is not None and len(supplied_bytes) > MAX_SCHEDULE_BYTES:
-                raise ValueError
-            relative_path = f"{_RELATIVE_PREFIX}{digest}.json"
-            authority = (
-                self._lease.read_operation
-                if supplied_bytes is None
-                else self._lease.root_operation
-            )
+                raise ScheduleEvidenceValidationError
+        except ScheduleEvidenceValidationError:
+            return _failure()
+        relative_path = f"{_RELATIVE_PREFIX}{digest}.json"
+        authority = (
+            self._lease.read_operation
+            if supplied_bytes is None
+            else self._lease.root_operation
+        )
+        try:
+            _ensure_deadline_live(deadline)
             with authority(target_root) as operation:
                 _ensure_deadline_live(deadline)
                 parent_fd = _open_parent(operation, create=supplied_bytes is not None)
                 if parent_fd is None:
-                    raise ValueError
+                    return _failure()
                 try:
-                    result = _resolve_in_parent(
-                        operation, parent_fd, digest, supplied_bytes, relative_path
-                    )
+                    try:
+                        result = _resolve_in_parent(
+                            operation, parent_fd, digest, supplied_bytes, relative_path
+                        )
+                    except ScheduleEvidenceValidationError:
+                        return _failure()
                     _ensure_deadline_live(deadline)
                     return result
                 finally:
                     os.close(parent_fd)
-        except Exception:
+        except (OSError, StorageRootLeaseError):
             _ensure_deadline_live(deadline)
             return _failure()
 
@@ -396,7 +417,7 @@ def _resolve_in_parent(
     if existing is not None:
         existing_bytes, schedule = existing
         if supplied_bytes is not None and existing_bytes != supplied_bytes:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         operation.ensure_live()
         return _success(
             ScheduleOutcome.RESOLVED,
@@ -406,13 +427,13 @@ def _resolve_in_parent(
             relative_path,
         )
     if supplied_bytes is None:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     schedule = _parse_canonical_bytes(supplied_bytes)
     created = _publish_bytes(operation, parent_fd, digest, supplied_bytes)
     if not created:
         existing = _read_existing(parent_fd, digest)
         if existing is None or existing[0] != supplied_bytes:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
     operation.ensure_live()
     return _success(
         ScheduleOutcome.RETAINED if created else ScheduleOutcome.RESOLVED,
@@ -426,7 +447,7 @@ def _resolve_in_parent(
 def canonical_schedule_bytes(schedule: ExpectedSessionSchedule) -> bytes:
     """Serialize the exact versioned schedule-digest representation."""
     if type(schedule) is not ExpectedSessionSchedule:
-        raise ValueError("invalid expected session schedule")
+        raise ScheduleEvidenceValidationError("invalid expected session schedule")
     schedule = _validated_schedule(schedule)
     value: dict[str, object] = {
         "schema_version": schedule.schema_version,
@@ -501,30 +522,31 @@ def parse_canonical_schedule_bytes(value: object) -> ExpectedSessionSchedule:
     """Parse only the exact bounded canonical schedule representation."""
     try:
         return _parse_canonical_bytes(value)
-    except ValueError:
-        raise ValueError("invalid canonical schedule evidence") from None
+    except ScheduleEvidenceValidationError:
+        raise ScheduleEvidenceValidationError(
+            "invalid canonical schedule evidence"
+        ) from None
 
 
 def _parse_canonical_bytes(value: object) -> ExpectedSessionSchedule:
     if type(value) is not bytes or len(value) > MAX_SCHEDULE_BYTES:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     try:
         decoded = value.decode("utf-8")
         parsed = json.loads(
             decoded,
             object_pairs_hook=_unique_object,
-            parse_constant=lambda _constant: (_ for _ in ()).throw(ValueError()),
+            parse_constant=lambda _constant: (_ for _ in ()).throw(
+                ScheduleEvidenceValidationError()
+            ),
         )
-    except Exception:
-        raise ValueError from None
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise ScheduleEvidenceValidationError from None
     if type(parsed) is not dict:
-        raise ValueError
-    try:
-        schedule = _schedule_from_json(cast(dict[str, object], parsed))
-    except Exception:
-        raise ValueError from None
+        raise ScheduleEvidenceValidationError
+    schedule = _schedule_from_json(cast(dict[str, object], parsed))
     if canonical_schedule_bytes(schedule) != value:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     return schedule
 
 
@@ -570,20 +592,20 @@ def _validated_schema_version(value: dict[str, object]) -> int:
         }
         or set(value) != required
     ):
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     return schema_version
 
 
 def _sessions_from_json(value: object) -> tuple[ScheduleSession, ...]:
     if type(value) is not list:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     sessions: list[ScheduleSession] = []
     for raw_item in cast(list[object], value):
         if type(raw_item) is not dict:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         item = cast(dict[str, object], raw_item)
         if set(item) != {"trade_date", "open_at", "close_at", "kind"}:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         sessions.append(
             ScheduleSession(
                 trade_date=_parse_date(item["trade_date"]),
@@ -600,17 +622,17 @@ def _closures_from_json(
 ) -> tuple[ScheduleClosure, ...]:
     if schema_version == SCHEDULE_SCHEMA_VERSION_V1:
         if value is not None:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         return ()
     if type(value) is not list:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     closures: list[ScheduleClosure] = []
     for raw_item in cast(list[object], value):
         if type(raw_item) is not dict:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         item = cast(dict[str, object], raw_item)
         if set(item) != {"trade_date", "reason"}:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         closures.append(
             ScheduleClosure(
                 trade_date=_parse_date(item["trade_date"]),
@@ -624,7 +646,7 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         result[key] = value
     return result
 
@@ -673,10 +695,10 @@ def _read_existing(
             or descriptor_stat.st_ino != path_stat.st_ino
             or descriptor_stat.st_size > MAX_SCHEDULE_BYTES
         ):
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         value = _read_bounded(descriptor)
         if _digest_bytes(value) != digest:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         schedule = _parse_canonical_bytes(value)
         return value, schedule
     finally:
@@ -694,8 +716,8 @@ def _read_bounded(descriptor: int) -> bytes:
         chunks.append(chunk)
         total += len(chunk)
         if total > MAX_SCHEDULE_BYTES:
-            raise ValueError
-    raise ValueError
+            raise ScheduleEvidenceValidationError
+    raise ScheduleEvidenceValidationError
 
 
 def _publish_bytes(
@@ -716,14 +738,14 @@ def _publish_bytes(
             dir_fd=parent_fd,
         )
         if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         view = memoryview(value)
         written = 0
         while written < len(view):
             operation.ensure_live()
             written += os.write(descriptor, view[written:])
         if os.fstat(descriptor).st_size != len(value):
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         operation.ensure_live()
         os.fsync(descriptor)
         os.close(descriptor)
@@ -797,8 +819,10 @@ def _validated_schedule(schedule: ExpectedSessionSchedule) -> ExpectedSessionSch
             schedule.sessions,
             schedule.closures,
         )
-    except Exception:
-        raise ValueError("invalid expected session schedule") from None
+    except ScheduleEvidenceValidationError:
+        raise ScheduleEvidenceValidationError(
+            "invalid expected session schedule"
+        ) from None
 
 
 def _is_nonempty_ascii(value: object) -> bool:
@@ -812,17 +836,14 @@ def _is_nonempty_ascii(value: object) -> bool:
 
 
 def _as_utc(value: datetime, field: str) -> datetime:
-    try:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError
-        return value.astimezone(UTC)
-    except Exception:
-        raise ValueError(f"invalid {field}") from None
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
+        raise ScheduleEvidenceValidationError(f"invalid {field}")
+    return value.astimezone(UTC)
 
 
 def _format_date(value: date) -> str:
     if type(value) is not date:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     return value.isoformat()
 
 
@@ -833,23 +854,23 @@ def _format_instant(value: datetime) -> str:
 
 def _parse_date(value: object) -> date:
     if type(value) is not str or _DATE_RE.fullmatch(value) is None:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     try:
         parsed = date.fromisoformat(value)
     except ValueError:
-        raise ValueError from None
+        raise ScheduleEvidenceValidationError from None
     if parsed.isoformat() != value:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     return parsed
 
 
 def _parse_instant(value: object) -> datetime:
     if type(value) is not str or _INSTANT_RE.fullmatch(value) is None:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     try:
         parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
     except ValueError:
-        raise ValueError from None
+        raise ScheduleEvidenceValidationError from None
     if _format_instant(parsed) != value:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     return parsed

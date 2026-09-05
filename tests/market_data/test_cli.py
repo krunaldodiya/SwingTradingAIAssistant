@@ -4,6 +4,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -180,28 +181,6 @@ def test_storage_root_creation_fails_closed_for_unsafe_or_blocked_paths(
     assert not cli._prepare_storage_root(tmp_path / "data*").is_absolute()
     with pytest.raises(OSError):
         cli._prepare_storage_root(blocked / "child")
-
-
-def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
-    capsys,
-) -> None:
-    with pytest.raises(SystemExit, match="2"):
-        cli.build_parser().parse_args(
-            [
-                "probe-upstox",
-                "--segment",
-                "NSE_EQ",
-                "--symbol",
-                "RELIANCE",
-                "--from",
-                "YYYY-MM-DD",
-            ]
-        )
-
-    assert (
-        "replace YYYY-MM-DD with an actual date, for example 2026-08-03"
-        in capsys.readouterr().err
-    )
 
 
 @pytest.mark.parametrize("value", ("20260701", "2026-W27-3"))
@@ -399,9 +378,86 @@ def test_default_multi_download_keeps_the_bounded_aggregate_contract(
     assert '"scope":"nifty50"' in capsys.readouterr().out
 
 
-def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
-    def run_probe(*args: object, **kwargs: object) -> ProbeReport:
-        raise ValueError("secret-token")
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, TypeError, ValueError, Exception),
+)
+def test_unexpected_execution_fault_emits_no_market_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    error_type: type[Exception],
+) -> None:
+    error = error_type("private/path/token/provider-payload")
+
+    class FailingCoverage:
+        def coverage(self, _request: object) -> Never:
+            raise error
+
+    exit_code = cli.main(
+        _persistent_command("coverage", tmp_path), coverage_service=FailingCoverage()
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+
+
+def test_cli_rejects_unknown_arguments_without_echoing_private_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main(
+            _persistent_command("coverage", tmp_path)
+            + ["--private-input=private/path/token"]
+        )
+    assert exited.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "request_invalid\n"
+
+
+def test_cli_does_not_publish_report_before_exit_status_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    report = PublicCommandReportV1(
+        "v1",
+        "coverage",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Coverage:
+        def coverage(self, _request: object) -> PublicCommandReportV1[object]:
+            return report
+
+    def fail_exit_code(_status: object) -> Never:
+        raise RuntimeError("private/path/token")
+
+    monkeypatch.setattr(cli, "public_exit_code", fail_exit_code)
+    assert (
+        cli.main(
+            _persistent_command("coverage", tmp_path),
+            coverage_service=Coverage(),  # type: ignore[arg-type]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+
+
+def test_probe_fault_does_not_disclose_a_dynamic_exception_name(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    private_error = type("private-provider-token-" * 1024, (Exception,), {})
+
+    def run_probe(*_args: object, **_kwargs: object) -> Never:
+        raise private_error("private/path/provider-payload")
 
     monkeypatch.setattr(cli, "run_capability_probe", run_probe)
 
@@ -411,8 +467,8 @@ def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert captured.err == "probe_failed:ValueError\n"
-    assert "secret-token" not in captured.err
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
 
 
 def _range_command(

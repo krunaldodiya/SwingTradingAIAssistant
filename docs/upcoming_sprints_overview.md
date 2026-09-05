@@ -310,9 +310,13 @@ Relative Strength, Liquidity/SMC, signals, historical qualification, and
 delivery surfaces remain outside that delivered slice.
 
 Issue #154 closed/completed through PR #157 after accepting
-[Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md). The
-ordered current/live lane after the Issue #155 delivery is Issue #156, then
-owner-prioritized maintenance Issue #145 before another product module starts.
+[Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md). Issue #156
+owns that separately bounded implementation. Owner-prioritized maintenance
+Issue #145 implements the
+[cross-module internal-error policy](architecture-freeze-v1.md#internal-errors-and-operator-diagnostics)
+without adding a product module, provider acquisition, or evidence vocabulary.
+Its review and release evidence are tracked in the Issue before another product
+module starts.
 Sprint 17 / Issue #147 has completed its separate `4/4` temporal captures. Its
 final historical qualification no longer waits on future-session evidence.
 

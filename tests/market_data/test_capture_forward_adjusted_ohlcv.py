@@ -1067,17 +1067,28 @@ def test_writer_upgrade_is_not_correction_content_change(
     assert provider.calls == 1
 
 
+@pytest.mark.parametrize(
+    "writer_identity",
+    (
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+        "1054af9a2f2e791444d0198a801d5e728139bcbb12822fd230c5625d35747560",
+    ),
+)
 def test_released_base_writer_revision_remains_exactly_readable(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer_identity: str
 ) -> None:
     request = _request()
     initial = _capture(tmp_path)
-    historical = _retarget_retained_revision_writer(
-        tmp_path,
-        initial.revision,
-        request,
-        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
-    )
+    # Seed a prior admitted writer, then exercise the unmodified current reader.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            core,
+            "_COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1",
+            core._COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1 | {writer_identity},
+        )
+        historical = _retarget_retained_revision_writer(
+            tmp_path, initial.revision, request, writer_identity
+        )
     provider = _Provider(
         retrieved_at=request.schedule.decision_session_official_close_at
         + timedelta(hours=1)

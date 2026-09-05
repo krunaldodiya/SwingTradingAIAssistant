@@ -711,15 +711,21 @@ def test_conflicts_and_faults_roll_back_both_current_and_history(tmp_path) -> No
     fault_root.mkdir()
     with DuckDBCatalog(fault_root) as catalog:
         catalog.create_manifest(initial)
-        catalog._after_history_insert = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-            RuntimeError("injected failure")
-        )
-        with pytest.raises(CatalogPersistenceError):
-            catalog.transition_manifest(initial, verified)
-        assert catalog.get_manifest(_plan()) == initial
-        assert catalog.connection.execute(
-            "SELECT count(*) FROM ingestion_runs"
-        ).fetchone() == (0,)
+        for defect in (
+            RuntimeError("injected implementation failure"),
+            duckdb.ParserException("injected SQL implementation failure"),
+            KeyboardInterrupt(),
+        ):
+            catalog._after_history_insert = lambda defect=defect: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                defect
+            )
+            with pytest.raises(type(defect)) as caught:
+                catalog.transition_manifest(initial, verified)
+            assert caught.value is defect
+            assert catalog.get_manifest(_plan()) == initial
+            assert catalog.connection.execute(
+                "SELECT count(*) FROM ingestion_runs"
+            ).fetchone() == (0,)
 
 
 def test_schema_is_fail_closed_and_storage_errors_are_sanitized(tmp_path) -> None:

@@ -1679,9 +1679,17 @@ class DuckDBCatalog:
         except CatalogError:
             self._rollback()
             raise
-        except Exception:
+        except (
+            duckdb.ConstraintException,
+            duckdb.IOException,
+            duckdb.OutOfMemoryException,
+            duckdb.TransactionException,
+        ):
             self._rollback()
             raise CatalogPersistenceError("catalog transaction failed") from None
+        except BaseException:
+            self._rollback()
+            raise
 
     def _rollback(self) -> None:
         if self._connection is not None:

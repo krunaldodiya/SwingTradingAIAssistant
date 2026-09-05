@@ -329,7 +329,7 @@ class DuckDBOneMinuteQueryEngineV1:
             if type(request) is not PublicQueryRequestV1:
                 raise ValueError
             request = replace(request)
-        except Exception:
+        except (TypeError, ValueError):
             raise QueryExecutionFailureV1 from None
         evaluation = _validated_evaluation(evaluation)
         if (
@@ -340,29 +340,24 @@ class DuckDBOneMinuteQueryEngineV1:
         ):
             raise QueryExecutionFailureV1
         admission.ensure_live(root)
-        try:
-            with ExitStack() as handles:
-                pinned = tuple(
-                    cast(
-                        VerifiedPartitionReadHandleV1,
-                        handles.enter_context(
-                            evaluator.open_verified_partition_under_admission(
-                                root,
-                                selection,
-                                cast(ExistingCoverageAdmissionV1, admission),
-                            )
-                        ),
-                    )
-                    for selection in evaluation.verified_partitions
+        with ExitStack() as handles:
+            pinned = tuple(
+                cast(
+                    VerifiedPartitionReadHandleV1,
+                    handles.enter_context(
+                        evaluator.open_verified_partition_under_admission(
+                            root,
+                            selection,
+                            cast(ExistingCoverageAdmissionV1, admission),
+                        )
+                    ),
                 )
-                admission.ensure_live(root)
-                rows = self._execute(request, pinned)
-                admission.ensure_live(root)
-                return rows
-        except (QueryResourceLimitV1, QueryTimeoutV1, QueryExecutionFailureV1):
-            raise
-        except Exception:
-            raise QueryExecutionFailureV1 from None
+                for selection in evaluation.verified_partitions
+            )
+            admission.ensure_live(root)
+            rows = self._execute(request, pinned)
+            admission.ensure_live(root)
+            return rows
 
     def _execute(
         self,
@@ -372,6 +367,7 @@ class DuckDBOneMinuteQueryEngineV1:
         connection: Any | None = None
         timer: threading.Timer | None = None
         deadline = threading.Event()
+        active_exception: BaseException | None = None
         try:
             active_connection: Any = duckdb.connect(config=_connection_config())
             connection = active_connection
@@ -409,19 +405,22 @@ class DuckDBOneMinuteQueryEngineV1:
                 raise QueryTimeoutV1
             return rows
         except duckdb.InterruptException:
-            raise QueryTimeoutV1 from None
+            active_exception = QueryTimeoutV1()
+            raise active_exception from None
         except duckdb.OutOfMemoryException:
-            raise QueryResourceLimitV1 from None
-        except (QueryResourceLimitV1, QueryTimeoutV1):
+            active_exception = QueryResourceLimitV1()
+            raise active_exception from None
+        except duckdb.IOException:
+            active_exception = QueryExecutionFailureV1()
+            raise active_exception from None
+        except (QueryResourceLimitV1, QueryTimeoutV1) as error:
+            active_exception = error
             raise
-        except Exception:
-            raise QueryExecutionFailureV1 from None
+        except BaseException as error:
+            active_exception = error
+            raise
         finally:
-            if timer is not None:
-                timer.cancel()
-                timer.join(timeout=1.0)
-            if connection is not None:
-                connection.close()
+            _cleanup_query_resources(timer, connection, active_exception)
 
 
 def _validated_request(value: object) -> QueryRequestV1:
@@ -429,7 +428,7 @@ def _validated_request(value: object) -> QueryRequestV1:
         if type(value) is not QueryRequestV1:
             raise ValueError
         return replace(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError("invalid query request") from None
 
 
@@ -468,7 +467,7 @@ def _validated_evaluation(value: object) -> CoverageEvaluationV1:
             tuple(replace(month) for month in value.months),
             tuple(replace(selection) for selection in value.verified_partitions),
         )
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
 
 
@@ -588,3 +587,33 @@ def _expire_query(deadline: threading.Event, connection: Any) -> None:
     deadline.set()
     with suppress(Exception):
         connection.interrupt()
+
+
+def _cleanup_query_resources(
+    timer: threading.Timer | None,
+    connection: Any | None,
+    active_exception: BaseException | None,
+) -> None:
+    cleanup_error: BaseException | None = None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except BaseException as error:
+            cleanup_error = error
+        try:
+            timer.join(timeout=1.0)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if connection is not None:
+        try:
+            connection.close()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is None:
+        return
+    if active_exception is not None:
+        active_exception.add_note("query resource cleanup failed")
+        return
+    raise cleanup_error

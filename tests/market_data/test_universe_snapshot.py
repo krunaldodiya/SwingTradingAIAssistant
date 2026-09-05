@@ -870,11 +870,13 @@ def test_catalog_precommit_validator_rolls_back_universe_row(tmp_path) -> None:
             _snapshot()
         )
         catalog.connection.execute("DELETE FROM universe_snapshots")
-        with pytest.raises(CatalogPersistenceError):
+        failure = ValueError()
+        with pytest.raises(ValueError) as raised:
             catalog.save_universe_snapshot(
                 metadata,
-                precommit_validator=lambda: (_ for _ in ()).throw(ValueError()),
+                precommit_validator=lambda: (_ for _ in ()).throw(failure),
             )
+        assert raised.value is failure
         assert catalog.list_universe_snapshots() == ()
 
 

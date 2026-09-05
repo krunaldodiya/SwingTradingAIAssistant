@@ -33,7 +33,14 @@ from .manifest_lifecycle import (
     ValidationOutcome,
 )
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
-from .parquet import iter_candles_from_parquet
+from .parquet import (
+    ARROW_DATA_ERRORS,
+    CandleParquetConversionError,
+    IncompatibleCandleParquetSchemaError,
+    MissingCandleSchemaVersionError,
+    UnsupportedCandleSchemaVersionError,
+    iter_candles_from_parquet,
+)
 from .partition_publication import canonical_partition_relative_path
 from .public_contract import (
     CoveragePayloadV1,
@@ -52,7 +59,12 @@ from .schedule_evidence import (
     ScheduleOutcome,
 )
 from .schemas import CanonicalCandle
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 from .validation import (
     EQUITY_MONTH_VALIDATION_POLICY_V1,
     MAX_CANONICAL_EQUITY_CANDLES,
@@ -76,8 +88,16 @@ _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 _READ_BUFFER_SIZE = 64 * 1024
 _IST = timezone(timedelta(hours=5, minutes=30))
 
+_PARTITION_DECODING_ERRORS = (
+    *ARROW_DATA_ERRORS,
+    CandleParquetConversionError,
+    IncompatibleCandleParquetSchemaError,
+    MissingCandleSchemaVersionError,
+    UnsupportedCandleSchemaVersionError,
+)
 
-class _PartitionReadFailure(RuntimeError):
+
+class PartitionReadFailureV1(RuntimeError):
     def __init__(self, category: FailureCategory) -> None:
         super().__init__("stored partition is invalid")
         self.category = category
@@ -266,12 +286,9 @@ class ExistingCoverageAdmissionV1:
 
     def ensure_live(self, root: object) -> None:
         if not self._live or root != self._root:
-            raise RuntimeError("coverage admission unavailable")
-        try:
-            with self._lease.read_operation(self._root) as operation:
-                operation.ensure_live()
-        except Exception:
-            raise RuntimeError("coverage admission unavailable") from None
+            raise StorageRootLeaseError("coverage admission unavailable")
+        with self._lease.read_operation(self._root) as operation:
+            operation.ensure_live()
 
     def close(self) -> None:
         if self._live:
@@ -329,7 +346,7 @@ class StoredCoverageEvaluatorV1:
             if type(selection) is not VerifiedPartitionV1:
                 raise ValueError
             selection = replace(selection)
-        except Exception:
+        except (TypeError, ValueError):
             raise ValueError("invalid verified partition selection") from None
         if type(admission) is not ExistingCoverageAdmissionV1:
             raise ValueError("invalid coverage admission")
@@ -592,7 +609,7 @@ def _validated_request(value: object) -> CoverageRequestV1:
             raise ValueError
         reconstructed = replace(value)
         return reconstructed
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError("invalid coverage request") from None
 
 
@@ -769,7 +786,7 @@ def _evaluate_physical_month(
         )
     try:
         checksum, candles = _read_partition(root, lease, expected_path)
-    except _PartitionReadFailure as failure:
+    except PartitionReadFailureV1 as failure:
         return _corrupt_month(plan, manifest, failure.category)
     _ensure_deadline_live(deadline)
     if checksum != manifest.checksum_sha256:
@@ -784,14 +801,9 @@ def _evaluate_physical_month(
         return _corrupt_month(
             plan, manifest, FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
         )
-    try:
-        evidence = EquityMonthValidationPolicy(
-            EQUITY_MONTH_VALIDATION_POLICY_V1
-        ).validate(plan, candles, schedule, len(candles), len(candles))
-    except Exception:
-        return _corrupt_month(
-            plan, manifest, FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
-        )
+    evidence = EquityMonthValidationPolicy(EQUITY_MONTH_VALIDATION_POLICY_V1).validate(
+        plan, candles, schedule, len(candles), len(candles)
+    )
     _ensure_deadline_live(deadline)
     if (
         evidence.policy_version != manifest.validation_policy_version
@@ -941,8 +953,9 @@ def _open_verified_partition(
 ) -> Generator[VerifiedPartitionReadHandleV1, None, None]:
     parent: int | None = None
     file_descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
-        with lease.read_operation(root) as operation:
+        with _read_operation_preserving_error(lease, root) as operation:
             try:
                 parent, file_descriptor = _open_partition_descriptor(
                     operation.descriptor, selection.canonical_path
@@ -959,37 +972,32 @@ def _open_verified_partition(
                 operation.ensure_live()
                 _require_unchanged_partition_identity(before, after, entry)
                 _require_selection_matches_candles(selection, digest, candles)
-            except _PartitionReadFailure:
+            except PartitionReadFailureV1:
                 raise
             except FileNotFoundError:
-                raise _PartitionReadFailure(FailureCategory.FILE_MISSING) from None
+                raise PartitionReadFailureV1(FailureCategory.FILE_MISSING) from None
             except OSError:
-                raise _PartitionReadFailure(
+                raise PartitionReadFailureV1(
                     FailureCategory.PATH_INVALID_OR_MISMATCHED
                 ) from None
-            except Exception:
-                raise _PartitionReadFailure(
+            except _PARTITION_DECODING_ERRORS:
+                raise PartitionReadFailureV1(
                     FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
                 ) from None
-            try:
-                yield VerifiedPartitionReadHandleV1(
-                    f"/dev/fd/{file_descriptor}", selection
-                )
-            except BaseException:
-                raise
-            else:
-                final = os.fstat(file_descriptor)
-                final_entry = os.stat(
-                    selection.canonical_path.rsplit("/", 1)[-1],
-                    dir_fd=parent,
-                    follow_symlinks=False,
-                )
-                operation.ensure_live()
-                _require_unchanged_partition_identity(after, final, final_entry)
+            yield VerifiedPartitionReadHandleV1(f"/dev/fd/{file_descriptor}", selection)
+            final = os.fstat(file_descriptor)
+            final_entry = os.stat(
+                selection.canonical_path.rsplit("/", 1)[-1],
+                dir_fd=parent,
+                follow_symlinks=False,
+            )
+            operation.ensure_live()
+            _require_unchanged_partition_identity(after, final, final_entry)
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        for candidate in (file_descriptor, parent):
-            if candidate is not None:
-                os.close(candidate)
+        _close_partition_descriptors(parent, file_descriptor, active_exception)
 
 
 def _read_partition(
@@ -997,39 +1005,97 @@ def _read_partition(
 ) -> tuple[str, tuple[CanonicalCandle, ...]]:
     parent: int | None = None
     file_descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
-        with lease.read_operation(root) as operation:
-            parent, file_descriptor = _open_partition_descriptor(
-                operation.descriptor, relative_path
-            )
-            before = os.fstat(file_descriptor)
-            _validate_partition_stat(before)
-            digest, candles = _decode_partition(file_descriptor)
-            after = os.fstat(file_descriptor)
-            entry = os.stat(
-                relative_path.rsplit("/", 1)[-1],
-                dir_fd=parent,
-                follow_symlinks=False,
-            )
-            operation.ensure_live()
-            _require_unchanged_partition_identity(before, after, entry)
-            return digest, candles
-    except _PartitionReadFailure:
+        try:
+            with _read_operation_preserving_error(lease, root) as operation:
+                parent, file_descriptor = _open_partition_descriptor(
+                    operation.descriptor, relative_path
+                )
+                before = os.fstat(file_descriptor)
+                _validate_partition_stat(before)
+                digest, candles = _decode_partition(file_descriptor)
+                after = os.fstat(file_descriptor)
+                entry = os.stat(
+                    relative_path.rsplit("/", 1)[-1],
+                    dir_fd=parent,
+                    follow_symlinks=False,
+                )
+                operation.ensure_live()
+                _require_unchanged_partition_identity(before, after, entry)
+                return digest, candles
+        except PartitionReadFailureV1:
+            raise
+        except FileNotFoundError:
+            raise PartitionReadFailureV1(FailureCategory.FILE_MISSING) from None
+        except OSError:
+            raise PartitionReadFailureV1(
+                FailureCategory.PATH_INVALID_OR_MISMATCHED
+            ) from None
+        except _PARTITION_DECODING_ERRORS:
+            raise PartitionReadFailureV1(
+                FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
+            ) from None
+    except BaseException as error:
+        active_exception = error
         raise
-    except FileNotFoundError:
-        raise _PartitionReadFailure(FailureCategory.FILE_MISSING) from None
-    except OSError:
-        raise _PartitionReadFailure(
-            FailureCategory.PATH_INVALID_OR_MISMATCHED
-        ) from None
-    except Exception:
-        raise _PartitionReadFailure(
-            FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
-        ) from None
     finally:
-        for candidate in (file_descriptor, parent):
-            if candidate is not None:
-                os.close(candidate)
+        _close_partition_descriptors(parent, file_descriptor, active_exception)
+
+
+@contextmanager
+def _read_operation_preserving_error(
+    lease: StorageRootLease, root: Path
+) -> Generator[StorageRootLeaseOperation, None, None]:
+    operation = lease.read_operation(root)
+    active_exception: BaseException | None = None
+    entered = False
+    try:
+        operation.__enter__()
+        entered = True
+        yield operation
+    except BaseException as error:
+        active_exception = error
+        raise
+    finally:
+        if entered:
+            try:
+                operation.__exit__(
+                    type(active_exception) if active_exception is not None else None,
+                    active_exception,
+                    (
+                        active_exception.__traceback__
+                        if active_exception is not None
+                        else None
+                    ),
+                )
+            except BaseException:
+                if active_exception is not None:
+                    active_exception.add_note("storage read-operation cleanup failed")
+                else:
+                    raise
+
+
+def _close_partition_descriptors(
+    parent: int | None,
+    file_descriptor: int | None,
+    active_exception: BaseException | None,
+) -> None:
+    cleanup_error: BaseException | None = None
+    for candidate in (file_descriptor, parent):
+        if candidate is None:
+            continue
+        try:
+            os.close(candidate)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is None:
+        return
+    if active_exception is not None:
+        active_exception.add_note("partition descriptor cleanup failed")
+        return
+    raise cleanup_error
 
 
 def read_partition_under_lease(
@@ -1050,8 +1116,11 @@ def _open_partition_descriptor(
             os.close(parent)
             parent = child
         return parent, os.open(parts[-1], _FILE_FLAGS, dir_fd=parent)
-    except Exception:
-        os.close(parent)
+    except BaseException as error:
+        try:
+            os.close(parent)
+        except BaseException:
+            error.add_note("partition descriptor cleanup failed")
         raise
 
 
@@ -1062,9 +1131,9 @@ def _validate_partition_stat(value: os.stat_result) -> None:
         or stat.S_IMODE(value.st_mode) != 0o600
         or value.st_nlink != 1
     ):
-        raise _PartitionReadFailure(FailureCategory.PATH_INVALID_OR_MISMATCHED)
+        raise PartitionReadFailureV1(FailureCategory.PATH_INVALID_OR_MISMATCHED)
     if value.st_size <= 0 or value.st_size > MAX_COVERAGE_PARQUET_BYTES_V1:
-        raise _PartitionReadFailure(FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE)
+        raise PartitionReadFailureV1(FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE)
 
 
 def _partition_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -1091,7 +1160,7 @@ def _require_unchanged_partition_identity(
         == _partition_identity(after)
         == _partition_identity(entry)
     ):
-        raise _PartitionReadFailure(FailureCategory.PATH_INVALID_OR_MISMATCHED)
+        raise PartitionReadFailureV1(FailureCategory.PATH_INVALID_OR_MISMATCHED)
 
 
 def _require_selection_matches_candles(
@@ -1100,7 +1169,7 @@ def _require_selection_matches_candles(
     candles: tuple[CanonicalCandle, ...],
 ) -> None:
     if digest != selection.checksum_sha256:
-        raise _PartitionReadFailure(FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED)
+        raise PartitionReadFailureV1(FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED)
     plan = selection.plan
     if (
         len(candles) != selection.row_count
@@ -1131,7 +1200,7 @@ def _require_selection_matches_candles(
             for candle in candles
         )
     ):
-        raise _PartitionReadFailure(FailureCategory.PATH_INVALID_OR_MISMATCHED)
+        raise PartitionReadFailureV1(FailureCategory.PATH_INVALID_OR_MISMATCHED)
 
 
 def _decode_partition(
@@ -1155,12 +1224,12 @@ def _decode_partition(
             for batch in reader:
                 decoded_text_bytes += _candle_text_bytes(batch)
                 if decoded_text_bytes > MAX_COVERAGE_DECODED_TEXT_BYTES_V1:
-                    raise _PartitionReadFailure(
+                    raise PartitionReadFailureV1(
                         FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
                     )
                 candles.extend(batch)
                 if len(candles) > MAX_CANONICAL_EQUITY_CANDLES:
-                    raise _PartitionReadFailure(
+                    raise PartitionReadFailureV1(
                         FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
                     )
     return digest.hexdigest(), tuple(candles)

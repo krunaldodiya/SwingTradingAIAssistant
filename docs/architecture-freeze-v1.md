@@ -64,8 +64,9 @@ for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
 merged that planning record without changing runtime. Issue #155 delivered the
 exact reviewed Plan 30 runtime prerequisite. Open Project **In Progress** Issue
 #156 then owns the separately bounded Plan 33 implementation.
-Owner-prioritized maintenance Issue #145 follows #156 before another product
-module starts.
+Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
+policy below. It changes execution-failure handling, not the product-module
+sequence or the separately bounded scope of #156.
 [Plan 34](plans/34-swing-research-feature-map.md)
 freezes the necessary-only feature taxonomy: no later Price Action, Volume,
 Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
@@ -556,3 +557,56 @@ A module advances only after its requirements and validation are complete.
 Prior repositories are non-authoritative references. Their concepts may be
 studied, but logic must be independently specified, tested, and validated for
 this project's equity-only scope before adoption.
+
+## Internal errors and operator diagnostics
+
+[Issue #145](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/145)
+freezes the maintenance contract for shared market-data execution failures.
+An implementation defect is not evidence that a market input is malformed,
+unsupported, missing, corrupt, conflicting, invalid, or historically unavailable.
+
+- Shared schedule, instrument-snapshot, stored-coverage, partition-read,
+  daily-query, and retained-source internals propagate unexpected exceptions
+  after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
+  evidence rejection. Known validation and decoder errors are converted only at
+  their narrow input/data boundary.
+- Expected schedule and snapshot validation signals retain `ValueError`
+  compatibility through explicit subclasses. Expected lease-authority failures
+  use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
+  uses `PartitionReadFailureV1` with the existing finite failure categories;
+  an unrelated exception's attributes do not establish an evidence finding.
+- Recognized malformed/unsupported Arrow data signals remain data failures.
+  Native resource exhaustion and cancellation do not assert corrupt evidence.
+  Query timeout/resource outcomes remain distinct; unexpected SQL implementation
+  faults propagate, and catalog transactions roll back before propagation.
+- Existing V1 public coverage/query adapters retain the closed
+  `FAILED / UNCLASSIFIED_FAILURE` execution-failure envelope, without partial
+  rows or evidence payloads. That envelope is not a market-evidence state.
+- Before a completed public response, the `market-data` CLI maps an unexpected
+  exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
+  stderr. Parser rejection is exactly `request_invalid\n`; existing bounded
+  command-admission diagnostics remain distinct. Recognized probe failures use
+  exactly `probe_failed\n`, not dynamic exception-class names.
+- A completed valid V1 terminal report retains its existing output and exit
+  behavior. Request admission, execution, exit-code validation, and output
+  publication are ordered so an execution defect is not called an invalid
+  request and no partial success is printed.
+
+The closed public failure code or fixed CLI diagnostic is the operator signal.
+No logger, telemetry backend, or persistent diagnostic file is added. Never
+print or log exception messages, representations, dynamic class names, chained
+exceptions, stacks, private paths, credentials, source payloads, or raw provider
+responses. Applications calling shared internals directly must supply this
+bounded operator boundary rather than exposing propagated exceptions.
+
+On an internal error, stop that invocation without relabeling or deleting its
+evidence. Preserve private inputs; report only the command name, software version,
+and fixed code. A separate authorized debugging session may investigate the
+implementation. There is no automatic provider fallback or evidence acquisition.
+
+Delivered Sprint 10–15 result schemas, evidence enums, supported-input
+precedence, persisted formats, and historical exact-read identities remain
+unchanged. Source-at-rest manifests are refreshed from formatted code, including
+transitively bound manifests; old revisions retain their original writer and
+evidence identities. Current boundary regressions, exact independent review,
+repository gates, and installed-artifact proof are recorded with Issue #145.
