@@ -615,3 +615,61 @@ def test_calendar_classification_propagates_computation_fault(
             schedule, schedule.covered_from, schedule.covered_to
         )
     assert raised.value is failure
+
+
+@pytest.mark.parametrize("close_timing", ("before", "after"))
+def test_open_parent_close_fault_preserves_primary_and_closes_owned_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_timing: str
+) -> None:
+    _, lease = _store(tmp_path)
+    primary = AssertionError("traversal close fault")
+    cleanup_error = OSError("secondary descriptor cleanup fault")
+    opened: set[int] = set()
+    faulted = False
+    real_dup, real_open, real_close = (
+        schedule_module.os.dup,
+        schedule_module.os.open,
+        schedule_module.os.close,
+    )
+
+    def track_dup(descriptor: int) -> int:
+        duplicate = real_dup(descriptor)
+        opened.add(duplicate)
+        return duplicate
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path in ("calendar-schedules", "sha256"):
+            opened.add(descriptor)
+        return descriptor
+
+    def close_with_fault(descriptor: int) -> None:
+        nonlocal faulted
+        if descriptor not in opened:
+            real_close(descriptor)
+            return
+        if not faulted:
+            faulted = True
+            if close_timing == "after":
+                real_close(descriptor)
+                opened.discard(descriptor)
+            raise primary
+        real_close(descriptor)
+        opened.discard(descriptor)
+        raise cleanup_error
+
+    with lease, lease.root_operation(tmp_path) as operation:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(schedule_module.os, "dup", track_dup)
+            scoped.setattr(schedule_module.os, "open", track_open)
+            scoped.setattr(schedule_module.os, "close", close_with_fault)
+            with pytest.raises(AssertionError) as raised:
+                schedule_module._open_parent(operation, create=True)
+            assert raised.value is primary
+        assert not opened

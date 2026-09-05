@@ -494,7 +494,8 @@ class DuckDBCatalog:
             try:
                 _close_catalog_descriptor(self._database_descriptor, primary_error)
             except BaseException as error:
-                primary_error = error
+                if primary_error is None:
+                    primary_error = error
             self._database_descriptor = None
         self._database_identity = None
         self._snapshot_path = None
@@ -504,11 +505,15 @@ class DuckDBCatalog:
             try:
                 self._snapshot_directory.cleanup()
             except OSError:
-                pass
+                if primary_error is None:
+                    primary_error = CatalogStorageError(
+                        "catalog snapshot cleanup failed"
+                    )
             except BaseException as error:
                 if primary_error is None:
                     primary_error = error
-            self._snapshot_directory = None
+            else:
+                self._snapshot_directory = None
         return primary_error
 
     def ensure_read_identity(self) -> None:
@@ -557,6 +562,7 @@ class DuckDBCatalog:
                     _READ_ONLY_DATABASE_FLAGS,
                     dir_fd=operation.descriptor,
                 )
+                self._database_descriptor = descriptor
                 identity = _catalog_identity(os.fstat(descriptor))
                 _validate_read_only_catalog_identity(identity)
                 snapshot_path, snapshot_identity = self._copy_catalog_snapshot(
@@ -573,7 +579,6 @@ class DuckDBCatalog:
                 ):
                     raise CatalogStorageError("catalog identity is invalid")
                 before = _open_file_descriptors()
-                self._database_descriptor = descriptor
                 self._database_identity = identity
                 self._snapshot_path = snapshot_path
                 self._snapshot_identity = snapshot_identity
@@ -3039,7 +3044,8 @@ def _close_catalog_descriptor(
     try:
         os.close(descriptor)
     except OSError:
-        pass
+        if primary_error is None:
+            raise CatalogStorageError("catalog descriptor cleanup failed") from None
     except BaseException:
         if primary_error is None:
             raise

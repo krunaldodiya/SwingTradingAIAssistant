@@ -1113,18 +1113,17 @@ def _open_partition_descriptor(
     root_descriptor: int, relative_path: str
 ) -> tuple[int, int]:
     parent = os.dup(root_descriptor)
+    child: int | None = None
     try:
         parts = relative_path.split("/")
         for component in parts[:-1]:
             child = os.open(component, _DIRECTORY_FLAGS, dir_fd=parent)
             os.close(parent)
             parent = child
+            child = None
         return parent, os.open(parts[-1], _FILE_FLAGS, dir_fd=parent)
     except BaseException as error:
-        try:
-            os.close(parent)
-        except BaseException:
-            error.add_note("partition descriptor cleanup failed")
+        _close_partition_descriptors(parent, child, error)
         raise
 
 

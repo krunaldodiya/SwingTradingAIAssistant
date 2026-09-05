@@ -497,6 +497,155 @@ def test_leased_catalog_publish_keeps_previous_generation_readable_during_swap(
     assert observed == [initial, initial]
 
 
+@pytest.mark.parametrize("fault", ("identity", "copy"))
+def test_read_only_catalog_admission_failure_closes_owned_source_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    real_open = catalog_module.os.open
+    real_fstat = catalog_module.os.fstat
+    opened: list[int] = []
+    failure = AssertionError("admission fault")
+
+    def capture_open(*args: object, **kwargs: object) -> int:
+        descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+        if args[0] == "catalog.duckdb":
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(catalog_module.os, "open", capture_open)
+    if fault == "identity":
+
+        def fail_identity(descriptor: int) -> os.stat_result:
+            if descriptor in opened:
+                raise failure
+            return real_fstat(descriptor)
+
+        monkeypatch.setattr(catalog_module.os, "fstat", fail_identity)
+    else:
+        monkeypatch.setattr(
+            DuckDBCatalog,
+            "_copy_catalog_snapshot",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    with (
+        acquired.lease,
+        pytest.raises(AssertionError) as caught,
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
+
+    assert caught.value is failure
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            real_fstat(descriptor)
+
+
+def test_catalog_descriptor_cleanup_oserror_is_not_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+
+    with acquired.lease:
+        catalog.__enter__()
+        descriptor = catalog._database_descriptor  # pyright: ignore[reportPrivateUsage]
+        assert descriptor is not None
+        real_close = catalog_module.os.close
+        with monkeypatch.context() as scoped:
+
+            def close_then_fail(value: int) -> None:
+                real_close(value)
+                if value == descriptor:
+                    raise OSError("injected descriptor cleanup failure")
+
+            scoped.setattr(catalog_module.os, "close", close_then_fail)
+            with pytest.raises(CatalogStorageError):
+                catalog.close()
+
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+        catalog.close()
+
+
+def test_catalog_snapshot_cleanup_oserror_is_not_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+
+    with acquired.lease:
+        catalog.__enter__()
+        snapshot_directory = (
+            catalog._snapshot_directory  # pyright: ignore[reportPrivateUsage]
+        )
+        assert snapshot_directory is not None
+        with monkeypatch.context() as scoped:
+
+            def fail_cleanup() -> None:
+                raise OSError("injected snapshot cleanup failure")
+
+            scoped.setattr(snapshot_directory, "cleanup", fail_cleanup)
+            with pytest.raises(CatalogStorageError):
+                catalog.close()
+
+        assert Path(snapshot_directory.name).is_dir()
+        catalog.close()
+        assert not Path(snapshot_directory.name).exists()
+
+
+def test_catalog_cleanup_preserves_body_primary_and_attempts_every_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+    failure = AssertionError("body primary")
+    descriptor_closed = False
+
+    with acquired.lease, monkeypatch.context() as scoped:
+        real_close = catalog_module.os.close
+        with pytest.raises(AssertionError) as caught, catalog:
+            descriptor = catalog._database_descriptor
+            snapshot_directory = catalog._snapshot_directory
+            assert descriptor is not None
+            assert snapshot_directory is not None
+            real_cleanup = snapshot_directory.cleanup
+
+            def fail_descriptor_close(value: int) -> None:
+                nonlocal descriptor_closed
+                real_close(value)
+                if value == descriptor and not descriptor_closed:
+                    descriptor_closed = True
+                    raise OSError("injected descriptor cleanup failure")
+
+            def fail_snapshot_cleanup() -> None:
+                real_cleanup()
+                raise OSError("injected snapshot cleanup failure")
+
+            scoped.setattr(catalog_module.os, "close", fail_descriptor_close)
+            scoped.setattr(snapshot_directory, "cleanup", fail_snapshot_cleanup)
+            raise failure
+        assert caught.value is failure
+
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+    assert not Path(snapshot_directory.name).exists()
+    catalog.close()
+
+
 def test_read_only_catalog_never_creates_or_migrates(tmp_path) -> None:
     missing = tmp_path / "missing"
     missing.mkdir()

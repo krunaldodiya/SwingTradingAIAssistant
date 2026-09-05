@@ -966,3 +966,45 @@ def test_admission_preserves_primary_and_closes_both_owned_descriptors(
     for descriptor in owned:
         with pytest.raises(OSError):
             os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("error_type", (OSError, AssertionError))
+def test_live_authority_rejects_standalone_path_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    target: int | None = None
+    failure = error_type("private cleanup sentinel")
+    real_open = lease_module._open_directory_without_symlink_components
+    real_close = os.close
+
+    def capture_open(root: Path) -> int:
+        nonlocal target
+        target = real_open(root)
+        return target
+
+    def fail_close(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor == target:
+            raise failure
+
+    expected = (
+        lease_module.StorageRootLeaseError if error_type is OSError else error_type
+    )
+    with acquired.lease, acquired.lease.read_operation(tmp_path) as operation:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                lease_module, "_open_directory_without_symlink_components", capture_open
+            )
+            scoped.setattr(os, "close", fail_close)
+            try:
+                raise KeyError("unrelated caller failure")
+            except KeyError:
+                with pytest.raises(expected) as caught:
+                    operation.ensure_live()
+            if error_type is not OSError:
+                assert caught.value is failure
+        assert target is not None
+        with pytest.raises(OSError):
+            os.fstat(target)

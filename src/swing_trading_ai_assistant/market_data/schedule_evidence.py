@@ -680,6 +680,7 @@ def _parse_schedule_json_int(value: str) -> int:
 def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int | None:
     root_fd = operation.descriptor
     current = os.dup(root_fd)
+    child: int | None = None
     try:
         for component in ("calendar-schedules", "sha256"):
             operation.ensure_live()
@@ -697,8 +698,12 @@ def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int |
                 child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
             os.close(current)
             current = child
+            child = None
         return current
     except BaseException:
+        if child is not None:
+            with suppress(BaseException):
+                os.close(child)
         with suppress(BaseException):
             os.close(current)
         raise

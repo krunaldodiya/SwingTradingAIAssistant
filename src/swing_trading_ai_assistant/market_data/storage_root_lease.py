@@ -410,7 +410,8 @@ class StorageRootLease:
                     "storage lease authority unavailable"
                 ) from None
             raise
-        _close_descriptor(path_descriptor)
+        if not _close_descriptor(path_descriptor):
+            raise StorageRootLeaseError("storage lease descriptor cleanup failed")
 
     def _assert_lease_open(self) -> None:
         descriptor = self._descriptor

@@ -710,3 +710,68 @@ def test_partition_hardlink_is_rejected_at_read_boundary(tmp_path: Path) -> None
         raised.value.category
         is coverage_module.FailureCategory.PATH_INVALID_OR_MISMATCHED
     )
+
+
+@pytest.mark.parametrize("close_timing", ("before", "after"))
+def test_open_partition_descriptor_close_fault_preserves_primary_and_closes_owned_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_timing: str
+) -> None:
+    (tmp_path / "first" / "second").mkdir(parents=True)
+    partition = tmp_path / "first" / "second" / "bars.parquet"
+    partition.write_bytes(b"partition")
+    partition.chmod(0o600)
+    root_descriptor = os.open(tmp_path, coverage_module._DIRECTORY_FLAGS)
+    primary = AssertionError("traversal close fault")
+    cleanup_error = OSError("secondary descriptor cleanup fault")
+    opened: set[int] = set()
+    faulted = False
+    real_dup, real_open, real_close = (
+        coverage_module.os.dup,
+        coverage_module.os.open,
+        coverage_module.os.close,
+    )
+
+    def track_dup(descriptor: int) -> int:
+        duplicate = real_dup(descriptor)
+        opened.add(duplicate)
+        return duplicate
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.add(descriptor)
+        return descriptor
+
+    def close_with_fault(descriptor: int) -> None:
+        nonlocal faulted
+        if descriptor not in opened:
+            real_close(descriptor)
+            return
+        if not faulted:
+            faulted = True
+            if close_timing == "after":
+                real_close(descriptor)
+                opened.discard(descriptor)
+            raise primary
+        real_close(descriptor)
+        opened.discard(descriptor)
+        raise cleanup_error
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(coverage_module.os, "dup", track_dup)
+            scoped.setattr(coverage_module.os, "open", track_open)
+            scoped.setattr(coverage_module.os, "close", close_with_fault)
+            with pytest.raises(AssertionError) as raised:
+                coverage_module._open_partition_descriptor(
+                    root_descriptor, "first/second/bars.parquet"
+                )
+            assert raised.value is primary
+        assert not opened
+    finally:
+        real_close(root_descriptor)
