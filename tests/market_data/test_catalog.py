@@ -304,6 +304,70 @@ def test_leased_catalog_close_fault_propagates_without_publication(
         assert frozenset(root.iterdir()) == initial_entries
 
 
+def test_leased_catalog_operational_close_fault_propagates_without_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = duckdb.IOException("injected native close failure")
+    with acquired.lease:
+        catalog = DuckDBCatalog(root, lease=acquired.lease)
+        with pytest.raises(duckdb.IOException) as raised, catalog:
+            catalog.create_manifest(_in_progress())
+            assert catalog._snapshot_directory is not None
+            snapshot_directory = Path(catalog._snapshot_directory.name)
+            connection = catalog.connection
+
+            class ConnectionCloseProxy:
+                def close(self) -> None:
+                    connection.close()
+                    raise failure
+
+            catalog._connection = ConnectionCloseProxy()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
+@pytest.mark.parametrize("close_fault", (False, True))
+def test_leased_catalog_failed_body_discards_staged_change_despite_close_fault(
+    tmp_path: Path, close_fault: bool
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    body_failure = ValueError()
+    cleanup_failure = duckdb.IOException("injected close failure")
+    with acquired.lease:
+        catalog = DuckDBCatalog(root, lease=acquired.lease)
+        with pytest.raises(ValueError) as raised, catalog:
+            catalog.create_manifest(_in_progress())
+            assert catalog._snapshot_directory is not None
+            snapshot_directory = Path(catalog._snapshot_directory.name)
+            connection = catalog.connection
+
+            class ConnectionCloseProxy:
+                def close(self) -> None:
+                    connection.close()
+                    raise cleanup_failure
+
+            if close_fault:
+                catalog._connection = ConnectionCloseProxy()
+            raise body_failure
+        assert raised.value is body_failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
 @pytest.mark.parametrize("existing_source", (False, True))
 def test_leased_catalog_conditional_publish_never_overwrites_final_race(
     tmp_path: Path,
@@ -688,6 +752,41 @@ def test_catalog_initialization_preserves_unknown_fault_after_cleanup(
     assert raised.value is failure
     with pytest.raises(CatalogStorageError):
         _ = catalog.connection
+
+
+def test_initialize_schema_preserves_parser_exception_identity(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = duckdb.ParserException("injected parser failure")
+    monkeypatch.setattr(
+        catalog,
+        "_user_relations",
+        lambda: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(duckdb.ParserException) as raised:
+        catalog.__enter__()
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection
+
+
+def test_user_relations_preserves_parser_exception_identity(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = duckdb.ParserException("injected parser failure")
+
+    class FaultingConnection:
+        def execute(self, *_args: object) -> None:
+            raise failure
+
+    monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+
+    with pytest.raises(duckdb.ParserException) as raised:
+        catalog._user_relations()
+    assert raised.value is failure
 
 
 def test_catalog_identity_validation_preserves_unknown_fault_after_cleanup(

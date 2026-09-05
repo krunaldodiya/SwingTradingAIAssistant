@@ -74,8 +74,13 @@ class InstrumentCatalog:
     @classmethod
     def from_json_bytes(cls, payload: bytes) -> InstrumentCatalog:
         try:
-            records: object = json.loads(payload)
-        except (ValueError, RecursionError):
+            records: object = json.loads(payload, parse_int=_parse_catalog_json_int)
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            InstrumentCatalogPayloadError,
+            RecursionError,
+        ):
             raise InstrumentCatalogPayloadError(
                 "instrument catalog is not valid JSON"
             ) from None
@@ -214,6 +219,15 @@ class InstrumentCatalogClient:
                 "instrument catalog response is not valid gzip"
             ) from None
         return InstrumentCatalog.from_json_bytes(payload)
+
+
+def _parse_catalog_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise InstrumentCatalogPayloadError(
+            "instrument catalog is not valid JSON"
+        ) from None
 
 
 def _text(value: object) -> str:

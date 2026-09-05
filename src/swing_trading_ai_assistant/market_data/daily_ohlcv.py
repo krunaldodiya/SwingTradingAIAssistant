@@ -50,6 +50,7 @@ from .schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
     ScheduleEvidenceStore,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
     schedule_digest,
@@ -469,19 +470,25 @@ def _validated_schedule_evidence(
         if type(value) is not ScheduleEvidenceResult:
             raise ValueError
         evidence = replace(value)
-        schedule = evidence.schedule
+    except (TypeError, ValueError):
+        raise QueryExecutionFailureV1 from None
+    schedule = evidence.schedule
+    if (
+        evidence != value
+        or evidence.outcome is not ScheduleOutcome.RESOLVED
+        or type(schedule) is not ExpectedSessionSchedule
+        or evidence.digest != digest
+        or schedule.as_of > invocation
+    ):
+        raise QueryExecutionFailureV1
+    try:
         if (
-            evidence != value
-            or evidence.outcome is not ScheduleOutcome.RESOLVED
-            or schedule is None
-            or evidence.digest != digest
-            or schedule.as_of > invocation
-            or schedule_digest(schedule) != digest
+            schedule_digest(schedule) != digest
             or canonical_schedule_bytes(schedule) != evidence.canonical_bytes
         ):
-            raise ValueError
+            raise QueryExecutionFailureV1
         return replace(schedule)
-    except (TypeError, ValueError):
+    except ScheduleEvidenceValidationError:
         raise QueryExecutionFailureV1 from None
 
 

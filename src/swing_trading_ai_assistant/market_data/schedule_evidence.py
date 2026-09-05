@@ -552,8 +552,14 @@ def _parse_canonical_bytes(value: object) -> ExpectedSessionSchedule:
             parse_constant=lambda _constant: (_ for _ in ()).throw(
                 ScheduleEvidenceValidationError()
             ),
+            parse_int=_parse_schedule_json_int,
         )
-    except (UnicodeDecodeError, ValueError, RecursionError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ScheduleEvidenceValidationError,
+        RecursionError,
+    ):
         raise ScheduleEvidenceValidationError from None
     if type(parsed) is not dict:
         raise ScheduleEvidenceValidationError
@@ -662,6 +668,13 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ScheduleEvidenceValidationError
         result[key] = value
     return result
+
+
+def _parse_schedule_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise ScheduleEvidenceValidationError from None
 
 
 def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int | None:

@@ -178,6 +178,13 @@ def _reject_nonstandard_json_constant(value: str) -> NoReturn:
     raise _RejectedProviderJSON
 
 
+def _parse_provider_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _RejectedProviderJSON from None
+
+
 def _decode_success_candles(
     body: bytes,
 ) -> tuple[_SuccessDecodeStatus, list[list[object]]]:
@@ -188,8 +195,14 @@ def _decode_success_candles(
             body,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_int=_parse_provider_json_int,
         )
-    except (ValueError, RecursionError, MemoryError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _RejectedProviderJSON,
+        RecursionError,
+    ):
         return _SuccessDecodeStatus.MALFORMED_JSON, []
     if type(payload) is not dict:
         return _SuccessDecodeStatus.INVALID_ENVELOPE, []

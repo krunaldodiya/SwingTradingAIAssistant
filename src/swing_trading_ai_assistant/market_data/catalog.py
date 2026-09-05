@@ -459,6 +459,8 @@ class DuckDBCatalog:
         return self
 
     def __exit__(self, _exc_type: object, error: object, _traceback: object) -> None:
+        if error is not None:
+            self._write_publish_ready = False
         try:
             self.close()
         except BaseException:
@@ -472,8 +474,6 @@ class DuckDBCatalog:
         if self._connection is not None:
             try:
                 self._connection.close()
-            except _OPERATIONAL_DUCKDB_ERRORS:
-                pass
             except BaseException as error:
                 primary_error = error
             self._connection = None
@@ -1514,7 +1514,7 @@ class DuckDBCatalog:
         except CatalogSchemaError:
             self._rollback()
             raise
-        except duckdb.Error:
+        except _OPERATIONAL_DUCKDB_ERRORS:
             self._rollback()
             raise CatalogSchemaError("catalog schema is invalid") from None
         except BaseException:
@@ -1612,7 +1612,7 @@ class DuckDBCatalog:
                 ).fetchall()
             }
             return tables | views
-        except duckdb.Error:
+        except _OPERATIONAL_DUCKDB_ERRORS:
             raise CatalogSchemaError("catalog schema is invalid") from None
 
     def _validate_schema(self, *, version: int = 6) -> None:  # noqa: C901

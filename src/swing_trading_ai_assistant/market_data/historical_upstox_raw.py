@@ -1075,8 +1075,14 @@ def _closed_json(raw: object, maximum: int) -> dict[str, Any]:
             object_pairs_hook=pairs,
             parse_float=_reject_float,
             parse_constant=_reject_constant,
+            parse_int=_parse_closed_json_int,
         )
-    except (UnicodeDecodeError, ValueError, RecursionError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _MalformedSourceJson,
+        RecursionError,
+    ):
         raise _MalformedSourceJson from None
     if type(value) is not dict:
         raise _MalformedSourceJson
@@ -1096,6 +1102,13 @@ def _reject_float(_: str) -> object:
 
 def _reject_constant(_: str) -> object:
     raise _MalformedSourceJson
+
+
+def _parse_closed_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _MalformedSourceJson from None
 
 
 def _depth(value: object) -> int:

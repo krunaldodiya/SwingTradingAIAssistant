@@ -644,8 +644,14 @@ def _parse_canonical_journal(value: bytes) -> InstrumentSnapshotMetadataV1:
                 parse_constant=lambda _value: (_ for _ in ()).throw(
                     InstrumentSnapshotValidationError()
                 ),
+                parse_int=_parse_journal_json_int,
             )
-        except (UnicodeDecodeError, ValueError, RecursionError):
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            InstrumentSnapshotValidationError,
+            RecursionError,
+        ):
             raise InstrumentSnapshotValidationError from None
         if type(parsed_object) is not dict:
             raise InstrumentSnapshotValidationError
@@ -716,6 +722,13 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise InstrumentSnapshotValidationError
         value[key] = item
     return value
+
+
+def _parse_journal_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise InstrumentSnapshotValidationError from None
 
 
 def _open_snapshot_root(operation: StorageRootLeaseOperation, *, create: bool) -> int:

@@ -599,17 +599,19 @@ def _read_historical_local_file(
         raise ValueError
     parts = _absolute_no_follow_parts(path)
     parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    parent_identities = {(os.fstat(parent).st_dev, os.fstat(parent).st_ino)}
     descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
+        metadata = os.fstat(parent)
+        parent_identities = {(metadata.st_dev, metadata.st_ino)}
         for part in parts[:-1]:
             next_parent = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
-            os.close(parent)
-            parent = next_parent
+            previous_parent, parent = parent, next_parent
+            os.close(previous_parent)
             metadata = os.fstat(parent)
             parent_identities.add((metadata.st_dev, metadata.st_ino))
         if (
@@ -654,10 +656,11 @@ def _read_historical_local_file(
         ):
             raise _RequestInvalid
         return admitted.raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent)
+        _close_cli_file_descriptors((descriptor, parent), active_exception)
 
 
 def _admit_regime_current_argv(argv: list[str] | None) -> bool:
@@ -794,6 +797,8 @@ def _read_current_regime_input(path: Path) -> bytes:
     descriptor = os.open(
         "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )
+    file_descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
         for part in parts[:-1]:
             next_descriptor = os.open(
@@ -801,38 +806,38 @@ def _read_current_regime_input(path: Path) -> bytes:
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=descriptor,
             )
-            os.close(descriptor)
-            descriptor = next_descriptor
+            previous_descriptor, descriptor = descriptor, next_descriptor
+            os.close(previous_descriptor)
         file_descriptor = os.open(
             parts[-1],
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=descriptor,
         )
-        try:
-            before = os.fstat(file_descriptor)
-            if (
-                not stat.S_ISREG(before.st_mode)
-                or before.st_uid != os.geteuid()
-                or before.st_nlink != 1
-                or stat.S_IMODE(before.st_mode) & 0o077
-                or before.st_size < 1
-                or before.st_size > 16 * 1024
-            ):
-                raise _RequestInvalid
-            raw = os.read(file_descriptor, 16 * 1024 + 1)
-            after = os.fstat(file_descriptor)
-            if len(raw) != before.st_size or (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-            ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-                raise _RequestInvalid
-            return raw
-        finally:
-            os.close(file_descriptor)
+        before = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o077
+            or before.st_size < 1
+            or before.st_size > 16 * 1024
+        ):
+            raise _RequestInvalid
+        raw = os.read(file_descriptor, 16 * 1024 + 1)
+        after = os.fstat(file_descriptor)
+        if len(raw) != before.st_size or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise _RequestInvalid
+        return raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_cli_file_descriptors((file_descriptor, descriptor), active_exception)
 
 
 def _run_current_cohort_command(
@@ -913,6 +918,7 @@ def _read_cohort_file(path: Path) -> bytes:
         path,
         os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
     )
+    active_exception: BaseException | None = None
     try:
         metadata = os.fstat(descriptor)
         if (
@@ -925,8 +931,27 @@ def _read_cohort_file(path: Path) -> bytes:
         if len(raw) != metadata.st_size:
             raise _RequestInvalid
         return raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_cli_file_descriptors((descriptor,), active_exception)
+
+
+def _close_cli_file_descriptors(
+    descriptors: tuple[int | None, ...], active_exception: BaseException | None
+) -> None:
+    pending = active_exception
+    for descriptor in descriptors:
+        if descriptor is None:
+            continue
+        try:
+            os.close(descriptor)
+        except BaseException as error:  # noqa: BLE001 - finish cleanup before propagation
+            if pending is None:
+                pending = error
+    if active_exception is None and pending is not None:
+        raise pending
 
 
 def _command_request(args: argparse.Namespace, injected: bool) -> _CommandAdmissionV1:

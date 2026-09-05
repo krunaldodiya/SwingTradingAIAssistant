@@ -2037,3 +2037,34 @@ def test_preparation_does_not_succeed_after_unknown_snapshot_file_fault(
     assert not (
         tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
     ).exists()
+
+
+def test_schedule_source_preserves_read_failure_over_close_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "schedule.json"
+    path.write_bytes(_schedule_input().canonical_bytes)
+    path.chmod(0o600)
+    primary = AssertionError("primary schedule read failure")
+    faulted_descriptors: set[int] = set()
+    closed_descriptors: set[int] = set()
+    real_close = preparation_module.os.close
+
+    def fail_read(descriptor: int, _size: int) -> bytes:
+        faulted_descriptors.add(descriptor)
+        raise primary
+
+    def close_after_failure(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in faulted_descriptors:
+            closed_descriptors.add(descriptor)
+            raise OSError("secondary schedule close failure")
+
+    monkeypatch.setattr(preparation_module.os, "read", fail_read)
+    monkeypatch.setattr(preparation_module.os, "close", close_after_failure)
+    with pytest.raises(AssertionError) as raised:
+        CanonicalFileScheduleSourceV1(path).load()
+
+    assert raised.value is primary
+    assert faulted_descriptors
+    assert closed_descriptors == faulted_descriptors

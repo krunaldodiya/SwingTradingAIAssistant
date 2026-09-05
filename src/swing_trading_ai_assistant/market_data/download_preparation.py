@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
@@ -607,6 +608,7 @@ def _file_identity(value: os.stat_result) -> tuple[int, ...]:
 
 def _read_bounded_regular_file(path: Path) -> bytes:
     descriptor = -1
+    active_exception: BaseException | None = None
     try:
         descriptor = os.open(
             path,
@@ -638,11 +640,19 @@ def _read_bounded_regular_file(path: Path) -> bytes:
         ):
             raise ScheduleEvidenceValidationError
         return canonical
-    except OSError:
+    except OSError as error:
+        active_exception = error
         raise ScheduleEvidenceValidationError from None
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
         if descriptor >= 0:
-            os.close(descriptor)
+            if active_exception is None:
+                os.close(descriptor)
+            else:
+                with suppress(BaseException):
+                    os.close(descriptor)
 
 
 def _touched_months(from_date: date, to_date: date) -> int:

@@ -645,11 +645,13 @@ def test_v4_to_v5_migration_is_atomic_and_read_only_never_migrates(tmp_path) -> 
         current.connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     broken = DuckDBCatalog(tmp_path)
+    failure = RuntimeError()
     broken._after_corporate_action_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        RuntimeError("injected v5 failure")
+        failure
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         broken.__enter__()
+    assert raised.value is failure
     connection = duckdb.connect(str(tmp_path / "catalog.duckdb"))
     try:
         assert "corporate_action_snapshots" not in {

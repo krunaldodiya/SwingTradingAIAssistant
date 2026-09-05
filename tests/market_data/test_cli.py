@@ -945,3 +945,73 @@ def test_real_probe_reports_historical_decoder_defect_as_internal_error(
     output = capsys.readouterr()
     assert calls == ["decode"]
     assert (status, output.out, output.err) == (2, "", "internal_error\n")
+
+
+@pytest.mark.parametrize("reader", ("cohort", "regime", "historical"))
+@pytest.mark.parametrize("failure_kind", ("admission", "read"))
+def test_local_reader_preserves_primary_failure_and_closes_all_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reader: str,
+    failure_kind: str,
+) -> None:
+    path = (tmp_path / "input.json").resolve()
+    path.write_bytes(b"" if failure_kind == "admission" else b"{}")
+    path.chmod(0o600)
+    metadata = path.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    root = (tmp_path / "storage").resolve()
+    root.mkdir(mode=0o700)
+    admitted_root = cli._admit_historical_storage_root(root)
+    primary = AssertionError("primary local read failure")
+    cleanup_error = (
+        AssertionError("secondary admission close failure")
+        if failure_kind == "admission"
+        else OSError("secondary read close failure")
+    )
+    opened: set[int] = set()
+    real_open, real_close = cli.os.open, cli.os.close
+    real_read, real_fstat = cli.os.read, cli.os.fstat
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.add(descriptor)
+        return descriptor
+
+    def is_input(descriptor: int) -> bool:
+        current = real_fstat(descriptor)
+        return (current.st_dev, current.st_ino) == identity
+
+    def fail_read(descriptor: int, size: int) -> bytes:
+        if is_input(descriptor):
+            raise primary
+        return real_read(descriptor, size)
+
+    def close_after_failure(descriptor: int) -> None:
+        target = is_input(descriptor)
+        real_close(descriptor)
+        opened.discard(descriptor)
+        if target:
+            raise cleanup_error
+
+    monkeypatch.setattr(cli.os, "open", track_open)
+    monkeypatch.setattr(cli.os, "read", fail_read)
+    monkeypatch.setattr(cli.os, "close", close_after_failure)
+    expected = cli._RequestInvalid if failure_kind == "admission" else AssertionError
+    with pytest.raises(expected) as raised:
+        if reader == "cohort":
+            cli._read_cohort_file(path)
+        elif reader == "regime":
+            cli._read_current_regime_input(path)
+        else:
+            cli._read_historical_local_file(path, 1024, admitted_root)
+
+    if failure_kind == "read":
+        assert raised.value is primary
+    assert not opened

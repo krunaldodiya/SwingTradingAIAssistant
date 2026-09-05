@@ -93,11 +93,13 @@ def test_current_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
         catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
 
     broken = DuckDBCatalog(tmp_path)
+    failure = RuntimeError()
     broken._after_provisional_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        RuntimeError("injected migration failure")
+        failure
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         broken.__enter__()
+    assert raised.value is failure
 
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
@@ -130,13 +132,14 @@ def test_v5_populated_migration_preserves_legacy_row_and_path(tmp_path) -> None:
         )
         catalog.connection.execute("DROP TABLE provisional_partitions_v6")
         catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 6")
-
     broken = DuckDBCatalog(tmp_path)
+    failure = RuntimeError()
     broken._after_content_addressed_provisional_migration = (  # type: ignore[method-assign]
-        lambda: (_ for _ in ()).throw(RuntimeError("injected v6 failure"))
+        lambda: (_ for _ in ()).throw(failure)
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         broken.__enter__()
+    assert raised.value is failure
     connection = catalog_module.duckdb.connect(str(tmp_path / "catalog.duckdb"))
     try:
         assert connection.execute(

@@ -76,7 +76,9 @@ from swing_trading_ai_assistant.market_data.public_query import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleClosure,
+    ScheduleEvidenceResult,
     ScheduleEvidenceStore,
+    ScheduleFailureCode,
     ScheduleOutcome,
     ScheduleSession,
 )
@@ -1555,3 +1557,47 @@ def test_disposable_root_daily_cli_is_provider_free_read_only_and_provenanced(
         }
     ]
     assert _root_bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize("helper", ("schedule_digest", "canonical_schedule_bytes"))
+def test_daily_schedule_helper_value_error_propagates_unchanged(
+    monkeypatch: pytest.MonkeyPatch, helper: str
+) -> None:
+    schedule = ExpectedSessionSchedule(
+        2,
+        "nse-authoritative-test",
+        "release-2026-08-01",
+        datetime(2026, 8, 1, tzinfo=UTC),
+        "Asia/Kolkata",
+        date(2026, 7, 3),
+        date(2026, 7, 3),
+        (
+            ScheduleSession(
+                date(2026, 7, 3),
+                _session().open_at,
+                _session().close_at,
+                "special-test",
+            ),
+        ),
+        (),
+    )
+    canonical = daily_module.canonical_schedule_bytes(schedule)
+    digest = daily_module.schedule_digest(schedule)
+    evidence = ScheduleEvidenceResult(
+        ScheduleOutcome.RESOLVED,
+        ScheduleFailureCode.NONE,
+        schedule,
+        canonical,
+        digest,
+        f"schedule_evidence/{digest}.json",
+    )
+    primary = ValueError("schedule computation defect")
+
+    def fail_helper(_schedule: ExpectedSessionSchedule) -> str:
+        raise primary
+
+    monkeypatch.setattr(daily_module, helper, fail_helper)
+    with pytest.raises(ValueError) as raised:
+        daily_module._validated_schedule_evidence(evidence, digest, NOW)
+
+    assert raised.value is primary
