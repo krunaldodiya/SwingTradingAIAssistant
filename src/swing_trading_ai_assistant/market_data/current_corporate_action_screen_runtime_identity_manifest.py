@@ -9,5 +9,5 @@ CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final = {
     "current_corporate_action_screen.py": "f3d866a662a8bb44eb04e57b8297c89cee7a2a9005cf0b37716fdf99261fe9b3",
     "schedule_evidence.py": "0abde4536d131e04d21534b1688c8aa1640bb80e1dc2700d650fd28b1c9d3ff2",
     "storage_root_lease.py": "a20d2e4e68b0788bcd3118a8ffb3e15b53b99e181a800c353a1e3a4b7b5ae942",
-    "universe_snapshot.py": "f37c9763860240617685c339934ede38ada2cadafe79ae629a78cb169cf90a30",
+    "universe_snapshot.py": "b0564eb22a0ce946536bed7abc851df6f2b8dd218c0d3f16e91a42b5a8f38fd2",
 }

@@ -55,18 +55,17 @@ deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
 current delivery sequence; it does not change the module order or authorize
 autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
 Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
-closed/completed. Sprint 17 / #147 has retained all `4/4` predeclared
-completed-session captures; no future-session wait remains. Its historical
-qualification and closure remain separate from current/live work. Sprint 19
-Price Action delivered through PR #153. Closed
-Issue #154 and accepted Plan 33 own only the bounded source decision, benchmark,
-and contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
-PR #157 merged that planning record without changing runtime. Issue #155 owns
-the exact reviewed Plan 30 runtime delivery; its governing merge installs that
-prerequisite without closing #147. Open Project **Todo** Issue #156 then owns
-the separately bounded Plan 33 implementation. Owner-prioritized maintenance
-Issue #145 follows #156 before another product module starts. Issue #147's
-four-session historical qualification remains a separate parallel lane.
+closed/completed. Sprint 17 / #147 retained all `4/4` predeclared
+completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
+closed/completed through PR #166; its Delivery Project item is **Done**.
+Sprint 19 Price Action delivered through PR #153. Closed Issue #154 and
+accepted Plan 33 own only the bounded source decision, benchmark, and contract
+for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
+merged that planning record without changing runtime. Issue #155 delivered the
+exact reviewed Plan 30 runtime prerequisite. Open Project **In Progress** Issue
+#156 then owns the separately bounded Plan 33 implementation.
+Owner-prioritized maintenance Issue #145 follows #156 before another product
+module starts.
 [Plan 34](plans/34-swing-research-feature-map.md)
 freezes the necessary-only feature taxonomy: no later Price Action, Volume,
 Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
@@ -402,6 +401,43 @@ It must never:
 - make autonomous buy or sell decisions;
 - generate opinions; or
 - perform LLM-style reasoning.
+
+## Dynamic stock-list and eligibility boundary
+
+Index, sector, Industry, thematic, watchlist, and explicit caller inputs are
+selection policies. Each produces an exact dynamic canonical stock list; none
+defines a separate Market Regime, Sector Analysis, Market Structure, Price
+Action, Volume, Relative Strength, or Risk algorithm. A reusable feature core
+consumes the list and its declared evidence capabilities without importing an
+index resolver or requiring category membership.
+
+The official [NSE Indices sectoral catalogue](https://www.niftyindices.com/indices/equity/sectoral-indices)
+and [NSE sectoral-indices page](https://www.nseindia.com/static/products-services/indices-sectoral)
+demonstrate why this separation is mandatory. Nifty Bank, Private Bank, PSU
+Bank, Financial Services, Financial Services Ex-Bank, NBFC, Housing Finance,
+Insurance, and MidSmall Financial Services are overlapping named index
+methodologies, not one mutually exclusive taxonomy. A Bank research list may
+come from any one authorized selector, an explicit union/intersection/difference,
+or a caller-supplied list. The tool preserves that exact list identity and
+provenance; it never infers or hard-codes the category from its members.
+
+The default product selector remains point-in-time Nifty 100. Nifty 500 is at
+most a carefully screened discovery universe, not blanket feature admission,
+and the product does not target every NSE listing. Selection is followed by a
+separate objective, versioned stock-eligibility boundary covering sufficient
+listing/history evidence, canonical identity and provider mappings, data
+quality, liquidity/turnover, price integrity, event risk, and every
+feature-specific requirement. Newly listed, very small-cap,
+penny/very-low-priced, thinly traded, or otherwise
+manipulation-susceptible stocks fail closed when an applicable evidence-backed
+gate is unsatisfied. Category membership never bypasses those gates, and price
+or capitalization alone never proves manipulation.
+
+Every feature owns a finite resource bound rather than a magic index
+cardinality. Oversized lists may be partitioned only through a versioned
+orchestrator that preserves exact whole-list semantics and one selection
+identity. Per-batch verdicts must not be averaged or combined when the feature
+depends on the complete cohort.
 
 ## Locked pipeline
 

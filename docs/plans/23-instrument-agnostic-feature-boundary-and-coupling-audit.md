@@ -18,6 +18,38 @@ Risk: **R2 documentation decision; later financial-research contract migrations 
 
 This decision supersedes the product-scope conclusion in the 2026-08-09 Nifty 100 hypothesis note. That note remains unchanged historical evidence of the earlier open question.
 
+### 2026-09-03 permanent owner clarification
+
+The owner reaffirmed that Nifty 50, Nifty Next 50, Nifty 100, every sectoral
+index, every Industry label, and every explicit watchlist are list-selection
+policies rather than research implementations. The same reusable feature core
+must accept the resulting exact canonical stock list. A supported stock must
+not be rejected solely because it is outside a named index or category, and a
+category name must not select a different calculation.
+
+This does not authorize all Indian listings. The default product selection
+remains Nifty 100; Nifty 500 is at most a carefully screened discovery ceiling,
+not blanket admission. Every selected stock still passes separate objective,
+versioned eligibility and evidence gates for sufficient listing/history,
+canonical identity and mappings, data quality, liquidity/turnover, price
+integrity, event risk, and the requested capability. Newly listed, very
+small-cap, penny/very-low-priced, thinly traded, or otherwise
+manipulation-susceptible stocks fail closed when those evidence-backed gates
+are unsatisfied; price or capitalization alone does not prove manipulation.
+
+The official [NSE Indices sectoral catalogue](https://www.niftyindices.com/indices/equity/sectoral-indices)
+and [NSE sectoral-indices page](https://www.nseindia.com/static/products-services/indices-sectoral)
+are concrete selection examples. Their Bank, Private Bank, PSU Bank, Financial
+Services, Financial Services Ex-Bank, NBFC, Housing Finance, Insurance, and
+MidSmall Financial Services lists overlap. The tool must preserve the exact
+chosen source, as-of evidence, membership, and list identity rather than infer
+one taxonomy or hard-code a Bank-analysis path.
+
+Feature-specific finite limits are resource bounds, not category rules. A
+larger list may be partitioned only when a versioned orchestrator preserves the
+complete-list calculation and identity; independently calculated batch
+verdicts must not be averaged or relabelled as a whole-list result.
+
 ## Non-goals
 
 - No source, test, dependency, provider, data, schema, or runtime change in

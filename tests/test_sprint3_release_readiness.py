@@ -66,6 +66,9 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
     cli_source = source_by_name["cli.py"]
     event_source = source_by_name["current_event_notice.py"]
     acquisition_source = source_by_name["current_evidence_acquisition.py"]
+    nifty100_capture_source = source_by_name[
+        "efficient_current_nifty100_adjusted_capture.py"
+    ]
     other_source = "\n".join(
         text
         for name, text in source_by_name.items()
@@ -74,6 +77,7 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
             "current_event_notice.py",
             "current_evidence_acquisition.py",
             "current_industry_classification.py",
+            "efficient_current_nifty100_adjusted_capture.py",
         }
     )
     for text in (
@@ -99,6 +103,12 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
     assert "https://www.nseindia.com/api/corporate-announcements" in acquisition_source
     assert "https://www.nseindia.com/api/holiday-master" in acquisition_source
     assert "https://api.upstox.com/v2/market/holidays" in acquisition_source
+    for official_url in (
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+    ):
+        assert official_url in nifty100_capture_source
     assert "nseindia.com" not in other_source.lower()
     assert "nse.com" not in other_source.lower()
     for primitive in (
@@ -144,9 +154,18 @@ def test_documented_cli_is_symbol_agnostic_and_provider_boundary_is_unambiguous(
 def test_distribution_ci_secrets_and_future_scope_are_release_bounded() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         project = tomllib.load(file)["project"]
+    assert {
+        "curl-cffi==0.16.1",
+        "multitasking==0.0.13",
+        "yfinance==1.6.0",
+    } <= set(project["dependencies"])
     assert project["scripts"] == {
         "capture-forward-adjusted-ohlcv": (
             "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
+        ),
+        "efficient-current-nifty100-adjusted-capture": (
+            "swing_trading_ai_assistant.entrypoints."
+            "efficient_current_nifty100_adjusted_capture:main"
         ),
         "evidence-readiness": (
             "swing_trading_ai_assistant.historical_evaluation.prospective_cli:main"

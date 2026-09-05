@@ -19,6 +19,11 @@ The canonical project adapter decides whether this procedure applies. Once
 selected, use this procedure for the assigned multi-agent or independent-review
 work without expanding its scope.
 
+This procedure is OMP-runtime-only. Start every worker and reviewer with
+`herdr agent start ... --kind omp`; never invoke the native Codex CLI or use
+`--kind codex` for repository work. An `openai-codex/...` value below is only
+an OMP model route passed through OMP's `--model` option.
+
 All agents share the current working tree. A separate tab is visibility, not
 filesystem isolation.
 
@@ -66,17 +71,20 @@ adapter; an assignment may narrow them further.
    tab, parse its returned tab and pane IDs, and start every routed agent before
    submitting any work prompt. Dependency-ordered or shared-file work is a later
    serialized wave.
-6. **Verify routing from OMP evidence.** For every started agent, obtain
-   `agent_session.value` from `herdr agent get`. Before work is submitted, verify
-   that the session JSONL's initial `model_change` and
-   `thinking_level_change` records name the approved model and `high` thinking,
-   occur before the first message, and do not report a model fallback.
+6. **Verify routing from OMP evidence before work.** For every started agent,
+   obtain `agent_session.value` from `herdr agent get`. If the session JSONL
+   exists, verify its initial `model_change` and `thinking_level_change`
+   records before submitting work. If this OMP version creates the JSONL only
+   after first input, send the fixed no-work routing bootstrap, wait for the
+   agent to settle, and then verify that the same records precede the bootstrap
+   message and report no fallback. A delayed JSONL is routine lifecycle state,
+   not an owner decision.
 7. **Prompt once, completely.** Include goal, governing sources, file ownership,
    exact change, non-goals, acceptance criteria, dependency edges, validation
    ownership, integration boundary, escalation, and required report. Prompt once
-   means one work assignment, not a ban on a deliberate blocked-dialog response
-   or a result-capture recovery request; neither exception may add or redefine
-   work.
+   means one work assignment; the no-work routing bootstrap is not a work
+   assignment. A deliberate blocked-dialog response or result-capture recovery
+   request also does not violate this rule, but none may add or redefine work.
 8. **Fan out before waiting.** Submit the initial prompt to every independent
    agent without `--wait`. Only after all submissions are accepted, wait on each
    named agent with the default settled states; do not use `--until done`.
@@ -204,8 +212,25 @@ stable for the live wave.
 
 ### Verify OMP model and thinking before work
 
-For each started agent, resolve the OMP session path from Herdr and inspect the
-JSONL. This check must pass before its initial assignment is sent:
+For each started agent, resolve the OMP session path from Herdr. When it is
+already a regular file, inspect it immediately. Some OMP versions return the
+future path before creating the JSONL and create it only after first input.
+That lifecycle timing is not missing authority and MUST NOT be escalated to the
+owner.
+
+When the returned path is not yet a regular file:
+
+1. Confirm the recorded successful `herdr agent start` command used the approved
+   model, `--thinking high`, and `--approval-mode yolo`.
+2. Read the startup pane and require its visible model label to match the
+   approved model. This is provisional routing evidence, not authorization.
+3. Send exactly this no-work input:
+   `Routing bootstrap only. Do not read or change repository files, execute
+   commands, use tools, or begin the assignment. Reply only READY.`
+4. Wait for `idle` or `done`, resolve `agent_session.value` again, and require
+   the JSONL to exist. Any work or tool use during the bootstrap invalidates the
+   agent.
+5. Perform the JSONL verification below before sending any work assignment.
 
 ```bash
 AGENT_JSON="$(herdr agent get "$AGENT_NAME")"
@@ -232,9 +257,11 @@ jq -e -s --arg approved "$APPROVED_MODEL" '
 ```
 
 Missing records, a different model or thinking level, a fallback, a non-path
-session reference, or either record appearing after the first message fails
-routing verification. Do not submit work; inspect or restart the incorrectly
-routed agent without interrupting any other active agent.
+session reference, or either routing record appearing after the first message
+fails verification. Inspect or restart the incorrectly routed agent without
+interrupting any other active agent. Do not send it work and do not ask the
+owner to approve routine continuation. Finish verifying the whole independent
+wave before fanning out its work assignments.
 
 ### Submit first, then wait and inspect
 
@@ -269,9 +296,13 @@ Handle the inspected `agent_status` exactly:
   agent before acting. Do not resend the initial assignment unless evidence
   proves it was not accepted.
 
-The one-work-prompt rule permits only two later inputs: a deliberate response to
-a blocked approval/question, and the result-recovery prompt below. Neither may
-change scope, acceptance, ownership, or the agent's implementation assignment.
+The one-work-prompt rule excludes the fixed no-work routing bootstrap and
+permits only two later inputs: a deliberate response to a blocked
+approval/question, and the result-recovery prompt below. Answer an in-scope
+routine permission dialog from the standing pre-approval; escalate only a
+genuine boundary named by the canonical project adapter. None of these inputs
+may change scope, acceptance, ownership, or the agent's implementation
+assignment.
 
 ### Capture complete output before close
 

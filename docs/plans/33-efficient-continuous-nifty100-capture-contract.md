@@ -19,7 +19,7 @@ The public NSE Indices constituent CSVs establish only the exact current bytes k
 2. **Scope fit:** composes two existing `1..50` adjusted-capture cohorts for the default current Nifty 50 plus Nifty Next 50 focus without changing reusable feature cores.
 3. **Material risk:** yfinance is an unofficial per-ticker Yahoo client with no published batch/rate guarantee; unbounded threads, missing mappings, current-list relabelling, partial publication, or raw/adjusted mixing would make the result unsafe or misleading.
 4. **Smallest alternative:** two sequential 50-ticker yfinance calls with eight internal workers, one fixed-cadence bounded curl-cffi session, existing adjusted settings, existing immutable cohort retention, and a read-time complete-union check; no provider framework, queue, scheduler, database, adaptive rate controller, or cross-cohort transaction subsystem.
-5. **Decision:** **accepted** as the Plan 33 implementation contract after fresh functional/domain/temporal **APPROVE** and security/privacy/provenance **PASS** review; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) is delivered by its governing merge, while bounded implementation [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156) remains a separate Todo Issue.
+5. **Decision:** **accepted** as the Plan 33 implementation contract after fresh functional/domain/temporal **APPROVE** and security/privacy/provenance **PASS** review; runtime delivery prerequisite [#155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155) is delivered by its governing merge, while [#156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156) and its governing pull request own the separate bounded implementation lifecycle.
 
 ## Source verification and decision
 
@@ -38,10 +38,11 @@ authorization.
 Disabled configuration returns `DISABLED/ADAPTER_DISABLED`. A missing, false,
 wrongly typed, duplicated, or malformed acknowledgement returns
 `AUTHORIZATION_DENIED/OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED`. Both return a
-sanitized bounded result before constituent retrieval, yfinance import/cache
-initialization, provider/session work, store lookup/write, or dependency
-logging. The command-line parser and one no-effect invocation test are the
-authority source and evidence; no ambient persisted acknowledgement or
+sanitized bounded result after a standard-library-only duplicate-key and
+enablement preflight but before any executable third-party import, constituent
+retrieval, yfinance import/cache initialization, provider/session work, store
+lookup/write, or dependency logging. Clean-process no-effect invocation tests
+are the authority evidence; no ambient
 authorization subsystem is added.
 
 ### Current selection inputs
@@ -91,9 +92,113 @@ The documented `download` boundary accepts a ticker list and `threads: bool | in
 
 Pinned `multitasking==0.0.13` creates its default CPU-sized pool when yfinance's threaded function is decorated, and `set_max_threads()` affects only new pools. Therefore `threads=8` alone does not impose an eight-worker ceiling. Plan 33 requires a fresh single-purpose operator process to import `multitasking`, call `createPool(name="plan33_yfinance_8", threads=8, engine="thread")`, assert the active pool name/engine/count, construct the bounded session, and only then import yfinance. The same assertions run immediately before each cohort call. An earlier yfinance import, another active pool, concurrent Plan 33 invocation in the same process, default/`True` threads, debug logging, or any pool value other than eight is a configuration failure before provider work.
 
-The supplied session is one `curl_cffi.requests.Session(impersonate="chrome", retry=0)` subtype with a shared locked transport ledger. It admits only:
+Before the enabled core import executes a provider dependency, the CLI requires
+a fresh process with no preloaded admitted dependency or transitive child
+module. It admits the exact locked yfinance runtime closure: `yfinance==1.6.0`,
+`beautifulsoup4==4.15.0`, `certifi==2026.7.22`, `cffi==2.1.1`,
+`charset-normalizer==3.5.1`, `curl-cffi==0.16.1`, `idna==3.19`,
+`lxml==6.1.2`, `multitasking==0.0.13`, `numpy==2.4.6`,
+`pandas==3.0.5`, `peewee==4.3.0`, `platformdirs==4.11.3`,
+`protobuf==7.36.0`, `pycparser==3.0`, `python-dateutil==2.9.0.post0`,
+`pytz==2026.3.post1`, `requests==2.34.2`, `six==1.17.0`,
+`soupsieve==2.9.2`, `typing-extensions==4.16.0`, `urllib3==2.7.0`,
+and `websockets==17.0.1` distributions beneath the running interpreter's
+resolved `purelib`/`platlib`. Exact aggregates are admitted only for CPython
+3.11 x86-64 on Darwin or Linux with the bound SOABI; every other runtime fails
+closed. The Linux identity and native-companion path are exercised in the
+locked Debian/Ubuntu-compatible CPython 3.11 environment used by hosted CI.
+The Requests family is admitted because pinned yfinance imports it for its
+dual-backend session-type compatibility surface; it is not an admitted
+provider transport.
 
-- a minimum 125-millisecond monotonic-clock interval between HTTP request
+Import admission is positive rather than an enumeration of known optional
+probes. The public console bootstrap first replaces itself with the same
+interpreter under `-I -S`, restores only the exact package and environment
+site-package roots needed by the installed runtime, and immediately imports
+the CLI. The enabled preload guard refuses to run without both isolated and
+no-site flags. Ambient `sitecustomize`, user-site, `PYTHONPATH`, and parent
+process module objects therefore cannot seed the retained initialization set.
+
+Only built-in and standard-library prefixes, the project prefix, the
+descriptor-admitted dependency prefixes, and the exact path-import prefixes
+required by this capture boundary may resolve. Every other top-level prefix is
+rejected before a later finder can execute it. An initialized built-in,
+frozen, standard-library, project, or interpreter-bootstrap module is accepted
+only when its exact standard loader, canonical specification name and origin,
+module file, and package search path match the module. Package search paths
+must equal the directory implied by the module origin, not merely a sibling
+directory beneath the same trusted root. Only the explicit interpreter aliases
+for `os.path` and importlib bootstrap modules may use a distinct specification
+name.
+
+The accepted module must also be the exact non-null object retained when the
+isolated CLI initialization completed; matching metadata cannot substitute a
+later module object or cross-name alias. Root discovery must not add any module
+after that snapshot, and request-authority support is loaded during the same
+isolated initialization rather than through a later open-ended retention
+window. The boundary then replaces ambient meta-path finders and path hooks
+with the standard built-in, frozen, source, and native-extension machinery,
+clears ambient path-finder cache entries, and restores the prior import state
+only after the verified lifetime ends. Known optional probes remain explicitly
+denied as defense in depth.
+
+Every distribution-owned package file is bound into an allowlisted aggregate,
+and every Python module executes from descriptor-read admitted bytes. Dependency
+admission allows at most 67,108,864 bytes per file and 67,108,864 bytes across
+one package tree. Installed Python source may be hard-linked by the package
+installer; link count is not treated as authenticity. Admission still requires
+the pathname and held descriptor to retain the same complete file identity
+before and after the bounded read, and the descriptor-read bytes must contribute
+to an allowlisted distribution aggregate.
+Each native extension and package-owned native companion is held by a
+shared-locked descriptor whose full metadata and content identity match the
+admitted distribution object. The extension loader receives only the verified
+`/dev/fd` or `/proc/self/fd` alias to that held object, never a second lookup of
+its mutable package pathname. Required companion libraries are loaded from the
+same descriptor aliases with global native visibility and retained for the
+verified import lifetime. This includes cffi's top-level `_cffi_backend` native
+object, curl-cffi's package extensions and companions, and NumPy/Pandas native
+extensions and companion libraries. Loaded Python file/spec origins bind to
+their admitted absolute paths, while a loaded native file/spec origin binds to
+that verified descriptor alias and remains live through the operation. The
+cffi-generated `curl_cffi._wrapper.lib` object has no file/spec; it is admitted
+only when it is the exact `lib` object exported by the separately
+descriptor-bound `curl_cffi._wrapper` extension.
+The admitted certifi CA bundle is descriptor-bound before the enabled core
+import, so dependency import cannot reopen that resource through the custom
+source loader.
+
+The CLI proves that the exported and inherited `Session` class is the admitted
+`curl_cffi.requests.session` class. The core retains the exact admitted
+`curl_cffi.requests` module object used to obtain that class.
+`YF_DISABLE_CURL_CFFI` is rejected as ambient transport authority, and provider
+preparation requires the current `sys.modules` entry plus pinned yfinance's
+active `_http` backend and exported `requests` object to remain that same
+non-null admitted object before a provider effect. Ambient import paths are
+removed for the duration of the operation. A package, coherent
+package-plus-metadata, preloaded transitive or optional module, ambient optional
+module, native pathname substitution, missing/replaced backend object, or
+Requests transport fallback is not executed.
+
+The CLI revalidates every retained native descriptor, every loaded dependency
+origin, the complete yfinance distribution and loaded-module set, and the exact
+curl-cffi backend immediately before each provider effect, after each adapter
+response, and before final success.
+
+The official-source opener installs no proxy handler and uses a fresh
+client-verifying TLS context populated only from the same admitted immutable CA
+bytes. The provider session copies those exact bytes into each thread-local
+native curl handle through `CURLOPT_CAINFO_BLOB`, explicitly restores peer and
+hostname verification after curl-cffi option preparation, and accepts only
+`GET` requests to the exact `fc.yahoo.com`, `query1.finance.yahoo.com`, and
+`query2.finance.yahoo.com` hosts. Consent hosts, non-`GET` methods, request-level
+transport overrides, ambient proxy variables, and mutable system trust roots
+are not authorities.
+
+The supplied session is one `curl_cffi.requests.Session(impersonate="chrome", retry=0)` subtype with a shared locked transport ledger and a non-overtakable call-start boundary. A worker holds that boundary from ledger admission through entry into the superclass HTTP call and releases it only at the first response-body callback or terminal return/failure. Thus concurrent scheduling cannot reorder admissions or cluster actual HTTP-call starts. It admits only:
+
+
+- a minimum 125-millisecond monotonic-clock interval between actual HTTP-call
   starts across all workers;
 - at most 256 HTTP starts per 50-member cohort;
 - at most 16,384 UTF-8 bytes for method plus URL plus encoded query target;
@@ -101,14 +206,17 @@ The supplied session is one `curl_cffi.requests.Session(impersonate="chrome", re
 - at most 134,217,728 aggregate response-body bytes per cohort.
 
 The response-body callback stops the transfer at the first limit violation
-before yfinance JSON/frame decoding. The session intercepts the first observed
-HTTP 429, records `PROVIDER_RATE_LIMITED`, and raises before yfinance's
-alternate-cookie request. Pinned yfinance may issue exactly one
-dependency-internal alternate-cookie request after a non-429 HTTP status
-`>=400`; that request is accepted as part of the single adapter invocation and
-is subject to the same start, cadence, target, and body bounds. There is no
-operator retry, fallback, second provider, or curl-cffi retry. The two cohort
-calls run sequentially. The exact adjusted call is:
+before yfinance JSON/frame decoding. A resource-limit violation remains sticky
+for all later starts and active-response body admissions. A cohort reset is
+rejected while any response remains active; only after every response is closed
+may the next explicit cohort reset clear the violation. The session intercepts
+the first observed HTTP 429, records `PROVIDER_RATE_LIMITED`, and raises before
+yfinance's alternate-cookie request.
+Pinned yfinance may issue exactly one dependency-internal alternate-cookie
+request after a non-429 HTTP status `>=400`; that request is accepted as part of
+the single adapter invocation and is subject to the same start, cadence, target,
+and body bounds. There is no operator retry, fallback, second provider, or
+curl-cffi retry. The two cohort calls run sequentially. The exact adjusted call is:
 
 ```python
 yfinance.download(
@@ -240,7 +348,8 @@ The first implementation Issue may deliver only one repeatable operator-triggere
 8. resolve valid existing revisions for both cohorts;
 9. acquire, validate, and retain/reuse every unresolved cohort in fixed
    `NIFTY_50`, `NIFTY_NEXT_50` order, continuing after provider/frame failure
-   but stopping new effects after a retention failure;
+   but stopping new effects after a retention failure or immutable-evidence
+   conflict;
 10. return complete Nifty 100 only when both revisions bind the same selection,
     schedule, decision session, source profile, configuration, and compatible
     retrieval boundary; and
@@ -250,16 +359,65 @@ The first implementation Issue may deliver only one repeatable operator-triggere
     dependency logs.
 
 The implementation reuses the existing yfinance/curl-cffi source boundary and
-immutable capture rules. It versions the changed pool, supplied session,
-cadence, and byte-bound configuration rather than weakening or silently
-mutating the delivered `threads=False` contract.
+immutable capture rules. Each Plan 33 receipt key binds the selection identity,
+low-level request identity, cohort, and high-level configuration so a valid
+official-source transition preserves both old and new receipts. A newly captured
+low-level revision publishes one immutable receipt binding its selection,
+request, schedule, revision, source, and retrieval time. An exact reused
+low-level revision may recover a missing receipt only after every bound identity
+and the immutable revision are revalidated; conflicting bytes fail closed before
+provider work. Every successful reused or captured cohort must then yield
+exactly one detached, exact-identity binding snapshot that remains live through
+cleanup and finalization. A missing, renamed, or replaced successful binding is
+`EVIDENCE_CONFLICT`; completion cannot omit its snapshot. The changed pool,
+supplied session, cadence, and byte-bound configuration is versioned rather than
+weakening or silently mutating the delivered `threads=False` contract.
+
+Before reading the private request or performing any source, cache, provider,
+or store effect, the CLI rejects the request file, schedule root, or either
+cohort storage root when it equals or is below the reserved cache boundary.
+The reusable core independently repeats the evidence-root separation check.
+The shared private-request reader returns the admitted bytes and the exact
+device/inode/metadata identity from the same held descriptor after final name
+and parent revalidation. The CLI carries that identity through the enabled
+handoff and rejects a later name substitution; it does not restat the pathname
+to derive a different identity.
+
+The provider cache uses one fixed owner-private directory beneath the
+descriptor-admitted selection root. Every admitted invocation clears private
+content through held file and directory descriptors before resolving cohort
+outcomes, including an all-`REUSED` invocation that never imports yfinance.
+Request and existing selection, schedule, and cohort-store device/inode
+identities are captured before the first source effect, passed into cache
+admission before provider import, and remain protected during recursive
+cleanup. The cache directory's own identity is also rejected if it aliases a
+protected object.
+Before provider use, the pinned yfinance timezone, cookie, and ISIN cache
+managers are bound to their in-memory no-op cache implementations and all three
+SQLite managers must remain unopened. If an unexpected database was opened,
+session shutdown must close it and report it closed before any file is
+content-cleared. Failure releases the cache authority without truncating its
+live database files and returns configuration insufficiency.
+
+Cleanup never unlinks or removes an entry through a mutable pathname. Regular
+files must be single-linked, are opened without following symlinks, are
+identity-revalidated from the held descriptor, and are truncated and synced
+through that descriptor. Directories are recursively content-cleared through
+held descriptors and retained. Symlinks, special files, hard-linked regular
+files, a changed name identity, or any protected identity fail closed without
+destructive cleanup. Every close revalidates the held and named cache
+identities, the content-cleared state, and the protected names before success.
+Zero-length regular files and content-cleared directories may remain for the
+next invocation; no cookie, provider response, or other cache payload bytes are
+retained. This avoids a stat-to-delete race because POSIX pathname removal
+cannot atomically bind the removed object to the previously checked identity.
 
 The governing [Issue #155](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/155)
 merge ports the exact reviewed actionable Plan 30 runtime from source candidate
-`54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main without changing
-or closing #147's historical lane.
+`54f8b7c8246d6bd302ca729c01686f635c9809c7` onto current main. Issue #147
+subsequently completed its separate historical lane through PR #166.
 [Issue #156](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156)
-then owns only this bounded Plan 33 implementation. It must not copy unreviewed
+owns only this bounded Plan 33 implementation. It must not copy unreviewed
 quarantine bytes, consume #147's retained historical evidence as current Plan 33
 input, or imply a qualification state not established by #147's exact evidence.
 
@@ -288,7 +446,8 @@ Shared admission returns exactly one of:
   mapping capability; or
 - `INSUFFICIENT_EVIDENCE` with exactly one of
   `CONSTITUENT_SOURCE_INVALID`, `CONSTITUENT_SOURCE_CONFLICT`,
-  `MAPPING_EVIDENCE_INVALID`, `SCHEDULE_INVALID`, or `EVIDENCE_CONFLICT`.
+  `MAPPING_EVIDENCE_INVALID`, `SCHEDULE_INVALID`, `EVIDENCE_CONFLICT`, or
+  `RETENTION_FAILED`.
 
 After shared admission, each cohort returns exactly one ordered outcome:
 
@@ -322,7 +481,7 @@ only by its own cohort identity and cannot authorize the union claim.
 | Case | Observable result | Prohibited effects | Evidence method |
 | --- | --- | --- | --- |
 | Enabled exact configuration and per-invocation acknowledgement; two exact disjoint 50-member lists; exact 100-member witness; mappings; schedule; bounded session; complete frames | Two valid revision references; complete union; sanitized bounded output | Raw/member publication; fallback | Focused positive plus one completed-session smoke |
-| Disabled configuration or missing/false/wrong/duplicate acknowledgement | `DISABLED/ADAPTER_DISABLED` or `AUTHORIZATION_DENIED/OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED` before all source/cache/provider/store/log effects | Ambient acknowledgement; network/cache/store effect | CLI parser and no-effect invocation tests |
+| Disabled configuration or missing/false/wrong/duplicate acknowledgement | `DISABLED/ADAPTER_DISABLED` or `AUTHORIZATION_DENIED/OWNER_PRIVATE_USE_NOT_ACKNOWLEDGED` before executable third-party import and all source/cache/provider/store/log effects | Ambient acknowledgement; dependency import; network/cache/store effect | CLI parser and clean-process shadow-dependency no-effect tests |
 | Caller request is 262,145 bytes or has malformed fields/bounds | `MALFORMED_INPUT` before source/provider/store effects | Source fetch; provider call; publication | 262,144 and limit-plus-one admission tests |
 | Any constituent response body is 262,145 bytes; fetched list/witness has 49/51/101 rows, duplicate, overlap, non-`EQ`, blank identity, or wrong header | `INSUFFICIENT_EVIDENCE/CONSTITUENT_SOURCE_INVALID` before yfinance/store effects | Full-body allocation/parse; member repair; substitution | Bounded-reader and source composition tests |
 | Pair union and official witness disagree, identity is substituted, or bytes change during paired admission | `INSUFFICIENT_EVIDENCE/CONSTITUENT_SOURCE_CONFLICT` before yfinance/store effects | Either cohort provider call or publication | Conflict/substitution test |
@@ -330,21 +489,25 @@ only by its own cohort identity and cannot authorize the union claim.
 | Current CSV lacks publisher-effective time | Current-at-retrieval label only | Historical/pre-retrieval membership claim | Serialization/nonclaim test |
 | Mapping capability is absent | `UNSUPPORTED_CAPABILITY` before provider call | `.NS` inference; wrong ticker call | Missing-capability test |
 | Mapping evidence is stale, conflicting, or substituted | `INSUFFICIENT_EVIDENCE/MAPPING_EVIDENCE_INVALID` before provider call | Mapping repair or wrong ticker call | Mapping interval/identity tests |
-| Invalid schedule, incomplete decision session, wrong close/cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar | Schedule/temporal tests |
-| Pool/session was not created before yfinance import; pool metadata, session type, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` for every unresolved cohort before provider work | CPU-derived, unbounded, silently sequential, or raced execution | Import-order/pool/session/configuration tests |
-| A request start is scheduled less than 125 milliseconds after the prior start, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; callback stops before frame decode; no partial publish | Limit bypass; full oversized decode; retry | Clock-controlled bound and limit-plus-one tests |
+| Invalid schedule, incomplete decision session, wrong close/cutoff, selection retrieved after the decision cutoff, or schedule identity substitution | `INSUFFICIENT_EVIDENCE/SCHEDULE_INVALID` before provider call | Partial-session capture; inferred calendar; untyped temporal failure | Schedule/temporal tests |
+| Parent process preloads a metadata-cloned standard module, `sitecustomize`, user-site, or `PYTHONPATH` shadow before invoking the public command | Public bootstrap replaces the process with immediate `-I -S` initialization; enabled preload admission proceeds only there | Parent module execution inside the capture runtime; inherited module object trust; later open-ended retention | Parent pre-import marker test plus isolated positive dependency import |
+| Pool/session was not created before yfinance import; any admitted, optional, or otherwise unapproved external dependency module is preloaded; an unapproved import is requested; ambient meta-path/path-hook/cache machinery survives inside the verified lifetime; the admitted distribution, any loaded Python origin, native descriptor origin/content/identity, exact exported/inherited `Session` class, retained active backend module object, pool metadata, retry value, cadence, bounds, worker value, or debug/concurrency state differs | `INSUFFICIENT_EVIDENCE/CONFIGURATION_INVALID` before provider work | `PYTHONPATH` package or coherent metadata substitution; preloaded transitive or optional-module substitution; ambient optional-code execution; native pathname reopen/substitution; missing/replaced backend accepted through `None` identity; CPU-derived, unbounded, silently sequential, or raced execution | Clean-process package/metadata/preloaded-child substitution, hostile unapproved meta-path/site-root/path-hook/cache, missing/replaced backend, and import-order/pool/session/configuration/native-descriptor tests |
+| Concurrent actual HTTP-call starts are less than 125 milliseconds apart, the 257th cohort start is requested, the request target is 16,385 bytes, one response body reaches 2,097,153 bytes, or aggregate cohort response bodies reach 134,217,729 bytes | Sticky `INSUFFICIENT_EVIDENCE/RESOURCE_LIMIT_EXCEEDED`; no later start, active-response body admission, or cohort reset until every active response closes; callback stops before frame decode; no partial publish | Admission overtake; clustered real calls; limit bypass after first violation; reset with active response; full oversized decode; retry | Concurrent superclass-entry cadence plus clock-controlled bound, limit-plus-one, active-reset, and post-violation tests |
 | First transport response is HTTP 429 | Session stops it before yfinance alternate-cookie handling; `INSUFFICIENT_EVIDENCE/PROVIDER_RATE_LIMITED`; second unresolved cohort still follows precedence | Dependency/operator retry; fallback; partial publish | Session interception/rate-limit test |
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |
 | Provider raises an ordinary non-rate exception or timeout | `INSUFFICIENT_EVIDENCE/PROVIDER_ERROR` for that cohort | Operator retry; fallback; partial cohort publish | Adapter failure tests |
 | Empty/unexpected-schema frame, missing/duplicated session or ticker, NaN/non-finite/non-positive price, negative/non-integral volume, or wrong timezone | `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE` for that cohort | Invented 429; member/session dropping; value repair | Frame matrix tests |
 | Complete yfinance-adjusted window crosses a provider-reported corporate action | Capture remains one adjusted revision; volume remains source-reported unadjusted; limitation retained | Upstox/raw substitution; local adjustment inference | Corporate-action basis test |
-| A later authorized request observes revised adjusted bytes | New immutable revision/lineage; old revision unchanged | Overwrite or relabelling old known-at | Revision/correction test |
+| A later authorized request observes revised adjusted bytes, including when its admitted parent was written by an explicitly compatible historical runtime | New immutable revision/lineage; old revision and writer identity unchanged; writer upgrade alone is not changed provider content | Overwrite, historical-writer rejection, spurious correction, or relabelling old known-at | Revision/correction and compatible-writer lineage tests |
 | First cohort has provider/frame failure; second is unresolved | Second is still attempted; ordered tuple carries both exact rows | Nondeterministic short-circuit | Combined-failure precedence test |
 | First cohort retention fails; second is unresolved | First is `RETENTION_FAILED`; second is `NOT_ATTEMPTED/BLOCKED_BY_PRIOR_RETENTION_FAILURE`; no later provider/store effect | Use of potentially unsafe store; missing second row | Retention-stop test |
 | First cohort retention fails; second was already validly reused | Failed first row plus valid reused second row; no new effect | Deletion or relabelling of reused revision | Mixed reuse/retention test |
 | Interruption or write failure during second cohort retention | `INSUFFICIENT_EVIDENCE/RETENTION_FAILED` for second; existing rollback/recovery semantics; ordered incomplete union | Partial revision admission; overwrite | Existing atomic-store interruption tests plus orchestration test |
+| The canonical `selections` or `plan33_bindings` child name is replaced after descriptor admission during a missing read or immutable publish, or a successful cohort binding disappears before detached snapshot/finalization | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; the replacement remains untouched and no success is returned | Publication into, deletion of, trust in the substituted sibling, or completion without exactly one live successful-cohort binding snapshot | Descriptor/name identity race and successful-binding-disappearance tests |
+| Both cohorts are validly `REUSED` while the fixed cache contains residue from an earlier cleanup failure | Cache contents are descriptor-cleared without importing yfinance or calling the provider; cleanup failure makes both rows `CONFIGURATION_INVALID` | Retained cookie/response data; provider work on an all-reuse invocation | All-reuse cache-residue regression |
+| Request, schedule, or cohort storage root equals/descends from the fixed provider-cache boundary; the cache directory aliases a protected identity; or a validated protected object is moved there before/during cleanup or provider import failure | Static overlap is `MALFORMED_INPUT`/`request_invalid`; later aliasing is `CONFIGURATION_INVALID`; protected identity is not deleted and no complete result is returned | Deletion of retained evidence; publication followed by cache deletion; dangling success | Core/CLI static-overlap, own-cache-alias, import-failure movement, root-before-source snapshot, descriptor-bound content-clear, and final-delete-substitution regressions |
 | Exact retry | Same revision identity and `REUSED`; no provider call/write | Duplicate revision; changed known-at | Retry test |
-| Either request identity points to invalid/conflicting bytes | `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; no new provider/store effect | Repair, overwrite, or masking provider call | Conflict/substitution tests |
+| The request pathname is replaced after descriptor admission, or either request identity points to invalid/conflicting bytes | The descriptor-bound identity follows the admitted bytes; later name substitution is `CONFIGURATION_INVALID`; conflicting domain bytes are `INSUFFICIENT_EVIDENCE/EVIDENCE_CONFLICT`; no new provider/store effect | Identity handoff from replacement bytes; repair, overwrite, or masking provider call | Request-reader handoff-swap and conflict/substitution tests |
 | Raw Upstox or another provider appears in either cohort | `INSUFFICIENT_EVIDENCE/PROVIDER_BASIS_INVALID` | Raw/adjusted mixing; silent fallback | Provider/price-basis substitution tests |
 | One cohort uses another selection, schedule, decision session, configuration, source profile, or incompatible retrieval boundary | Both cohort rows remain exact; `INCOMPLETE_CURRENT_NIFTY100_CAPTURE/UNION_INCOMPATIBLE` | Cross-context composition | Union binding tests |
 | Source/canonical rows or publication attempts arrive in another order | Canonical source rows `(ISIN Code, Symbol)`; canonical members `(isin, exchange, effective_symbol, provider_symbol)`; cohorts/publication `NIFTY_50` then `NIFTY_NEXT_50` | Input-order identity drift; nondeterministic output/write order | Permutation/publication-order tests |

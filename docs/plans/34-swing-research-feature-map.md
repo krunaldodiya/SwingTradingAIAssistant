@@ -91,9 +91,9 @@ ordered current/live delivery lane is:
 2. Issue #145 — define the cross-module internal-error taxonomy and privacy-safe
    operator diagnostics before another product module starts.
 
-Issue #147 has completed its separate parallel temporal-evidence lane at `4/4`.
-No future-session capture remains. Its final historical qualification stays
-separate from the ordered current/live lane and does not block that lane.
+Issue #147 completed its separate parallel temporal-evidence lane at `4/4`,
+passed unchanged Plan 29 for `OHLCV_ONLY`, and closed through PR #166. Its
+historical result remains separate from the ordered current/live lane.
 
 No possible feature in this plan automatically enters either lane.
 

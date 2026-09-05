@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
+import select
 import stat
 import subprocess
 import sys
@@ -11,6 +13,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pandas as pd
@@ -28,6 +31,7 @@ from swing_trading_ai_assistant.market_data import storage_root_lease as lease_c
 from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv import (
     ADJUSTED_PRICE_BASIS_V1,
     SOURCE_PROFILE_V1,
+    VOLUME_BASIS_V1,
     AdjustedOhlcvCaptureRevisionV1,
     CaptureForwardAdjustedOhlcvFailureV1,
     CaptureForwardAdjustedOhlcvMemberV1,
@@ -38,6 +42,7 @@ from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv impor
     compose_capture_forward_plan29_v1,
     mapping_identity_v1,
     parse_capture_forward_request_v1,
+    read_capture_forward_request_revision_v1,
     read_capture_forward_revision_v1,
     serialize_capture_forward_result_v1,
 )
@@ -529,6 +534,74 @@ def test_valid_capture_is_immutable_exact_and_retry_avoids_provider(
     assert stored[0].stat().st_mode & 0o777 == 0o400
 
 
+def test_provider_adjusted_corporate_action_window_keeps_reported_volume_basis(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+
+    class CorporateActionProvider(_Provider):
+        def download(self, **kwargs: object) -> object:
+            frame = cast(dict[str, object], super().download(**kwargs))
+            sessions = cast(tuple[date, ...], frame["index"])
+            split_position = len(sessions) // 2
+            rows: list[dict[str, object]] = []
+            for position, _session in enumerate(sessions):
+                base = (
+                    Decimal(200 + position)
+                    if position < split_position
+                    else Decimal(100 + position - split_position)
+                )
+                rows.append(
+                    {
+                        "open": base,
+                        "high": base + 2,
+                        "low": base - 1,
+                        "close": base + 1,
+                        "volume": (
+                            3_000 + position
+                            if position < split_position
+                            else 10_000 + position
+                        ),
+                    }
+                )
+            provider_symbols = cast(tuple[str, ...], kwargs["tickers"])
+            frame["ohlcv"] = {symbol: tuple(rows) for symbol in provider_symbols}
+            return frame
+
+    provider = CorporateActionProvider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    result = _invoke(request, provider, tmp_path)
+
+    assert isinstance(result, CaptureForwardAdjustedOhlcvSuccessV1)
+    assert result.revision.provider_source == "yfinance==1.6.0"
+    assert result.revision.source_profile == SOURCE_PROFILE_V1
+    assert result.revision.price_basis == ADJUSTED_PRICE_BASIS_V1
+    assert result.revision.volume_basis == VOLUME_BASIS_V1
+    split_position = len(request.schedule.sessions) // 2
+    before = result.revision.bars[split_position - 1]
+    after = result.revision.bars[split_position]
+    before_base = Decimal(200 + split_position - 1)
+    assert (before.open, before.high, before.low, before.close, before.volume) == (
+        before_base,
+        before_base + 2,
+        before_base - 1,
+        before_base + 1,
+        3_000 + split_position - 1,
+    )
+    assert (after.open, after.high, after.low, after.close, after.volume) == (
+        Decimal("100"),
+        Decimal("102"),
+        Decimal("99"),
+        Decimal("101"),
+        10_000 + split_position,
+    )
+    assert provider.last_kwargs is not None
+    assert provider.last_kwargs["auto_adjust"] is True
+    assert provider.last_kwargs["actions"] is False
+
+
 def test_reused_success_revalidates_child_directories_before_return(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -896,6 +969,235 @@ def test_explicit_changed_correction_preserves_parent_lineage(tmp_path: Path) ->
     assert len(tuple((tmp_path / "revisions").iterdir())) == 2
 
 
+def _retarget_retained_revision_writer(
+    root: Path,
+    revision: AdjustedOhlcvCaptureRevisionV1,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    writer_identity: str,
+) -> AdjustedOhlcvCaptureRevisionV1:
+    historical_request_identity = core._request_identity_for_writer_v1(  # pyright: ignore[reportPrivateUsage]
+        request, writer_identity
+    )
+    historical = replace(
+        revision,
+        request_identity_sha256=historical_request_identity,
+        runtime_code_identity_sha256=writer_identity,
+    )
+    (root / "requests" / f"{revision.request_identity_sha256}.json").unlink()
+    (root / "revisions" / f"{revision.revision_sha256}.json").unlink()
+    revision_path = root / "revisions" / f"{historical.revision_sha256}.json"
+    revision_path.write_bytes(historical.canonical_json_bytes())
+    revision_path.chmod(0o400)
+    pointer = root / "requests" / f"{historical.request_identity_sha256}.json"
+    pointer.write_bytes(
+        core._pointer_bytes(  # pyright: ignore[reportPrivateUsage]
+            historical.request_identity_sha256,
+            historical.revision_sha256,
+        )
+    )
+    pointer.chmod(0o400)
+    return historical
+
+
+@pytest.mark.parametrize(
+    "writer_identity",
+    [
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    ],
+)
+def test_correction_accepts_compatible_parent_writer_runtime(
+    tmp_path: Path, writer_identity: str
+) -> None:
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        _request(),
+        writer_identity,
+    )
+    request = _request(parent_revision_sha256=historical.revision_sha256)
+
+    correction = _invoke(
+        request,
+        _Provider(
+            retrieved_at=request.schedule.decision_session_official_close_at
+            + timedelta(hours=1),
+            price_offset=1,
+        ),
+        tmp_path,
+    )
+
+    assert isinstance(correction, CaptureForwardAdjustedOhlcvSuccessV1)
+    assert correction.revision.parent_revision_sha256 == historical.revision_sha256
+    assert (
+        correction.revision.runtime_code_identity_sha256
+        != historical.runtime_code_identity_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    "writer_identity",
+    [
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    ],
+)
+def test_writer_upgrade_is_not_correction_content_change(
+    tmp_path: Path, writer_identity: str
+) -> None:
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        _request(),
+        writer_identity,
+    )
+    request = _request(parent_revision_sha256=historical.revision_sha256)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        "INSUFFICIENT_EVIDENCE", "CORRECTION_CONTENT_UNCHANGED"
+    )
+    assert provider.calls == 1
+
+
+def test_released_base_writer_revision_remains_exactly_readable(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    initial = _capture(tmp_path)
+    historical = _retarget_retained_revision_writer(
+        tmp_path,
+        initial.revision,
+        request,
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+    )
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+
+    assert read_capture_forward_request_revision_v1(tmp_path, request) == historical
+    assert (
+        core.read_capture_forward_revision_v1(tmp_path, historical.revision_sha256)
+        == historical
+    )
+    result = _invoke(request, provider, tmp_path)
+    assert result == CaptureForwardAdjustedOhlcvSuccessV1("REUSED", historical)
+    assert provider.calls == 0
+
+
+def test_capture_lease_cleanup_failure_raises_typed_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capture(tmp_path)
+    request = _request()
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    monkeypatch.setattr(
+        core, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
+    )
+    original_close = core.StorageRootLease.close
+
+    def close_then_fail(lease: core.StorageRootLease) -> None:
+        original_close(lease)
+        raise RuntimeError("descriptor cleanup failed")
+
+    monkeypatch.setattr(core.StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(core._CaptureCleanupFailureV1, match="capture cleanup failed"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request,
+            provider,
+            tmp_path,
+            tmp_path / "schedule",
+        )
+
+
+def test_child_cleanup_failure_attempts_all_resources_and_releases_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capture(tmp_path)
+    request = _request()
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    monkeypatch.setattr(
+        core, "_retained_schedule_matches_request", lambda *_args, **_kwargs: True
+    )
+    original_close = core._PrivateDirectory.close  # pyright: ignore[reportPrivateUsage]
+    close_calls = 0
+
+    def close_then_fail_once(directory: object) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        original_close(directory)
+        if close_calls == 1:
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(
+        core._PrivateDirectory,  # pyright: ignore[reportPrivateUsage]
+        "close",
+        close_then_fail_once,
+    )
+
+    with pytest.raises(core._CaptureCleanupFailureV1, match="capture cleanup failed"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request,
+            provider,
+            tmp_path,
+            tmp_path / "schedule",
+        )
+
+    assert close_calls >= 3
+    identity = core.StorageRootLease.admit_existing_private_identity(tmp_path)
+    assert identity is not None
+    acquired = core.StorageRootLease.try_acquire_existing_identity(tmp_path, identity)
+    assert acquired.lease is not None
+    acquired.lease.close()
+
+
+def test_capture_cleanup_preserves_first_base_failure_and_exhausts_resources() -> None:
+    events: list[str] = []
+
+    class CleanupSignal(BaseException):
+        pass
+
+    class Resource:
+        def __init__(self, name: str, failure: BaseException | None) -> None:
+            self.name = name
+            self.failure = failure
+
+        def close(self) -> None:
+            events.append(self.name)
+            if self.failure is not None:
+                raise self.failure
+
+    first = CleanupSignal("first cleanup failure")
+    resources = (
+        Resource("first", first),
+        Resource("second", ValueError("second cleanup failure")),
+        Resource("third", None),
+    )
+
+    with pytest.raises(
+        core._CaptureCleanupFailureV1, match="capture cleanup failed"
+    ) as raised:
+        core._close_capture_resources_v1(*resources)
+
+    assert events == ["first", "second", "third"]
+    assert raised.value.__cause__ is first
+
+
 def test_provider_failure_does_not_hide_correction_parent_admission_loss(
     tmp_path: Path,
 ) -> None:
@@ -920,7 +1222,7 @@ def test_provider_failure_does_not_hide_correction_parent_admission_loss(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert not (root / "requests" / f"{request.request_identity_sha256}.json").exists()
@@ -957,10 +1259,77 @@ def test_correction_parent_is_readmitted_between_publication_effects(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert not (root / "requests" / f"{request.request_identity_sha256}.json").exists()
+    assert {
+        item.stem
+        for item in (root / "revisions").iterdir()
+        if not item.name.startswith(".")
+    } == {parent.revision.revision_sha256}
+
+
+def test_publication_conflict_survives_exhaustive_directory_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "publication-conflict-cleanup"
+    root.mkdir(mode=0o700)
+    parent = _capture(root)
+    request = _request(parent_revision_sha256=parent.revision.revision_sha256)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1),
+        price_offset=1,
+    )
+    parent_pointer = (
+        root / "requests" / f"{parent.revision.request_identity_sha256}.json"
+    )
+    original_publish = cast(
+        Callable[..., None],
+        core._publish_prepared_revision,  # pyright: ignore[reportPrivateUsage]
+    )
+    original_close = core._PrivateDirectory.close  # pyright: ignore[reportPrivateUsage]
+    conflict_started = False
+    cleanup_failed = False
+    close_calls: list[str] = []
+
+    def displace_parent_after_prepared(*args: object, **kwargs: object) -> None:
+        nonlocal conflict_started
+        original_publish(*args, **kwargs)
+        parent_pointer.rename(root / "requests" / "parent-pointer-displaced")
+        conflict_started = True
+
+    def close_then_fail_during_conflict(directory: object) -> None:
+        nonlocal cleanup_failed
+        name = cast(core._PrivateDirectory, directory).name  # pyright: ignore[reportPrivateUsage]
+        close_calls.append(name)
+        original_close(cast(core._PrivateDirectory, directory))  # pyright: ignore[reportPrivateUsage]
+        if conflict_started and name == "prepared" and not cleanup_failed:
+            cleanup_failed = True
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(
+        core, "_publish_prepared_revision", displace_parent_after_prepared
+    )
+    monkeypatch.setattr(
+        core._PrivateDirectory,  # pyright: ignore[reportPrivateUsage]
+        "close",
+        close_then_fail_during_conflict,
+    )
+
+    result = _invoke(request, provider, root)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert cleanup_failed is True
+    assert close_calls[-3:] == ["prepared", "requests", "revisions"]
+    identity = core.StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = core.StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.lease is not None
+    acquired.lease.close()
     assert {
         item.stem
         for item in (root / "revisions").iterdir()
@@ -1268,6 +1637,7 @@ provider = namespace["_Provider"](
     retrieved_at=request.schedule.decision_session_official_close_at
     + timedelta(hours=1)
 )
+print("READY", flush=True)
 result = namespace["_invoke"](
     request,
     provider,
@@ -1276,14 +1646,14 @@ result = namespace["_invoke"](
 )
 expected = namespace["CaptureForwardAdjustedOhlcvFailureV1"](
     code="STORE_UNAVAILABLE",
-    reason="STORAGE_OPERATION_FAILED",
+    reason="EVIDENCE_CONFLICT",
 )
 if result != expected:
     raise AssertionError(result)
 if provider.calls != 0:
     raise AssertionError("provider was called")
 """
-    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+    process = subprocess.Popen(  # noqa: S603 - trusted isolated interpreter
         [
             sys.executable,
             "-c",
@@ -1292,14 +1662,23 @@ if provider.calls != 0:
             str(tmp_path),
             str(schedule_root),
         ],
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=3,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
+    try:
+        assert process.stdout is not None
+        ready, _, _ = select.select((process.stdout,), (), (), 15)
+        assert ready, "child process did not finish initialization"
+        assert process.stdout.readline() == "READY\n"
+        _stdout, stderr = process.communicate(timeout=3)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
 
-    assert completed.returncode == 0, completed.stderr
+    assert process.returncode == 0, stderr
     assert stat.S_ISFIFO(prepared.lstat().st_mode)
     assert displaced.read_bytes() == original
     assert set((tmp_path / "prepared").iterdir()) == {prepared, displaced}
@@ -1352,7 +1731,7 @@ def test_publication_readback_rejects_final_name_substitution(
     result = _invoke(request, provider, root)
 
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert substituted is True
     assert (root / "prepared" / "displaced-owned-final").is_file()
@@ -1537,7 +1916,7 @@ def test_four_exact_captures_with_distinct_schedule_releases_approve_plan29(
     assert qualification.evidence.source_identity_sha256 == expected_source
 
 
-def test_composer_accepts_current_and_latest_retained_writer_runtimes(
+def test_composer_accepts_current_and_released_base_writer_runtimes(
     tmp_path: Path,
 ) -> None:
     windows = (
@@ -1552,31 +1931,21 @@ def test_composer_accepts_current_and_latest_retained_writer_runtimes(
     )
     current_runtime = captures[0].revision.runtime_code_identity_sha256
     compatible_runtime = (
-        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3"
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54"
     )
     revisions = tuple(
-        replace(
-            capture.revision,
-            runtime_code_identity_sha256=(
-                compatible_runtime if position % 2 else current_runtime
-            ),
+        (
+            _retarget_retained_revision_writer(
+                tmp_path,
+                capture.revision,
+                _request(sessions=windows[position]),
+                compatible_runtime,
+            )
+            if position % 2
+            else capture.revision
         )
         for position, capture in enumerate(captures)
     )
-    for revision in revisions:
-        destination = tmp_path / "revisions" / f"{revision.revision_sha256}.json"
-        if not destination.exists():
-            destination.write_bytes(revision.canonical_json_bytes())
-            destination.chmod(0o400)
-        pointer = tmp_path / "requests" / f"{revision.request_identity_sha256}.json"
-        pointer.chmod(0o600)
-        pointer.write_bytes(
-            core._pointer_bytes(  # pyright: ignore[reportPrivateUsage]
-                revision.request_identity_sha256,
-                revision.revision_sha256,
-            )
-        )
-        pointer.chmod(0o400)
 
     qualification = compose_capture_forward_plan29_v1(
         tmp_path,
@@ -1770,6 +2139,30 @@ def test_capture_request_parser_rejects_request_identity_substitution() -> None:
         parse_capture_forward_request_v1(raw)
 
 
+@pytest.mark.parametrize(
+    "identity_field", ["cohort_identity_sha256", "request_identity_sha256"]
+)
+def test_typed_request_identity_is_rechecked_before_effects(
+    identity_field: str, tmp_path: Path
+) -> None:
+    request = _request()
+    object.__setattr__(request, identity_field, "f" * 64)
+    provider = _Provider(retrieved_at=request.decision_cutoff)
+    store_root = tmp_path / "store"
+    schedule_root = tmp_path / "schedule"
+
+    with pytest.raises(ValueError, match="capture request identity mismatch"):
+        core._capture_forward_adjusted_ohlcv_with_provider_v1(  # pyright: ignore[reportPrivateUsage]
+            request, provider, store_root, schedule_root
+        )
+    with pytest.raises(ValueError, match="capture request identity mismatch"):
+        read_capture_forward_request_revision_v1(store_root, request)
+
+    assert provider.calls == 0
+    assert not store_root.exists()
+    assert not schedule_root.exists()
+
+
 def test_capture_request_parser_rejects_excessive_json_depth() -> None:
     raw = b"[" * 1_100 + b"]" * 1_100
 
@@ -1916,7 +2309,6 @@ def _strict_yfinance_frame(
         ("flat", "FRAME_SCHEMA_INVALID"),
         ("inverted", "FRAME_SCHEMA_INVALID"),
         ("extra", "FRAME_COVERAGE_INCOMPLETE"),
-        ("reordered", "FRAME_SCHEMA_INVALID"),
         ("duplicate", "FRAME_SCHEMA_INVALID"),
     ],
 )
@@ -1943,8 +2335,6 @@ def test_yfinance_adapter_rejects_non_exact_dataframe_schema(
         )
     elif variant == "extra":
         frame = _strict_yfinance_frame((*columns, ("UNEXPECTED.NS", "Open")))
-    elif variant == "reordered":
-        frame = _strict_yfinance_frame(tuple(reversed(columns)))
     else:
         frame = _strict_yfinance_frame((*columns[:-1], columns[0]))
 
@@ -1988,6 +2378,35 @@ def test_yfinance_adapter_accepts_only_exact_ticker_price_orientation(
     assert tuple(cast(dict[str, object], result["ohlcv"])) == ("RELIANCE.NS",)
 
 
+def test_yfinance_adapter_rejects_reordered_multi_ticker_columns_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = ("TCS.NS", "RELIANCE.NS")
+    frame = _strict_yfinance_frame(tuple(reversed(_strict_yfinance_columns(tickers))))
+
+    def download(**kwargs: object) -> pd.DataFrame:
+        del kwargs
+        return frame
+
+    monkeypatch.setattr(core, "_public_yfinance_download", download)
+    adapter = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
+    result = adapter.download(
+        tickers=tickers,
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
+    )
+    normalized = adapter.download(
+        tickers=tickers,
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+        _plan33_normalize_provider_order=True,
+    )
+    assert isinstance(normalized, dict)
+    assert tuple(cast(dict[str, object], normalized["ohlcv"])) == tickers
+
+
 def test_provider_identity_precedes_malformed_dataframe_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1999,7 +2418,7 @@ def test_provider_identity_precedes_malformed_dataframe_schema(
 
     monkeypatch.setattr(core, "_public_yfinance_download", download)
     monkeypatch.setitem(
-        core._YFINANCE_MODULE.__dict__,  # pyright: ignore[reportPrivateUsage]
+        core._load_yfinance_module().__dict__,  # pyright: ignore[reportPrivateUsage]
         "__version__",
         "0.0.0",
     )
@@ -2013,6 +2432,311 @@ def test_provider_identity_precedes_malformed_dataframe_schema(
         code="INSUFFICIENT_EVIDENCE",
         reason="PROVIDER_IDENTITY_MISMATCH",
     )
+
+
+def test_provider_identity_is_rechecked_after_response_before_interpretation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _strict_yfinance_frame()
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    def download(**kwargs: object) -> pd.DataFrame:
+        del kwargs
+        monkeypatch.setitem(module.__dict__, "__version__", "0.0.0")
+        return frame
+
+    monkeypatch.setattr(core, "_public_yfinance_download", download)
+
+    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+        tickers=("RELIANCE.NS",),
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="INSUFFICIENT_EVIDENCE",
+        reason="PROVIDER_IDENTITY_MISMATCH",
+    )
+
+
+def test_yfinance_import_origin_must_belong_to_distribution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_root = tmp_path / "fake"
+    package = fake_root / "yfinance"
+    package.mkdir(parents=True)
+    marker = tmp_path / "executed"
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "__version__ = '1.6.0'\n"
+    )
+    monkeypatch.syspath_prepend(str(fake_root))
+    monkeypatch.delitem(sys.modules, "yfinance", raising=False)
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    assert not Path(cast(str, module.__file__)).is_relative_to(fake_root)
+    assert not marker.exists()
+
+
+def test_coherent_pythonpath_distribution_cannot_supply_yfinance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_root = tmp_path / "fake"
+    package = fake_root / "yfinance"
+    package.mkdir(parents=True)
+    marker = tmp_path / "executed"
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "__version__ = '1.6.0'\n"
+    )
+    metadata = fake_root / "yfinance-1.6.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: yfinance\nVersion: 1.6.0\n"
+    )
+    (metadata / "RECORD").write_text(
+        "yfinance/__init__.py,,\n"
+        "yfinance-1.6.0.dist-info/METADATA,,\n"
+        "yfinance-1.6.0.dist-info/RECORD,,\n"
+    )
+    monkeypatch.syspath_prepend(str(fake_root))
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+
+    module = core._load_yfinance_module()  # pyright: ignore[reportPrivateUsage]
+
+    assert not Path(cast(str, module.__file__)).is_relative_to(fake_root)
+    assert not marker.exists()
+
+
+def test_yfinance_source_accepts_hardlinked_installed_file(tmp_path: Path) -> None:
+    source = tmp_path / "module.py"
+    raw = b"VALUE = 'admitted'\n"
+    source.write_bytes(raw)
+    os.link(source, tmp_path / "uv-cache-hardlink.py")
+    identity = core._regular_file_identity(  # pyright: ignore[reportPrivateUsage]
+        str(source)
+    )
+
+    assert (
+        core._read_yfinance_source_v1(  # pyright: ignore[reportPrivateUsage]
+            source, identity
+        )
+        == raw
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_yfinance_source_open_rejects_fifo_substitution_without_blocking() -> None:
+    script = """
+import os
+import tempfile
+from pathlib import Path
+from swing_trading_ai_assistant.market_data import capture_forward_adjusted_ohlcv as core
+
+with tempfile.TemporaryDirectory() as temporary:
+    source = Path(temporary) / "module.py"
+    source.write_bytes(b"VALUE = 'admitted'\\n")
+    identity = core._regular_file_identity(str(source))
+    real_open = core.os.open
+
+    def substitute(path, flags, mode=0o777, **kwargs):
+        if os.fspath(path) == os.fspath(source):
+            source.unlink()
+            os.mkfifo(source)
+        return real_open(path, flags, mode, **kwargs)
+
+    core.os.open = substitute
+    try:
+        core._read_yfinance_source_v1(source, identity)
+    except RuntimeError:
+        pass
+    else:
+        raise SystemExit(2)
+    finally:
+        core.os.open = real_open
+raise SystemExit(0)
+"""
+    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_yfinance_transitive_child_executes_admitted_bytes_after_path_swap(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "yfinance"
+    package.mkdir()
+    parent = package / "__init__.py"
+    child = package / "multi.py"
+    marker = tmp_path / "replaced-source-executed"
+    parent_raw = b"from .multi import VALUE\n__version__ = '1.6.0'\n"
+    child_raw = b"VALUE = 'admitted'\n"
+    parent.write_bytes(parent_raw)
+    child.write_bytes(child_raw)
+    sources: dict[str, core._YfinanceSourceV1] = {  # pyright: ignore[reportPrivateUsage]
+        "yfinance": (
+            parent,
+            parent_raw,
+            True,
+            core._regular_file_identity(str(parent)),  # pyright: ignore[reportPrivateUsage]
+        ),
+        "yfinance.multi": (
+            child,
+            child_raw,
+            False,
+            core._regular_file_identity(str(child)),  # pyright: ignore[reportPrivateUsage]
+        ),
+    }
+    finder = core._YfinanceSourceFinderV1(sources)  # pyright: ignore[reportPrivateUsage]
+    child.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "VALUE = 'substituted'\n"
+    )
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            sys.modules.pop(name, None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("yfinance")
+        assert module.VALUE == "admitted"
+        assert not marker.exists()
+    finally:
+        sys.meta_path.remove(finder)
+        for name in tuple(sys.modules):
+            if name == "yfinance" or name.startswith("yfinance."):
+                sys.modules.pop(name, None)
+
+
+def test_yfinance_distribution_ordering_uses_first_pass_admitted_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package = tmp_path / "yfinance"
+    package.mkdir()
+    parent = package / "__init__.py"
+    child = package / "multi.py"
+    marker = tmp_path / "second-pass-source-executed"
+    parent_raw = b"from .multi import VALUE\n__version__ = '1.6.0'\n"
+    child_raw = b"VALUE = 'admitted'\n"
+    substituted = (
+        b"from pathlib import Path\n"
+        + f"Path({str(marker)!r}).write_text('executed')\n".encode()
+        + b"VALUE = 'substituted'\n"
+    )
+    parent.write_bytes(parent_raw)
+    child.write_bytes(child_raw)
+    distribution = SimpleNamespace(
+        version="1.6.0",
+        metadata={"Name": "yfinance"},
+        files=(
+            Path("yfinance/multi.py"),
+            Path("yfinance/__init__.py"),
+        ),
+        locate_file=lambda item: tmp_path / item,
+    )
+    aggregate = hashlib.sha256()
+    for relative, raw in sorted(
+        (
+            ("yfinance/__init__.py", parent_raw),
+            ("yfinance/multi.py", child_raw),
+        )
+    ):
+        aggregate.update(relative.encode())
+        aggregate.update(b"\0")
+        aggregate.update(len(raw).to_bytes(8, "big"))
+        aggregate.update(hashlib.sha256(raw).digest())
+    expected_aggregate = aggregate.hexdigest()
+    synthetic_identity = (
+        2,
+        len(parent_raw) + len(child_raw),
+        expected_aggregate,
+    )
+    monkeypatch.setattr(
+        core,
+        "_YFINANCE_DISTRIBUTION_IDENTITIES_V1",
+        dict.fromkeys(
+            core._YFINANCE_DISTRIBUTION_IDENTITIES_V1,
+            synthetic_identity,
+        ),
+    )
+    monkeypatch.setattr(core, "_trusted_site_roots_v1", lambda: (tmp_path,))
+    monkeypatch.setattr(
+        core.importlib.metadata,
+        "distributions",
+        lambda *, path: (distribution,),
+    )
+    monkeypatch.setattr(
+        core, "_YFINANCE_CODE_AGGREGATES_V1", frozenset({expected_aggregate})
+    )
+    original_read = core._read_yfinance_source_v1
+
+    def swap_after_first_read(
+        origin: Path, identity: core._YfinanceFileIdentityV1
+    ) -> bytes:
+        raw = original_read(origin, identity)
+        if origin == child:
+            child.write_bytes(substituted)
+        return raw
+
+    monkeypatch.setattr(core, "_read_yfinance_source_v1", swap_after_first_read)
+
+    _, _, code_identity, sources = core._trusted_yfinance_distribution_v1()
+
+    assert code_identity == expected_aggregate
+    assert sources["yfinance.multi"][1] == child_raw
+    finder = core._YfinanceSourceFinderV1(sources)
+    for name in tuple(sys.modules):
+        if name == "yfinance" or name.startswith("yfinance."):
+            sys.modules.pop(name, None)
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module("yfinance")
+        assert module.VALUE == "admitted"
+        assert not marker.exists()
+    finally:
+        sys.meta_path.remove(finder)
+        for name in tuple(sys.modules):
+            if name == "yfinance" or name.startswith("yfinance."):
+                sys.modules.pop(name, None)
+
+
+def test_yfinance_distribution_mismatch_precedes_import_and_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_called = False
+
+    def forbidden_provider(**_kwargs: object) -> object:
+        nonlocal provider_called
+        provider_called = True
+        return object()
+
+    monkeypatch.setattr(core, "_yfinance_modules", [])
+    monkeypatch.setattr(
+        core,
+        "_trusted_yfinance_distribution_v1",
+        lambda: (_ for _ in ()).throw(RuntimeError("distribution mismatch")),
+    )
+    monkeypatch.setattr(core, "_public_yfinance_download", forbidden_provider)
+    result = core.YfinanceCaptureForwardAdjustedOhlcvAdapterV1().download(
+        tickers=("RELIANCE.NS",),
+        expected_sessions=tuple(session.isoformat() for session in _BASE_SESSIONS),
+    )
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="INSUFFICIENT_EVIDENCE",
+        reason="PROVIDER_IDENTITY_MISMATCH",
+    )
+    assert provider_called is False
 
 
 def test_retained_schedule_substitution_fails_before_store_and_provider(
@@ -2583,7 +3307,7 @@ def test_fresh_pointer_stays_uncommitted_when_held_revision_name_changes(
 
     pointer = root / "requests" / f"{request.request_identity_sha256}.json"
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert substituted is True
     assert provider.calls == 1
@@ -2643,7 +3367,7 @@ def test_recovered_pointer_stays_uncommitted_when_held_revision_name_changes(
     retry = _invoke(request, provider, root)
 
     assert retry == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert stat.S_IMODE(pointer.stat().st_mode) == 0o600
@@ -2684,11 +3408,111 @@ def test_pointer_success_revalidates_held_revision_after_mode_commit(
 
     pointer = root / "requests" / f"{request.request_identity_sha256}.json"
     assert result == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
     assert stat.S_IMODE(pointer.stat().st_mode) == 0o400
     assert (root / "revisions" / "displaced-revision").is_file()
+
+
+def test_corrupted_request_pointer_is_evidence_conflict_before_provider(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    captured = _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+    pointer.write_bytes(b"{}")
+    pointer.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=captured.revision.retrieved_at + timedelta(minutes=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
+
+
+def test_request_revision_read_rejects_corrupted_pointer(tmp_path: Path) -> None:
+    request = _request()
+    _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+    pointer.write_bytes(b"{}")
+    pointer.chmod(0o400)
+
+    with pytest.raises(ValueError, match="request revision evidence conflict"):
+        read_capture_forward_request_revision_v1(tmp_path, request)
+
+
+def test_deeply_nested_prepared_revision_is_evidence_conflict(
+    tmp_path: Path,
+) -> None:
+    first_request = _request()
+    _capture(tmp_path)
+    request = _request(evaluated_at=first_request.evaluated_at + timedelta(minutes=1))
+    prepared = tmp_path / "prepared" / f"{request.request_identity_sha256}.json"
+    prepared.write_bytes(b"[" * 1_200 + b"0" + b"]" * 1_200)
+    prepared.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
+
+
+def test_deeply_nested_admitted_revision_is_evidence_conflict(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    captured = _capture(tmp_path)
+    revision = tmp_path / "revisions" / f"{captured.revision.revision_sha256}.json"
+    revision.chmod(0o600)
+    revision.write_bytes(b"[" * 1_200 + b"0" + b"]" * 1_200)
+    revision.chmod(0o400)
+    provider = _Provider(
+        retrieved_at=captured.revision.retrieved_at + timedelta(minutes=1)
+    )
+
+    result = _invoke(request, provider, tmp_path)
+
+    assert result == CaptureForwardAdjustedOhlcvFailureV1(
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
+    )
+    assert provider.calls == 0
+    with pytest.raises(ValueError, match="request revision evidence conflict"):
+        read_capture_forward_request_revision_v1(tmp_path, request)
+
+
+def test_request_revision_read_leaves_fresh_private_root_empty(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir(mode=0o700)
+
+    assert read_capture_forward_request_revision_v1(root, _request()) is None
+    assert list(root.iterdir()) == []
+
+
+def test_request_revision_read_does_not_commit_recoverable_pointer(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    _capture(tmp_path)
+    pointer = tmp_path / "requests" / f"{request.request_identity_sha256}.json"
+    pointer.chmod(0o600)
+
+    assert read_capture_forward_request_revision_v1(tmp_path, request) is None
+    assert stat.S_IMODE(pointer.stat().st_mode) == 0o600
 
 
 def test_reused_revision_must_match_complete_current_request(
@@ -2754,7 +3578,7 @@ def test_prepared_correction_recovery_requires_admitted_parent(
         code="STORE_UNAVAILABLE", reason="STORAGE_OPERATION_FAILED"
     )
     assert retry == CaptureForwardAdjustedOhlcvFailureV1(
-        code="STORE_UNAVAILABLE", reason="PARENT_REVISION_UNAVAILABLE"
+        code="STORE_UNAVAILABLE", reason="EVIDENCE_CONFLICT"
     )
     assert provider.calls == 1
 
@@ -2844,3 +3668,11 @@ def test_composer_rejects_revision_count_bounds(
             regions=tuple(HistoricalStudyRegionV1),
             evaluated_at=datetime(2026, 9, 1, tzinfo=UTC),
         )
+
+
+def test_yfinance_admission_uses_plan33_dependency_bounds() -> None:
+    assert core._MAX_YFINANCE_FILE_BYTES_V1 == 67_108_864
+    assert core._MAX_YFINANCE_AGGREGATE_BYTES_V1 == 67_108_864
+    assert core._MAX_YFINANCE_FILES_V1 == 4_096
+    assert core._MAX_YFINANCE_PATH_BYTES_V1 == 4_096
+    assert core._MAX_YFINANCE_TOTAL_PATH_BYTES_V1 == 1_048_576
