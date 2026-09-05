@@ -1,5 +1,10 @@
 # Plan 32: current supplied-cohort Price Action contract
 
+> Harness portability: historical named-model review choices below record the
+> original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
+> and [portable review procedure](../agent-workflow.md); independent exact-byte
+> review and every product acceptance criterion remain required.
+
 **Issue:** [#152](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/152)  
 **Status:** accepted implementation contract  
 **Risk:** R3  
@@ -349,4 +354,4 @@ The bounded retained-current smoke is time-independent with respect to market ho
 
 Final acceptance requires the applicable repository format, lint, type, dead-code, focused, full-suite, coverage, diff, build, installed-wheel/runtime, hosted CI, and GitGuardian gates; independent Sol/high exact-byte functional/domain and security/privacy/provenance reviews; an exact reviewed revision; PR; and merge. Any review finding must cite a violated current acceptance condition or concrete current safety, correctness, usability, authorization, privacy, or evidence-integrity failure to block this slice. All other improvements are recorded separately and deferred.
 
-**Routing supersession — Issue #168 (2026-09-05):** for new review assignments, the Sol/high model requirement in the preceding paragraph is superseded by Astra/high under the canonical adapter's [OMP routing table](../mandatory-agent-instructions.md#omp-model-routing). Review independence, exact-byte evidence, all other acceptance gates, and the historical Sol decision evidence above remain unchanged. In-flight and provider-blocked reviews follow that adapter's cutover and fail-closed rules.
+**Historical routing supersession — Issue #168 (2026-09-05), superseded for new work by Issue #170:** at that time, for new review assignments, the Sol/high model requirement in the preceding paragraph is superseded by Astra/high under the [OMP routing decision](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168). Review independence, exact-byte evidence, all other acceptance gates, and the historical Sol decision evidence above remain unchanged. Current assignments and provider-blocked reviews follow the [canonical capability and provider boundaries](../mandatory-agent-instructions.md#capability-and-responsibility-selection).
