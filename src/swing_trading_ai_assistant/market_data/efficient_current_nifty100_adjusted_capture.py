@@ -2736,7 +2736,9 @@ def _close_binding_read_resources_v1(
         raise _BindingCleanupFailureV1("binding descriptor cleanup failed") from failure
 
 
-def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
+def _snapshot_plan33_binding_v1(
+    root: Path, name: str, expected_payload: bytes
+) -> _BindingSnapshotV1:
     """Read a validated binding into a detached exact identity record."""
 
     result = StorageRootLease.try_admit_read_existing(root)
@@ -2778,6 +2780,7 @@ def _snapshot_plan33_binding_v1(root: Path, name: str) -> _BindingSnapshotV1:
             after = os.fstat(descriptor)
             if (
                 len(payload) != held.st_size
+                or payload != expected_payload
                 or after.st_size != held.st_size
                 or (after.st_dev, after.st_ino) != (held.st_dev, held.st_ino)
             ):
@@ -3457,17 +3460,25 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
 
     binding_snapshots: list[_BindingSnapshotV1] = []
     try:
-        for cohort, reused in zip(request.cohorts, validated_reuses, strict=True):
+        for cohort, reused, low_revision in zip(
+            request.cohorts, validated_reuses, low_revisions, strict=True
+        ):
             if reused is None:
                 continue
-            if reused.request_identity_sha256 is None:
+            if low_revision is None or reused.request_identity_sha256 is None:
                 raise EvidenceConflict("Plan 33 binding evidence conflict")
+            expected_payload = _plan33_binding_payload_v1(
+                cohort,
+                low.CaptureForwardAdjustedOhlcvSuccessV1("REUSED", low_revision),
+                selection,
+            )
             binding_snapshots.append(
                 _snapshot_plan33_binding_v1(
                     selection_root,
                     _plan33_binding_name_v1(
                         cohort, selection, reused.request_identity_sha256
                     ),
+                    expected_payload,
                 )
             )
         protected_identities = frozenset(
@@ -3708,6 +3719,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                         _plan33_binding_name_v1(
                             cohort, selection, result.revision.request_identity_sha256
                         ),
+                        _plan33_binding_payload_v1(cohort, result, selection),
                     )
                     binding_snapshots.append(snapshot)
                     protected_identities = frozenset(

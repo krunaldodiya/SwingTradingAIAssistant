@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import py_compile
+import stat
 import subprocess
 import sys
 import sysconfig
@@ -3079,7 +3080,7 @@ def test_binding_snapshot_disappearance_is_evidence_conflict(tmp_path: Path) -> 
     binding.rename(root / "disappeared.json")
 
     with pytest.raises(core.EvidenceConflict):
-        core._snapshot_plan33_binding_v1(root, binding.name)
+        core._snapshot_plan33_binding_v1(root, binding.name, b"{}\n")
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
@@ -3123,7 +3124,7 @@ for stage in ("missing", "snapshot", "liveness"):
     if stage == "missing":
         binding.unlink()
     snapshot = (
-        core._snapshot_plan33_binding_v1(root, binding.name)
+        core._snapshot_plan33_binding_v1(root, binding.name, b"{}")
         if stage == "liveness"
         else None
     )
@@ -3157,7 +3158,7 @@ for stage in ("missing", "snapshot", "liveness"):
                 raise SystemExit("missing FIFO binding was accepted")
         elif stage == "snapshot":
             try:
-                core._snapshot_plan33_binding_v1(root, target.name)
+                core._snapshot_plan33_binding_v1(root, target.name, b"{}")
             except core.EvidenceConflict:
                 pass
             else:
@@ -3178,6 +3179,219 @@ for stage in ("missing", "snapshot", "liveness"):
         env=environment,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_reused_binding_replacement_before_snapshot_is_evidence_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request, selection = _admitted()
+    low_requests = tuple(
+        core._selection_bound_low_request_v1(
+            core.low.parse_capture_forward_request_v1(
+                core._canonical(cohort.request) + b"\n"
+            ),
+            selection,
+        )
+        for cohort in request.cohorts
+    )
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    lease = core.StorageRootLease.try_acquire_private_empty(selection_root).lease
+    assert lease is not None
+    lease.close()
+    revisions: list[Any] = []
+    for index, (cohort, low_request) in enumerate(
+        zip(request.cohorts, low_requests, strict=True)
+    ):
+        revision = SimpleNamespace(
+            request_identity_sha256=low_request.request_identity_sha256,
+            revision_sha256=str(index + 1) * 64,
+            cohort=low_request.cohort,
+            schedule=low_request.schedule,
+            decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
+            configuration_identity_sha256=low_request.configuration_identity_sha256,
+            provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+            source_identity_sha256=str(index + 3) * 64,
+            retrieved_at=selection.retrieved_at,
+        )
+        revisions.append(revision)
+        outcome = core._cohort_outcome_v1(
+            cohort,
+            low_request,
+            core.low.CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", revision),
+            selection,
+            request,
+            binding_root=selection_root,
+        )
+        assert outcome.code == "INSERTED"
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda root, _request, **_kwargs: revisions[
+            0 if root == tmp_path / "nifty50" else 1
+        ],
+    )
+
+    def forbidden_effect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("validated reuses must stop provider/store effects")
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", forbidden_effect
+    )
+    monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", forbidden_effect)
+    original_snapshot = core._snapshot_plan33_binding_v1
+    replacement = b'{"replacement":true}\n'
+    replaced = False
+
+    def replace_before_snapshot(
+        root: Path, name: str, expected_payload: bytes
+    ) -> object:
+        nonlocal replaced
+        if not replaced:
+            target = root / "plan33_bindings" / name
+            candidate = root / "plan33_bindings" / "replacement.json"
+            candidate.write_bytes(replacement)
+            candidate.chmod(0o400)
+            os.replace(candidate, target)
+            replaced = True
+        return original_snapshot(root, name, expected_payload)
+
+    monkeypatch.setattr(core, "_snapshot_plan33_binding_v1", replace_before_snapshot)
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=selection_root,
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+
+    assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+    assert replaced
+    target = (
+        selection_root
+        / "plan33_bindings"
+        / core._plan33_binding_name_v1(
+            request.cohorts[0], selection, low_requests[0].request_identity_sha256
+        )
+    )
+    assert target.read_bytes() == replacement
+    assert stat.S_ISREG(target.stat(follow_symlinks=False).st_mode)
+    assert stat.S_IMODE(target.stat(follow_symlinks=False).st_mode) == 0o400
+    assert target.stat(follow_symlinks=False).st_nlink == 1
+
+
+def test_new_binding_replacement_before_snapshot_stops_second_cohort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        core.low,
+        "_retained_schedule_matches_request",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        core.low,
+        "read_capture_forward_request_revision_v1",
+        lambda *_args, **_kwargs: None,
+    )
+    provider_roots: list[Path] = []
+
+    def capture(
+        low_request: object,
+        provider: object,
+        root: Path,
+        _schedule: Path,
+        **_kwargs: object,
+    ) -> object:
+        if isinstance(provider, core._UnresolvedProbeV1):
+            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+            )
+        provider_roots.append(root)
+        revision = SimpleNamespace(
+            request_identity_sha256=low_request.request_identity_sha256,
+            revision_sha256=str(len(provider_roots)) * 64,
+            cohort=low_request.cohort,
+            schedule=low_request.schedule,
+            decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
+            configuration_identity_sha256=low_request.configuration_identity_sha256,
+            provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+            source_identity_sha256=str(len(provider_roots) + 2) * 64,
+            retrieved_at=_NOW + timedelta(minutes=1),
+        )
+        return core.low.CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", revision)
+
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
+    )
+
+    class Session:
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            return None
+
+        def protect_cleanup_identities(
+            self, _identities: frozenset[tuple[int, int]]
+        ) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: Session()
+    )
+    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    original_snapshot = core._snapshot_plan33_binding_v1
+    replacement = b'{"replacement":true}\n'
+    replaced = False
+
+    def replace_before_snapshot(
+        root: Path, name: str, expected_payload: bytes
+    ) -> object:
+        nonlocal replaced
+        if not replaced:
+            target = root / "plan33_bindings" / name
+            candidate = root / "plan33_bindings" / "replacement.json"
+            candidate.write_bytes(replacement)
+            candidate.chmod(0o400)
+            os.replace(candidate, target)
+            replaced = True
+        return original_snapshot(root, name, expected_payload)
+
+    monkeypatch.setattr(core, "_snapshot_plan33_binding_v1", replace_before_snapshot)
+    selection_root = tmp_path / "selection"
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=selection_root,
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+
+    assert result == core.SharedFailureV1("INSUFFICIENT_EVIDENCE", "EVIDENCE_CONFLICT")
+    assert provider_roots == [tmp_path / "nifty50"]
+    assert replaced
+    target = next((selection_root / "plan33_bindings").iterdir())
+    assert target.read_bytes() == replacement
+    assert stat.S_ISREG(target.stat(follow_symlinks=False).st_mode)
+    assert stat.S_IMODE(target.stat(follow_symlinks=False).st_mode) == 0o400
+    assert target.stat(follow_symlinks=False).st_nlink == 1
 
 
 @pytest.mark.parametrize(
@@ -3228,10 +3442,25 @@ def test_all_reuse_capture_clears_retained_provider_cache(  # noqa: C901
     monkeypatch.setattr(
         core, "_read_retained_selection_v1", lambda *_args, **_kwargs: selection
     )
+
+    def read_revision(_root: Path, low_request: object, **_kwargs: object) -> object:
+        return SimpleNamespace(
+            request_identity_sha256=low_request.request_identity_sha256,
+            revision_sha256=("b" if low_request.cohort[0].isin == _isin(0) else "c")
+            * 64,
+            cohort=low_request.cohort,
+            schedule=low_request.schedule,
+            decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
+            configuration_identity_sha256=low_request.configuration_identity_sha256,
+            provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+            source_identity_sha256="d" * 64,
+            retrieved_at=selection.retrieved_at + timedelta(seconds=1),
+        )
+
     monkeypatch.setattr(
-        core.low,
-        "read_capture_forward_request_revision_v1",
-        lambda *_args, **_kwargs: object(),
+        core.low, "read_capture_forward_request_revision_v1", read_revision
     )
     monkeypatch.setattr(
         core, "resolve_selection_v1", lambda *_args, **_kwargs: ("REUSED", selection)
@@ -3245,7 +3474,7 @@ def test_all_reuse_capture_clears_retained_provider_cache(  # noqa: C901
     )
     binding_snapshot = SimpleNamespace(protected_identities=())
 
-    def snapshot_binding(_root: Path, _name: str) -> object:
+    def snapshot_binding(_root: Path, _name: str, _expected_payload: bytes) -> object:
         if finalization == "binding_snapshot_cleanup_failed":
             raise core._BindingCleanupFailureV1("binding descriptor cleanup failed")
         return binding_snapshot
@@ -3505,10 +3734,25 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
     monkeypatch.setattr(
         core, "_read_retained_selection_v1", lambda *_args, **_kwargs: selection
     )
+
+    def read_revision(_root: Path, low_request: object, **_kwargs: object) -> object:
+        return SimpleNamespace(
+            request_identity_sha256=low_request.request_identity_sha256,
+            revision_sha256=("b" if low_request.cohort[0].isin == _isin(0) else "c")
+            * 64,
+            cohort=low_request.cohort,
+            schedule=low_request.schedule,
+            decision_session=low_request.decision_session,
+            decision_cutoff=low_request.decision_cutoff,
+            configuration_identity_sha256=low_request.configuration_identity_sha256,
+            provider_source=core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            source_profile=core.low.SOURCE_PROFILE_V1,
+            source_identity_sha256="d" * 64,
+            retrieved_at=selection.retrieved_at + timedelta(seconds=1),
+        )
+
     monkeypatch.setattr(
-        core.low,
-        "read_capture_forward_request_revision_v1",
-        lambda *_args, **_kwargs: object(),
+        core.low, "read_capture_forward_request_revision_v1", read_revision
     )
     monkeypatch.setattr(
         core, "resolve_selection_v1", lambda *_args, **_kwargs: ("REUSED", selection)
@@ -3524,7 +3768,7 @@ def test_cache_cleanup_preserves_protected_objects_moved_after_validation(
     monkeypatch.setattr(
         core,
         "_snapshot_plan33_binding_v1",
-        lambda _root, _name: binding_snapshot,
+        lambda _root, _name, _expected_payload: binding_snapshot,
     )
     monkeypatch.setattr(
         core,
@@ -4955,15 +5199,6 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     second_payload = core._plan33_binding_payload_v1(
         request.cohorts[1], probes[1], selection
     )
-    binding_payloads: list[bytes] = []
-    original_binding_payload = core._plan33_binding_payload_v1
-
-    def track_binding_payload(*args: Any) -> bytes:
-        payload = original_binding_payload(*args)
-        binding_payloads.append(payload)
-        return payload
-
-    monkeypatch.setattr(core, "_plan33_binding_payload_v1", track_binding_payload)
     monkeypatch.setattr(
         core.low,
         "_retained_schedule_matches_request",
@@ -4993,7 +5228,9 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     monkeypatch.setattr(
         core,
         "_snapshot_plan33_binding_v1",
-        lambda _root, name: binding_snapshot if name == second_name else None,
+        lambda _root, name, _expected_payload: (
+            binding_snapshot if name == second_name else None
+        ),
     )
     monkeypatch.setattr(
         core,
@@ -5047,7 +5284,6 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     assert isinstance(result, core.CurrentNifty100ResultV1)
     assert result.cohorts[0].reason == "RETENTION_FAILED"
     assert binding_reads[1] == second_name
-    assert binding_payloads == [second_payload]
     assert result.cohorts[1] == core._cohort_outcome_v1(
         request.cohorts[1], low_requests[1], probes[1], selection, request
     )
