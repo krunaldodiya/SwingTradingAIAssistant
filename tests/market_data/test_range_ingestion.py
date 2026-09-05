@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import swing_trading_ai_assistant.market_data.range_ingestion as ingestion_module
+from swing_trading_ai_assistant.market_data.catalog import CatalogPersistenceError
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationToken,
     HistoricalFetchCode,
@@ -334,6 +335,63 @@ def _coordinator(
         recovery_observer_factory=observer_factory,  # type: ignore[arg-type]
         lifecycle_executor_factory=lifecycle_factory or PartitionIngestionExecutor,  # type: ignore[arg-type]
     )
+
+
+@pytest.mark.parametrize("stage", ("serialization", "retention", "recovery"))
+@pytest.mark.parametrize("caller_lease", (False, True))
+def test_internal_schedule_and_recovery_faults_escape_range_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    caller_lease: bool,
+) -> None:
+    failure = ValueError("private-range-implementation-fault")
+    provider_calls: list[object] = []
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    def unexpected_provider() -> None:
+        provider_calls.append(object())
+        raise AssertionError("provider must not run after local failure")
+
+    def faulting_observer(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(observe=fail)
+
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+    )
+    coordinator = _coordinator(
+        faulting_observer if stage == "recovery" else _request_observer,
+        session_factory=SimpleNamespace(open=unexpected_provider),
+    )
+    if stage == "serialization":
+        monkeypatch.setattr(ingestion_module, "canonical_schedule_bytes", fail)
+    elif stage == "retention":
+        monkeypatch.setattr(_ScheduleStore, "retain", fail)
+    lease = None
+    if caller_lease:
+        acquired = StorageRootLease.try_acquire(tmp_path)
+        assert acquired.outcome is LeaseOutcome.ACQUIRED
+        assert acquired.lease is not None
+        lease = acquired.lease
+    try:
+        with pytest.raises(ValueError) as raised:
+            if lease is None:
+                coordinator.run(command)
+            else:
+                coordinator.run_under_lease(command, lease)
+        assert raised.value is failure
+        assert provider_calls == []
+    finally:
+        if lease is not None:
+            lease.close()
 
 
 def test_unsupported_interval_is_typed_rejection_before_operational_dependencies(
@@ -1383,26 +1441,25 @@ def test_hostile_schedule_port_rejects_before_catalog_or_provider(
             raise RuntimeError("schedule secret")
         return SimpleNamespace()
 
-    report = IngestionCoordinator(
-        session_factory=SimpleNamespace(open=lambda: provider_calls.append(object())),  # type: ignore[arg-type]
-        lease_acquirer=_lease,  # type: ignore[arg-type]
-        schedule_store_factory=schedule_store_factory,  # type: ignore[arg-type]
-        catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
-    ).run(
-        IngestionCommand(
-            _instrument(),
-            date(2026, 1, 1),
-            date(2026, 1, 31),
-            "1m",
-            tmp_path,
-            _wide_schedule(),
-            "nse-equity-month@v1",
+    with pytest.raises(RuntimeError if raises else AttributeError):
+        IngestionCoordinator(
+            session_factory=SimpleNamespace(
+                open=lambda: provider_calls.append(object())
+            ),  # type: ignore[arg-type]
+            lease_acquirer=_lease,  # type: ignore[arg-type]
+            schedule_store_factory=schedule_store_factory,  # type: ignore[arg-type]
+            catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
+        ).run(
+            IngestionCommand(
+                _instrument(),
+                date(2026, 1, 1),
+                date(2026, 1, 31),
+                "1m",
+                tmp_path,
+                _wide_schedule(),
+                "nse-equity-month@v1",
+            )
         )
-    )
-
-    assert report.outcome is IngestionRunOutcome.REJECTED
-    assert report.failure_code is RunFailureCode.SCHEDULE_UNSUPPORTED
-    assert report.not_attempted_count == 1
     assert catalog_calls == []
     assert provider_calls == []
 
@@ -1477,7 +1534,7 @@ def test_schedule_failure_and_catalog_failure_are_zero_provider_paths(
     ).run(command)
     catalog_report = IngestionCoordinator(
         lease_acquirer=_lease,
-        catalog_factory=lambda _root: (_ for _ in ()).throw(RuntimeError()),  # type: ignore[arg-type]
+        catalog_factory=lambda _root: (_ for _ in ()).throw(CatalogPersistenceError()),  # type: ignore[arg-type]
         schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
     ).run(command)
 

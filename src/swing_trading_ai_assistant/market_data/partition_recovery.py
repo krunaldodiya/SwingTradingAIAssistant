@@ -7,12 +7,14 @@ import os
 import re
 import stat
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol
 
+from .catalog import CatalogError
 from .manifest_lifecycle import (
     FailureCategory,
     ManifestState,
@@ -26,8 +28,12 @@ from .manifest_lifecycle import (
 )
 from .monthly_request_planner import PlannedInstrumentMonth
 from .parquet import (
+    ARROW_DATA_ERRORS,
     MAX_PARQUET_BATCH_SIZE,
     CandleParquetConversionError,
+    IncompatibleCandleParquetSchemaError,
+    MissingCandleSchemaVersionError,
+    UnsupportedCandleSchemaVersionError,
     iter_candles_from_parquet,
 )
 from .partition_directory_maintenance import (
@@ -43,8 +49,9 @@ from .schedule_evidence import (
     ScheduleOutcome,
 )
 from .schemas import CanonicalCandle
-from .storage_root_lease import StorageRootLease
+from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 from .validation import (
+    MAX_CANONICAL_EQUITY_CANDLES,
     EquityMonthValidationPolicy,
     ValidationEvidence,
     ValidationReason,
@@ -292,15 +299,12 @@ class _LocalEvidence:
 
 def _bounded_candles(
     reader: Iterable[tuple[CanonicalCandle, ...]],
-) -> tuple[CanonicalCandle, ...]:
+) -> tuple[CanonicalCandle, ...] | None:
     candles: list[CanonicalCandle] = []
     for batch in reader:
-        remaining = MAX_PARQUET_BATCH_SIZE + 1 - len(candles)
-        if remaining <= 0:
-            break
-        candles.extend(batch[:remaining])
-        if len(candles) == MAX_PARQUET_BATCH_SIZE + 1:
-            break
+        if len(batch) > MAX_CANONICAL_EQUITY_CANDLES - len(candles):
+            return None
+        candles.extend(batch)
     return tuple(candles)
 
 
@@ -333,7 +337,7 @@ class PartitionRecoveryObserver:
             raise ValueError("validation policy version is required")
         try:
             EquityMonthValidationPolicy(validation_policy_version)
-        except Exception:
+        except ValueError:
             raise ValueError("validation policy version is invalid") from None
         self._lease = lease
         self._storage_root = storage_root
@@ -375,7 +379,15 @@ class PartitionRecoveryObserver:
                 current, plan, FailureCategory.PATH_INVALID_OR_MISMATCHED
             )
 
-        artifact = self._read_artifact(plan)
+        return self._observe_canonical_file(plan, current)
+
+    def _observe_canonical_file(
+        self, plan: PlannedInstrumentMonth, current: PartitionManifest | None
+    ) -> PartitionRecoveryResult:
+        try:
+            artifact = self._read_artifact(plan)
+        except (OSError, StorageRootLeaseError):
+            return _failed(plan, "LOCAL_REPAIR_BLOCKED", current)
         schedule = self._schedule_for(current)
         evidence = self._inspect(plan, current, artifact, schedule)
         if current is not None and current.state is ManifestState.VERIFIED:
@@ -387,7 +399,7 @@ class PartitionRecoveryObserver:
     ) -> PartitionManifest | PartitionRecoveryResult | None:
         try:
             current = self._catalog.get_manifest(plan)
-        except Exception:
+        except CatalogError:
             return _failed(plan, "CATALOG_UNAVAILABLE")
         if current is not None and (
             type(current) is not PartitionManifest
@@ -401,7 +413,7 @@ class PartitionRecoveryObserver:
             with self._lease.root_operation(self._storage_root) as operation:
                 operation.ensure_live()
             return True
-        except Exception:
+        except StorageRootLeaseError:
             return False
 
     def _observe_verified(
@@ -468,7 +480,7 @@ class PartitionRecoveryObserver:
             return interrupted
         except _RecoveryCancelled:
             raise
-        except Exception:
+        except CatalogError:
             return None
 
     def _recover(
@@ -545,7 +557,7 @@ class PartitionRecoveryObserver:
             if active is not None and active.state is ManifestState.IN_PROGRESS:
                 active = self._best_effort_interrupt(active)
             return _failed(requested_plan, "CANCELLED", active)
-        except Exception:
+        except CatalogError:
             return _failed(requested_plan, "LOCAL_REPAIR_BLOCKED", current)
         return _result(
             requested_plan,
@@ -570,9 +582,12 @@ class PartitionRecoveryObserver:
             self._transition_manifest(current, invalidated)
         except _RecoveryCancelled:
             return _failed(requested_plan, "CANCELLED", current)
-        except Exception:
+        except CatalogError:
             return _failed(requested_plan, "LOCAL_REPAIR_BLOCKED", current)
-        artifact = self._read_artifact(requested_plan)
+        try:
+            artifact = self._read_artifact(requested_plan)
+        except (OSError, StorageRootLeaseError):
+            return _failed(requested_plan, "LOCAL_REPAIR_BLOCKED", invalidated)
         if _aliases_differ(current.plan, requested_plan):
             return _result(
                 requested_plan,
@@ -610,15 +625,10 @@ class PartitionRecoveryObserver:
         digest = _policy_digest(manifest.validation_policy_version)
         if digest is None:
             return _unsupported_schedule()
-        try:
-            result = self._schedule_store.resolve(digest)
-        except Exception:
-            return _unsupported_schedule()
-        return (
-            result
-            if type(result) is ScheduleEvidenceResult
-            else _unsupported_schedule()
-        )
+        result = self._schedule_store.resolve(digest)
+        if type(result) is not ScheduleEvidenceResult:
+            raise TypeError("schedule store returned an invalid result")
+        return result
 
     def _inspect(
         self,
@@ -673,21 +683,13 @@ class PartitionRecoveryObserver:
             if manifest is not None
             else self._validation_policy_version
         )
-        try:
-            validation = EquityMonthValidationPolicy(policy_version).validate(
-                stored_plan,
-                artifact.candles,
-                schedule,
-                len(artifact.candles),
-                len(artifact.candles),
-            )
-        except Exception:
-            return _LocalEvidence(
-                stored_plan,
-                artifact,
-                None,
-                FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE,
-            )
+        validation = EquityMonthValidationPolicy(policy_version).validate(
+            stored_plan,
+            artifact.candles,
+            schedule,
+            len(artifact.candles),
+            len(artifact.candles),
+        )
         if type(validation) is not ValidationEvidence:
             return _LocalEvidence(
                 stored_plan,
@@ -740,12 +742,22 @@ class PartitionRecoveryObserver:
                         ) as reader:
                             candles = _bounded_candles(reader)
                         return _Artifact(True, True, checksum, candles)
+                except BaseException:
+                    if descriptor != -1:
+                        with suppress(BaseException):
+                            os.close(descriptor)
+                        descriptor = -1
+                    raise
                 finally:
                     if descriptor != -1:
                         os.close(descriptor)
-        except (CandleParquetConversionError, OSError, ValueError, RuntimeError):
-            return _Artifact(True, True, checksum, None)
-        except Exception:
+        except (
+            *ARROW_DATA_ERRORS,
+            CandleParquetConversionError,
+            IncompatibleCandleParquetSchemaError,
+            MissingCandleSchemaVersionError,
+            UnsupportedCandleSchemaVersionError,
+        ):
             return _Artifact(True, True, checksum, None)
 
     def _cleanup_temporary_outputs(
@@ -813,11 +825,7 @@ class PartitionRecoveryObserver:
             return active
 
     def _check_cancellation(self) -> None:
-        try:
-            cancelled = self._cancellation.is_cancelled()
-        except Exception:
-            cancelled = True
-        if cancelled:
+        if self._cancellation.is_cancelled():
             raise _RecoveryCancelled
 
     def _new_run_id(self) -> str:
@@ -919,7 +927,7 @@ def _stored_plan(
             requested.from_date,
             requested.to_date,
         )
-    except Exception:
+    except ValueError:
         return None
     return candidate if _same_physical_identity(candidate, requested) else None
 

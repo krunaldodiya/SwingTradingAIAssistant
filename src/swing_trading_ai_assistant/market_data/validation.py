@@ -15,6 +15,7 @@ from .monthly_request_planner import PlannedInstrumentMonth
 from .schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
 )
@@ -400,7 +401,7 @@ def _resolved_schedule(
         )
     try:
         canonical = canonical_schedule_bytes(value.schedule)
-    except Exception:
+    except ScheduleEvidenceValidationError:
         return (
             None,
             value.digest if _valid_digest(value.digest) else None,

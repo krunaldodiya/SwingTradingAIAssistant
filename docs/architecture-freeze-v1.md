@@ -570,6 +570,9 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
   evidence rejection. Known validation and decoder errors are converted only at
   their narrow input/data boundary.
+  Schedule consumers, partition recovery, and current-cohort identity resolution
+  follow the same distinction: an implementation fault does not justify
+  invalidating or quarantining retained evidence.
 - Expected schedule and snapshot validation signals retain `ValueError`
   compatibility through explicit subclasses. Expected lease-authority failures
   use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
@@ -581,7 +584,8 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   faults propagate, and catalog transactions roll back before propagation.
 - Existing V1 public coverage/query adapters retain the closed
   `FAILED / UNCLASSIFIED_FAILURE` execution-failure envelope, without partial
-  rows or evidence payloads. That envelope is not a market-evidence state.
+  rows or evidence payloads. That envelope is not a market-evidence state and
+  retains the delivered CLI exit code `5`.
 - Before a completed public response, the `market-data` CLI maps an unexpected
   exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
   stderr. Parser rejection is exactly `request_invalid\n`; existing bounded

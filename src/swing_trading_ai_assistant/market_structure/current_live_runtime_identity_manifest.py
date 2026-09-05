@@ -3,7 +3,7 @@
 from typing import Final
 
 CURRENT_MARKET_STRUCTURE_RUNTIME_SOURCE_DIGESTS_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "f3d866a662a8bb44eb04e57b8297c89cee7a2a9005cf0b37716fdf99261fe9b3",
+    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",
     "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py": "862f373452d332177d43a6eac2f40b134d6a7a485b8a397c688380ca7ca3c29e",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_structure/__init__.py": "44cd5c22184353ce56fa95cacd71765c5ff45cd8157581e3c747f79d903b1137",

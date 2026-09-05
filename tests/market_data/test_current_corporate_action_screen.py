@@ -592,6 +592,36 @@ def test_schedule_admission_handles_exact_source_and_availability(
         scenario.close()
 
 
+def test_schedule_serializer_defect_propagates_before_corporate_action_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    failure = ValueError("schedule-implementation-fault")
+    provider_reads: list[object] = []
+
+    def fail(_schedule: object) -> bytes:
+        raise failure
+
+    def unexpected_provider(*_args: object) -> None:
+        provider_reads.append(object())
+        raise AssertionError("provider must not run after schedule failure")
+
+    monkeypatch.setattr(api, "canonical_schedule_bytes", fail)
+    monkeypatch.setattr(
+        api.UpstoxCorporateActionScreenProviderV1,
+        "resolve_exact",
+        unexpected_provider,
+    )
+    try:
+        with pytest.raises(ValueError) as raised:
+            _resolve(api, scenario)
+        assert raised.value is failure
+        assert provider_reads == []
+    finally:
+        scenario.close()
+
+
 @pytest.mark.parametrize(
     "mutation",
     ("unknown", "missing", "wrong_type", "conditional_nullability"),

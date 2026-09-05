@@ -43,7 +43,7 @@ from .public_contract import (
 )
 from .public_query import QueryRequestV1
 from .runtime_identity_manifest import MARKET_DATA_RUNTIME_SOURCE_SHA256_V1
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 from .universe_snapshot import (
     Nifty50UniverseStoreV1,
     UniverseSnapshotAmbiguousError,
@@ -1503,8 +1503,6 @@ def _identity_admission_reason(
         return None, CurrentCohortReasonV1.IDENTITY_STALE
     except (InstrumentSnapshotNotFoundError, SnapshotInstrumentNotFoundError):
         return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
-    except Exception:
-        return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
     if resolved is None:
         return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
     if (
@@ -1552,12 +1550,12 @@ class CurrentCohortMarketDataServiceV1:
         try:
             report = self._evaluate_under_lease(request, acquired.lease)
         except BaseException:
-            with suppress(RuntimeError):
+            with suppress(BaseException):
                 acquired.lease.close()
             raise
         try:
             acquired.lease.close()
-        except RuntimeError:
+        except StorageRootLeaseError:
             return self._insufficient(
                 request, {CurrentCohortReasonV1.PROVIDER_UNAVAILABLE}
             )

@@ -909,3 +909,55 @@ def test_catalog_row_fault_preserves_unknown_exception(
     with pytest.raises(AssertionError) as raised:
         StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
     assert raised.value is failure
+
+
+@pytest.mark.parametrize("surface", ("internal", "cli"))
+def test_schedule_serializer_fault_is_not_coverage_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    surface: str,
+) -> None:
+    _seed(tmp_path)
+    before = _bytes(tmp_path)
+    failure = ValueError("private-schedule-implementation-fault")
+
+    def fail(_schedule: object) -> bytes:
+        raise failure
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.validation.canonical_schedule_bytes",
+        fail,
+    )
+    if surface == "internal":
+        with pytest.raises(ValueError) as raised:
+            StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+        assert raised.value is failure
+    else:
+        exit_code = main(
+            [
+                "coverage",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ]
+        )
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert exit_code == 5
+        assert output["status"] == "FAILED"
+        assert output["failure"]["code"] == "UNCLASSIFIED_FAILURE"
+        assert output["payload"] is None
+        assert output["provider_attempt_count"] == 0
+        assert "private-schedule-implementation-fault" not in captured.out
+        assert captured.err == ""
+    assert _bytes(tmp_path) == before

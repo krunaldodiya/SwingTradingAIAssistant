@@ -39,6 +39,12 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     current_cohort_runtime_code_identity_v1,
     parse_current_cohort_manifest_bytes_v1,
 )
+from swing_trading_ai_assistant.market_data.instrument_snapshot import (
+    InstrumentSnapshotCorruptError,
+    InstrumentSnapshotNotFoundError,
+    SnapshotInstrumentAmbiguousError,
+    SnapshotInstrumentNotFoundError,
+)
 from swing_trading_ai_assistant.market_data.instruments import Instrument
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     ManifestState,
@@ -69,6 +75,7 @@ from swing_trading_ai_assistant.market_data.runtime_identity_manifest import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
@@ -161,7 +168,79 @@ def test_current_service_archives_completed_daily_and_partial_ledger(
     assert partial["revision_identity_sha256"] == _DIGEST
 
 
-def test_current_service_maps_lease_cleanup_failure_to_closed_report(
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_current_service_propagates_unrelated_snapshot_resolver_fault(
+    tmp_path: Path, fault_type: type[BaseException]
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    error = fault_type("resolver defect")
+    service = _service(root, member, _query_report(), resolver=_FaultingResolver(error))
+
+    with pytest.raises(fault_type) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    ("snapshot_error", "reason"),
+    (
+        (SnapshotInstrumentAmbiguousError, CurrentCohortReasonV1.IDENTITY_AMBIGUOUS),
+        (InstrumentSnapshotCorruptError, CurrentCohortReasonV1.IDENTITY_STALE),
+        (InstrumentSnapshotNotFoundError, CurrentCohortReasonV1.IDENTITY_UNRESOLVED),
+        (SnapshotInstrumentNotFoundError, CurrentCohortReasonV1.IDENTITY_UNRESOLVED),
+    ),
+    ids=("ambiguous", "corrupt", "snapshot-missing", "instrument-missing"),
+)
+def test_current_service_maps_typed_snapshot_error_to_closed_report(
+    tmp_path: Path,
+    snapshot_error: type[RuntimeError],
+    reason: CurrentCohortReasonV1,
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    service = _service(
+        root,
+        member,
+        _query_report(),
+        resolver=_FaultingResolver(snapshot_error()),
+    )
+
+    report = service.evaluate(_request(member))
+
+    assert report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
+    assert report.members is None
+    assert report.reasons == (reason,)
+
+
+def test_current_service_propagates_unrelated_lease_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    service = _service(root, member, _query_report())
+    original_close = StorageRootLease.close
+    error = RuntimeError("cleanup defect")
+
+    def close_then_fail(lease: StorageRootLease) -> None:
+        original_close(lease)
+        raise error
+
+    monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(RuntimeError) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+
+
+def test_current_service_maps_storage_lease_cleanup_failure_to_closed_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _protected_root(tmp_path)
@@ -171,7 +250,7 @@ def test_current_service_maps_lease_cleanup_failure_to_closed_report(
 
     def close_then_fail(lease: StorageRootLease) -> None:
         original_close(lease)
-        raise RuntimeError("cleanup failure")
+        raise StorageRootLeaseError("lease cleanup failure")
 
     monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
 
@@ -180,6 +259,29 @@ def test_current_service_maps_lease_cleanup_failure_to_closed_report(
     assert report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
     assert report.members is None
     assert report.reasons == (CurrentCohortReasonV1.PROVIDER_UNAVAILABLE,)
+
+
+def test_current_service_preserves_primary_body_error_over_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    primary = KeyError("body defect")
+    service = _service(
+        root, member, _query_report(), resolver=_FaultingResolver(primary)
+    )
+    original_close = StorageRootLease.close
+
+    def close_then_fail(lease: StorageRootLease) -> None:
+        original_close(lease)
+        raise AssertionError("secondary cleanup defect")
+
+    monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(KeyError) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is primary
 
 
 def test_complete_report_rejects_duplicate_and_future_member_evidence(
@@ -1228,6 +1330,45 @@ def test_cohort_cli_execution_fault_is_not_malformed_input(
     assert tuple(root.iterdir()) == ()
 
 
+def test_default_cohort_cli_reports_retained_resolver_defect_as_internal_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    resolved_members: list[CurrentCohortMemberV1] = []
+
+    def admitted_members(*_args: object) -> frozenset[CurrentCohortMemberV1]:
+        return frozenset((_member(),))
+
+    def fail_resolver(
+        _self: object, member: CurrentCohortMemberV1, _lease: StorageRootLease
+    ) -> None:
+        resolved_members.append(member)
+        raise KeyError("private-retained-resolver-defect")
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        admitted_members,
+    )
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentCohortInstrumentResolverV1,
+        "resolve_under_lease",
+        fail_resolver,
+    )
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+    captured = capsys.readouterr()
+    assert resolved_members == [_member()]
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
 def test_cohort_current_cli_rejects_future_cutoff_before_service_or_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1588,6 +1729,17 @@ class _Resolver:
             ),
             _PUBLISHED_AT,
         )
+
+
+class _FaultingResolver(_Resolver):
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def resolve_under_lease(
+        self, member: CurrentCohortMemberV1, lease: StorageRootLease
+    ) -> CurrentCohortResolvedIdentityV1:
+        del member, lease
+        raise self.error
 
 
 @dataclass(frozen=True, slots=True)
