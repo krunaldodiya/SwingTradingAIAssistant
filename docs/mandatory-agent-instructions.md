@@ -4,6 +4,7 @@ Status: **CANONICAL PROJECT ADAPTER**
 
 Owner: repository owner and product direction authority
 Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
+OMP routing revision: [#168](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168)
 
 These instructions apply to every task in this repository, including resumed work, discussion that becomes delivery work, and work that appears routine. Every agent MUST read and follow this file before planning, editing, delegation, or delivery. Prior-session familiarity, summaries, memories, and restored harness state do not substitute for the current file.
 
@@ -95,10 +96,7 @@ Goal mode grants continuity, not authority. It MUST pause at the next safe bound
 
 Resuming a goal requires rechecking tracker state, branch and working tree, material decisions, external prerequisites, and whether earlier evidence still applies. Never continue merely because the harness restored a session.
 
-Route goal work by responsibility:
-
-- Sol/high owns framing, architecture, market/source/evidence/security decisions, adversarial acceptance, and independent review.
-- Terra/high may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
+Route goal work through the [OMP model routing](#omp-model-routing) boundaries below. Terra/high may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
 
 For R3/R4 evidence, persistence, revision, security, or state-transition contracts, freeze the adversarial matrix before implementation. Cover positive behavior, malformed/unsupported/insufficient/conflicting outcomes, bounds and limit-plus-one, combined-failure precedence, interruption/retry/rollback, provenance substitution, concurrency where applicable, historical compatibility, and external temporal or authority gates.
 
@@ -117,6 +115,27 @@ after startup input, and a routine approval dialog are operational conditions,
 not owner decisions. Inspect, wait, retry, restart, or use the documented
 no-work bootstrap; apply the standing pre-approval to an in-scope routine
 dialog. Never ask the owner merely to authorize ordinary continuation.
+
+## OMP model routing
+
+This routing applies to OMP only. Use `openai-codex/` model identifiers inside OMP; do not configure or substitute native Codex or another harness. The coordinator selects the lane from the actual responsibility and risk; these settings are not an automatic risk-classification router.
+
+| Responsibility | OMP assignment | Required model and thinking |
+|---|---|---|
+| Routine coordination, integration, reporting, and R1/R2 code review | `modelRoles.default`; `task.agentModelOverrides.reviewer` | `openai-codex/gpt-5.6-sol:high` |
+| Consequential framing, architecture, market/source/evidence/security decisions, adversarial acceptance, and difficult escalation | `modelRoles.plan`, `slow`, `advisor` | `openai-codex/gpt-6-astra:high` |
+| R3/R4 final functional/domain review, independent of the writer | Explicit Herdr launch; do not inherit the generic Sol reviewer assignment | `openai-codex/gpt-6-astra:high` |
+| Security/privacy/provenance review | `task.agentModelOverrides.security-reviewer`; explicit Herdr launch | `openai-codex/gpt-6-astra:high` |
+| Bounded implementation, discovery, source research, and design | `modelRoles.smol`, `designer`, `vision`; agent overrides `task`, `scout`, `librarian`, `designer` | `openai-codex/gpt-5.6-terra:high` |
+| Exact, interpretation-free mechanical work | `modelRoles.tiny`; `task.agentModelOverrides.sonic` | `openai-codex/gpt-5.6-luna:high` |
+
+Routine work under an unchanged accepted contract does not require another Astra planning pass. Semantic ambiguity leaves Luna; consequential ambiguity or repeated failure in Terra/Sol pauses the affected work for a bounded Astra decision before implementation resumes. A required Astra lane being unavailable is a blocker, not permission to downgrade silently.
+
+The active local profile lives in `~/.omp/agent/config.yml`; preserve unrelated settings, credentials, model restrictions, and its existing global storage scope. Back up before changing it and verify effective assignments plus a fresh process's exact model/high-thinking/no-fallback evidence. Explicit Herdr launch flags must match this table. Existing sessions retain their selected models; new settings do not retroactively change them.
+
+Apply the new routes to new assignments. Do not switch in-flight work or relabel historical model/review evidence. A new candidate or restarted review needs fresh exact-byte review under the current route. A provider safety pause/refusal is **INVALID / NO VERDICT** regardless of an apparent idle state: pause the affected task, retain its evidence, and obtain explicit interactive owner approval where required. Never retry, rephrase, switch models, dismiss a restriction, or use a new review to bypass the provider boundary.
+
+Optimize accepted work per unit of usage, including retries and reviews, rather than token count alone. API list prices are not ChatGPT allowance multipliers; zero or missing OMP cost metadata is not free usage. Do not claim measured savings or native-Codex-only capabilities without OMP evidence. The dated capability, price, and scope decision is retained in [Issue #168](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168).
 
 ## Additional standing owner instructions
 
