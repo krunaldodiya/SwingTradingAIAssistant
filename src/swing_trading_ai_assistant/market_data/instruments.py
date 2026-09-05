@@ -237,7 +237,12 @@ def _text(value: object) -> str:
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        raise InstrumentCatalogPayloadError(
+            "instrument catalog contains an unrepresentable numeric field"
+        ) from None
 
 
 def _identity_value(instrument: Instrument, field_name: str) -> object:

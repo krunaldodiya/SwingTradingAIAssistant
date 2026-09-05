@@ -10,6 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from .catalog import CatalogPersistenceError, CatalogStorageError
 from .historical import (
     CancellationRequested,
     CancellationSignal,
@@ -268,7 +269,7 @@ class PartitionIngestionExecutor:
     def _fetch_current(self, plan: PlannedInstrumentMonth) -> PartitionManifest | None:
         try:
             current = self._catalog.get_manifest(plan)
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             if self._cancelled():
                 return None
             raise PartitionCatalogFailure("catalog access failed") from None
@@ -554,7 +555,7 @@ class PartitionIngestionExecutor:
             )
             try:
                 self._catalog.create_manifest(active)
-            except Exception:
+            except (CatalogPersistenceError, CatalogStorageError):
                 authoritative, reconciled = self._recover_active_manifest(plan, active)
                 if reconciled is not None:
                     return reconciled
@@ -585,7 +586,7 @@ class PartitionIngestionExecutor:
                 return True, None
             if type(observed) is not PartitionManifest or observed != attempted:
                 return False, None
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             raise PartitionCatalogFailure("catalog create failed") from None
         return True, observed
 
@@ -649,7 +650,7 @@ class PartitionIngestionExecutor:
     ) -> None:
         try:
             self._catalog.transition_manifest(current, target)
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             if self._cancelled():
                 raise PartitionCatalogFailure("catalog persistence cancelled") from None
             raise PartitionCatalogFailure("catalog persistence failed") from None

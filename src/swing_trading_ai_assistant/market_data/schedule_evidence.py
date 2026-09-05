@@ -921,26 +921,25 @@ def _finish_publication(
     visible: bool,
     active_exception: BaseException | None,
 ) -> None:
+    primary_error = active_exception
     if descriptor is not None:
-        if active_exception is None:
-            with suppress(OSError):
-                os.close(descriptor)
-        else:
-            with suppress(BaseException):
-                os.close(descriptor)
-    if active_exception is None:
-        with suppress(OSError):
-            operation.ensure_live()
-            os.unlink(temp_name, dir_fd=parent_fd)
-    else:
-        with suppress(BaseException):
-            operation.ensure_live()
-            os.unlink(temp_name, dir_fd=parent_fd)
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if primary_error is None:
+                primary_error = error
+    try:
+        operation.ensure_live()
+        os.unlink(temp_name, dir_fd=parent_fd)
+    except BaseException as error:
+        if primary_error is None:
+            primary_error = error
     if visible:
-        if active_exception is None:
+        try:
             operation.ensure_live()
             os.fsync(parent_fd)
-        else:
-            with suppress(BaseException):
-                operation.ensure_live()
-                os.fsync(parent_fd)
+        except BaseException as error:
+            if primary_error is None:
+                primary_error = error
+    if active_exception is None and primary_error is not None:
+        raise primary_error

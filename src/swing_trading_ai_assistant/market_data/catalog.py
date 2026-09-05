@@ -1768,7 +1768,7 @@ class DuckDBCatalog:
                 ).fetchone()
                 is not None
             )
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
 
     def _current_run_exists(
@@ -1787,7 +1787,7 @@ class DuckDBCatalog:
                 parameters += _identity_values(exclude_plan)
             query = f"SELECT 1 FROM partitions WHERE {_quote('ingestion_run_id')} = ?{predicate}"  # noqa: S608 - identifiers are fixed and quoted
             return self.connection.execute(query, parameters).fetchone() is not None
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
 
     def _ensure_run_id_available(
@@ -1817,7 +1817,7 @@ class DuckDBCatalog:
                 query,
                 values,
             )
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog write failed") from None
 
     def _execute_update(
@@ -1843,7 +1843,7 @@ class DuckDBCatalog:
                 query,
                 changed_values + _identity_values(current.plan),
             )
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog write failed") from None
 
     def _fetch_source_manifest_identity(self, plan: PlannedInstrumentMonth) -> str:
@@ -1853,7 +1853,7 @@ class DuckDBCatalog:
                 f"SELECT {_quote(_SOURCE_MANIFEST_IDENTITY_COLUMN)} FROM partitions WHERE {where}",  # noqa: S608 - identifiers are fixed and quoted
                 _identity_values(plan),
             ).fetchone()
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
         if row is None or type(row[0]) is not str:
             raise CatalogSchemaError("catalog row is invalid")

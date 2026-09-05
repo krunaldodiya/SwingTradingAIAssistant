@@ -673,3 +673,41 @@ def test_open_parent_close_fault_preserves_primary_and_closes_owned_descriptors(
                 schedule_module._open_parent(operation, create=True)
             assert raised.value is primary
         assert not opened
+
+
+@pytest.mark.parametrize("error_type", (OSError, AssertionError))
+def test_publication_cleanup_failure_cannot_report_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    store, lease = _store(tmp_path)
+    schedule = _schedule()
+    failure = error_type("temporary unlink fault")
+    cleanup_started = False
+    real_unlink = os.unlink
+    real_fsync = os.fsync
+
+    def fail_unlink(path: str | Path, *, dir_fd: int | None = None) -> None:
+        nonlocal cleanup_started
+        if str(path).startswith(".schedule-"):
+            cleanup_started = True
+            raise failure
+        real_unlink(path, dir_fd=dir_fd)
+
+    def fail_cleanup_sync(descriptor: int) -> None:
+        if cleanup_started:
+            raise KeyError("secondary cleanup sync fault")
+        real_fsync(descriptor)
+
+    with lease:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(os, "unlink", fail_unlink)
+            scoped.setattr(os, "fsync", fail_cleanup_sync)
+            if error_type is OSError:
+                assert store.retain(schedule).outcome is ScheduleOutcome.FAILED
+            else:
+                with pytest.raises(AssertionError) as caught:
+                    store.retain(schedule)
+                assert caught.value is failure
+        assert _path(tmp_path, schedule_digest(schedule)).read_bytes() == (
+            canonical_schedule_bytes(schedule)
+        )

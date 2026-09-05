@@ -1105,6 +1105,102 @@ def test_conflicts_and_faults_roll_back_both_current_and_history(tmp_path) -> No
             ).fetchone() == (0,)
 
 
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_manifest_create_preserves_unknown_run_lookup_fault_and_committed_rows(
+    tmp_path, fault_type: type[Exception]
+) -> None:
+    committed = _in_progress()
+    candidate = _in_progress(plan=_other_plan(), ingestion_run_id="run-2")
+    failure = fault_type("injected run lookup fault")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(committed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise failure
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(fault_type) as raised:
+                catalog.create_manifest(candidate)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(committed.plan) == committed
+        assert catalog.get_manifest(candidate.plan) is None
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM ingestion_runs"
+        ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_manifest_transition_preserves_unknown_run_lookup_fault_and_history(
+    tmp_path, fault_type: type[Exception]
+) -> None:
+    initial = _in_progress()
+    failed = fail_manifest(
+        initial, _time(2), FailureCategory.EMPTY_RESPONSE, row_count=0
+    )
+    retried = retry_manifest(
+        failed, "run-2", "upstox-v3", "policy-v1", _time(3), _time(3)
+    )
+    failure = fault_type("injected run lookup fault")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(initial)
+        catalog.transition_manifest(initial, failed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise failure
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(fault_type) as raised:
+                catalog.transition_manifest(failed, retried)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(initial.plan) == failed
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM ingestion_runs"
+        ).fetchone() == (1,)
+
+
+def test_manifest_create_converts_operational_run_lookup_failure(tmp_path) -> None:
+    committed = _in_progress()
+    candidate = _in_progress(plan=_other_plan(), ingestion_run_id="run-2")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(committed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise duckdb.IOException("catalog unavailable")
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(CatalogPersistenceError, match="catalog read failed"):
+                catalog.create_manifest(candidate)
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(committed.plan) == committed
+        assert catalog.get_manifest(candidate.plan) is None
+
+
 def test_schema_is_fail_closed_and_storage_errors_are_sanitized(tmp_path) -> None:
     database_path = tmp_path / "catalog.duckdb"
     connection = duckdb.connect(str(database_path))

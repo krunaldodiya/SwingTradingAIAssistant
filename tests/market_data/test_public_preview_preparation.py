@@ -585,6 +585,17 @@ def test_snapshot_client_fails_closed_for_bad_responses_and_clock() -> None:
         ).fetch()
 
 
+def test_snapshot_client_classifies_overflowing_catalog_number_as_unavailable() -> None:
+    payload = gzip.compress(json.dumps([RELIANCE | {"strike_price": 10**999}]).encode())
+    client = InstrumentSnapshotClientV1(
+        StaticTransport(HttpResponse(200, payload)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    with pytest.raises(InstrumentSnapshotUnavailableError):
+        client.fetch()
+
+
 def test_snapshot_client_propagates_unexpected_parser_fault(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
