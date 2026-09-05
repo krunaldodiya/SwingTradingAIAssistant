@@ -28,15 +28,22 @@ filesystem isolation.
   working/later boundary, defines cross-slice contracts, assigns file ownership,
   exclusively integrates shared results, exclusively runs final repository-wide
   gates, and owns delivery claims.
+  Use the canonical adapter's [OMP routing table](mandatory-agent-instructions.md#omp-model-routing)
+  to separate routine Sol coordination from consequential Astra decisions.
 - **Implementation agent:** use `openai-codex/gpt-5.6-terra` with high thinking
   for bounded source and behavior-test changes.
-- **Functional/domain reviewer:** use `openai-codex/gpt-5.6-sol` with high
-  thinking; read-only unless a later repair assignment is explicit.
+- **Functional/domain reviewer:** use `openai-codex/gpt-6-astra` with high
+  thinking for R3/R4 final review; use `openai-codex/gpt-5.6-sol` with high
+  thinking for R1/R2 review. Remain read-only unless a later repair assignment
+  is explicit. The generic OMP `reviewer` override is Sol, so high-risk Herdr
+  launches must explicitly select Astra.
 - **Security/privacy/provenance reviewer:** use
-  `openai-codex/gpt-5.6-sol` with high thinking; use neutral defensive wording
+  `openai-codex/gpt-6-astra` with high thinking; use neutral defensive wording
   and remain read-only.
 - **Mechanical work:** keep with the coordinator unless it is a large,
   exact, non-overlapping transformation with explicit acceptance evidence.
+  When delegation is justified, use `openai-codex/gpt-5.6-luna` with high
+  thinking; any semantic interpretation leaves the mechanical lane.
 
 Agent authority and delegation boundaries come from the canonical project
 adapter; an assignment may narrow them further.
@@ -96,7 +103,9 @@ adapter; an assignment may narrow them further.
     the candidate, then obtain a fresh review from scratch.
 14. **Treat invalid reviews as no evidence.** An interrupted, network-failed,
     safety-filtered, stale-byte, partially completed, or mutation-invalidated
-    review has no verdict. Repair first, then start fresh reviewers from scratch.
+    review has no verdict. Repair ordinary failures before a fresh review.
+    Provider safety restrictions instead require the canonical adapter's
+    fail-closed owner/provider boundary; never restart or change models to bypass them.
 15. **Repair only current blockers.** A blocker must cite a violated active
     acceptance condition or concrete current safety, correctness, usability, or
     evidence-integrity failure. Re-review every changed exact candidate.
@@ -139,18 +148,18 @@ shared integration, repository-wide gates, review, tracker, and delivery actions
 with the coordinator unless those actions and their authority are explicitly
 assigned.
 
-Route a decision-dominant goal to `openai-codex/gpt-5.6-sol` with high
+Route a consequential decision-dominant goal to `openai-codex/gpt-6-astra` with high
 thinking, and an implementation-ready goal with frozen contracts to
 `openai-codex/gpt-5.6-terra` with high thinking. A Terra goal that encounters a
 consequential architecture, market-logic, source/provider, evidence-policy,
 security, acceptance, or authority decision must pause. The coordinator starts
-a fresh bounded Sol decision agent, captures the decision and its evidence,
+a fresh bounded Astra decision agent, captures the decision and its evidence,
 updates the governing record, revalidates the shared tree and remaining
 assignment, and only then resumes or restarts Terra. A mid-goal model switch is
 not a substitute for that decision boundary or an independent review.
 
 For R3/R4 goals that introduce a new evidence, persistence, revision, security,
-or state-transition contract, the Sol decision assignment must return the
+or state-transition contract, the Astra decision assignment must return the
 adversarial acceptance matrix before Terra starts. The matrix includes positive,
 negative, failure-precedence, boundary, interruption/retry/rollback, provenance
 substitution, concurrency when applicable, compatibility, and external
@@ -381,6 +390,10 @@ path.
 ## Failure and interruption handling
 
 - A network-interrupted or filtered review is **INVALID / NO VERDICT**.
+- A provider safety pause/refusal remains blocked even if Herdr reports `idle`
+  or `done`. Retain the evidence and follow the canonical adapter's explicit
+  interactive-approval and no-bypass boundary; do not close or repurpose that
+  paused agent as routine cleanup.
 - A tool or agent summary never overrides source inspection or executable
   evidence.
 - If an agent stops with reachable work unfinished, assign the bounded remainder
