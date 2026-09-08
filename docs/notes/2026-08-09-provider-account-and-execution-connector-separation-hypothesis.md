@@ -182,4 +182,3 @@ through the promotion gates above and with an owner-approved specification.
 - [Architecture freeze v1](../architecture-freeze-v1.md)
 - [Research vision, validation, and instrument extensibility](2026-08-07-research-vision-validation-and-instrument-extensibility.md)
 - [Data foundation and Upstox ingestion plan](../plans/01-data-foundation-and-upstox-ingestion.md)
-- [Reference repositories](../reference-repositories.md)

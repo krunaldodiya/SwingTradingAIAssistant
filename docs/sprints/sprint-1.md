@@ -74,8 +74,9 @@ canceled and superseded by the equity-only downloader-v1 boundary.
   equity-only ARK-13 milestone.
 - Index, derivative, forex, crypto, and other instrument adapters; ARK-44 was
   canceled and superseded rather than deferred.
-- ExpiryTrack NIFTY/India VIX migration, which is superseded as an active roadmap
-  item and retained only as a reference audit.
+- An earlier external-data migration is superseded and has no active work; see
+  the canonical [independent research logic
+  policy](../mandatory-agent-instructions.md#independent-research-logic).
 - Market-regime, indicator, strategy, backtesting, and agent-facing features.
 
 ## Historical acceptance evidence
