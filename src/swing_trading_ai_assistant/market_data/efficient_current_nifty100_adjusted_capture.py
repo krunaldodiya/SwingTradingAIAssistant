@@ -26,8 +26,10 @@ from ctypes import (
 )
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from importlib import import_module
 from importlib.metadata import version
+from numbers import Real
 from pathlib import Path
 from ssl import CERT_REQUIRED, PROTOCOL_TLS_CLIENT, SSLContext
 from types import ModuleType
@@ -332,6 +334,20 @@ _PROVIDER_FRAME_REASONS_V1: Final = frozenset(
         "RETRIEVED_BEFORE_OFFICIAL_CLOSE",
     }
 )
+_PROVIDER_VALUE_CHECKS_V1: Final = frozenset(
+    {
+        f"{field}_{check}"
+        for field in ("OPEN", "HIGH", "LOW", "CLOSE")
+        for check in ("NOT_NUMERIC", "NOT_FINITE", "NOT_POSITIVE")
+    }
+    | {
+        "VOLUME_NOT_NUMERIC",
+        "VOLUME_NOT_FINITE",
+        "VOLUME_NEGATIVE",
+        "VOLUME_NONINTEGRAL",
+        "OHLC_ORDER_INVALID",
+    }
+)
 MAX_SOURCE_BYTES_V1: Final = 262_144
 MIN_START_INTERVAL_SECONDS_V1: Final = 0.125
 MAX_HTTP_STARTS_PER_COHORT_V1: Final = 256
@@ -589,6 +605,7 @@ class CohortOutcomeV1:
     source_identity_sha256: str | None = None
     source_profile: str | None = None
     provider_frame_reason: str | None = None
+    provider_value_check: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1583,6 +1600,12 @@ def _safe_provider_frame_reason_v1(value: object) -> str:
     return "UNCLASSIFIED_FRAME_REJECTION"
 
 
+def _safe_provider_value_check_v1(value: object) -> str:
+    if type(value) is str and value in _PROVIDER_VALUE_CHECKS_V1:
+        return value
+    return "UNCLASSIFIED_VALUE_REJECTION"
+
+
 def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
     """Return the fixed bounded public result without member or provider detail."""
 
@@ -1604,6 +1627,14 @@ def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
                     _safe_provider_frame_reason_v1(row.provider_frame_reason)
                     if row.code == "INSUFFICIENT_EVIDENCE"
                     and row.reason == "PROVIDER_FRAME_INCOMPLETE"
+                    else None
+                ),
+                "provider_value_check": (
+                    _safe_provider_value_check_v1(row.provider_value_check)
+                    if row.code == "INSUFFICIENT_EVIDENCE"
+                    and row.reason == "PROVIDER_FRAME_INCOMPLETE"
+                    and type(row.provider_frame_reason) is str
+                    and row.provider_frame_reason == "FRAME_VALUE_INVALID"
                     else None
                 ),
                 "revision_sha256": row.revision_sha256,
@@ -2597,9 +2628,77 @@ def prepare_yfinance_runtime_v1(  # noqa: C901 - closed provider admission
     return session
 
 
+def _invalid_number_check_v1(field: str, value: object) -> str:
+    numeric = type(value) is Decimal or (
+        not isinstance(value, bool) and isinstance(value, Real)
+    )
+    return f"{field}_NOT_FINITE" if numeric else f"{field}_NOT_NUMERIC"
+
+
+def _diagnose_provider_value_check_v1(  # noqa: C901 - mirrors rejection precedence only
+    request: low.CaptureForwardAdjustedOhlcvRequestV1,
+    result: object,
+    frame: object,
+) -> str | None:
+    """Explain an existing rejection; never decide capture admission."""
+    if not (
+        isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
+        and result.code == "INSUFFICIENT_EVIDENCE"
+        and result.reason == "FRAME_VALUE_INVALID"
+    ):
+        return None
+    unknown = "UNCLASSIFIED_VALUE_REJECTION"
+    if type(frame) is not dict:
+        return unknown
+    response = cast(dict[str, object], frame)
+    if response.get("index") != request.schedule.sessions:
+        return unknown
+    raw_ohlcv = response.get("ohlcv")
+    if type(raw_ohlcv) is not dict:
+        return unknown
+    ohlcv = cast(dict[str, object], raw_ohlcv)
+    if set(ohlcv) != {member.provider_symbol for member in request.cohort}:
+        return unknown
+    fields = ("open", "high", "low", "close")
+    for member in request.cohort:
+        raw_rows = ohlcv[member.provider_symbol]
+        if type(raw_rows) is not tuple:
+            return unknown
+        rows = cast(tuple[object, ...], raw_rows)
+        if len(rows) != len(request.schedule.sessions):
+            return unknown
+        for raw_row in rows:
+            if type(raw_row) is not dict:
+                return unknown
+            row = cast(dict[str, object], raw_row)
+            if set(row) != {"open", "high", "low", "close", "volume"}:
+                return unknown
+            prices = tuple(
+                low._decimal(row[field])  # pyright: ignore[reportPrivateUsage]
+                for field in fields
+            )
+            for field, price in zip(fields, prices, strict=True):
+                if price is None:
+                    return _invalid_number_check_v1(field.upper(), row[field])
+            if low._volume(row["volume"]) is None:  # pyright: ignore[reportPrivateUsage]
+                volume_number = low._decimal(row["volume"])  # pyright: ignore[reportPrivateUsage]
+                if volume_number is None:
+                    return _invalid_number_check_v1("VOLUME", row["volume"])
+                return "VOLUME_NEGATIVE" if volume_number < 0 else "VOLUME_NONINTEGRAL"
+            values = cast(tuple[Decimal, ...], prices)
+            for field, price in zip(fields, values, strict=True):
+                if price <= 0:
+                    return f"{field.upper()}_NOT_POSITIVE"
+            opening, high, low_price, closing = values
+            if not low_price <= min(opening, closing) <= max(opening, closing) <= high:
+                return "OHLC_ORDER_INVALID"
+    return unknown
+
+
 class _Plan33ProviderV1:
     def __init__(self, session: BoundedYahooSessionV1) -> None:
         self._session = session
+        self._response: object = None
         dependency_authority = getattr(
             session, "ensure_dependency_authority", lambda: None
         )
@@ -2608,7 +2707,13 @@ class _Plan33ProviderV1:
         self._dependency_authority = dependency_authority
         self._adapter = low.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
 
+    def take_response(self) -> object:
+        response = self._response
+        self._response = None
+        return response
+
     def download(self, **kwargs: object) -> object:
+        self._response = None
         if (
             not _pool_is_exact_v1()
             or multitasking.get_active_tasks()
@@ -2631,6 +2736,7 @@ class _Plan33ProviderV1:
             ):
                 response = self._adapter.download(**kwargs)
                 self._dependency_authority()
+                self._response = response
                 return response
         finally:
             logging.disable(previous_disable)
@@ -3021,6 +3127,7 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
     session: BoundedYahooSessionV1 | None = None,
     *,
     binding_root: Path | None = None,
+    provider_value_check: str | None = None,
 ) -> CohortOutcomeV1:
     if isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1):
         revision = result.revision
@@ -3136,6 +3243,11 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
         "INSUFFICIENT_EVIDENCE",
         reason,
         provider_frame_reason=provider_frame_reason,
+        provider_value_check=(
+            _safe_provider_value_check_v1(provider_value_check)
+            if provider_frame_reason == "FRAME_VALUE_INVALID"
+            else None
+        ),
     )
 
 
@@ -3606,6 +3718,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                     "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
                 )
             active_session: BoundedYahooSessionV1 | None = None
+            provider_value_check: str | None = None
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
                 and result.reason == "PROVIDER_CALL_FAILED"
@@ -3691,6 +3804,10 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                             "INSUFFICIENT_EVIDENCE",
                             "RUNTIME_CONFIGURATION_INVALID",
                         )
+                    finally:
+                        provider_value_check = _diagnose_provider_value_check_v1(
+                            low_request, result, active_provider.take_response()
+                        )
             try:
                 current_snapshots = _snapshot_protected_directories_v1(
                     (root,), require_all=False
@@ -3735,6 +3852,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                 binding_root=selection_root
                 if isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1)
                 else None,
+                provider_value_check=provider_value_check,
             )
             if outcome.reason == "EVIDENCE_CONFLICT":
                 shared_failure = SharedFailureV1(

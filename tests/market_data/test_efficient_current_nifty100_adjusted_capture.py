@@ -16,6 +16,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+import weakref
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -2061,7 +2062,11 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda _root, **_kwargs: session
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_response=lambda: None),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     nifty50_root = tmp_path / "nifty50"
     next50_root = tmp_path / "next50"
@@ -3353,7 +3358,11 @@ def test_new_binding_replacement_before_snapshot_stops_second_cohort(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: Session()
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_response=lambda: None),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     original_snapshot = core._snapshot_plan33_binding_v1
     replacement = b'{"replacement":true}\n'
@@ -4939,7 +4948,11 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
             )
         ),
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_response=lambda: None),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     selection_root = tmp_path / "selection"
     result = core.capture_current_nifty100_v1(
@@ -5010,7 +5023,11 @@ def test_cohort_reset_resource_limit_returns_ordered_bounded_outcomes(
 
     session = Session()
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: session)
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_response=lambda: None),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
 
     result = core.capture_current_nifty100_v1(
@@ -5292,6 +5309,249 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
         (tmp_path / "next50", low_requests[1].request_identity_sha256),
     ]
     assert retain_calls == ["NIFTY_50"]
+
+
+def _capture_with_value_faults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    faults: tuple[dict[str, object], dict[str, object]],
+    *,
+    first_call_raises: bool = False,
+    retain_valid: bool = False,
+) -> core.CurrentNifty100ResultV1:
+    active_request: Any = None
+    calls = 0
+    frame_values: list[Any] = []
+    original_capture = core.low._capture_forward_adjusted_ohlcv_with_provider_v1
+    for directory in ("nifty50", "next50", "schedule"):
+        (tmp_path / directory).mkdir(mode=0o700)
+
+    class TrackedPrice(float):
+        pass
+
+    class Adapter:
+        def download(self, **_kwargs: object) -> object:
+            rows: dict[str, tuple[dict[str, object], ...]] = {
+                member.provider_symbol: tuple(
+                    {"open": 100, "high": 102, "low": 98, "close": 101, "volume": 0}
+                    for _ in active_request.schedule.sessions
+                )
+                for member in active_request.cohort
+            }
+            rows[active_request.cohort[0].provider_symbol][0].update(faults[calls - 1])
+            marker = TrackedPrice(101)
+            frame_values.append(weakref.ref(marker))
+            rows[active_request.cohort[-1].provider_symbol][-1]["close"] = marker
+            return {
+                "provider_source": core.low.EXPECTED_PROVIDER_SOURCE_V1,
+                "timezone": "Asia/Kolkata",
+                "index": active_request.schedule.sessions,
+                "retrieved_at": _NOW,
+                "ohlcv": rows,
+            }
+
+    class Session(_ProtectedCleanupSessionStub):
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+
+        def close(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+
+    def capture(
+        low_request: Any, provider: Any, _root: Path, _schedule: Path, **_kwargs: Any
+    ) -> object:
+        nonlocal active_request, calls
+        if isinstance(provider, core._UnresolvedProbeV1):
+            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+            )
+        active_request = low_request
+        calls += 1
+        if retain_valid:
+            return original_capture(low_request, provider, _root, _schedule, **_kwargs)
+        frame = provider.download(threads=False)
+        if first_call_raises and calls == 1:
+            raise RuntimeError("PRIVATE_VALUE_EXCEPTION_CANARY")
+        result = core.low._normalize_provider_frame(low_request, frame)
+        assert isinstance(result, core.low.CaptureForwardAdjustedOhlcvFailureV1)
+        assert result.reason == "FRAME_VALUE_INVALID"
+        return result
+
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_a, **_k: True
+    )
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
+    )
+    monkeypatch.setattr(
+        core.low, "YfinanceCaptureForwardAdjustedOhlcvAdapterV1", Adapter
+    )
+    monkeypatch.setattr(
+        core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: Session()
+    )
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert calls == 2
+    assert all(reference() is None for reference in frame_values)
+    if not retain_valid:
+        assert all(row.revision_sha256 is None for row in result.cohorts)
+    return result
+
+
+@pytest.mark.parametrize(
+    ("fault", "check"),
+    [
+        ({"open": True}, "OPEN_NOT_NUMERIC"),
+        ({"high": float("nan")}, "HIGH_NOT_FINITE"),
+        ({"low": 0}, "LOW_NOT_POSITIVE"),
+        ({"volume": "PRIVATE_VALUE_CANARY"}, "VOLUME_NOT_NUMERIC"),
+        ({"volume": float("inf")}, "VOLUME_NOT_FINITE"),
+        ({"volume": -1}, "VOLUME_NEGATIVE"),
+        ({"volume": 0.5}, "VOLUME_NONINTEGRAL"),
+        ({"close": 103}, "OHLC_ORDER_INVALID"),
+        ({"open": 0, "volume": 0.5}, "VOLUME_NONINTEGRAL"),
+        ({"open": float("nan"), "volume": 0.5}, "OPEN_NOT_FINITE"),
+        ({"open": 0, "high": 0}, "OPEN_NOT_POSITIVE"),
+    ],
+)
+def test_provider_value_check_explains_actual_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: dict[str, object],
+    check: str,
+) -> None:
+    result = _capture_with_value_faults(monkeypatch, tmp_path, (fault, fault))
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.get("provider_value_check") for row in cohorts] == [check, check]
+    assert all(row["provider_frame_reason"] == "FRAME_VALUE_INVALID" for row in cohorts)
+    encoded = json.dumps(payload)
+    assert "PRIVATE_VALUE_CANARY" not in encoded
+    assert all(
+        _isin(index) not in encoded and _symbol(index) not in encoded
+        for index in range(100)
+    )
+
+
+def test_provider_value_check_does_not_retain_prior_frame_after_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": float("nan")}, {"volume": -1}),
+        first_call_raises=True,
+    )
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert cohorts[0]["reason"] == "CONFIGURATION_INVALID"
+    assert cohorts[0].get("provider_value_check") is None
+    assert cohorts[1].get("provider_value_check") == "VOLUME_NEGATIVE"
+    assert "PRIVATE_VALUE_EXCEPTION_CANARY" not in json.dumps(payload)
+
+
+def test_provider_value_check_keeps_valid_zero_volume_capture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": 100, "high": 100, "low": 100, "close": 100}, {}),
+        retain_valid=True,
+    )
+    assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.code for row in result.cohorts] == ["INSERTED", "INSERTED"]
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert all(row["provider_value_check"] is None for row in cohorts)
+    for outcome, directory in zip(result.cohorts, ("nifty50", "next50"), strict=True):
+        assert outcome.revision_sha256 is not None
+        revision = core.low.read_capture_forward_revision_v1(
+            tmp_path / directory, outcome.revision_sha256
+        )
+        assert all(bar.volume == 0 for bar in revision.bars)
+
+
+@pytest.mark.parametrize(
+    ("code", "reason", "frame_reason"),
+    [
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE", "FRAME_VALUE_INVALID"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE", "FRAME_SCHEMA_INVALID"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_RATE_LIMITED", "FRAME_VALUE_INVALID"),
+        ("REUSED", None, "FRAME_VALUE_INVALID"),
+    ],
+)
+def test_provider_value_check_rechecks_public_context_and_forgery(
+    code: str, reason: str | None, frame_reason: str
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name, "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+        ),
+    )
+
+    class MasqueradingCheck(str):
+        def __hash__(self) -> int:
+            return hash("OPEN_NOT_FINITE")
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    for value in (
+        None,
+        "PRIVATE_VALUE_CANARY",
+        ["PRIVATE_VALUE_CANARY"],
+        MasqueradingCheck("PRIVATE_VALUE_CANARY"),
+    ):
+        row = replace(
+            result.cohorts[0],
+            code=code,
+            reason=reason,
+            provider_frame_reason=frame_reason,
+            provider_value_check=value,
+        )
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(row, result.cohorts[1]))
+        )
+        cohorts: Any = payload["cohorts"]
+        expected = (
+            "UNCLASSIFIED_VALUE_REJECTION"
+            if code == "INSUFFICIENT_EVIDENCE"
+            and reason == "PROVIDER_FRAME_INCOMPLETE"
+            and frame_reason == "FRAME_VALUE_INVALID"
+            else None
+        )
+        assert cohorts[0]["provider_value_check"] == expected
+        assert "PRIVATE_VALUE_CANARY" not in json.dumps(payload)
+    forged_context = replace(
+        result.cohorts[0],
+        provider_frame_reason=MasqueradingCheck("PRIVATE_CONTEXT_CANARY"),
+        provider_value_check="OPEN_NOT_FINITE",
+    )
+    payload = core.serialize_result_v1(
+        replace(result, cohorts=(forged_context, result.cohorts[1]))
+    )
+    cohorts = payload["cohorts"]
+    assert cohorts[0]["provider_value_check"] is None
+    assert "PRIVATE_CONTEXT_CANARY" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize(
@@ -5596,7 +5856,11 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda *_args, **_kwargs: _Session()
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_response=lambda: None),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),

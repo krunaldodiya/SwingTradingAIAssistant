@@ -488,6 +488,42 @@ offending member, private value, or proven root cause. No rejected frame or
 dependency log is published or retained by this extension. A new diagnostic
 must not be retroactively attributed to an earlier capture that lacked it.
 
+The owner-approved Issue #176 continuation adds nullable `provider_value_check`
+only when the outcome is `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE`
+and `provider_frame_reason` is the exact plain string `FRAME_VALUE_INVALID`.
+Its closed vocabulary is:
+
+- each of `OPEN`, `HIGH`, `LOW`, and `CLOSE` followed by `_NOT_NUMERIC`,
+  `_NOT_FINITE`, or `_NOT_POSITIVE`;
+- `VOLUME_NOT_NUMERIC`, `VOLUME_NOT_FINITE`, `VOLUME_NEGATIVE`, or
+  `VOLUME_NONINTEGRAL`; and
+- `OHLC_ORDER_INVALID`.
+
+Missing, unclassified, forged, non-string, or string-subclass detail becomes
+`UNCLASSIFIED_VALUE_REJECTION` in that context; every other context emits null.
+Public serialization independently checks both the context and the finite
+plain-string value. A field label identifies a failed check, not a stock,
+session coordinate, observed price, or proven provider/adapter root cause.
+
+Diagnosis uses only the same invocation's already-normalized response after
+the authoritative low-level call reports `FRAME_VALUE_INVALID`. It scans within
+the admitted request's bounds in canonical member/session order. In the first
+rejected row, precedence is price-number conversion in open/high/low/close
+order, volume-number/integrality checks, price positivity in that order, then
+OHLC ordering. It reuses the existing low-level numeric validators. Its scalar
+comparisons explain an already-rejected bar; they never decide data acceptance.
+An unavailable or nonmatching observation remains unclassified.
+
+The provider may hold one transient reference to its already-created response,
+without copying it, during the per-cohort call. A `finally` handoff clears that
+provider-owned reference on every call exit and completes any bounded failure
+diagnosis before the next cohort. No rejected frame, value, identifier, session
+coordinate, private row count, path, URL, exception text, or dependency log is
+archived or emitted. Successful, reused, transport-failed, and exceptional
+paths cannot inherit a previous frame's diagnostic. Low-level source, request
+identities, writer compatibility, immutable revisions, effect precedence, and
+no-retry/no-fallback rules remain unchanged.
+
 The higher-level outcome is:
 
 - `COMPLETE_CURRENT_NIFTY100_CAPTURE` only when both ordered cohort outcomes
@@ -527,6 +563,9 @@ only by its own cohort identity and cannot authorize the union claim.
 | Empty/unexpected-schema frame, missing/duplicated session or ticker, NaN/non-finite/non-positive price, negative/non-integral volume, or wrong timezone | `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE` for that cohort | Invented 429; member/session dropping; value repair | Frame matrix tests |
 | Distinct real schema, coverage, value, or retrieval-time frame failures | Existing incomplete cohort outcome plus its allowlisted `provider_frame_reason`; second cohort still follows existing precedence | New provider call, partial publication, changed failure classification | Real normalized-frame rejection through outcome composition and public serialization |
 | Unknown/forged private diagnostic, non-string or string-subclass value, or diagnostic attached to a non-frame/success outcome | Fixed `UNCLASSIFIED_FRAME_REJECTION` only for frame failure; null otherwise | Raw detail echo, diagnostic overriding resource/rate-limit failure, unbounded payload | Serialization redaction and combined-failure precedence regressions |
+| A rejected row has competing price-conversion, volume, positivity, or OHLC-order faults | One allowlisted `provider_value_check` in the frozen order, attached only to exact `FRAME_VALUE_INVALID` | Changed admission, invented value diagnosis for another frame reason, values or member/session coordinates | Real normalizer rejection through both ordered cohort outcomes; competing-failure regressions |
+| A value diagnostic or its frame context is missing, unknown, non-string, or a masquerading string subclass | `UNCLASSIFIED_VALUE_REJECTION` only in the exact eligible context; null otherwise | Private canary echo; hash/equality masquerade; diagnostic on rate-limited or reused output | Public serializer context/forgery regressions |
+| A rejected or exceptional first cohort is followed by another cohort; a valid zero-volume/flat-price capture succeeds | Transient response released before the next cohort and session close; later diagnosis comes only from its own response; valid immutable revisions read back with null diagnostic | Raw response retention; inherited diagnostic; rejection of valid zero volume or equality bounds | Weak-reference lifetime checks, exceptional-exit regression, and real low-level capture/readback |
 | Complete yfinance-adjusted window crosses a provider-reported corporate action | Capture remains one adjusted revision; volume remains source-reported unadjusted; limitation retained | Upstox/raw substitution; local adjustment inference | Corporate-action basis test |
 | A later authorized request observes revised adjusted bytes, including when its admitted parent was written by an explicitly compatible historical runtime | New immutable revision/lineage; old revision and writer identity unchanged; writer upgrade alone is not changed provider content | Overwrite, historical-writer rejection, spurious correction, or relabelling old known-at | Revision/correction and compatible-writer lineage tests |
 | First cohort has provider/frame failure; second is unresolved | Second is still attempted; ordered tuple carries both exact rows | Nondeterministic short-circuit | Combined-failure precedence test |
