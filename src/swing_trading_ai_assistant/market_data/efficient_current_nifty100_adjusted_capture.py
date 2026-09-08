@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import stat
 import sys
@@ -25,7 +26,7 @@ from ctypes import (
     create_string_buffer,
 )
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from importlib import import_module
 from importlib.metadata import version
@@ -34,13 +35,14 @@ from pathlib import Path
 from ssl import CERT_REQUIRED, PROTOCOL_TLS_CLIENT, SSLContext
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
     ProxyHandler,
     build_opener,
 )
+from zoneinfo import ZoneInfo
 
 import multitasking as _untyped_multitasking  # pyright: ignore[reportMissingImports,reportUnknownVariableType]
 
@@ -348,6 +350,17 @@ _PROVIDER_VALUE_CHECKS_V1: Final = frozenset(
         "OHLC_ORDER_INVALID",
     }
 )
+_PROVIDER_VALUE_ORIGINS_V1: Final = frozenset(
+    {
+        "SOURCE_OPEN_MISSING_OR_NONFINITE",
+        "SOURCE_ADJUSTMENT_INPUT_INVALID",
+        "SOURCE_ADJUSTMENT_RESULT_NONFINITE",
+        "SOURCE_EXPECTED_SESSION_MISSING",
+        "SOURCE_ADJUSTED_OPEN_FINITE",
+    }
+)
+_UNCLASSIFIED_SOURCE_ORIGIN_V1: Final = "UNCLASSIFIED_SOURCE_ORIGIN"
+_NSE_SOURCE_TIMEZONE_V1: Final = ZoneInfo("Asia/Kolkata")
 MAX_SOURCE_BYTES_V1: Final = 262_144
 MIN_START_INTERVAL_SECONDS_V1: Final = 0.125
 MAX_HTTP_STARTS_PER_COHORT_V1: Final = 256
@@ -606,6 +619,7 @@ class CohortOutcomeV1:
     source_profile: str | None = None
     provider_frame_reason: str | None = None
     provider_value_check: str | None = None
+    provider_value_origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1299,6 +1313,247 @@ def _close_yfinance_cache_databases_v1() -> None:
         raise failures[0]
 
 
+def _source_float_v1(value: object) -> float | None:
+    if value is None:
+        return float("nan")
+    if type(value) not in (bool, int, float, str):
+        return None
+    if type(value) is str and len(value) > 64:
+        return None
+    try:
+        return float(cast(bool | int | float | str, value))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _source_open_origin_v1(opening: object, close: object, adjusted: object) -> str:
+    opening_number = _source_float_v1(opening)
+    close_number = _source_float_v1(close)
+    adjusted_number = _source_float_v1(adjusted)
+    if opening_number is None:
+        return _UNCLASSIFIED_SOURCE_ORIGIN_V1
+    if not math.isfinite(opening_number):
+        return "SOURCE_OPEN_MISSING_OR_NONFINITE"
+    if close_number is None or adjusted_number is None:
+        return _UNCLASSIFIED_SOURCE_ORIGIN_V1
+    if (
+        not math.isfinite(close_number)
+        or not math.isfinite(adjusted_number)
+        or close_number == 0
+    ):
+        return "SOURCE_ADJUSTMENT_INPUT_INVALID"
+    if not math.isfinite(opening_number * (adjusted_number / close_number)):
+        return "SOURCE_ADJUSTMENT_RESULT_NONFINITE"
+    return "SOURCE_ADJUSTED_OPEN_FINITE"
+
+
+def _source_chart_origins_v1(  # noqa: C901 - bounded source-only projection
+    raw: bytes, ticker: str, sessions: tuple[date, ...]
+) -> dict[date, str] | None:
+    try:
+        decoded: object = json.loads(raw, object_pairs_hook=_unique_json_object_v1)
+        if type(decoded) is not dict:
+            return None
+        chart_value = cast(dict[str, object], decoded).get("chart")
+        if type(chart_value) is not dict:
+            return None
+        chart = cast(dict[str, object], chart_value)
+        results = chart.get("result")
+        if (
+            chart.get("error") is not None
+            or type(results) is not list
+            or len(cast(list[object], results)) != 1
+        ):
+            return None
+        result_value = cast(list[object], results)[0]
+        if type(result_value) is not dict:
+            return None
+        result = cast(dict[str, object], result_value)
+        metadata_value = result.get("meta")
+        if type(metadata_value) is not dict:
+            return None
+        metadata = cast(dict[str, object], metadata_value)
+        if (
+            metadata.get("symbol") != ticker
+            or metadata.get("exchangeTimezoneName") != "Asia/Kolkata"
+        ):
+            return None
+        timestamps_value = result.get("timestamp")
+        indicators_value = result.get("indicators")
+        if (
+            type(timestamps_value) is not list
+            or len(cast(list[object], timestamps_value)) > len(sessions) + 1
+            or type(indicators_value) is not dict
+        ):
+            return None
+        timestamps = cast(list[object], timestamps_value)
+        indicators = cast(dict[str, object], indicators_value)
+        quotes = indicators.get("quote")
+        if type(quotes) is not list or len(cast(list[object], quotes)) != 1:
+            return None
+        quote_value = cast(list[object], quotes)[0]
+        if type(quote_value) is not dict:
+            return None
+        quote = cast(dict[str, object], quote_value)
+        opens, closes = quote.get("open"), quote.get("close")
+        adjusted: object = closes
+        if "adjclose" in indicators:
+            adjustment = indicators["adjclose"]
+            if type(adjustment) is not list or len(cast(list[object], adjustment)) != 1:
+                return None
+            adjustment_value = cast(list[object], adjustment)[0]
+            if type(adjustment_value) is not dict:
+                return None
+            adjusted = cast(dict[str, object], adjustment_value).get("adjclose")
+        if any(
+            type(values) is not list or len(values) != len(timestamps)
+            for values in (opens, closes, adjusted)
+        ):
+            return None
+        origins = dict.fromkeys(sessions, "SOURCE_EXPECTED_SESSION_MISSING")
+        seen: set[date] = set()
+        for timestamp, opening, close, adjusted_close in zip(
+            timestamps,
+            cast(list[object], opens),
+            cast(list[object], closes),
+            cast(list[object], adjusted),
+            strict=True,
+        ):
+            if type(timestamp) is not int:
+                return None
+            session = datetime.fromtimestamp(timestamp, _NSE_SOURCE_TIMEZONE_V1).date()
+            if session in seen:
+                return None
+            seen.add(session)
+            if session in origins:
+                origins[session] = _source_open_origin_v1(
+                    opening, close, adjusted_close
+                )
+        return origins
+    except (UnicodeDecodeError, ValueError, RecursionError, OverflowError, OSError):
+        return None
+
+
+class _SourceFrameObservationV1:
+    """Hold only current-invocation categorical projections, never source values."""
+
+    def __init__(self, tickers: tuple[str, ...], sessions: tuple[date, ...]) -> None:
+        self._tickers = frozenset(tickers)
+        self._sessions = sessions
+        self._period1 = str(
+            int(
+                datetime.combine(
+                    sessions[0], datetime.min.time(), _NSE_SOURCE_TIMEZONE_V1
+                ).timestamp()
+            )
+        )
+        self._period2 = str(
+            int(
+                datetime.combine(
+                    sessions[-1] + timedelta(days=1),
+                    datetime.min.time(),
+                    _NSE_SOURCE_TIMEZONE_V1,
+                ).timestamp()
+            )
+        )
+        self._origins: dict[str, dict[date, str] | None] = {}
+        self._lock = threading.Lock()
+        self._closed = False
+
+    @classmethod
+    def from_download(
+        cls, kwargs: dict[str, object]
+    ) -> _SourceFrameObservationV1 | None:
+        tickers_value = kwargs.get("tickers")
+        dates_value = kwargs.get("expected_sessions")
+        if (
+            type(tickers_value) is not tuple
+            or not 1
+            <= len(cast(tuple[object, ...], tickers_value))
+            <= low.MAX_MEMBERS_V1
+            or any(
+                type(value) is not str or len(value) > 64
+                for value in cast(tuple[object, ...], tickers_value)
+            )
+            or type(dates_value) is not tuple
+            or not 1
+            <= len(cast(tuple[object, ...], dates_value))
+            <= low.MAX_WINDOW_SESSIONS_V1
+            or any(
+                type(value) is not str or len(value) != 10
+                for value in cast(tuple[object, ...], dates_value)
+            )
+            or kwargs.get("interval") != "1d"
+            or kwargs.get("auto_adjust") is not True
+        ):
+            return None
+        tickers = cast(tuple[str, ...], tickers_value)
+        try:
+            sessions = tuple(
+                date.fromisoformat(value)
+                for value in cast(tuple[str, ...], dates_value)
+            )
+            if (
+                len(set(tickers)) != len(tickers)
+                or tuple(sorted(set(sessions))) != sessions
+                or kwargs.get("start") != sessions[0].isoformat()
+                or kwargs.get("end") != (sessions[-1] + timedelta(days=1)).isoformat()
+            ):
+                return None
+            return cls(tickers, sessions)
+        except (ValueError, OverflowError, OSError):
+            return None
+
+    def observe(self, target: str, status: object, content: object) -> None:
+        if type(status) is not int or status != 200:
+            return
+        parsed = urlsplit(target)
+        prefix = "/v8/finance/chart/"
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname
+            not in {"query1.finance.yahoo.com", "query2.finance.yahoo.com"}
+            or not parsed.path.startswith(prefix)
+        ):
+            return
+        ticker = unquote(parsed.path[len(prefix) :])
+        if ticker not in self._tickers:
+            return
+        try:
+            params = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=32)
+        except ValueError:
+            return
+        if (
+            params.get("period1") != [self._period1]
+            or params.get("period2") != [self._period2]
+            or params.get("interval") != ["1d"]
+        ):
+            return
+        with self._lock:
+            if self._closed:
+                return
+            origins = (
+                _source_chart_origins_v1(content, ticker, self._sessions)
+                if type(content) is bytes and len(content) <= MAX_RESPONSE_BYTES_V1
+                else None
+            )
+            if ticker not in self._origins:
+                self._origins[ticker] = origins
+            elif self._origins[ticker] != origins:
+                self._origins[ticker] = None
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+
+    def origin(self, ticker: str, session: date) -> str:
+        with self._lock:
+            origins = self._origins.get(ticker)
+            if not self._closed or origins is None:
+                return _UNCLASSIFIED_SOURCE_ORIGIN_V1
+            return origins.get(session, _UNCLASSIFIED_SOURCE_ORIGIN_V1)
+
+
 class BoundedYahooSessionV1(CurlSession):
     """curl-cffi session with the exact Plan 33 transport ledger."""
 
@@ -1336,6 +1591,7 @@ class BoundedYahooSessionV1(CurlSession):
         self._clock = clock
         self._sleep = sleep
         self._last_transport_release: float | None = None
+        self._source_observation: _SourceFrameObservationV1 | None = None
 
     @property
     def curl(self) -> Curl:
@@ -1371,11 +1627,14 @@ class BoundedYahooSessionV1(CurlSession):
         if remaining > 0:
             self._sleep(remaining)
 
-    def request(self, method: str, url: str, **kwargs: object) -> object:
+    def request(  # noqa: C901 - fixed transport and diagnostic boundaries
+        self, method: str, url: str, **kwargs: object
+    ) -> object:
         _ensure_provider_request_authorized_v1(method, url, kwargs)
         _reject_ambient_transport_authority_v1()
         _ensure_provider_ca_bundle_live_v1()
         target_url = _request_target_v1(url, kwargs)
+        observation = self._source_observation
 
         self._acquire_start_boundary()
         boundary_held = True
@@ -1422,6 +1681,8 @@ class BoundedYahooSessionV1(CurlSession):
             if response.status_code == 429:
                 self._ledger.mark_rate_limited()
                 raise ProviderRateLimited
+            if observation is not None:
+                observation.observe(target_url, response.status_code, response.content)
             return response
         finally:
             release_start_boundary()
@@ -1606,6 +1867,12 @@ def _safe_provider_value_check_v1(value: object) -> str:
     return "UNCLASSIFIED_VALUE_REJECTION"
 
 
+def _safe_provider_value_origin_v1(value: object) -> str:
+    if type(value) is str and value in _PROVIDER_VALUE_ORIGINS_V1:
+        return value
+    return _UNCLASSIFIED_SOURCE_ORIGIN_V1
+
+
 def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
     """Return the fixed bounded public result without member or provider detail."""
 
@@ -1639,6 +1906,18 @@ def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
                     and row.reason == "PROVIDER_FRAME_INCOMPLETE"
                     and type(row.provider_frame_reason) is str
                     and row.provider_frame_reason == "FRAME_VALUE_INVALID"
+                    else None
+                ),
+                "provider_value_origin": (
+                    _safe_provider_value_origin_v1(row.provider_value_origin)
+                    if type(row.code) is str
+                    and row.code == "INSUFFICIENT_EVIDENCE"
+                    and type(row.reason) is str
+                    and row.reason == "PROVIDER_FRAME_INCOMPLETE"
+                    and type(row.provider_frame_reason) is str
+                    and row.provider_frame_reason == "FRAME_VALUE_INVALID"
+                    and type(row.provider_value_check) is str
+                    and row.provider_value_check == "OPEN_NOT_FINITE"
                     else None
                 ),
                 "revision_sha256": row.revision_sha256,
@@ -2639,70 +2918,83 @@ def _invalid_number_check_v1(field: str, value: object) -> str:
     return f"{field}_NOT_FINITE" if numeric else f"{field}_NOT_NUMERIC"
 
 
-def _diagnose_provider_value_check_v1(  # noqa: C901 - mirrors rejection precedence only
+def _diagnose_provider_value_v1(  # noqa: C901 - mirrors rejection precedence only
     request: low.CaptureForwardAdjustedOhlcvRequestV1,
     result: object,
     frame: object,
-) -> str | None:
+    source: _SourceFrameObservationV1 | None,
+) -> tuple[str | None, str | None]:
     """Explain an existing rejection; never decide capture admission."""
     if not (
         isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
         and result.code == "INSUFFICIENT_EVIDENCE"
         and result.reason == "FRAME_VALUE_INVALID"
     ):
-        return None
+        return None, None
     unknown = "UNCLASSIFIED_VALUE_REJECTION"
     if type(frame) is not dict:
-        return unknown
+        return unknown, None
     response = cast(dict[str, object], frame)
     if response.get("index") != request.schedule.sessions:
-        return unknown
+        return unknown, None
     raw_ohlcv = response.get("ohlcv")
     if type(raw_ohlcv) is not dict:
-        return unknown
+        return unknown, None
     ohlcv = cast(dict[str, object], raw_ohlcv)
     if set(ohlcv) != {member.provider_symbol for member in request.cohort}:
-        return unknown
+        return unknown, None
     fields = ("open", "high", "low", "close")
     for member in request.cohort:
         raw_rows = ohlcv[member.provider_symbol]
         if type(raw_rows) is not tuple:
-            return unknown
+            return unknown, None
         rows = cast(tuple[object, ...], raw_rows)
         if len(rows) != len(request.schedule.sessions):
-            return unknown
-        for raw_row in rows:
+            return unknown, None
+        for session, raw_row in zip(request.schedule.sessions, rows, strict=True):
             if type(raw_row) is not dict:
-                return unknown
+                return unknown, None
             row = cast(dict[str, object], raw_row)
             if set(row) != {"open", "high", "low", "close", "volume"}:
-                return unknown
+                return unknown, None
             prices = tuple(
                 low._decimal(row[field])  # pyright: ignore[reportPrivateUsage]
                 for field in fields
             )
             for field, price in zip(fields, prices, strict=True):
                 if price is None:
-                    return _invalid_number_check_v1(field.upper(), row[field])
+                    check = _invalid_number_check_v1(field.upper(), row[field])
+                    origin = None
+                    if check == "OPEN_NOT_FINITE":
+                        origin = (
+                            source.origin(member.provider_symbol, session)
+                            if source is not None
+                            else _UNCLASSIFIED_SOURCE_ORIGIN_V1
+                        )
+                    return check, origin
             if low._volume(row["volume"]) is None:  # pyright: ignore[reportPrivateUsage]
                 volume_number = low._decimal(row["volume"])  # pyright: ignore[reportPrivateUsage]
                 if volume_number is None:
-                    return _invalid_number_check_v1("VOLUME", row["volume"])
-                return "VOLUME_NEGATIVE" if volume_number < 0 else "VOLUME_NONINTEGRAL"
+                    return _invalid_number_check_v1("VOLUME", row["volume"]), None
+                return (
+                    "VOLUME_NEGATIVE" if volume_number < 0 else "VOLUME_NONINTEGRAL",
+                    None,
+                )
             values = cast(tuple[Decimal, ...], prices)
             for field, price in zip(fields, values, strict=True):
                 if price <= 0:
-                    return f"{field.upper()}_NOT_POSITIVE"
+                    return f"{field.upper()}_NOT_POSITIVE", None
             opening, high, low_price, closing = values
             if not low_price <= min(opening, closing) <= max(opening, closing) <= high:
-                return "OHLC_ORDER_INVALID"
-    return unknown
+                return "OHLC_ORDER_INVALID", None
+    return unknown, None
 
 
 class _Plan33ProviderV1:
     def __init__(self, session: BoundedYahooSessionV1) -> None:
         self._session = session
         self._response: object = None
+        self._source_observation: _SourceFrameObservationV1 | None = None
         dependency_authority = getattr(
             session, "ensure_dependency_authority", lambda: None
         )
@@ -2711,13 +3003,18 @@ class _Plan33ProviderV1:
         self._dependency_authority = dependency_authority
         self._adapter = low.YfinanceCaptureForwardAdjustedOhlcvAdapterV1()
 
-    def take_response(self) -> object:
+    def take_observation(self) -> tuple[object, _SourceFrameObservationV1 | None]:
         response = self._response
+        source = self._source_observation
         self._response = None
-        return response
+        self._source_observation = None
+        if source is not None:
+            source.close()
+        return response, source
 
     def download(self, **kwargs: object) -> object:
         self._response = None
+        self._source_observation = None
         if (
             not _pool_is_exact_v1()
             or multitasking.get_active_tasks()
@@ -2728,6 +3025,8 @@ class _Plan33ProviderV1:
                 "INSUFFICIENT_EVIDENCE", "RUNTIME_CONFIGURATION_INVALID"
             )
         self._dependency_authority()
+        self._source_observation = _SourceFrameObservationV1.from_download(kwargs)
+        self._session._source_observation = self._source_observation  # pyright: ignore[reportPrivateUsage]
         kwargs["threads"] = 8
         kwargs["session"] = self._session
         kwargs["_plan33_normalize_provider_order"] = True
@@ -2743,6 +3042,7 @@ class _Plan33ProviderV1:
                 self._response = response
                 return response
         finally:
+            self._session._source_observation = None  # pyright: ignore[reportPrivateUsage]
             logging.disable(previous_disable)
 
 
@@ -3132,6 +3432,7 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
     *,
     binding_root: Path | None = None,
     provider_value_check: str | None = None,
+    provider_value_origin: str | None = None,
 ) -> CohortOutcomeV1:
     if isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1):
         revision = result.revision
@@ -3250,6 +3551,13 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
         provider_value_check=(
             _safe_provider_value_check_v1(provider_value_check)
             if provider_frame_reason == "FRAME_VALUE_INVALID"
+            else None
+        ),
+        provider_value_origin=(
+            _safe_provider_value_origin_v1(provider_value_origin)
+            if provider_frame_reason == "FRAME_VALUE_INVALID"
+            and type(provider_value_check) is str
+            and provider_value_check == "OPEN_NOT_FINITE"
             else None
         ),
     )
@@ -3723,6 +4031,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                 )
             active_session: BoundedYahooSessionV1 | None = None
             provider_value_check: str | None = None
+            provider_value_origin: str | None = None
             if (
                 isinstance(result, low.CaptureForwardAdjustedOhlcvFailureV1)
                 and result.reason == "PROVIDER_CALL_FAILED"
@@ -3809,8 +4118,10 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                             "RUNTIME_CONFIGURATION_INVALID",
                         )
                     finally:
-                        provider_value_check = _diagnose_provider_value_check_v1(
-                            low_request, result, active_provider.take_response()
+                        provider_value_check, provider_value_origin = (
+                            _diagnose_provider_value_v1(
+                                low_request, result, *active_provider.take_observation()
+                            )
                         )
             try:
                 current_snapshots = _snapshot_protected_directories_v1(
@@ -3857,6 +4168,7 @@ def _capture_current_nifty100_impl_v1(  # noqa: C901
                 if isinstance(result, low.CaptureForwardAdjustedOhlcvSuccessV1)
                 else None,
                 provider_value_check=provider_value_check,
+                provider_value_origin=provider_value_origin,
             )
             if outcome.reason == "EVIDENCE_CONFLICT":
                 shared_failure = SharedFailureV1(

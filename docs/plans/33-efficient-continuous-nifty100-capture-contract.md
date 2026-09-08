@@ -488,7 +488,7 @@ offending member, private value, or proven root cause. No rejected frame or
 dependency log is published or retained by this extension. A new diagnostic
 must not be retroactively attributed to an earlier capture that lacked it.
 
-Both diagnostic fields require exact plain-string coarse `code` and `reason`;
+All diagnostic fields require exact plain-string coarse `code` and `reason`;
 subclass-defined equality never decides their eligibility.
 
 The owner-approved Issue #176 continuation adds nullable `provider_value_check`
@@ -508,7 +508,7 @@ Public serialization independently checks both the context and the finite
 plain-string value. A field label identifies a failed check, not a stock,
 session coordinate, observed price, or proven provider/adapter root cause.
 
-Diagnosis uses only the same invocation's already-normalized response after
+Value-check diagnosis uses the same invocation's already-normalized response after
 the authoritative low-level call reports `FRAME_VALUE_INVALID`. It scans within
 the admitted request's bounds in canonical member/session order. In the first
 rejected row, precedence is price-number conversion in open/high/low/close
@@ -526,6 +526,56 @@ archived or emitted. Successful, reused, transport-failed, and exceptional
 paths cannot inherit a previous frame's diagnostic. Low-level source, request
 identities, writer compatibility, immutable revisions, effect precedence, and
 no-retry/no-fallback rules remain unchanged.
+
+The separately owner-approved source-stage continuation adds nullable
+`provider_value_origin` only when all four plain-string contexts above resolve
+to `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE/FRAME_VALUE_INVALID/OPEN_NOT_FINITE`.
+It correlates source evidence with the same canonical first rejected
+member/session, never with an unrelated bad value elsewhere in the cohort.
+Its closed source vocabulary is:
+
+- `SOURCE_OPEN_MISSING_OR_NONFINITE`: the corresponding raw opening value is
+  missing or non-finite under the pinned provider's float conversion;
+- `SOURCE_ADJUSTMENT_INPUT_INVALID`: the corresponding close or adjusted close
+  is non-finite, or close is a zero divisor;
+- `SOURCE_ADJUSTMENT_RESULT_NONFINITE`: finite inputs produce a non-finite
+  opening under the pinned `open * (adjusted_close / close)` calculation;
+- `SOURCE_EXPECTED_SESSION_MISSING`: the matching chart quote series lacks the
+  expected session, regardless of whether a later event merge or batch
+  alignment creates its empty price row; and
+- `SOURCE_ADJUSTED_OPEN_FINITE`: the corresponding source projection is finite.
+  This alone does not prove a downstream defect or that other prices are valid.
+
+Missing, malformed, unsupported, conflicting, mismatched, or forged source
+observations produce `UNCLASSIFIED_SOURCE_ORIGIN` in that exact eligible
+context; all other contexts emit null. Serialization independently rechecks
+every context's exact type and the closed origin vocabulary.
+
+The source observer consumes only already-admitted HTTP 200 response bytes
+from the existing query1/query2 Yahoo daily chart path. It matches the exact
+requested provider symbol, interval, start/end epochs, response symbol, and
+`Asia/Kolkata` timezone. It rejects duplicate JSON keys and session dates,
+ambiguous query parameters, more than 32 query fields, more than the expected
+session count plus one source timestamp, and inconsistent array lengths.
+Unsupported scalar shapes or numeric strings longer than 64 characters remain
+unclassified. Absent `adjclose` follows the pinned parser's use of `close`
+solely for this diagnostic calculation; no capture input or price is replaced.
+
+Existing 2 MiB response and 128 MiB aggregate transport limits still apply.
+Only categorical projections for the current request's at-most-50 members and
+at-most-366 sessions may survive the response inspection. Raw decoded values
+are not retained by the observer. Conflicting matching responses remain
+unclassified rather than choosing a convenient response. A transport request
+holds its entry-time observer; completion cannot attach evidence to a later
+invocation. The provider detaches it in `finally`, and the same-invocation
+frame/observation handoff closes and clears both before diagnosis or the next
+cohort. Late observations after closure are ignored.
+
+This continuation adds no provider effect, retry, data repair, source switch,
+logging/archive mechanism, or change to immutable evidence admission. A live
+diagnostic invocation still requires its own explicit owner authority and
+current-byte verification/review. Synthetic source projections must not be
+attributed to the four earlier capture attempts.
 
 The higher-level outcome is:
 
