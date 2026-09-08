@@ -11,6 +11,7 @@ import pytest
 
 import swing_trading_ai_assistant.market_data.bounded_nifty50_workflow as workflow_module
 import swing_trading_ai_assistant.market_data.universe_snapshot as universe_module
+from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -77,6 +78,59 @@ def _snapshot() -> Nifty50UniverseSnapshotV1:
         observed,
         tuple(members),
     )
+
+
+def test_omitted_schedule_preserves_insufficient_evidence_without_provider_effects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    def forbidden_provider_effect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("missing schedule must stop before provider effects")
+
+    monkeypatch.setattr(cli.UrllibHttpTransport, "get", forbidden_provider_effect)
+    monkeypatch.setattr(
+        cli._LazyEnvironmentAccessTokenProvider,
+        "get_access_token",
+        forbidden_provider_effect,
+    )
+    monkeypatch.setattr(
+        cli._SystemClock, "now", lambda _self: datetime(2026, 8, 1, tzinfo=UTC)
+    )
+    universe_file = tmp_path / "universe.json"
+    universe_file.write_bytes(_snapshot().canonical_json_bytes())
+    universe_file.chmod(0o444)
+
+    assert (
+        cli.main(
+            [
+                "download",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path.resolve() / "storage"),
+                "--universe-file",
+                str(universe_file.resolve()),
+                "--output",
+                "json",
+            ]
+        )
+        == 3
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["status"] == PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
+    assert (
+        report["failure"]["code"] == PublicFailureCodeV1.SCHEDULE_EVIDENCE_UNAVAILABLE
+    )
+    assert report["provider_attempt_count"] == 0
+    assert report["payload"] is None
+    assert captured.err == ""
 
 
 def _terminal_report() -> PublicCommandReportV1[None]:

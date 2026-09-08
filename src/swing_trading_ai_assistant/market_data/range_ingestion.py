@@ -399,7 +399,7 @@ class _NoopLimiter:
 
 class _UnavailableSessionFactory:
     def open(self) -> HistoricalProviderSession:
-        raise RuntimeError()
+        raise ProviderSessionAuthenticationError()
 
 
 class _RangeFetcher:

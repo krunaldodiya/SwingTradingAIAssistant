@@ -1044,6 +1044,47 @@ def test_session_open_errors_are_typed_sanitized_and_stop_later_plans(
     assert "secret" not in report.failure_code.value
 
 
+@pytest.mark.parametrize("shared_gate", (False, True))
+def test_default_unavailable_session_preserves_authentication_failure(
+    tmp_path: Path, shared_gate: bool
+) -> None:
+    coordinator = IngestionCoordinator(
+        session_factory=None,
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(  # type: ignore[arg-type]
+            _wide_schedule()
+        ),
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        publication_gate=threading.RLock() if shared_gate else None,
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+    if shared_gate:
+        lease_result = StorageRootLease.try_acquire(tmp_path)
+        assert lease_result.lease is not None
+        with lease_result.lease as lease:
+            report = coordinator.run_under_lease(command, lease)
+    else:
+        report = coordinator.run(command)
+
+    assert report.outcome is IngestionRunOutcome.FAILED
+    assert report.failure_code is RunFailureCode.AUTHENTICATION_FAILED
+    assert report.provider_attempt_count == 0
+    assert tuple(result.outcome for result in report.results) == (
+        PartitionOutcome.NOT_ATTEMPTED,
+        PartitionOutcome.NOT_ATTEMPTED,
+    )
+
+
 @pytest.mark.parametrize("stage", ("open", "request_executor"))
 def test_unknown_provider_setup_faults_escape_before_fetch(
     tmp_path: Path, stage: str

@@ -158,6 +158,7 @@ from .range_ingestion import (
     IngestionCoordinator,
     ProviderSessionAuthenticationError,
 )
+from .schedule_evidence import ScheduleEvidenceValidationError
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 from .workflow_coordination import PublicationGateV1
 
@@ -245,7 +246,9 @@ def _trusted_now(clock: _ClockV1) -> datetime:
 
 class _UnavailableAuthoritativeScheduleSource:
     def load(self) -> AuthoritativeScheduleInputV1:
-        raise RuntimeError("authoritative schedule source is not configured")
+        raise ScheduleEvidenceValidationError(
+            "authoritative schedule source is not configured"
+        )
 
 
 class _LazyEnvironmentAccessTokenProvider:
