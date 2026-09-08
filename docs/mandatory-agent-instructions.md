@@ -5,6 +5,7 @@ Status: **CANONICAL PROJECT ADAPTER**
 Owner: repository owner and product direction authority
 Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
 Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/170)
+Review-efficiency revision: [#174](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/174)
 
 This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
@@ -70,6 +71,42 @@ Use any available AI agent harness that can satisfy the task's controls, includi
 
 One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them. Native delegated agents, separate sessions, and qualified human reviewers are acceptable when identity, assignment, independence, complete results, and candidate immutability can be established. A writer's second pass is not independent review.
 
+Personal use is not grounds to lower a change's risk tier, remove delivered or
+accepted future capabilities, weaken security or research integrity, or relax
+quality standards, acceptance criteria, reviewer roles, or applicable gates.
+Optimize repeated work, not these requirements.
+
+R3/R4 work requires both independent functional/domain and
+security/privacy/provenance reviews. Initial reviews cover the complete
+base-to-candidate change and its affected context. A correction MAY receive a
+bounded re-review only under all of these conditions:
+
+- The coordinator supplies one inspectable package with the original base,
+  previously reviewed and current commit/tree identities, complete original and
+  correction diffs, governing contracts, complete prior review results and
+  limitations, every finding's disposition, and observed verification evidence.
+- Prior full reviews are complete and valid for their stated scope. Their
+  findings and coverage may provide context, including a completed blocker
+  verdict, but no prior verdict or failed check becomes current approval.
+  Missing, interrupted, invalid or safety-refused review cannot supply the
+  required review baseline.
+- The correction's impact is justified through changed behavior, dependencies,
+  callers, generated artifacts, runtime identities, and trust boundaries.
+  Mechanically identified unchanged bytes support this analysis but do not
+  establish unchanged behavior or sufficient coverage by themselves.
+- Each required reviewer independently accepts the proposed scope, examines all
+  affected behavior and prior findings within their responsibility, and issues
+  a new verdict for the exact current candidate. The record identifies reused
+  context, newly examined scope, evidence limits, and unresolved blockers.
+  Approval requires coverage of the entire current accepted slice, not just
+  changed lines, and no unresolved current blocker.
+- Changed contracts or risks, broader effects, missing evidence, or uncertainty
+  require expanded review, up to the full candidate. If bounded scope cannot be
+  justified, full review remains required; reduced review is never mandatory.
+
+This changes review repetition, not review independence, final-revision
+accountability, provider safety boundaries, or the full accepted scope.
+
 After a complete result is captured and checked, close or release completed task-owned execution resources when the harness supports it. Retain durable review evidence. Never close, interrupt, or replace an active, blocked, or unknown agent for cleanup or timeboxing; a completed message alone does not prove a persistent task has stopped.
 
 If a required capability or independent reviewer is unavailable, continue authorized single-agent work where proportionate and pause only the dependent review, acceptance, or release. Do not claim a missing review passed or require installing a preferred harness merely to continue independent work.
@@ -120,7 +157,7 @@ Select from the current harness's available, authorized models and tools accordi
 | Coordination and integration | Interpret authority, freeze scope and contracts, serialize shared work, verify evidence, and own final delivery claims. |
 | Consequential design or escalation | Reason about architecture, domain, source/evidence/security decisions and adversarial acceptance before implementation. |
 | Bounded implementation | Implement the frozen contract and focused checks; return consequential ambiguity to the coordinator. |
-| Independent functional/domain review | Inspect the complete exact candidate, trace current acceptance and failure paths, and report blockers with evidence; remain independent of the writer. |
+| Independent functional/domain review | Assess the exact candidate and current acceptance/failure paths through full initial review or the qualified correction review above; report blockers with evidence and remain independent of the writer. |
 | Security/privacy/provenance review | Perform authorized defensive analysis of the exact candidate and its trust boundaries; remain independent and read-only. |
 | Mechanical work | Perform an exact transformation with explicit acceptance evidence; escalate semantic interpretation. |
 
@@ -278,6 +315,7 @@ history as part of this withdrawal.
 - A bug fix requires a discriminating reproduction before repair and confirmation after repair.
 - UI changes require verification on the actual surface; CLI/TUI changes require launching the actual program and observing the changed path.
 - Focused checks do not replace applicable full repository gates.
+- Consolidate review findings and use focused checks during correction work. Run expensive applicable final gates after the findings are addressed and the candidate is stable, unless a scoped contract requires an earlier gate. All applicable full-suite, coverage, static, build, installed-artifact and hosted requirements remain release prerequisites. A later relevant change invalidates affected evidence and requires verification again; scheduling is not a waiver or approval transfer.
 - Runtime-source edits are formatted before every directly and transitively bound source-at-rest manifest is refreshed.
 - R3/R4 review is independent, exact-byte, non-mutating, and blocker-only for the current accepted slice. Review drift or a later commit invalidates the verdict.
 - Release is PR-based. Direct push to `main` is prohibited. Hosted CI, security checks, exact merge ancestry, and main admission must pass where configured.

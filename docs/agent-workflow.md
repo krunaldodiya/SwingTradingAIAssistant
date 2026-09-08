@@ -118,8 +118,12 @@ completed sessions as records without treating them as active workers.
    behavior checks. For documentation-only changes, inspect prose and run only
    `git diff --check` under the canonical policy.
 2. Commit the candidate. Record base, full commit SHA, tree, and clean status.
-   Give reviewers the complete base-to-candidate change and governing sources,
-   not merely the writer's summary or test counts.
+   Supply one review package containing governing sources, the complete
+   base-to-candidate change, observed checks and limits, and known findings.
+   For correction review, include the previous candidate identity, complete
+   prior results, correction diff and dependency/consumer impact analysis under
+   the canonical policy. Keep the complete original change available; do not
+   substitute the writer's confidence or test counts for review evidence.
 3. Obtain independent functional/domain and security/privacy/provenance reviews
    on those same bytes for R3/R4 work. They may run in parallel or sequentially
    if capacity is limited, with no intervening candidate changes. Roles may use
@@ -129,15 +133,25 @@ completed sessions as records without treating them as active workers.
    blockers. Separate later improvements. Counts and self-consistent hashes do
    not prove behavior beyond what was exercised.
 5. After each result, recheck commit, tree, and clean status. Mutation, stale bytes,
-   interruption, incomplete output, or a filtered review means **INVALID / NO
-   VERDICT**. Preserve failures and never transfer a verdict to another candidate.
-6. Repair current blockers, freeze new bytes, and obtain fresh reviews. Ordinary
-   execution failures can be repaired before retry. Provider safety refusals
-   follow the canonical provider boundary; never bypass them with another model,
-   prompt, or harness.
-7. The coordinator verifies evidence and runs applicable final gates on stable
-   bytes. Documentation-only checks stay documentation-only. Unavailable required
-   reviews, checks, or temporal evidence remain explicit blockers to their claims.
+   interruption, incomplete output, or unjustified narrowing of review scope
+   means **INVALID / NO VERDICT**. A qualified bounded correction review is not
+   an invalid filtered review. Preserve failures and never transfer a verdict
+   to another candidate.
+6. Capture both complete results and consolidate current blockers before
+   repairing and freezing a new candidate. Obtain fresh verdicts from both
+   required roles on those new bytes. Use bounded correction review only when
+   each reviewer accepts its eligibility and coverage under the canonical
+   policy; otherwise expand review. Neither a previous PASS nor a previous
+   BLOCKERS verdict approves the corrected candidate. Ordinary execution
+   failures can be repaired before retry. Provider safety refusals follow the
+   canonical provider boundary; never bypass them with another model, prompt,
+   or harness.
+7. The coordinator verifies evidence and runs all applicable final gates on the
+   stable candidate after corrections and review, unless a scoped contract
+   requires earlier verification. Review completion alone is not release
+   approval. A later relevant change requires renewed affected verification
+   and review. Documentation-only checks stay documentation-only. Unavailable
+   required reviews, checks, or temporal evidence block their dependent claims.
 8. Record local completion, review, hosted checks, PR, merge, and tracker closeout
    as distinct states. Release and risk acceptance retain their authority gates.
 
