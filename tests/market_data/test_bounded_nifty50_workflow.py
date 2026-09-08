@@ -80,8 +80,31 @@ def _snapshot() -> Nifty50UniverseSnapshotV1:
     )
 
 
-def test_omitted_schedule_preserves_insufficient_evidence_without_provider_effects(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+@pytest.mark.parametrize(
+    ("date_range", "expected_status", "expected_code", "expected_exit"),
+    (
+        (
+            ("2026-07-01", "2026-07-31"),
+            PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+            PublicFailureCodeV1.SCHEDULE_EVIDENCE_UNAVAILABLE,
+            3,
+        ),
+        (
+            ("2026-08-01", "2026-08-01"),
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+            4,
+        ),
+    ),
+)
+def test_omitted_schedule_preserves_closed_and_current_month_terminals(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    date_range: tuple[str, str],
+    expected_status: PublicCommandStatusV1,
+    expected_code: PublicFailureCodeV1,
+    expected_exit: int,
 ) -> None:
     def forbidden_provider_effect(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("missing schedule must stop before provider effects")
@@ -108,9 +131,9 @@ def test_omitted_schedule_preserves_insufficient_evidence_without_provider_effec
                 "--symbol",
                 "RELIANCE",
                 "--from",
-                "2026-07-01",
+                date_range[0],
                 "--to",
-                "2026-07-31",
+                date_range[1],
                 "--storage-root",
                 str(tmp_path.resolve() / "storage"),
                 "--universe-file",
@@ -119,15 +142,13 @@ def test_omitted_schedule_preserves_insufficient_evidence_without_provider_effec
                 "json",
             ]
         )
-        == 3
+        == expected_exit
     )
 
     captured = capsys.readouterr()
     report = json.loads(captured.out)
-    assert report["status"] == PublicCommandStatusV1.INSUFFICIENT_EVIDENCE
-    assert (
-        report["failure"]["code"] == PublicFailureCodeV1.SCHEDULE_EVIDENCE_UNAVAILABLE
-    )
+    assert report["status"] == expected_status
+    assert report["failure"]["code"] == expected_code
     assert report["provider_attempt_count"] == 0
     assert report["payload"] is None
     assert captured.err == ""

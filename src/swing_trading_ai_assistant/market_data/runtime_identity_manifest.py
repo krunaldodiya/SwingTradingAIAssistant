@@ -15,7 +15,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "capture_forward_adjusted_ohlcv_cli.py": "a53012cae9b72069e17bfda8f382f9b042a2512d2cc4f73044bb1aeff481665a",
     "capture_forward_adjusted_ohlcv_runtime_identity_manifest.py": "c2838bc431d10f60ae9627bea932a6a173fdee637e3c49a87899709c529f7e26",
     "catalog.py": "52a5b5cfe6a04c5a6fe781f09236f867e7cff095c8dba3132556cd30d093a28a",
-    "cli.py": "9b9b7a942f9038de3256f009c3a0c4ea3bc4a45dfdb693eab5df080456b44ce0",
+    "cli.py": "feeed104968e558ac477a6ac28d7adf5f8db915fe91abf06ba35a5d63902ad23",
     "corporate_actions.py": "fd669350a715d8271a7359dcb4e4ae09374cd0db0e7c245054c7e9b7f7681a34",
     "credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
     "current_cohort.py": "50d5e3198908a006be93ff4314fe7ceb5350785b1eb52bbb6dcf2fd468770bea",

@@ -604,10 +604,14 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   catalog evidence or invalid membership. Bounded wrappers retain their generic
   `FAILED` result with no member results when setup fails unexpectedly.
   Clock and cancellation callback execution faults are not cancellation evidence.
-  Current same-pass raw consumers stop a generic query execution failure before
+  Current same-pass completed-grid consumers stop a generic query execution failure before
   completion-time or raw-evidence reduction; it is not missing, invalid,
   conflicted, or future-known raw evidence. Supported-data failures retain their
-  existing precedence. The separate prerequisite-manifest service and CLI keep
+  existing precedence. The optional partial-capability boundary remains
+  explicitly nonfatal under [Plan 27](plans/27-current-same-pass-market-regime-contract.md#optional-partial_current_session):
+  query and projection faults produce `UNAVAILABLE` partial snapshots with no
+  rows, without invalidating independently valid completed facts.
+  The separate prerequisite-manifest service and CLI keep
   their sanitized no-manifest failure boundary: exit code `3`, empty stdout, and
   the fixed unavailable diagnostic.
 - Before a completed public response, the `market-data` CLI maps an unexpected

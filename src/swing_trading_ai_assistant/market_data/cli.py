@@ -279,7 +279,7 @@ class _HistoricalProviderSessionFactory:
     def open(self) -> _HistoricalProviderSession:
         try:
             token = self._token_provider.get_access_token()
-        except Exception:
+        except CredentialNotFoundError:
             raise ProviderSessionAuthenticationError from None
         return _HistoricalProviderSession(self._client, token)
 

@@ -10,6 +10,7 @@ import pytest
 import swing_trading_ai_assistant.market_data.partition_publication as publication_module
 import swing_trading_ai_assistant.market_data.range_ingestion as ingestion_module
 import swing_trading_ai_assistant.market_data.validation as validation_module
+from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogPersistenceError,
     DuckDBCatalog,
@@ -1083,6 +1084,68 @@ def test_default_unavailable_session_preserves_authentication_failure(
         PartitionOutcome.NOT_ATTEMPTED,
         PartitionOutcome.NOT_ATTEMPTED,
     )
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_real_cli_session_factory_distinguishes_missing_credentials_from_faults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception] | None
+) -> None:
+    environment_provider = cli.EnvironmentAccessTokenProvider
+    monkeypatch.setattr(
+        cli, "EnvironmentAccessTokenProvider", lambda: environment_provider({})
+    )
+    failure = error_type("private-token-provider-fault") if error_type else None
+    if failure is not None:
+
+        def fail(_self: object) -> None:
+            raise failure
+
+        monkeypatch.setattr(environment_provider, "get_access_token", fail)
+
+    requests: list[object] = []
+
+    def forbidden_provider_request(*args: object, **_kwargs: object) -> None:
+        requests.append(args)
+        raise AssertionError("credential failure must stop before provider requests")
+
+    monkeypatch.setattr(cli.UrllibHttpTransport, "get", forbidden_provider_request)
+    factory = cli._HistoricalProviderSessionFactory(
+        cli.UpstoxV3HistoricalClient(
+            cli.UrllibHttpTransport(
+                max_body_bytes=cli.DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES
+            )
+        ),
+        cli._LazyEnvironmentAccessTokenProvider(),
+    )
+    coordinator = _coordinator(_request_observer, session_factory=factory)
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    if error_type is None:
+        report = coordinator.run(command)
+        assert report.outcome is IngestionRunOutcome.FAILED
+        assert report.failure_code is RunFailureCode.AUTHENTICATION_FAILED
+        assert report.provider_attempt_count == 0
+        assert tuple(result.outcome for result in report.results) == (
+            PartitionOutcome.NOT_ATTEMPTED,
+            PartitionOutcome.NOT_ATTEMPTED,
+        )
+    else:
+        with pytest.raises(error_type) as raised:
+            coordinator.run(command)
+        assert raised.value is failure
+    assert requests == []
 
 
 @pytest.mark.parametrize("stage", ("open", "request_executor"))

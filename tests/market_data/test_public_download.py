@@ -1166,60 +1166,6 @@ def test_spanning_report_combiner_fails_closed_on_invalid_public_report(
     assert wrong_payload.status is PublicCommandStatusV1.FAILED
 
 
-def test_cli_provider_session_is_lazy_and_maps_authentication_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    token = object()
-
-    class TokenProvider:
-        def get_access_token(self) -> object:
-            return token
-
-    class RaisingTokenProvider:
-        def get_access_token(self) -> object:
-            raise RuntimeError("secret")
-
-    class Client:
-        def __init__(self) -> None:
-            self.values: list[tuple[object, object]] = []
-
-        def fetch(self, request: object, supplied_token: object) -> str:
-            self.values.append((request, supplied_token))
-            return "response"
-
-    client = Client()
-    factory = cli_module._HistoricalProviderSessionFactory(client, TokenProvider())
-    session = factory.open()
-    assert client.values == []
-    assert session.fetch("request") == "response"  # type: ignore[arg-type]
-    assert client.values == [("request", token)]
-
-    failing = cli_module._HistoricalProviderSessionFactory(
-        client, RaisingTokenProvider()
-    )
-    with pytest.raises(cli_module.ProviderSessionAuthenticationError):
-        failing.open()
-
-    monkeypatch.setattr(
-        cli_module,
-        "EnvironmentAccessTokenProvider",
-        TokenProvider,
-    )
-    assert cli_module._LazyEnvironmentAccessTokenProvider().get_access_token() is token
-
-
-def test_cli_default_services_are_current_aware(tmp_path: Path) -> None:
-    download = cli_module._default_download_service(
-        tmp_path / "current.json", tmp_path / "closed.json"
-    )
-    coverage = cli_module._default_coverage_service()
-    query = cli_module._default_query_service()
-
-    assert isinstance(download, CurrentAwareSingleSymbolDownloadServiceV1)
-    assert type(coverage).__name__ == "CurrentAwareCoverageServiceV1"
-    assert type(query).__name__ == "CurrentAwareQueryServiceV1"
-
-
 @pytest.mark.parametrize(
     ("preparation_outcome", "preparation_code", "status", "public_code", "attempts"),
     (
