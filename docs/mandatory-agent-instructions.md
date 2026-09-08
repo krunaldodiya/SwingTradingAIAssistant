@@ -230,15 +230,43 @@ Before changing architecture or market logic, read the relevant sections of:
 
 - `docs/architecture-freeze-v1.md`;
 - `docs/roadmap.md` and `docs/upcoming_sprints_overview.md`;
-- the affected accepted Plan or module specification;
-- `docs/reference-repositories.md` when studying prior work; and
+- the affected accepted Plan or module specification; and
 - the live GitHub Issue and Project item.
 
 Surface conflicts; never silently redefine rules or ownership.
 
 Evaluate only proposed new modules, data sources, or scoring factors before building them. In at most five lines state expected value, scope fit, material data/research risk, the smallest alternative, and `accepted`, `deferred`, or `rejected`. Ordinary implementation choices need no separate ritual.
 
-Reference repositories are read-only idea sources. Do not modify them or copy-paste their implementations. Independently specify, implement, test, and record provenance for any adopted concept.
+### Independent research logic
+
+On 2026-09-08 the owner withdrew the previously supplied external trading
+repository references, including those supplied for Price Action and
+Liquidity/SMC. This supersedes earlier permission to study them in project
+documents, GitHub discussions, or remembered conversations. Do not consult,
+copy, adapt, recommend, or use those repositories' implementations, concepts,
+thresholds, trading claims, or test results as design inputs or validation
+oracles for this project.
+
+Derive each necessary research calculation independently from the approved
+product question, explicit mathematical definitions, admitted market evidence,
+and causal/time/price-integrity requirements. Specify the rules first, implement
+the project's own logic, and verify it with independently derived expectations
+and adversarial cases. Independence does not by itself prove correctness.
+
+The product focus, necessary-only feature boundary, historical validation,
+source authorization, and evidence/provenance controls remain unchanged.
+Continue using verified project components where they satisfy the independently
+specified contract; this direction is not a blanket rewrite or permission to
+discard working code, tests, or retained evidence. Official provider and exchange
+documentation, approved dependency documentation, and the engineering handbook
+remain legitimate sources for their own contracts, not trading-logic substitutes.
+
+The catalogue and its active study instructions are removed under
+[#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172).
+Prior revisions remain historical records only; do not restore withdrawn
+guidance from them. Preserve required legal attribution and immutable
+research evidence, and do not delete unrelated repositories or rewrite Git
+history as part of this withdrawal.
 
 ## Delivery and evidence controls
 
@@ -299,7 +327,6 @@ Only this file owns project-wide agent behavior. Other sources retain the narrow
 | `docs/roadmap.md` and `docs/upcoming_sprints_overview.md` | Delivery sequencing | Own current roadmap dependencies and lifecycle summaries; they do not define general agent behavior. |
 | `docs/plans/` and `docs/sprints/` | Scoped contracts and historical records | Accepted Plans govern their feature scope; Sprint records preserve evidence and decisions. Repeated workflow wording is historical unless incorporated here. |
 | `docs/notes/README.md` | Notes authority | Defines notes as non-authoritative reasoning unless promoted into an approved source. |
-| `docs/reference-repositories.md` | Reference-source policy | Owns the approved read-only reference inventory and provenance context. |
 | GitHub Issues, Project, milestones, and PRs | Active delivery state | Own live work, status, priority, sprint assignment, acceptance, review, and merge evidence. |
 | Software-engineering handbook | Global project-agnostic defaults | Supplies shared risk-scaled engineering rules. This file is the repository adapter and overrides only within authorized project scope. |
 | Durable memory and conversation history | Context only | Useful for discovery; never overrides current authoritative evidence. |

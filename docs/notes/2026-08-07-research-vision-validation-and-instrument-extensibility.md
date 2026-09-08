@@ -88,17 +88,21 @@ history adds confidence only when membership, corporate actions, disclosures,
 costs, and other evidence can be reconstructed without look-ahead or survivorship
 bias.
 
-### Indicator minimization and reference material
+### Indicator minimization
 
 Status: **accepted**
 
 Indicators are excluded by default and may enter only when an approved
 specification proves one mandatory for a defined decision and validates it
-against simpler observable facts. Trading books and reference repositories are
-hypothesis sources, not specifications. Concepts must be localized to Indian
-market structure, accounting, disclosures, promoter/shareholding practices,
-corporate actions, exchange calendars, settlement, price bands, costs, taxes,
-and liquidity, then tested point-in-time and out-of-sample.
+against simpler observable facts. Each necessary calculation must be
+independently specified and validated under the canonical [independent research
+logic policy](../mandatory-agent-instructions.md#independent-research-logic).
+
+Trading books remain hypothesis sources, not specifications. Concepts must be
+localized to Indian market structure, accounting, disclosures,
+promoter/shareholding practices, corporate actions, exchange calendars,
+settlement, price bands, costs, taxes, and liquidity, then tested point-in-time
+and out-of-sample.
 
 The proposed reading list is David Aronson's *Evidence-Based Technical
 Analysis*, Adam Grimes's *The Art and Science of Technical Analysis*, Mark
@@ -160,9 +164,9 @@ availability.
 - **Rejected:** large-cap equities are immune to adverse market microstructure.
   Liquidity, gaps, event shocks, institutional flows, and false breakouts still
   require explicit risk treatment.
-- **Rejected:** copying price-action, SMC, scanner, or backtest code from a
-  reference repository. Concepts require an independent specification and
-  validation for this project.
+- **Rejected:** using withdrawn external trading repositories as design inputs
+  or validation oracles. See the canonical [independent research logic
+  policy](../mandatory-agent-instructions.md#independent-research-logic).
 
 ## Open questions
 
@@ -194,4 +198,3 @@ availability.
 - [Architecture freeze v1](../architecture-freeze-v1.md)
 - [Roadmap](../roadmap.md)
 - [Indicator minimization](2026-08-07-indicator-minimization.md)
-- [Reference repositories](../reference-repositories.md)

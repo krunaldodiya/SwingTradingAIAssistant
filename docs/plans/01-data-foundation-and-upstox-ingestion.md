@@ -18,19 +18,13 @@ This plan covers market data only. Indicators, swing strategies, market regime,
 SMC, screening, backtesting, agent integration, and trade reasoning are out of
 scope until the data layer is proven.
 
-## Decision: do not use ExpiryTrack as the canonical equity store
+## Decision: independent canonical equity store
 
-ExpiryTrack remains a read-only reference. It cannot replace this market-data
-tool because its local database contains no Nifty 50 constituent equity candles
-and its legacy schema is derivative-oriented. The previously proposed
-NIFTY/India VIX migration is superseded by the equity-only downloader-v1
-boundary.
-
-We will build a small equity data package in this repository. Shared internals
-may reuse independently validated architectural lessons from ExpiryTrack—rate
-limiting, chunking, vectorized loading, and resumability—but will not copy its
-AGPL implementation. The client must use the current Upstox Historical Candle
-Data V3 contract.
+An earlier external-data migration proposal is rejected and has no active work.
+We will build a small equity data package in this repository. The client must
+use the current Upstox Historical Candle Data V3 contract, and research logic
+must follow the canonical [independent research logic
+policy](../mandatory-agent-instructions.md#independent-research-logic).
 
 ## Storage decision
 
