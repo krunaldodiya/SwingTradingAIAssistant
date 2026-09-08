@@ -1625,13 +1625,17 @@ def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
                 "reason": row.reason,
                 "provider_frame_reason": (
                     _safe_provider_frame_reason_v1(row.provider_frame_reason)
-                    if row.code == "INSUFFICIENT_EVIDENCE"
+                    if type(row.code) is str
+                    and row.code == "INSUFFICIENT_EVIDENCE"
+                    and type(row.reason) is str
                     and row.reason == "PROVIDER_FRAME_INCOMPLETE"
                     else None
                 ),
                 "provider_value_check": (
                     _safe_provider_value_check_v1(row.provider_value_check)
-                    if row.code == "INSUFFICIENT_EVIDENCE"
+                    if type(row.code) is str
+                    and row.code == "INSUFFICIENT_EVIDENCE"
+                    and type(row.reason) is str
                     and row.reason == "PROVIDER_FRAME_INCOMPLETE"
                     and type(row.provider_frame_reason) is str
                     and row.provider_frame_reason == "FRAME_VALUE_INVALID"

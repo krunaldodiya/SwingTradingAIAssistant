@@ -5555,6 +5555,46 @@ def test_provider_value_check_rechecks_public_context_and_forgery(
 
 
 @pytest.mark.parametrize(
+    ("field", "public_value"),
+    [("code", "REUSED"), ("reason", "PROVIDER_RATE_LIMITED")],
+)
+def test_provider_diagnostics_reject_forged_coarse_context(
+    field: str, public_value: str
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name,
+            "INSUFFICIENT_EVIDENCE",
+            "PROVIDER_FRAME_INCOMPLETE",
+            provider_frame_reason="FRAME_VALUE_INVALID",
+            provider_value_check="OPEN_NOT_FINITE",
+        ),
+    )
+
+    class MasqueradingContext(str):
+        def __hash__(self) -> int:
+            return str.__hash__(self)
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    row = replace(result.cohorts[0], **{field: MasqueradingContext(public_value)})
+    payload = json.loads(
+        json.dumps(
+            core.serialize_capture_result_v1(
+                replace(result, cohorts=(row, result.cohorts[1]))
+            )
+        )
+    )
+    assert payload["cohorts"][0][field] == public_value
+    assert payload["cohorts"][0]["provider_frame_reason"] is None
+    assert payload["cohorts"][0]["provider_value_check"] is None
+
+
+@pytest.mark.parametrize(
     ("fault", "expected_reason"),
     [
         ("coverage", "FRAME_COVERAGE_INCOMPLETE"),

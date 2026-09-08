@@ -488,6 +488,9 @@ offending member, private value, or proven root cause. No rejected frame or
 dependency log is published or retained by this extension. A new diagnostic
 must not be retroactively attributed to an earlier capture that lacked it.
 
+Both diagnostic fields require exact plain-string coarse `code` and `reason`;
+subclass-defined equality never decides their eligibility.
+
 The owner-approved Issue #176 continuation adds nullable `provider_value_check`
 only when the outcome is `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE`
 and `provider_frame_reason` is the exact plain string `FRAME_VALUE_INVALID`.
