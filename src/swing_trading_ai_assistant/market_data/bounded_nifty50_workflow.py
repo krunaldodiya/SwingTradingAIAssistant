@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Protocol
 
 from .catalog import DuckDBCatalog
-from .equity_admission import Nifty50AdmissionPolicyV1
+from .equity_admission import (
+    Nifty50AdmissionPolicyV1,
+    Nifty50AdmissionValidationError,
+)
 from .public_contract import (
     MAX_DOWNLOAD_PROVIDER_ATTEMPTS_V1,
     DownloadReportV1,
@@ -296,7 +299,7 @@ class BoundedNifty50DownloadServiceV1:
                     sum(item.provider_attempt_count for item in results),
                     worker_count,
                 )
-        except ValueError:
+        except Nifty50AdmissionValidationError:
             return _empty(Nifty50BatchOutcomeV1.REJECTED)
         except (UniverseSnapshotNotFoundError, UniverseSnapshotStaleError):
             return _empty(Nifty50BatchOutcomeV1.UNAVAILABLE)
@@ -337,7 +340,7 @@ class BoundedNifty50DownloadServiceV1:
                     return validate_download_report_v1(report)
                 except Exception:
                     return _single_terminal(PublicCommandStatusV1.FAILED)
-        except ValueError:
+        except Nifty50AdmissionValidationError:
             return _single_terminal(PublicCommandStatusV1.REJECTED)
         except (UniverseSnapshotNotFoundError, UniverseSnapshotStaleError):
             return _single_terminal(PublicCommandStatusV1.UNAVAILABLE)

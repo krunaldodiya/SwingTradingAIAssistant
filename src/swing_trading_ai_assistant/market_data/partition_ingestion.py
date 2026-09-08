@@ -423,22 +423,15 @@ class PartitionIngestionExecutor:
                 canonical_path=published.canonical_path,
                 candle_schema_version=published.candle_schema_version,
             )
-        try:
-            verified = verify_manifest(
-                active,
-                max(_utc_now(self._clock), active.updated_at),
-                published.actual_from_ts,
-                published.actual_to_ts,
-                published.row_count,
-                published.checksum_sha256,
-                published.canonical_path,
-            )
-        except Exception:
-            if self._cancelled():
-                return self._terminal_failure(
-                    active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
-                )
-            raise
+        verified = verify_manifest(
+            active,
+            max(_utc_now(self._clock), active.updated_at),
+            published.actual_from_ts,
+            published.actual_to_ts,
+            published.row_count,
+            published.checksum_sha256,
+            published.canonical_path,
+        )
         if self._cancelled():
             return self._terminal_failure(
                 active,
@@ -640,10 +633,7 @@ class PartitionIngestionExecutor:
             raise PartitionCatalogFailure("catalog persistence failed") from None
 
     def _cancelled(self) -> bool:
-        try:
-            return self._cancellation.is_cancelled()
-        except Exception:
-            return True
+        return self._cancellation.is_cancelled()
 
     def _cancelled_result(
         self, plan: PlannedInstrumentMonth
@@ -692,14 +682,10 @@ def _bound_policy_version(policy_version: str, digest: str | None) -> str:
 
 
 def _utc_now(clock: UtcClock) -> datetime:
-    try:
-        value = clock.now()
-        if type(value) is not datetime or value.tzinfo is None:
-            raise ValueError
-        result = value.astimezone(UTC)
-    except Exception:
+    value = clock.now()
+    if type(value) is not datetime or value.tzinfo is None:
         raise PartitionClockFailure("clock access failed") from None
-    return result
+    return value.astimezone(UTC)
 
 
 def _validate_publication(

@@ -3603,7 +3603,7 @@ def _write_all(descriptor: int, raw: bytes) -> None:
     while offset < len(raw):
         written = os.write(descriptor, raw[offset:])
         if written <= 0:
-            raise RuntimeError
+            raise OSError("historical object write made no progress")
         offset += written
 
 
@@ -3628,7 +3628,7 @@ def _assert_final_descriptor(
         or actual_identity != (named.st_dev, named.st_ino)
         or (identity is not None and actual_identity != identity)
     ):
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
     return actual_identity
 
 
@@ -3651,10 +3651,10 @@ def _admit_final_name(
             or held.st_size > maximum
             or identity != (named.st_dev, named.st_ino)
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         return mode, identity, descriptor
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_descriptor_preserving_primary(descriptor, error)
         raise
 
 
@@ -3692,7 +3692,7 @@ def _accept_existing_immutable(
     descriptor: int,
 ) -> bool:
     if _read_object(parent, name, len(raw), identity) != raw:
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
     _fsync_immutable_object(parent, name, descriptor, len(raw), identity)
     os.fsync(parent)
     return False
@@ -3704,7 +3704,7 @@ def _resume_direct_final(
     descriptor = os.open(
         name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
     )
-    try:
+    with _closing_descriptor(descriptor):
         before = os.fstat(descriptor)
         identity = _assert_final_descriptor(
             parent,
@@ -3715,7 +3715,7 @@ def _resume_direct_final(
             identity=admitted_identity,
         )
         if before.st_size > len(raw):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         observed = bytearray()
         while len(observed) <= len(raw):
             chunk = os.read(descriptor, min(65_536, len(raw) + 1 - len(observed)))
@@ -3724,7 +3724,7 @@ def _resume_direct_final(
             observed.extend(chunk)
         existing = bytes(observed)
         if len(existing) != before.st_size or not raw.startswith(existing):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         _assert_final_descriptor(
             parent,
             name,
@@ -3734,7 +3734,7 @@ def _resume_direct_final(
             identity=identity,
         )
         if os.lseek(descriptor, len(existing), os.SEEK_SET) != len(existing):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         _write_all(descriptor, raw[len(existing) :])
         os.fchmod(descriptor, _IMMUTABLE_FILE_MODE)
         _assert_final_descriptor(
@@ -3746,11 +3746,9 @@ def _resume_direct_final(
             identity=identity,
         )
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
     os.fsync(parent)
     if _read_object(parent, name, len(raw), identity) != raw:
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
     return True
 
 
@@ -3762,14 +3760,12 @@ def _accept_admitted_final(
     identity: tuple[int, int],
     descriptor: int,
 ) -> bool:
-    try:
+    with _closing_descriptor(descriptor):
         if mode == _IMMUTABLE_FILE_MODE:
             return _accept_existing_immutable(parent, name, raw, identity, descriptor)
         if mode == 0o600:
             return _resume_direct_final(parent, name, raw, identity)
-        raise RuntimeError
-    finally:
-        os.close(descriptor)
+        raise _RetainedRevisionCorruptionError
 
 
 def _publish_object(parent: int, name: str, raw: bytes) -> bool:
@@ -3793,7 +3789,7 @@ def _publish_object(parent: int, name: str, raw: bytes) -> bool:
         return _accept_admitted_final(
             parent, name, raw, mode, identity, admitted_descriptor
         )
-    try:
+    with _closing_descriptor(descriptor):
         identity = _assert_final_descriptor(
             parent, name, descriptor, mode=0o600, size=0
         )
@@ -3808,11 +3804,9 @@ def _publish_object(parent: int, name: str, raw: bytes) -> bool:
             identity=identity,
         )
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
     os.fsync(parent)
     if _read_object(parent, name, len(raw), identity) != raw:
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
     return True
 
 
@@ -4027,81 +4021,94 @@ class HistoricalOhlcvRevisionStoreV1:
                         HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
                     )
                 root = _open_directory(operation.descriptor, _ROOT_DIRECTORY)
-                try:
+                with _closing_descriptor(root):
                     profile = _open_directory(root, _PROFILE_DIRECTORY)
-                    try:
+                    with _closing_descriptor(profile):
                         version = _open_directory(profile, _SCHEMA_DIRECTORY)
-                        try:
-                            with ExitStack() as directories:
-                                objects = _open_directory(version, _OBJECT_DIRECTORY)
-                                directories.callback(os.close, objects)
-                                revisions = _open_directory(
-                                    version, _REVISION_DIRECTORY
+                        with _closing_descriptor(version), ExitStack() as directories:
+                            objects = _open_directory(version, _OBJECT_DIRECTORY)
+                            directories.enter_context(_closing_descriptor(objects))
+                            revisions = _open_directory(version, _REVISION_DIRECTORY)
+                            directories.enter_context(_closing_descriptor(revisions))
+                            if not _storage_root_is_exact(operation.descriptor):
+                                return _result(
+                                    HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
                                 )
-                                directories.callback(os.close, revisions)
-                                if not _storage_root_is_exact(operation.descriptor):
-                                    return _result(
-                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                            candidate_source_objects = (
+                                (request["source_policy_sha256"], source_policy),
+                                (
+                                    request["source_artifact_sha256"],
+                                    source_artifact,
+                                ),
+                                (request["receipt_sha256"], source_receipt),
+                            )
+                            if request[
+                                "operation"
+                            ] == "INITIAL" and not _initial_hierarchy_is_exact(
+                                root, profile, version
+                            ):
+                                return _result(
+                                    HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                )
+                            if request["operation"] != "INITIAL":
+                                verified_parent = (
+                                    self._read_stored_exact_from_directories(
+                                        cast(
+                                            str,
+                                            request["parent_revision_sha256"],
+                                        ),
+                                        objects,
+                                        revisions,
                                     )
-                                candidate_source_objects = (
-                                    (request["source_policy_sha256"], source_policy),
-                                    (
-                                        request["source_artifact_sha256"],
-                                        source_artifact,
-                                    ),
-                                    (request["receipt_sha256"], source_receipt),
                                 )
-                                if request[
-                                    "operation"
-                                ] == "INITIAL" and not _initial_hierarchy_is_exact(
-                                    root, profile, version
+                                parent_artifact = self._artifact_for_revision(
+                                    verified_parent, objects
+                                )
+                                verified_depth, verified_outcome = _validate_transition(
+                                    request,
+                                    bars,
+                                    verified_parent,
+                                    parent_artifact,
+                                    artifact,
+                                )
+                                if (
+                                    verified_depth != depth
+                                    or verified_outcome
+                                    is not HistoricalOhlcvImportOutcomeV1.SUCCESS
                                 ):
                                     return _result(
-                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                        HistoricalOhlcvImportOutcomeV1.PARENT_LINEAGE_CONFLICT
                                     )
-                                if request["operation"] != "INITIAL":
-                                    verified_parent = (
-                                        self._read_stored_exact_from_directories(
-                                            cast(
-                                                str,
-                                                request["parent_revision_sha256"],
-                                            ),
-                                            objects,
-                                            revisions,
-                                        )
-                                    )
-                                    parent_artifact = self._artifact_for_revision(
-                                        verified_parent, objects
-                                    )
-                                    verified_depth, verified_outcome = (
-                                        _validate_transition(
-                                            request,
-                                            bars,
-                                            verified_parent,
-                                            parent_artifact,
-                                            artifact,
-                                        )
-                                    )
-                                    if (
-                                        verified_depth != depth
-                                        or verified_outcome
-                                        is not HistoricalOhlcvImportOutcomeV1.SUCCESS
-                                    ):
-                                        return _result(
-                                            HistoricalOhlcvImportOutcomeV1.PARENT_LINEAGE_CONFLICT
-                                        )
-                                try:
-                                    existing_revision = _read_object(
-                                        revisions,
-                                        f"{revision_id}.json",
-                                        _LIMITS["max_revision_bytes"],
-                                    )
-                                except (FileNotFoundError, RuntimeError):
-                                    existing_revision = None
+                            try:
+                                existing_revision = _read_object(
+                                    revisions,
+                                    f"{revision_id}.json",
+                                    _LIMITS["max_revision_bytes"],
+                                )
+                            except (
+                                FileNotFoundError,
+                                _RetainedRevisionCorruptionError,
+                            ):
+                                existing_revision = None
+                            if (
+                                request["operation"] == "INITIAL"
+                                and existing_revision is None
+                                and not _initial_partial_source_objects_match(
+                                    objects,
+                                    revisions,
+                                    candidate_source_objects,
+                                    f"{revision_id}.json",
+                                )
+                            ):
+                                return _result(
+                                    HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                )
+                            if existing_revision is not None:
+                                if existing_revision != revision_raw:
+                                    raise _RetainedRevisionCorruptionError
                                 if (
                                     request["operation"] == "INITIAL"
-                                    and existing_revision is None
-                                    and not _initial_partial_source_objects_match(
+                                    and not _initial_exact_replay_objects_match(
                                         objects,
                                         revisions,
                                         candidate_source_objects,
@@ -4111,28 +4118,39 @@ class HistoricalOhlcvRevisionStoreV1:
                                     return _result(
                                         HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
                                     )
-                                if existing_revision is not None:
-                                    if existing_revision != revision_raw:
-                                        raise RuntimeError
-                                    if (
-                                        request["operation"] == "INITIAL"
-                                        and not _initial_exact_replay_objects_match(
-                                            objects,
-                                            revisions,
-                                            candidate_source_objects,
-                                            f"{revision_id}.json",
-                                        )
-                                    ):
-                                        return _result(
-                                            HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
-                                        )
+                                self._read_stored_exact_from_directories(
+                                    revision_id, objects, revisions
+                                )
+                            if not _storage_root_is_exact(operation.descriptor):
+                                return _result(
+                                    HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
+                                )
+                            _assert_hierarchy_live(
+                                operation,
+                                root,
+                                profile,
+                                version,
+                                objects,
+                                revisions,
+                            )
+                            for name, raw in (
+                                (request["source_policy_sha256"], source_policy),
+                                (
+                                    request["source_artifact_sha256"],
+                                    source_artifact,
+                                ),
+                                (request["receipt_sha256"], source_receipt),
+                            ):
+                                _publish_object(objects, name, raw)
+                            _publish_object(
+                                revisions, f"{revision_id}.json", revision_raw
+                            )
+                            if existing_revision is not None:
+                                exact_revision = (
                                     self._read_stored_exact_from_directories(
                                         revision_id, objects, revisions
                                     )
-                                if not _storage_root_is_exact(operation.descriptor):
-                                    return _result(
-                                        HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
-                                    )
+                                )
                                 _assert_hierarchy_live(
                                     operation,
                                     root,
@@ -4141,44 +4159,12 @@ class HistoricalOhlcvRevisionStoreV1:
                                     objects,
                                     revisions,
                                 )
-                                for name, raw in (
-                                    (request["source_policy_sha256"], source_policy),
-                                    (
-                                        request["source_artifact_sha256"],
-                                        source_artifact,
-                                    ),
-                                    (request["receipt_sha256"], source_receipt),
-                                ):
-                                    _publish_object(objects, name, raw)
-                                _publish_object(
-                                    revisions, f"{revision_id}.json", revision_raw
+                                return HistoricalOhlcvImportResultV1(
+                                    HistoricalOhlcvImportOutcomeV1.SUCCESS,
+                                    revision_id,
+                                    exact_revision,
                                 )
-                                if existing_revision is not None:
-                                    exact_revision = (
-                                        self._read_stored_exact_from_directories(
-                                            revision_id, objects, revisions
-                                        )
-                                    )
-                                    _assert_hierarchy_live(
-                                        operation,
-                                        root,
-                                        profile,
-                                        version,
-                                        objects,
-                                        revisions,
-                                    )
-                                    return HistoricalOhlcvImportResultV1(
-                                        HistoricalOhlcvImportOutcomeV1.SUCCESS,
-                                        revision_id,
-                                        exact_revision,
-                                    )
-                        finally:
-                            os.close(version)
-                    finally:
-                        os.close(profile)
-                finally:
-                    os.close(root)
-        except Exception:
+        except (OSError, StorageRootLeaseError, _RetainedRevisionCorruptionError):
             return _result(
                 HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
             )
@@ -4212,40 +4198,35 @@ class HistoricalOhlcvRevisionStoreV1:
             ):
                 _assert_owner_private_directory(operation.descriptor)
                 root = _open_existing_directory(operation.descriptor, _ROOT_DIRECTORY)
-                try:
+                with _closing_descriptor(root):
                     profile = _open_existing_directory(root, _PROFILE_DIRECTORY)
-                    try:
+                    with _closing_descriptor(profile):
                         version = _open_existing_directory(profile, _SCHEMA_DIRECTORY)
-                        try:
-                            with ExitStack() as directories:
-                                objects = _open_existing_directory(
-                                    version, _OBJECT_DIRECTORY
-                                )
-                                directories.callback(os.close, objects)
+                        with _closing_descriptor(version):
+                            objects = _open_existing_directory(
+                                version, _OBJECT_DIRECTORY
+                            )
+                            with _closing_descriptor(objects):
                                 revisions = _open_existing_directory(
                                     version, _REVISION_DIRECTORY
                                 )
-                                directories.callback(os.close, revisions)
-                                current = self._validate_stored_revision_local(
-                                    revision_id, objects, revisions
-                                )
-                                artifact = self._artifact_for_revision(current, objects)
-                                _assert_hierarchy_live(
-                                    operation,
-                                    root,
-                                    profile,
-                                    version,
-                                    objects,
-                                    revisions,
-                                )
-                                return artifact
-                        finally:
-                            os.close(version)
-                    finally:
-                        os.close(profile)
-                finally:
-                    os.close(root)
-        except Exception:
+                                with _closing_descriptor(revisions):
+                                    current = self._validate_stored_revision_local(
+                                        revision_id, objects, revisions
+                                    )
+                                    artifact = self._artifact_for_revision(
+                                        current, objects
+                                    )
+                                    _assert_hierarchy_live(
+                                        operation,
+                                        root,
+                                        profile,
+                                        version,
+                                        objects,
+                                        revisions,
+                                    )
+                                    return artifact
+        except (OSError, StorageRootLeaseError, _RetainedRevisionCorruptionError):
             return None
 
     def read_exact(self, revision_sha256: object) -> HistoricalOhlcvImportResultV1:

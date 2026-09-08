@@ -882,10 +882,10 @@ def test_catalog_get_exception_cancellation_wins_before_manifest_creation() -> N
     assert fetcher.calls == []
 
 
-def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
-    class SecretClock:
+def test_invalid_clock_return_is_typed_bounded_and_does_not_leak_secret() -> None:
+    class InvalidClock:
         def now(self) -> datetime:
-            raise RuntimeError("clock secret")
+            return datetime(2026, 2, 1)
 
     executor = PartitionIngestionExecutor(
         instrument=_instrument(),
@@ -895,7 +895,7 @@ def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
         publisher=_Publisher(_published()),
         catalog=_Catalog(),
         storage_root=Path("test-market-data"),
-        clock=SecretClock(),
+        clock=InvalidClock(),
         run_id="run-1",
         cancellation=CancellationToken(),
     )
@@ -908,8 +908,72 @@ def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
     assert "secret" not in str(error.value)
 
 
-def test_clock_failure_after_publication_uses_cancelled_terminal_evidence() -> None:
+def test_clock_execution_fault_preserves_identity_without_lifecycle_evidence() -> None:
+    failure = RuntimeError("clock secret")
+
+    class FailingClock:
+        def now(self) -> datetime:
+            raise failure
+
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
+    executor = PartitionIngestionExecutor(
+        instrument=_instrument(),
+        expected_sessions=_schedule_evidence(),
+        validation_policy=EquityMonthValidationPolicy("nse-equity-month@v1"),
+        fetcher=fetcher,
+        publisher=publisher,
+        catalog=catalog,
+        storage_root=Path("test-market-data"),
+        clock=FailingClock(),
+        run_id="run-1",
+        cancellation=CancellationToken(),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        executor.execute(_plan())
+
+    assert raised.value is failure
+    assert catalog.current is None
+    assert catalog.created == []
+    assert catalog.transitions == []
+    assert fetcher.calls == []
+    assert publisher.calls == []
+
+
+def test_cancellation_callback_fault_preserves_identity_without_lifecycle_evidence() -> (
+    None
+):
+    failure = AssertionError("cancellation secret")
+
+    class FailingCancellation:
+        def is_cancelled(self) -> bool:
+            raise failure
+
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
+
+    with pytest.raises(AssertionError) as raised:
+        _executor(
+            fetcher,
+            catalog,
+            publisher=publisher,
+            cancellation=FailingCancellation(),  # type: ignore[arg-type]
+        ).execute(_plan())
+
+    assert raised.value is failure
+    assert catalog.current is None
+    assert catalog.created == []
+    assert catalog.transitions == []
+    assert fetcher.calls == []
+    assert publisher.calls == []
+
+
+def test_clock_execution_fault_after_publication_is_not_cancellation_evidence() -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("clock secret")
 
     class CancellingClock(_Clock):
         def __init__(self) -> None:
@@ -920,29 +984,35 @@ def test_clock_failure_after_publication_uses_cancelled_terminal_evidence() -> N
             self.calls += 1
             if self.calls >= 2:
                 cancellation.cancel()
-                raise RuntimeError("clock secret")
+                raise failure
             return super().now()
 
     clock = CancellingClock()
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
     executor = PartitionIngestionExecutor(
         instrument=_instrument(),
         expected_sessions=_schedule_evidence(),
         validation_policy=EquityMonthValidationPolicy("nse-equity-month@v1"),
-        fetcher=_Fetcher(_fetched(_raw_response())),
-        publisher=_Publisher(_published()),
-        catalog=_Catalog(),
+        fetcher=fetcher,
+        publisher=publisher,
+        catalog=catalog,
         storage_root=Path("test-market-data"),
         clock=clock,
         run_id="run-1",
         cancellation=cancellation,
     )
 
-    result = executor.execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        executor.execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.final_manifest is not None
-    assert result.final_manifest.failure_category is FailureCategory.INTERRUPTED
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
+    assert catalog.transitions == []
+    assert len(fetcher.calls) == 1
+    assert len(publisher.calls) == 1
 
 
 def test_catalog_returning_an_untyped_manifest_is_bounded() -> None:

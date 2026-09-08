@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
 import swing_trading_ai_assistant.market_data.bounded_nifty50_workflow as workflow_module
+import swing_trading_ai_assistant.market_data.universe_snapshot as universe_module
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -407,6 +409,51 @@ def test_single_symbol_adapter_maps_unexpected_worker_failure(tmp_path: Path) ->
     assert report.status is PublicCommandStatusV1.FAILED
     assert report.failure is not None
     assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+
+
+@pytest.mark.parametrize("single", [False, True])
+@pytest.mark.parametrize("boundary", ["retained_decoder", "factory"])
+def test_download_execution_value_error_is_not_invalid_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    single: bool,
+    boundary: str,
+) -> None:
+    tmp_path.chmod(0o700)
+    request = replace(_request(tmp_path), symbols=("RELIANCE",))
+    worker = _SymbolService()
+    BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()), lambda _policy: worker, clock=_Clock()
+    ).download(request)
+    assert worker.symbols == ["RELIANCE"]
+    worker.symbols.clear()
+    faults = 0
+
+    def fail(*_args: object, **_kwargs: object):
+        nonlocal faults
+        faults += 1
+        raise ValueError("private-download-execution-fault")
+
+    def factory(_policy: object):
+        if boundary == "factory":
+            fail()
+        pytest.fail("download reader must not follow a retained decoder fault")
+
+    if boundary == "retained_decoder":
+        monkeypatch.setattr(universe_module, "_parse_member", fail)
+    service = BoundedNifty50DownloadServiceV1(None, factory, clock=_Clock())
+    if single:
+        report = service.download_single(request)
+        assert report.status is PublicCommandStatusV1.FAILED
+        assert report.failure is not None
+        assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+        assert report.payload is None
+    else:
+        report = service.download(request)
+        assert report.outcome is Nifty50BatchOutcomeV1.FAILED
+        assert report.results == ()
+    assert faults == 1
+    assert worker.symbols == []
 
 
 def test_retained_universe_supports_zero_source_rerun(tmp_path: Path) -> None:

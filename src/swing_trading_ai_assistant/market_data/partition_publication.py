@@ -646,37 +646,34 @@ def _open_or_create_parents(  # noqa: C901
                     os.mkdir(component, mode=0o700, dir_fd=current_fd)
                 child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=current_fd)
             _fsync_directory(current_fd)
-            failure = PartitionPublicationError("unsafe publication path")
-            if not _close_for_primary(current_fd, failure):
-                _close_for_primary(child_fd, failure)
+            current_already_closed = True
+            if not _close_one(current_fd):
+                failure = PartitionPublicationError("unsafe publication path")
+                _close_one(child_fd, failure)
                 child_fd = None
-                current_already_closed = True
                 raise failure
             current_fd = child_fd
             child_fd = None
+            current_already_closed = False
         return current_fd
     except PartitionPublicationError as failure:
-        if current_already_closed:
-            if child_fd is not None:
-                _close_for_primary(child_fd, failure)
-            raise
-        failure = PartitionPublicationError("unsafe publication path")
         if child_fd is not None:
-            _close_for_primary(child_fd, failure)
-        _close_for_primary(current_fd, failure)
-        raise failure from None
+            _close_one(child_fd, failure)
+        if not current_already_closed:
+            _close_one(current_fd, failure)
+        raise
     except OSError:
         failure = PartitionPublicationError("unsafe publication path")
         if child_fd is not None:
-            _close_for_primary(child_fd, failure)
+            _close_one(child_fd, failure)
         if not current_already_closed:
-            _close_for_primary(current_fd, failure)
+            _close_one(current_fd, failure)
         raise failure from None
     except Exception as error:
         if child_fd is not None:
-            _close_for_primary(child_fd, error)
+            _close_one(child_fd, error)
         if not current_already_closed:
-            _close_for_primary(current_fd, error)
+            _close_one(current_fd, error)
         raise
 
 
@@ -832,8 +829,8 @@ def _final_matches_temp(parent_fd: int, temp_fd: int) -> bool:
             final.st_dev,
             final.st_ino,
         )
-        closed = _close_one(descriptor)
-        descriptor = None
+        descriptor, descriptor_to_close = None, descriptor
+        closed = _close_one(descriptor_to_close)
         return matches and closed
     except OSError:
         return False
@@ -894,15 +891,6 @@ def _close_one(descriptor: int, primary: Exception | None = None) -> bool:
         ):
             primary.add_note("publication descriptor cleanup failed")
         return False
-
-
-def _close_for_primary(descriptor: int, primary: Exception) -> bool:
-    closed = _close_one(descriptor, primary)
-    if not closed and "publication descriptor cleanup failed" not in getattr(
-        primary, "__notes__", ()
-    ):
-        primary.add_note("publication descriptor cleanup failed")
-    return closed
 
 
 def _close_all(*descriptors: int | Exception | None) -> bool:

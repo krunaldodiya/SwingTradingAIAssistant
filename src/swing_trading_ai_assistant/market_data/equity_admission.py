@@ -12,6 +12,10 @@ from .universe_snapshot import Nifty50ConstituentV1, Nifty50UniverseSnapshotV1
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
+class Nifty50AdmissionValidationError(ValueError):
+    """An explicitly invalid cohort policy or nonmember selection."""
+
+
 class EquityAdmissionPolicyV1(Protocol):
     """Small common boundary shared by preview and Nifty 50 workflows."""
 
@@ -45,7 +49,7 @@ class Nifty50AdmissionPolicyV1:
                 )
             )
         ):
-            raise ValueError("invalid Nifty 50 admission policy")
+            raise Nifty50AdmissionValidationError("invalid Nifty 50 admission policy")
         requested = (
             {member.symbol for member in self.universe.constituents}
             if self.selected_symbols is None
@@ -57,7 +61,9 @@ class Nifty50AdmissionPolicyV1:
             if member.symbol in requested
         )
         if len(selected) != len(requested):
-            raise ValueError("selected symbol is not in the point-in-time Nifty 50")
+            raise Nifty50AdmissionValidationError(
+                "selected symbol is not in the point-in-time Nifty 50"
+            )
         object.__setattr__(self, "_selected", selected)
 
     @property

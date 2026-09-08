@@ -860,6 +860,172 @@ def test_parent_advance_close_failure_closes_child_before_typed_error(
         os.close(root_fd)
 
 
+def test_publish_parent_advance_unknown_close_fault_propagates_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fault = TypeError("traversal close defect")
+    opened: dict[int, object] = {}
+    closed: list[object] = []
+    root_descriptor: int | None = None
+    root_token: object | None = None
+    current_token: object | None = None
+    child_token: object | None = None
+    original_open = publication.os.open
+    original_dup = publication.os.dup
+    original_close = publication.os.close
+
+    def open(name: object, *args: object, **kwargs: object) -> int:
+        nonlocal root_descriptor, root_token, child_token
+        descriptor = original_open(name, *args, **kwargs)  # type: ignore[arg-type]
+        if name == tmp_path:
+            root_descriptor = descriptor
+            root_token = object()
+            opened[descriptor] = root_token
+        elif name == "candles":
+            child_token = object()
+            opened[descriptor] = child_token
+        return descriptor
+
+    def duplicate(descriptor: int) -> int:
+        nonlocal current_token
+        duplicated = original_dup(descriptor)
+        if descriptor == root_descriptor:
+            current_token = object()
+            opened[duplicated] = current_token
+        return duplicated
+
+    def close(descriptor: int) -> None:
+        token = opened.pop(descriptor, None)
+        original_close(descriptor)
+        if token is not None:
+            closed.append(token)
+        if token is current_token:
+            raise fault
+
+    monkeypatch.setattr(publication.os, "open", open)
+    monkeypatch.setattr(publication.os, "dup", duplicate)
+    monkeypatch.setattr(publication.os, "close", close)
+
+    with pytest.raises(TypeError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is fault
+    assert (
+        root_token is not None and current_token is not None and child_token is not None
+    )
+    assert len(closed) == len(set(closed)) == 3
+    assert set(closed) == {root_token, current_token, child_token}
+    assert not list(tmp_path.rglob("bars.parquet"))
+    assert not list(tmp_path.rglob(".publish-*.tmp"))
+
+
+def test_publish_parent_traversal_primary_survives_later_close_faults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = RuntimeError("traversal primary defect")
+    cleanup_fault = TypeError("traversal cleanup defect")
+    opened: dict[int, object] = {}
+    closed: list[object] = []
+    root_descriptor: int | None = None
+    root_token: object | None = None
+    current_token: object | None = None
+    child_token: object | None = None
+    original_open = publication.os.open
+    original_dup = publication.os.dup
+    original_close = publication.os.close
+
+    def open(name: object, *args: object, **kwargs: object) -> int:
+        nonlocal root_descriptor, root_token, child_token
+        descriptor = original_open(name, *args, **kwargs)  # type: ignore[arg-type]
+        if name == tmp_path:
+            root_descriptor = descriptor
+            root_token = object()
+            opened[descriptor] = root_token
+        elif name == "candles":
+            child_token = object()
+            opened[descriptor] = child_token
+        return descriptor
+
+    def duplicate(descriptor: int) -> int:
+        nonlocal current_token
+        duplicated = original_dup(descriptor)
+        if descriptor == root_descriptor:
+            current_token = object()
+            opened[duplicated] = current_token
+        return duplicated
+
+    def close(descriptor: int) -> None:
+        token = opened.pop(descriptor, None)
+        original_close(descriptor)
+        if token is not None:
+            closed.append(token)
+        raise cleanup_fault
+
+    monkeypatch.setattr(
+        publication,
+        "_fsync_directory",
+        lambda *_: (_ for _ in ()).throw(primary),
+    )
+    monkeypatch.setattr(publication.os, "open", open)
+    monkeypatch.setattr(publication.os, "dup", duplicate)
+    monkeypatch.setattr(publication.os, "close", close)
+
+    with pytest.raises(RuntimeError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is primary
+    assert (
+        root_token is not None and current_token is not None and child_token is not None
+    )
+    assert len(closed) == len(set(closed)) == 3
+    assert set(closed) == {root_token, current_token, child_token}
+    assert not list(tmp_path.rglob("bars.parquet"))
+    assert not list(tmp_path.rglob(".publish-*.tmp"))
+
+
+def test_final_match_unknown_close_fault_does_not_retry_closed_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fault = TypeError("final match close defect")
+    final = tmp_path / publication._relative_path(_plan())
+    final_token: object | None = None
+    final_descriptor: int | None = None
+    final_lifetime_attempts: list[int] = []
+    opened: dict[int, object] = {}
+    original_open = publication.os.open
+    original_close = publication.os.close
+
+    def open(name: object, *args: object, **kwargs: object) -> int:
+        nonlocal final_token
+        descriptor = original_open(name, *args, **kwargs)  # type: ignore[arg-type]
+        if name == "bars.parquet":
+            final_token = object()
+            opened[descriptor] = final_token
+        return descriptor
+
+    def close(descriptor: int) -> None:
+        nonlocal final_descriptor
+        token = opened.pop(descriptor, None)
+        if final_descriptor is not None and descriptor == final_descriptor:
+            final_lifetime_attempts.append(descriptor)
+        original_close(descriptor)
+        if final_token is not None and token is final_token:
+            final_descriptor = descriptor
+            final_lifetime_attempts.append(descriptor)
+            raise fault
+
+    monkeypatch.setattr(publication.os, "open", open)
+    monkeypatch.setattr(publication.os, "close", close)
+
+    with pytest.raises(TypeError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is fault
+    assert final_descriptor is not None
+    assert final_lifetime_attempts == [final_descriptor]
+    assert final.is_file()
+
+
 def test_existing_raced_directory_is_fsynced_before_advancing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -948,32 +1114,6 @@ def test_parent_fsync_failure_closes_opened_child_once(
         assert len(closed) == 2
     finally:
         os.close(root_fd)
-
-
-def test_publish_parent_fsync_cleanup_preserves_typed_primary_and_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[int] = []
-    original = publication._close_one
-    monkeypatch.setattr(
-        publication,
-        "_fsync_directory",
-        lambda *_: (_ for _ in ()).throw(PublicationOutcomeUnknown("private-path")),
-    )
-
-    def fail_child_close(descriptor: int, primary: Exception | None = None) -> bool:
-        calls.append(descriptor)
-        original(descriptor, primary)
-        return len(calls) != 1
-
-    monkeypatch.setattr(publication, "_close_one", fail_child_close)
-    with pytest.raises(PartitionPublicationError) as error:
-        publish_partition(tmp_path, _plan(), [_candle()])
-    assert tuple(getattr(error.value, "__notes__", ())) == (
-        "publication descriptor cleanup failed",
-    )
-    assert len(calls) == 3
-    assert "private-path" not in str(error.value)
 
 
 def test_final_replacement_in_last_durability_window_is_outcome_unknown(

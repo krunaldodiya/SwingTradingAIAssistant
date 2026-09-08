@@ -62,8 +62,10 @@ Sprint 19 Price Action delivered through PR #153. Closed Issue #154 and
 accepted Plan 33 own only the bounded source decision, benchmark, and contract
 for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
 merged that planning record without changing runtime. Issue #155 delivered the
-exact reviewed Plan 30 runtime prerequisite. Open Project **In Progress** Issue
-#156 then owns the separately bounded Plan 33 implementation.
+exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
+separately bounded Plan 33 implementation. The owner requires its security
+review/audit follow-up after #145 and before #172 implementation; its closed
+tracker state does not establish that security acceptance.
 Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
 policy below. It changes execution-failure handling, not the product-module
 sequence or the separately bounded scope of #156.
@@ -575,8 +577,8 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   without invalidating or quarantining retained evidence. Cleanup preserves
   an active primary failure when cleanup also fails; an unexpected standalone
   cleanup failure propagates.
-- Expected schedule and snapshot validation signals retain `ValueError`
-  compatibility through explicit subclasses. Expected lease-authority failures
+- Expected schedule, snapshot, and cohort-selection validation signals retain
+  `ValueError` compatibility through explicit subclasses. Expected lease-authority failures
   use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
   uses `PartitionReadFailureV1` with the existing finite failure categories;
   an unrelated exception's attributes do not establish an evidence finding.
@@ -588,6 +590,10 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   `FAILED / UNCLASSIFIED_FAILURE` execution-failure envelope, without partial
   rows or evidence payloads. That envelope is not a market-evidence state and
   retains the delivered CLI exit code `5`.
+  Point-in-time read wrappers do not call a decoder or factory defect missing
+  catalog evidence or invalid membership. Bounded wrappers retain their generic
+  `FAILED` result with no member results when setup fails unexpectedly.
+  Clock and cancellation callback execution faults are not cancellation evidence.
 - Before a completed public response, the `market-data` CLI maps an unexpected
   exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
   stderr. Parser rejection is exactly `request_invalid\n`; existing bounded

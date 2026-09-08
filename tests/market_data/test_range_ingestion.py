@@ -1402,6 +1402,57 @@ def test_real_lifecycle_catalog_defect_escapes_before_later_fetch(
     assert fetches == []
 
 
+def test_default_lifecycle_clock_fault_escapes_before_later_range_work(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("clock implementation fault")
+    catalog_lookups: list[date] = []
+    provider_fetches: list[object] = []
+
+    class FaultingClock:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def now(self) -> datetime:
+            self.calls += 1
+            if self.calls >= 3:
+                raise failure
+            return datetime(2026, 3, 1, tzinfo=UTC)
+
+    class Catalog(_Catalog):
+        def get_manifest(self, plan: PlannedInstrumentMonth) -> None:
+            catalog_lookups.append(plan.from_date)
+            return None
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=provider_fetches.append)
+        ),  # type: ignore[arg-type]
+        clock=FaultingClock(),
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert catalog_lookups == [date(2026, 1, 1)]
+    assert provider_fetches == []
+
+
 @pytest.mark.parametrize("stage", ("session", "schedule", "publisher"))
 def test_real_lifecycle_unknown_fault_escapes_before_later_month_work(
     tmp_path: Path,

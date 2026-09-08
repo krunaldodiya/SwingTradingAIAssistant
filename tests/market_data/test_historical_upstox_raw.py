@@ -1484,6 +1484,58 @@ def test_synthetic_source_backed_append_copies_inherited_partition_receipts(
     )
 
 
+def test_source_backed_append_propagates_parent_artifact_reader_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = [(_synthetic_isin(0), "SYM00")]
+    sessions = ("2026-07-01", "2026-07-02")
+    source = _synthetic_source_root(tmp_path, "source")
+    destination = _private_destination_root(tmp_path, "destination")
+    schedule_digest, metadata = _seed_synthetic_retained_source(
+        source,
+        members,
+        sessions,
+        known_at_by_month={(2026, 7): datetime(2026, 8, 27, 4, tzinfo=UTC)},
+    )
+    parent_request = _synthetic_request(
+        members, (sessions[0],), schedule_digest, metadata, "2026-09-02T00:00:00Z"
+    )
+    identity = StorageRootLease.admit_existing_private_identity(destination)
+    assert identity is not None
+    parent = historical_upstox_raw.complete_upstox_raw_historical_ohlcv_v1(
+        _canonical(parent_request), source, destination, identity
+    )
+    assert parent.revision_sha256 is not None
+    append_request = _synthetic_request(
+        members, sessions, schedule_digest, metadata, "2026-09-03T00:00:00Z"
+    )
+    append_request["operation"] = "APPEND"
+    append_request["parent_revision_sha256"] = parent.revision_sha256
+    retained_before = _tree_bytes(destination)
+    primary = RuntimeError("private-parent-artifact-reader-fault")
+
+    def fail_parent_artifact(
+        _: historical_revision_store.HistoricalOhlcvRevisionStoreV1,
+        __: dict[str, Any],
+        ___: int,
+    ) -> dict[str, Any]:
+        raise primary
+
+    monkeypatch.setattr(
+        historical_revision_store.HistoricalOhlcvRevisionStoreV1,
+        "_artifact_for_revision",
+        fail_parent_artifact,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        historical_upstox_raw.complete_upstox_raw_historical_ohlcv_v1(
+            _canonical(append_request), source, destination, identity
+        )
+
+    assert raised.value is primary
+    assert _tree_bytes(destination) == retained_before
+
+
 def test_synthetic_source_backed_correction_replaces_only_named_month_coordinate(
     tmp_path: Path,
 ) -> None:
