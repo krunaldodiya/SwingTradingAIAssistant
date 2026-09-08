@@ -16,14 +16,18 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Generator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final, Protocol, cast
 
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 
 UNIVERSE_ID_V1: Final = "nifty-50"
 MAX_UNIVERSE_JSON_BYTES_V1: Final = 64 * 1024
@@ -59,6 +63,10 @@ class UniverseSnapshotCorruptError(UniverseSnapshotError):
     """Stored canonical object or metadata is unsafe or inconsistent."""
 
 
+class RetainedObjectValidationError(ValueError):
+    """A recognized retained-universe data or descriptor invariant failure."""
+
+
 @dataclass(frozen=True, slots=True)
 class Nifty50ConstituentV1:
     isin: str
@@ -76,7 +84,7 @@ class Nifty50ConstituentV1:
             and type(self.sector) is str
             and _SAFE_LABEL.fullmatch(self.sector)
         ):
-            raise ValueError("invalid Nifty 50 constituent")
+            raise RetainedObjectValidationError("invalid Nifty 50 constituent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +139,7 @@ class Nifty50UniverseSnapshotV1:
             and len(members) == 50
             and all(type(member) is Nifty50ConstituentV1 for member in members)
         ):
-            raise ValueError("invalid Nifty 50 universe snapshot")
+            raise RetainedObjectValidationError("invalid Nifty 50 universe snapshot")
         for member in members:
             member.__post_init__()
         if not (
@@ -139,7 +147,7 @@ class Nifty50UniverseSnapshotV1:
             and len({member.isin for member in members}) == 50
             and len({member.symbol for member in members}) == 50
         ):
-            raise ValueError("invalid Nifty 50 universe snapshot")
+            raise RetainedObjectValidationError("invalid Nifty 50 universe snapshot")
         for field in (
             "membership_published_at",
             "membership_retrieved_at",
@@ -174,7 +182,7 @@ class Nifty50UniverseSnapshotV1:
             + "\n"
         ).encode()
         if len(encoded) > MAX_UNIVERSE_JSON_BYTES_V1:
-            raise ValueError("universe snapshot too large")
+            raise RetainedObjectValidationError("universe snapshot too large")
         return encoded
 
     @classmethod
@@ -190,23 +198,24 @@ class Nifty50UniverseSnapshotV1:
                 payload,
                 object_pairs_hook=_unique_object,
                 parse_constant=_reject_constant,
+                parse_int=_parse_json_integer,
             )
             _assert_depth(parsed)
             if type(parsed) is not dict:
-                raise ValueError
+                raise RetainedObjectValidationError
             expected = tuple(cls.__dataclass_fields__)
             if tuple(cast(dict[str, object], cast(object, parsed))) != expected:
-                raise ValueError
+                raise RetainedObjectValidationError
             values = cast(dict[str, object], cast(object, parsed))
             members_raw = values["constituents"]
             if type(members_raw) is not list:
-                raise ValueError
+                raise RetainedObjectValidationError
             members = cast(list[object], members_raw)
             snapshot = cls(
                 schema_version=cast(int, values["schema_version"]),
                 universe_id=cast(str, values["universe_id"]),
-                effective_from=date.fromisoformat(cast(str, values["effective_from"])),
-                effective_to=date.fromisoformat(cast(str, values["effective_to"])),
+                effective_from=_parse_date(values["effective_from"]),
+                effective_to=_parse_date(values["effective_to"]),
                 membership_source=cast(str, values["membership_source"]),
                 membership_release=cast(str, values["membership_release"]),
                 membership_published_at=_parse_timestamp(
@@ -222,9 +231,14 @@ class Nifty50UniverseSnapshotV1:
                 constituents=tuple(_parse_member(member) for member in members),
             )
             if snapshot.canonical_json_bytes() != payload:
-                raise ValueError
+                raise RetainedObjectValidationError
             return snapshot
-        except Exception:
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            RecursionError,
+            RetainedObjectValidationError,
+        ):
             raise UniverseSnapshotCorruptError("universe snapshot corrupt") from None
 
 
@@ -282,7 +296,7 @@ class UniverseSnapshotMetadataV1:
             and self.relative_object_path
             == f"universe_snapshots/sha256={self.snapshot_sha256}/snapshot.json"
         ):
-            raise ValueError("invalid universe snapshot metadata")
+            raise RetainedObjectValidationError("invalid universe snapshot metadata")
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,9 +334,9 @@ class Nifty50UniverseStoreV1:
         self._root, self._lease, self._catalog = storage_root, lease, catalog
 
     def retain(self, snapshot: Nifty50UniverseSnapshotV1) -> UniverseSnapshotMetadataV1:
+        if type(snapshot) is not Nifty50UniverseSnapshotV1:
+            raise UniverseSnapshotCorruptError("universe snapshot corrupt")
         try:
-            if type(snapshot) is not Nifty50UniverseSnapshotV1:
-                raise ValueError
             payload = snapshot.canonical_json_bytes()
             digest = hashlib.sha256(payload).hexdigest()
             metadata = UniverseSnapshotMetadataV1(
@@ -342,10 +356,15 @@ class Nifty50UniverseStoreV1:
                 len(payload),
                 f"universe_snapshots/sha256={digest}/snapshot.json",
             )
-            with self._lease.root_operation(self._root) as operation:
+        except RetainedObjectValidationError:
+            raise UniverseSnapshotCorruptError("universe snapshot corrupt") from None
+        try:
+            with _operation_preserving_primary(
+                self._lease.root_operation(self._root)
+            ) as operation:
                 _assert_private_operation(operation)
                 object_fd = _open_object_directory(operation, digest, create=True)
-                try:
+                with _close_descriptor_preserving_primary(object_fd):
                     _publish_exact(operation, object_fd, "snapshot.json", payload)
                     _validate_retained_snapshot(operation, object_fd, digest, payload)
                     inserted = self._catalog.save_universe_snapshot(
@@ -358,17 +377,20 @@ class Nifty50UniverseStoreV1:
                         _validate_retained_snapshot(
                             operation, object_fd, digest, payload
                         )
-                    except Exception:
+                    except BaseException:
                         if inserted:
-                            self._catalog.remove_universe_snapshot_exact(metadata)
+                            with suppress(BaseException):
+                                self._catalog.remove_universe_snapshot_exact(metadata)
                         raise
-                finally:
-                    os.close(object_fd)
             return metadata
         except UniverseSnapshotError:
             raise
-        except Exception:
-            raise UniverseSnapshotCorruptError("universe snapshot corrupt") from None
+        except BaseException as error:
+            if _is_recognized_universe_failure(error):
+                raise UniverseSnapshotCorruptError(
+                    "universe snapshot corrupt"
+                ) from None
+            raise
 
     def resolve(
         self, *, as_of: date, knowledge_cutoff: datetime
@@ -395,34 +417,48 @@ class Nifty50UniverseStoreV1:
             if len(eligible) != 1:
                 raise UniverseSnapshotAmbiguousError("universe snapshot ambiguous")
             metadata = eligible[0]
-            with self._lease.read_operation(self._root) as operation:
+            with _operation_preserving_primary(
+                self._lease.read_operation(self._root)
+            ) as operation:
                 _assert_private_operation(operation)
                 object_fd = _open_object_directory(
                     operation, metadata.snapshot_sha256, create=False
                 )
-                try:
+                with _close_descriptor_preserving_primary(object_fd):
                     payload = _read_bounded(
                         operation, object_fd, "snapshot.json", metadata.byte_count
                     )
                     _validate_object_chain(
                         operation, object_fd, metadata.snapshot_sha256
                     )
-                finally:
-                    os.close(object_fd)
                 if (
                     len(payload) != metadata.byte_count
                     or hashlib.sha256(payload).hexdigest() != metadata.snapshot_sha256
                 ):
-                    raise ValueError
+                    raise RetainedObjectValidationError
                 snapshot = Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload)
                 if _snapshot_metadata_fields(snapshot) != _metadata_fields(metadata):
-                    raise ValueError
+                    raise RetainedObjectValidationError
                 operation.ensure_live()
                 return ResolvedNifty50UniverseSnapshotV1(metadata, snapshot)
         except UniverseSnapshotError:
             raise
-        except Exception:
-            raise UniverseSnapshotCorruptError("universe snapshot corrupt") from None
+        except BaseException as error:
+            if _is_recognized_universe_failure(error):
+                raise UniverseSnapshotCorruptError(
+                    "universe snapshot corrupt"
+                ) from None
+            raise
+
+
+def _is_recognized_universe_failure(error: BaseException) -> bool:
+    """Keep catalog's typed interface without creating its import cycle."""
+    from .catalog import CatalogError  # noqa: PLC0415
+
+    return isinstance(
+        error,
+        (CatalogError, OSError, RetainedObjectValidationError, StorageRootLeaseError),
+    )
 
 
 def _timestamp(value: datetime) -> str:
@@ -467,7 +503,7 @@ def _assert_private_operation(operation: StorageRootLeaseOperation) -> None:
         or stat.S_IMODE(info.st_mode) != _PRIVATE_DIRECTORY_MODE
         or info.st_uid != os.geteuid()
     ):
-        raise ValueError
+        raise RetainedObjectValidationError
     operation.ensure_live()
 
 
@@ -491,8 +527,27 @@ def _validate_retained_snapshot(
 
 def _parse_timestamp(value: object) -> datetime:
     if type(value) is not str:
-        raise ValueError
-    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+        raise RetainedObjectValidationError
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        raise RetainedObjectValidationError from None
+
+
+def _parse_date(value: object) -> date:
+    if type(value) is not str:
+        raise RetainedObjectValidationError
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise RetainedObjectValidationError from None
+
+
+def _parse_json_integer(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise RetainedObjectValidationError from None
 
 
 def _parse_member(value: object) -> Nifty50ConstituentV1:
@@ -501,7 +556,7 @@ def _parse_member(value: object) -> Nifty50ConstituentV1:
         "symbol",
         "sector",
     ):
-        raise ValueError
+        raise RetainedObjectValidationError
     return Nifty50ConstituentV1(**cast(dict[str, str], value))
 
 
@@ -509,18 +564,18 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError
+            raise RetainedObjectValidationError
         result[key] = value
     return result
 
 
 def _reject_constant(_value: str) -> None:
-    raise ValueError
+    raise RetainedObjectValidationError
 
 
 def _assert_depth(value: object, depth: int = 0) -> None:
     if depth > _MAX_DEPTH:
-        raise ValueError
+        raise RetainedObjectValidationError
     if type(value) is dict:
         for child in cast(dict[str, object], value).values():
             _assert_depth(child, depth + 1)
@@ -529,17 +584,65 @@ def _assert_depth(value: object, depth: int = 0) -> None:
             _assert_depth(child, depth + 1)
 
 
+@contextmanager
+def _close_descriptor_preserving_primary(
+    descriptor: int,
+) -> Generator[None, None, None]:
+    """Close a descriptor without letting cleanup replace an active primary."""
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            if primary is None:
+                raise
+
+
+@contextmanager
+def _operation_preserving_primary(
+    operation: StorageRootLeaseOperation,
+) -> Generator[StorageRootLeaseOperation, None, None]:
+    """Exit an operation without letting cleanup replace an active primary."""
+    entered = operation.__enter__()
+    primary: BaseException | None = None
+    try:
+        yield entered
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            operation.__exit__(
+                type(primary) if primary is not None else None,
+                primary,
+                primary.__traceback__ if primary is not None else None,
+            )
+        except BaseException:
+            if primary is None:
+                raise
+
+
 def _open_object_directory(
     operation: StorageRootLeaseOperation, digest: str, *, create: bool
 ) -> int:
     _ensure_private_operation(operation)
     parent = operation.descriptor
     first = _open_dir(operation, parent, "universe_snapshots", create)
+    child: int | None = None
     try:
-        child = _open_dir(operation, first, f"sha256={digest}", create)
-    finally:
-        os.close(first)
-    _validate_object_chain(operation, child, digest)
+        with _close_descriptor_preserving_primary(first):
+            child = _open_dir(operation, first, f"sha256={digest}", create)
+            _validate_object_chain(operation, child, digest)
+    except BaseException:
+        if child is not None:
+            with _close_descriptor_preserving_primary(child):
+                raise
+        raise
     return child
 
 
@@ -549,16 +652,12 @@ def _validate_object_chain(
     """Re-open every path component; held descriptors alone are not authority."""
     _assert_private_operation(operation)
     parent = _open_dir(operation, operation.descriptor, "universe_snapshots", False)
-    try:
+    with _close_descriptor_preserving_primary(parent):
         child = _open_dir(operation, parent, f"sha256={digest}", False)
-        try:
+        with _close_descriptor_preserving_primary(child):
             held, reopened = os.fstat(object_fd), os.fstat(child)
             if (held.st_dev, held.st_ino) != (reopened.st_dev, reopened.st_ino):
-                raise ValueError
-        finally:
-            os.close(child)
-    finally:
-        os.close(parent)
+                raise RetainedObjectValidationError
     _assert_private_operation(operation)
 
 
@@ -578,14 +677,17 @@ def _open_dir(
     fd = os.open(
         name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent
     )
-    info = os.fstat(fd)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid()
-        or stat.S_IMODE(info.st_mode) != _PRIVATE_DIRECTORY_MODE
-    ):
-        os.close(fd)
-        raise ValueError
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != _PRIVATE_DIRECTORY_MODE
+        ):
+            raise RetainedObjectValidationError
+    except BaseException:
+        with _close_descriptor_preserving_primary(fd):
+            raise
     return fd
 
 
@@ -607,7 +709,7 @@ def _publish_exact(
             while offset < len(payload):
                 written = os.write(fd, payload[offset:])
                 if written <= 0:
-                    raise ValueError
+                    raise RetainedObjectValidationError
                 offset += written
             os.fsync(fd)
             temporary_identity = _private_object_identity(fd)
@@ -618,11 +720,9 @@ def _publish_exact(
                 os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
-            try:
+            with _close_descriptor_preserving_primary(verify_fd):
                 if _read_fd(verify_fd, len(payload)) != payload:
-                    raise ValueError
-            finally:
-                os.close(verify_fd)
+                    raise RetainedObjectValidationError
             try:
                 _rename_noreplace(parent, temporary, parent, name)
             except FileExistsError:
@@ -640,20 +740,18 @@ def _publish_exact(
             os.fsync(parent)
             _verify_published_object(operation, parent, name, payload)
             return
-        except Exception:
+        except BaseException:
             if fd >= 0:
-                with suppress(Exception):
+                with suppress(BaseException):
                     temporary_identity = _private_object_identity(fd)
-                with suppress(Exception):
+                with suppress(BaseException):
                     os.close(fd)
             if temporary and temporary_identity is not None:
-                with suppress(Exception):
+                with suppress(BaseException):
                     _quarantine_then_remove_exact(parent, temporary, temporary_identity)
             raise
-    try:
+    with _close_descriptor_preserving_primary(fd):
         _verify_open_object(operation, parent, name, fd, payload)
-    finally:
-        os.close(fd)
 
 
 def _is_private_object(info: os.stat_result) -> bool:
@@ -677,13 +775,13 @@ def _open_private_temporary(parent: int, name: str) -> tuple[str, int]:
             )
         except FileExistsError:
             continue
-    raise ValueError
+    raise RetainedObjectValidationError
 
 
 def _private_object_identity(fd: int) -> tuple[int, ...]:
     info = os.fstat(fd)
     if not _is_private_object(info):
-        raise ValueError
+        raise RetainedObjectValidationError
     return (
         info.st_dev,
         info.st_ino,
@@ -743,7 +841,7 @@ def _quarantine_then_remove_exact(
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent,
         )
-        try:
+        with _close_descriptor_preserving_primary(directory):
             directory_info = os.fstat(directory)
             if (
                 directory_info.st_uid != os.geteuid()
@@ -751,7 +849,7 @@ def _quarantine_then_remove_exact(
                 or os.listdir(directory)
                 or not _same_entry(parent, name, identity)
             ):
-                raise ValueError
+                raise RetainedObjectValidationError
             _rename_noreplace(
                 parent,
                 name,
@@ -762,15 +860,13 @@ def _quarantine_then_remove_exact(
                 os.stat("entry", dir_fd=directory, follow_symlinks=False)
             )
             # A rename changes ctime on Darwin; all other identity fields stay
-            # exact.  A substituted source is retained in quarantine.
+            # exact. A substituted source is retained in quarantine.
             if moved[:7] + moved[8:] != identity[:7] + identity[8:]:
-                raise ValueError
+                raise RetainedObjectValidationError
             os.fsync(directory)
-        finally:
-            os.close(directory)
         os.fsync(parent)
         return
-    raise ValueError
+    raise RetainedObjectValidationError
 
 
 def _rename_noreplace(
@@ -809,10 +905,8 @@ def _verify_published_object(
         os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
         dir_fd=parent,
     )
-    try:
+    with _close_descriptor_preserving_primary(fd):
         _verify_open_object(operation, parent, name, fd, payload)
-    finally:
-        os.close(fd)
 
 
 def _verify_open_object(
@@ -824,9 +918,9 @@ def _verify_open_object(
 ) -> None:
     identity = _private_object_identity(fd)
     if os.fstat(fd).st_nlink != 1:
-        raise ValueError
+        raise RetainedObjectValidationError
     if not _same_entry(parent, name, identity):
-        raise ValueError
+        raise RetainedObjectValidationError
     data = _read_fd(fd, len(payload))
     if (
         len(data) != len(payload)
@@ -834,7 +928,7 @@ def _verify_open_object(
         or data != payload
         or not _same_entry(parent, name, identity)
     ):
-        raise ValueError
+        raise RetainedObjectValidationError
     _ensure_private_operation(operation)
     os.fsync(parent)
     _ensure_private_operation(operation)
@@ -849,28 +943,26 @@ def _read_bounded(
         os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
         dir_fd=parent,
     )
-    try:
+    with _close_descriptor_preserving_primary(fd):
         identity = _private_object_identity(fd)
         if os.fstat(fd).st_nlink != 1:
-            raise ValueError
+            raise RetainedObjectValidationError
         if not _same_entry(parent, name, identity):
-            raise ValueError
+            raise RetainedObjectValidationError
         data = _read_fd(fd, maximum)
         if not _same_entry(parent, name, identity):
-            raise ValueError
+            raise RetainedObjectValidationError
         _ensure_private_operation(operation)
         return data
-    finally:
-        os.close(fd)
 
 
 def _read_fd(fd: int, maximum: int) -> bytes:
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
-        raise ValueError
+        raise RetainedObjectValidationError
     data = os.read(fd, maximum + 1)
     if len(data) > maximum or os.read(fd, 1):
-        raise ValueError
+        raise RetainedObjectValidationError
     return data
 
 

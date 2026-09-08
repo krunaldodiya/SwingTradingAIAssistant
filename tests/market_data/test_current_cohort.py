@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 import swing_trading_ai_assistant.market_data.current_cohort as cohort_module
+import swing_trading_ai_assistant.market_data.provisional_store as provisional_store
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_cohort import (
@@ -55,6 +56,16 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
 )
+from swing_trading_ai_assistant.market_data.open_month_query import (
+    CurrentAwareQueryServiceV1,
+    OpenMonthOneMinuteQueryServiceV1,
+)
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    publish_provisional_partition_under_lease,
+)
+from swing_trading_ai_assistant.market_data.provisional_metadata import (
+    metadata_from_publication,
+)
 from swing_trading_ai_assistant.market_data.public_contract import (
     CandleFieldV1,
     CoverageStateV1,
@@ -72,6 +83,7 @@ from swing_trading_ai_assistant.market_data.public_query import QueryRequestV1
 from swing_trading_ai_assistant.market_data.runtime_identity_manifest import (
     MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
 )
+from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
@@ -959,6 +971,145 @@ def test_rollover_returns_current_success_when_prior_month_is_unavailable(
     acquired.lease.close()
 
     assert report == current_report
+
+
+@pytest.mark.parametrize("phase", ("current", "prior", "fallback"))
+def test_month_boundary_router_stops_each_unclassified_constituent_before_later_work(
+    tmp_path: Path, phase: str
+) -> None:
+    generic_failure = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.FAILED,
+        PublicFailureV1(
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE, None, None, None, None, ()
+        ),
+        0,
+        None,
+    )
+    current_aware_calls = 0
+    fallback_calls = 0
+
+    class CurrentAwarePort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal current_aware_calls
+            del request, lease
+            current_aware_calls += 1
+            if phase == "current" and current_aware_calls == 1:
+                return generic_failure
+            if phase == "prior" and current_aware_calls == 2:
+                return generic_failure
+            return (
+                _query_report() if current_aware_calls == 1 else _empty_query_report()
+            )
+
+    class FallbackPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal fallback_calls
+            del request, lease
+            fallback_calls += 1
+            return generic_failure
+
+    root = _protected_root(tmp_path)
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease, pytest.raises(RuntimeError):
+        CurrentCohortRetainedQueryPortV1(
+            CurrentAwarePort(), FallbackPort()
+        ).query_under_lease(
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 25),
+                date(2026, 9, 1),
+                "1m",
+                ("ts", "close"),
+                100,
+                root,
+            ),
+            lease,
+        )
+
+    assert current_aware_calls == (1 if phase == "current" else 2)
+    assert fallback_calls == (1 if phase == "fallback" else 0)
+
+
+def test_month_boundary_cohort_stops_at_current_partition_execution_envelope_before_prior_or_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    cutoff = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    monkeypatch.setitem(globals(), "_PUBLISHED_AT", cutoff - timedelta(hours=2))
+    _persist_provisional_month(root, member, date(2026, 8, 31))
+    _persist_provisional_month(root, member, date(2026, 9, 1))
+    policy = CurrentSuppliedCohortAdmissionPolicyV1((member,))
+    reader_calls = 0
+    closed_reads = 0
+    fallback_reads = 0
+
+    def fail_partition_reader(
+        root: object, lease: object, relative_path: object
+    ) -> object:
+        nonlocal reader_calls
+        del root, lease, relative_path
+        reader_calls += 1
+        raise RuntimeError("current partition reader defect")
+
+    class ClosedPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal closed_reads
+            del request, lease
+            closed_reads += 1
+            return _empty_query_report()
+
+    class FallbackPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal fallback_reads
+            del request, lease
+            fallback_reads += 1
+            return _empty_query_report()
+
+    current_aware = CurrentAwareQueryServiceV1(
+        ClosedPort(),
+        OpenMonthOneMinuteQueryServiceV1(policy, clock=_FixedClock(cutoff)),
+        clock=_FixedClock(cutoff),
+    )
+    service = CurrentCohortMarketDataServiceV1(
+        policy,
+        _UniverseResolver((member,)),
+        _Resolver(),
+        CurrentCohortRetainedQueryPortV1(current_aware, FallbackPort()),
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+    request = CurrentCohortMarketDataRequestV1(
+        CurrentSuppliedCohortManifestV1(_SELECTED_AT, (member,)),
+        cutoff,
+        False,
+        _POLICY,
+        _SCHEMA,
+    )
+    monkeypatch.setattr(
+        provisional_store, "read_partition_under_lease", fail_partition_reader
+    )
+
+    with pytest.raises(RuntimeError):
+        service.evaluate(request)
+
+    assert reader_calls == 1
+    assert closed_reads == 0
+    assert fallback_reads == 0
+    assert not (root / ".current-fact-archive-v1").exists()
 
 
 def test_current_service_uses_same_lease_for_identity_query_and_archive(
@@ -2198,6 +2349,78 @@ def _query_report_with_partial() -> QueryReportV1:
             source.payload.request, 3, (month,), (*source.payload.rows, current)
         )
     )
+
+
+def _persist_provisional_month(
+    root: Path, member: CurrentCohortMemberV1, month_end: date
+) -> None:
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        instrument = _Resolver().resolve_under_lease(member, lease).instrument
+        plan = PlannedInstrumentMonth(
+            "upstox",
+            instrument.instrument_key,
+            instrument.security_id,
+            instrument.symbol,
+            instrument.exchange,
+            instrument.segment,
+            instrument.instrument_type,
+            "1m",
+            month_end.year,
+            month_end.month,
+            date(month_end.year, month_end.month, 1),
+            month_end,
+        )
+        timestamp = datetime(
+            month_end.year, month_end.month, month_end.day, 3, 45, tzinfo=UTC
+        )
+        row = CanonicalCandle(
+            provider="upstox",
+            instrument_key=instrument.instrument_key,
+            security_id=instrument.security_id,
+            symbol=instrument.symbol,
+            exchange=instrument.exchange,
+            segment=instrument.segment,
+            instrument_type=instrument.instrument_type,
+            underlying_id=None,
+            expiry=None,
+            strike=None,
+            option_type=None,
+            interval="1m",
+            ts=timestamp,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=10,
+            oi=None,
+            ingested_at=timestamp + timedelta(minutes=15),
+            source_version="upstox-intraday-v3",
+            adjustment_state="raw",
+        )
+        published = publish_provisional_partition_under_lease(
+            root, lease, plan, timestamp, _DIGEST, (row,)
+        )
+        metadata = metadata_from_publication(
+            plan=plan,
+            schedule_digest_sha256=_DIGEST,
+            cutoff=timestamp,
+            session_complete=month_end != date(2026, 9, 1),
+            actual_from_ts=timestamp,
+            actual_to_ts=timestamp,
+            row_count=1,
+            checksum_sha256=published.checksum_sha256,
+            byte_size=published.byte_size,
+            relative_path=published.canonical_path,
+            instrument_snapshot_digest_sha256="b" * 64,
+            instrument_snapshot_retrieved_at=timestamp,
+            published_at=timestamp + timedelta(minutes=15),
+            historical_attempt_count=1,
+            intraday_attempt_count=1,
+        )
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            catalog.save_provisional_partition(metadata)
 
 
 def _report(payload: QueryPayloadV1) -> QueryReportV1:

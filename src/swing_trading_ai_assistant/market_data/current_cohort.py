@@ -807,14 +807,30 @@ class CurrentCohortRetainedQueryPortV1:
         current_request = replace(request, from_date=month_start)
         prior_request = replace(request, to_date=month_start - timedelta(days=1))
         current_report = self.current_aware.query_under_lease(current_request, lease)
+        _raise_if_unclassified_query_failure(current_report)
         prior_report = self.current_aware.query_under_lease(prior_request, lease)
+        _raise_if_unclassified_query_failure(prior_report)
         if _successful_minute_payload(prior_report) is None:
             prior_report = self.prior_provisional.query_under_lease(
                 prior_request, lease
             )
+            _raise_if_unclassified_query_failure(prior_report)
         return _merge_current_cohort_query_reports(
             request, prior_report, current_report
         )
+
+
+def _is_unclassified_query_failure(report: QueryReportV1) -> bool:
+    return (
+        report.status is PublicCommandStatusV1.FAILED
+        and report.failure is not None
+        and report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    )
+
+
+def _raise_if_unclassified_query_failure(report: QueryReportV1) -> None:
+    if _is_unclassified_query_failure(report):
+        raise _UnclassifiedQueryExecutionFailure
 
 
 def _query_payload(report: object) -> QueryPayloadV1 | None:
@@ -1784,11 +1800,7 @@ def _query_failure_reason(report: QueryReportV1) -> CurrentCohortReasonV1:
         and report.failure.code is PublicFailureCodeV1.QUERY_BOUNDS_EXCEEDED
     ):
         return CurrentCohortReasonV1.REQUEST_BOUND_EXCEEDED
-    if (
-        report.status is PublicCommandStatusV1.FAILED
-        and report.failure is not None
-        and report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
-    ):
+    if _is_unclassified_query_failure(report):
         raise _UnclassifiedQueryExecutionFailure
     if report.status in {
         PublicCommandStatusV1.UNAVAILABLE,

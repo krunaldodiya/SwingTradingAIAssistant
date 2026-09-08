@@ -3,9 +3,9 @@
 from typing import Final
 
 HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/catalog.py": "b14a46034146439c18949279a7636704749a9667a2d06753ee259b7e34859cd2",
+    "src/swing_trading_ai_assistant/market_data/catalog.py": "56f1a51b898d44d72cee86ad71b1d30e30f5d493fdc9dd139f0c07ae484ab09b",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
-    "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3bc35a624ebff3b238b31bb2619dde8b2115b7b55277b3f916355642629039bf",
+    "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "7875e15f8bd7a303f51584a38b18952a4026dc1fde8193cae085e8677cec961e",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "03e2674ae8e931d1d78c37ecb51903a2006338a5ff940af0ad352a0306859071",
     "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "12ed5359c2b29d4cc97eb3add1121e4044e32111363426d1fb0593d58e9ae662",
     "src/swing_trading_ai_assistant/market_data/instruments.py": "88da37f7a12c1e7e8a3dfa44c2755e12581f986886728b6addce91e851123029",

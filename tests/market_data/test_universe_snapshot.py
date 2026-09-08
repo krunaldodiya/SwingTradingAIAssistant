@@ -14,7 +14,13 @@ import swing_trading_ai_assistant.market_data.universe_snapshot as universe_modu
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogConflictError,
     CatalogPersistenceError,
+    CatalogSchemaError,
     DuckDBCatalog,
+)
+from swing_trading_ai_assistant.market_data.cli import main
+from swing_trading_ai_assistant.market_data.current_cohort import (
+    CurrentCohortMemberV1,
+    CurrentSuppliedCohortManifestV1,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.market_data.universe_snapshot import (
@@ -1113,7 +1119,7 @@ def test_catalog_universe_read_failures_are_typed(
         with pytest.raises(CatalogPersistenceError):
             catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(CatalogSchemaError):
         catalog_module._universe_metadata_from_row((1,))
 
 
@@ -1142,3 +1148,118 @@ def test_resolve_rejects_same_inode_mutation_after_valid_bounded_read(
                     as_of=date(2024, 6, 1),
                     knowledge_cutoff=datetime(2024, 1, 1, tzinfo=UTC),
                 )
+
+
+@pytest.mark.parametrize("fault_type", (TypeError, ValueError))
+def test_canonical_decoder_preserves_unexpected_helper_fault_identity(
+    monkeypatch: pytest.MonkeyPatch, fault_type: type[Exception]
+) -> None:
+    payload = _snapshot().canonical_json_bytes()
+    error = fault_type("unexpected decoder helper fault")
+    reached = False
+
+    def fail_member(_value: object) -> Nifty50ConstituentV1:
+        nonlocal reached
+        reached = True
+        raise error
+
+    monkeypatch.setattr(universe_module, "_parse_member", fail_member)
+
+    with pytest.raises(fault_type) as raised:
+        Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload)
+
+    assert reached
+    assert raised.value is error
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_resolve_preserves_unexpected_retained_read_fault_identity(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, fault_type: type[BaseException]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease, DuckDBCatalog(tmp_path, lease=acquired.lease) as catalog:
+        store = Nifty50UniverseStoreV1(tmp_path, acquired.lease, catalog)
+        store.retain(_snapshot())
+        error = fault_type("unexpected retained read fault")
+        reached = False
+
+        def fail_read(_descriptor: int, _maximum: int) -> bytes:
+            nonlocal reached
+            reached = True
+            raise error
+
+        monkeypatch.setattr(universe_module, "_read_fd", fail_read)
+
+        with pytest.raises(fault_type) as raised:
+            store.resolve(
+                as_of=date(2024, 6, 1),
+                knowledge_cutoff=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    assert reached
+    assert raised.value is error
+
+
+def test_default_cohort_cli_propagates_retained_universe_read_fault_without_archive(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "retained"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    snapshot = _snapshot()
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        Nifty50UniverseStoreV1(root, acquired.lease, catalog).retain(snapshot)
+
+    member = snapshot.constituents[0]
+    cohort_file = tmp_path / "cohort.json"
+    manifest = CurrentSuppliedCohortManifestV1(
+        datetime(2024, 1, 1, tzinfo=UTC),
+        (CurrentCohortMemberV1(member.isin, member.symbol),),
+    )
+    cohort_file.write_bytes(
+        json.dumps(
+            {
+                "contract_version": manifest.contract_version,
+                "members": [{"isin": member.isin, "symbol": member.symbol}],
+                "selected_at": "2024-01-01T00:00:00.000000Z",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    error = RuntimeError("unexpected universe read defect")
+    reached = False
+
+    def fail_read(_descriptor: int, _maximum: int) -> bytes:
+        nonlocal reached
+        reached = True
+        raise error
+
+    monkeypatch.setattr(universe_module, "_read_fd", fail_read)
+
+    exit_code = main(
+        [
+            "cohort-current",
+            "--cohort-file",
+            str(cohort_file),
+            "--storage-root",
+            str(root),
+            "--cutoff",
+            "2024-06-01T00:00:00.000000Z",
+            "--output",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()

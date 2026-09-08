@@ -269,7 +269,174 @@ def test_cleanup_failure_preserves_primary_with_sanitized_note(
     assert not list(tmp_path.rglob("bars.parquet"))
 
 
-@pytest.mark.parametrize("failure", ["fchmod", "fstat"])
+def test_unknown_serializer_fault_preserves_identity_without_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fault = TypeError("serializer fault")
+    monkeypatch.setattr(
+        publication,
+        "write_candles_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(fault),
+    )
+
+    with pytest.raises(TypeError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is fault
+    assert not list(tmp_path.rglob("bars.parquet"))
+    assert not list(tmp_path.rglob(".publish-*.tmp"))
+
+
+def test_unknown_reader_fault_preserves_primary_across_cleanup_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fault = AssertionError("reader fault")
+    cleanup_calls: list[str] = []
+    original_unlink = publication.os.unlink
+    monkeypatch.setattr(
+        publication,
+        "iter_candles_from_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(fault),
+    )
+
+    def fail_temp_unlink(name: str, *args: object, **kwargs: object) -> None:
+        if name.startswith(".publish-"):
+            cleanup_calls.append(name)
+            raise RuntimeError("secondary cleanup fault")
+        original_unlink(name, *args, **kwargs)
+
+    monkeypatch.setattr(publication.os, "unlink", fail_temp_unlink)
+
+    with pytest.raises(AssertionError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is fault
+    assert len(cleanup_calls) == 1
+    assert not list(tmp_path.rglob("bars.parquet"))
+    assert len(list(tmp_path.rglob(".publish-*.tmp"))) == 1
+
+
+def test_standalone_unknown_temp_cleanup_fault_preserves_identity_after_visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fault = RuntimeError("temp cleanup fault")
+    unlink_calls = 0
+    original_unlink = publication.os.unlink
+
+    def fail_first_temp_unlink(name: str, *args: object, **kwargs: object) -> None:
+        nonlocal unlink_calls
+        if name.startswith(".publish-"):
+            unlink_calls += 1
+            if unlink_calls == 1:
+                raise fault
+        original_unlink(name, *args, **kwargs)
+
+    monkeypatch.setattr(publication.os, "unlink", fail_first_temp_unlink)
+
+    with pytest.raises(RuntimeError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    assert raised.value is fault
+    assert unlink_calls == 2
+    assert list(tmp_path.rglob("bars.parquet"))
+    assert not list(tmp_path.rglob(".publish-*.tmp"))
+
+
+def test_standalone_final_cleanup_fault_still_closes_all_publication_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failure = TypeError("final descriptor cleanup defect")
+    watched: set[int] = set()
+    closed: set[int] = set()
+    original_finish = publication._finish_publication
+    original_close = publication.os.close
+
+    def finish(result, primary, visible, parent_fd, root_fd):
+        watched.update(fd for fd in (parent_fd, root_fd) if fd is not None)
+        return original_finish(result, primary, visible, parent_fd, root_fd)
+
+    def close(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor in watched:
+            closed.add(descriptor)
+            if len(closed) == 1:
+                raise failure
+
+    monkeypatch.setattr(publication, "_finish_publication", finish)
+    monkeypatch.setattr(publication.os, "close", close)
+    try:
+        with pytest.raises(TypeError) as raised:
+            publish_partition(tmp_path, _plan(), [_candle()])
+        assert raised.value is failure
+        assert watched and closed == watched
+        assert list(tmp_path.rglob("bars.parquet"))
+    finally:
+        for descriptor in watched - closed:
+            original_close(descriptor)
+
+
+def test_final_cleanup_fault_preserves_active_primary_and_closes_all_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = PartitionWriteError("partition write failed")
+    cleanup_fault = TypeError("final descriptor cleanup defect")
+    watched: set[int] = set()
+    closed: set[int] = set()
+    original_finish = publication._finish_publication
+    original_close = publication.os.close
+
+    def finish(result, failure, visible, parent_fd, root_fd):
+        watched.update(fd for fd in (parent_fd, root_fd) if fd is not None)
+        return original_finish(result, failure, visible, parent_fd, root_fd)
+
+    def close(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor in watched:
+            closed.add(descriptor)
+            if len(closed) == 1:
+                raise cleanup_fault
+
+    monkeypatch.setattr(
+        publication, "_write_temp", lambda *_: (_ for _ in ()).throw(primary)
+    )
+    monkeypatch.setattr(publication, "_finish_publication", finish)
+    monkeypatch.setattr(publication.os, "close", close)
+    try:
+        with pytest.raises(PartitionWriteError) as raised:
+            publish_partition(tmp_path, _plan(), [_candle()])
+        assert raised.value is primary
+        assert watched and closed == watched
+        assert not list(tmp_path.rglob("bars.parquet"))
+    finally:
+        for descriptor in watched - closed:
+            original_close(descriptor)
+
+
+def test_temp_collision_bound_preserves_existing_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+    token = "0" * 32
+    existing = tmp_path / f".publish-{token}.tmp"
+    existing.write_bytes(b"existing publication")
+    parent_fd = os.open(tmp_path, publication._DIRECTORY_FLAGS)
+
+    def fixed_token(_size: int) -> str:
+        nonlocal attempts
+        attempts += 1
+        return token
+
+    monkeypatch.setattr(publication.secrets, "token_hex", fixed_token)
+    try:
+        with pytest.raises(PartitionWriteError):
+            publication._create_temp(parent_fd)
+        assert attempts == 32
+        assert existing.read_bytes() == b"existing publication"
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize("failure", ["fchmod", "fstat", "unsafe_mode"])
 def test_create_temp_post_create_failures_close_and_remove_the_exact_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -290,6 +457,8 @@ def test_create_temp_post_create_failures_close_and_remove_the_exact_name(
                 "fchmod",
                 lambda *_: (_ for _ in ()).throw(OSError("fchmod failed")),
             )
+        elif failure == "unsafe_mode":
+            monkeypatch.setattr(publication.stat, "S_IMODE", lambda _mode: 0o644)
         else:
             monkeypatch.setattr(
                 publication.os,

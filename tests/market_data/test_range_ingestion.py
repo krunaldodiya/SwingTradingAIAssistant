@@ -7,8 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.partition_publication as publication_module
 import swing_trading_ai_assistant.market_data.range_ingestion as ingestion_module
-from swing_trading_ai_assistant.market_data.catalog import CatalogPersistenceError
+import swing_trading_ai_assistant.market_data.validation as validation_module
+from swing_trading_ai_assistant.market_data.catalog import (
+    CatalogPersistenceError,
+    DuckDBCatalog,
+)
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationToken,
     HistoricalFetchCode,
@@ -1395,6 +1400,102 @@ def test_real_lifecycle_catalog_defect_escapes_before_later_fetch(
     assert raised.value is failure
     assert created == [date(2026, 1, 1)]
     assert fetches == []
+
+
+@pytest.mark.parametrize("stage", ("session", "schedule", "publisher"))
+def test_real_lifecycle_unknown_fault_escapes_before_later_month_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    failure = AssertionError(f"private-{stage}-implementation-fault")
+    sessions = (
+        ScheduleSession(
+            date(2026, 1, 2),
+            datetime(2026, 1, 2, 3, 45, tzinfo=UTC),
+            datetime(2026, 1, 2, 3, 46, tzinfo=UTC),
+            "regular",
+        ),
+        ScheduleSession(
+            date(2026, 2, 2),
+            datetime(2026, 2, 2, 3, 45, tzinfo=UTC),
+            datetime(2026, 2, 2, 3, 46, tzinfo=UTC),
+            "regular",
+        ),
+    )
+    schedule = ExpectedSessionSchedule(
+        2,
+        "nse",
+        "2026-Q1",
+        datetime(2026, 3, 1, tzinfo=UTC),
+        "Asia/Kolkata",
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        sessions,
+        _closures(date(2026, 1, 1), date(2026, 2, 28), sessions),
+    )
+    requests: list[date] = []
+
+    def fetch(request: object) -> HistoricalResponse:
+        requests.append(request.from_date)  # type: ignore[union-attr]
+        if stage == "session":
+            raise failure
+        if request.from_date != date(2026, 1, 1):  # type: ignore[union-attr]
+            raise AssertionError("later month request must not occur")
+        return HistoricalResponse(
+            200,
+            [["2026-01-02T03:45:00+00:00", 1, 1, 1, 1, 1, None]],
+        )
+
+    if stage == "schedule":
+        monkeypatch.setattr(
+            validation_module,
+            "canonical_schedule_bytes",
+            lambda _schedule: (_ for _ in ()).throw(failure),
+        )
+    elif stage == "publisher":
+        monkeypatch.setattr(
+            publication_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        schedule,
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    def catalog_factory(root: Path) -> DuckDBCatalog:
+        return DuckDBCatalog(root)
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=lambda: SimpleNamespace(fetch=fetch)),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=catalog_factory,
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(schedule),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert requests == [date(2026, 1, 1)]
+    assert list(tmp_path.rglob("bars.parquet")) == []
+    plans = plan_upstox_equity_months(
+        _instrument(), date(2026, 1, 1), date(2026, 2, 28), "1m"
+    )
+    with DuckDBCatalog(tmp_path) as catalog:
+        first = catalog.get_manifest(plans[0])
+        assert first is not None
+        assert first.state is ManifestState.IN_PROGRESS
+        assert catalog.get_manifest(plans[1]) is None
 
 
 def test_first_local_fatal_stops_observation_and_marks_later_plans_not_attempted(

@@ -40,6 +40,7 @@ from swing_trading_ai_assistant.market_data.partition_ingestion import (
 )
 from swing_trading_ai_assistant.market_data.partition_publication import (
     PartitionPublicationError,
+    PartitionWriteError,
     PublicationOutcome,
     PublishedPartitionEvidence,
 )
@@ -493,16 +494,14 @@ def test_fresh_validation_failure_uses_validation_failed_not_invalidation_catego
     assert publisher.calls == []
 
 
-def test_publication_failure_is_terminal_without_a_second_publication_or_fetch() -> (
-    None
-):
+def test_trusted_publication_failure_is_terminal_without_a_second_attempt() -> None:
     fetcher = _Fetcher(_fetched(_raw_response()))
-    publisher = _Publisher(RuntimeError("private publication detail"))
+    publisher = _Publisher(PartitionWriteError("private publication detail"))
     catalog = _Catalog()
 
     result = _executor(fetcher, catalog, publisher=publisher).execute(_plan())
 
-    assert result.failure_category is FailureCategory.PUBLICATION_FAILED
+    assert result.failure_category is FailureCategory.WRITE_FAILED
     assert result.final_manifest is not None
     assert result.final_manifest.state is ManifestState.FAILED
     assert len(fetcher.calls) == 1
@@ -510,22 +509,20 @@ def test_publication_failure_is_terminal_without_a_second_publication_or_fetch()
     assert "private" not in result.error_code
 
 
-def test_publication_exception_without_trusted_metadata_uses_safe_category() -> None:
-    class HostilePublisherError(RuntimeError):
-        @property
-        def failure_category(self) -> FailureCategory:
-            raise RuntimeError("publisher metadata secret")
-
+def test_untyped_publisher_fault_preserves_identity_without_terminal_evidence() -> None:
+    failure = RuntimeError("publisher secret")
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = _Catalog()
-    publisher = _Publisher(HostilePublisherError("publisher secret"))
+    publisher = _Publisher(failure)
 
-    result = _executor(fetcher, catalog, publisher=publisher).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(fetcher, catalog, publisher=publisher).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.FAILED
-    assert result.failure_category is FailureCategory.PUBLICATION_FAILED
-    assert result.error_code == "PUBLICATION_FAILED"
-    assert "secret" not in result.error_code
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
+    assert len(fetcher.calls) == 1
+    assert len(publisher.calls) == 1
 
 
 def test_hostile_partition_publication_subclass_cannot_expose_metadata() -> None:
@@ -777,38 +774,42 @@ def test_publication_evidence_mismatch_never_becomes_verified(field: str) -> Non
 
     assert result.outcome is PartitionLifecycleOutcome.FAILED
     assert result.failure_category is FailureCategory.PUBLICATION_FAILED
+    assert result.error_code == "PUBLICATION_FAILED"
     assert result.final_manifest is not None
     assert result.final_manifest.state is ManifestState.FAILED
+    assert result.final_manifest.failure_category is FailureCategory.PUBLICATION_FAILED
     assert len(publisher.calls) == 1
     assert len(fetcher.calls) == 1
 
 
-def test_validation_exception_cancellation_wins_and_is_sanitized(
+def test_unknown_validation_fault_is_not_converted_to_terminal_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("validation secret")
 
     def cancel_and_fail(*_: object, **__: object) -> object:
         cancellation.cancel()
-        raise RuntimeError("validation secret")
+        raise failure
 
     monkeypatch.setattr(EquityMonthValidationPolicy, "validate", cancel_and_fail)
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = _Catalog()
 
-    result = _executor(fetcher, catalog, cancellation=cancellation).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(fetcher, catalog, cancellation=cancellation).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.error_code == "CANCELLED"
-    assert result.final_manifest is not None
-    assert result.final_manifest.failure_category is FailureCategory.INTERRUPTED
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
 
 
 def test_wrong_validation_return_is_a_fresh_validation_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(EquityMonthValidationPolicy, "validate", lambda *_: object())
+    monkeypatch.setattr(
+        EquityMonthValidationPolicy, "validate", lambda *_args, **_kwargs: object()
+    )
     result = _executor(_Fetcher(_fetched(_raw_response())), _Catalog()).execute(_plan())
 
     assert result.outcome is PartitionLifecycleOutcome.FAILED
@@ -816,30 +817,34 @@ def test_wrong_validation_return_is_a_fresh_validation_failure(
     assert result.error_code == "VALIDATION_ERROR"
 
 
-def test_publisher_exception_cancellation_wins_and_is_sanitized() -> None:
+def test_unknown_publisher_fault_is_not_converted_when_cancellation_is_signalled() -> (
+    None
+):
     cancellation = CancellationToken()
+    failure = RuntimeError("publisher secret")
 
     class CancellingPublisher(_Publisher):
         def __call__(
             self, root: Path, plan: PlannedInstrumentMonth, candles: object
         ) -> object:
             cancellation.cancel()
-            raise RuntimeError("publisher secret")
+            raise failure
 
     fetcher = _Fetcher(_fetched(_raw_response()))
     publisher = CancellingPublisher(_published())
     catalog = _Catalog()
 
-    result = _executor(
-        fetcher,
-        catalog,
-        publisher=publisher,
-        cancellation=cancellation,
-    ).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(
+            fetcher,
+            catalog,
+            publisher=publisher,
+            cancellation=cancellation,
+        ).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.error_code == "CANCELLED"
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
 
 
 def test_catalog_get_failure_is_typed_bounded_and_does_not_leak_secret() -> None:

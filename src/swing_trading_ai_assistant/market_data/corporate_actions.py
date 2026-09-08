@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -15,8 +17,13 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 
 from .http import HttpTransport
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 from .universe_snapshot import (
+    RetainedObjectValidationError,
     assert_private_storage_operation,
     open_private_storage_directory,
     publish_exact_storage_object,
@@ -56,6 +63,10 @@ class CorporateActionStaleError(CorporateActionUnavailableError):
 
 class CorporateActionCorruptError(CorporateActionError):
     """Provider or retained evidence violates the frozen contract."""
+
+
+class _CorporateActionSnapshotValidationError(ValueError):
+    """Expected malformed retained-snapshot data."""
 
 
 class CorporateActionAmbiguousError(CorporateActionError):
@@ -99,7 +110,9 @@ class CorporateActionEventV1:
             or self.announced_at.astimezone(_IST).date() > self.effective_date
             or (self.record_date is not None and self.record_date < self.effective_date)
         ):
-            raise ValueError("invalid corporate action event")
+            raise _CorporateActionSnapshotValidationError(
+                "invalid corporate action event"
+            )
         object.__setattr__(self, "announced_at", self.announced_at.astimezone(UTC))
         dividend = self.kind is CorporateActionKindV1.DIVIDEND
         if dividend:
@@ -110,7 +123,9 @@ class CorporateActionEventV1:
                 or self.ratio_numerator is not None
                 or self.ratio_denominator is not None
             ):
-                raise ValueError("invalid corporate action event")
+                raise _CorporateActionSnapshotValidationError(
+                    "invalid corporate action event"
+                )
         elif (
             self.cash_amount_inr is not None
             or type(self.ratio_numerator) is not int
@@ -118,9 +133,13 @@ class CorporateActionEventV1:
             or not 1 <= self.ratio_numerator <= 999_999
             or not 1 <= self.ratio_denominator <= 999_999
         ):
-            raise ValueError("invalid corporate action event")
+            raise _CorporateActionSnapshotValidationError(
+                "invalid corporate action event"
+            )
         if self.event_digest_sha256 != _event_digest(self):
-            raise ValueError("invalid corporate action event")
+            raise _CorporateActionSnapshotValidationError(
+                "invalid corporate action event"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +168,9 @@ class CorporateActionSnapshotV1:
             or len({event.event_digest_sha256 for event in events}) != len(events)
             or any(event.announced_at > self.retrieved_at for event in events)
         ):
-            raise ValueError("invalid corporate action snapshot")
+            raise _CorporateActionSnapshotValidationError(
+                "invalid corporate action snapshot"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
     def canonical_json_bytes(self) -> bytes:
@@ -169,22 +190,32 @@ class CorporateActionSnapshotV1:
             sort_keys=True,
         ).encode("utf-8")
         if not 1 <= len(payload) <= MAX_CORPORATE_ACTION_RESPONSE_BYTES_V1:
-            raise ValueError("corporate action snapshot too large")
+            raise _CorporateActionSnapshotValidationError(
+                "corporate action snapshot too large"
+            )
         return payload
 
     @classmethod
     def from_canonical_json_bytes(cls, payload: bytes) -> CorporateActionSnapshotV1:
+        if (
+            type(payload) is not bytes
+            or not 1 <= len(payload) <= MAX_CORPORATE_ACTION_RESPONSE_BYTES_V1
+        ):
+            raise CorporateActionCorruptError("corporate action snapshot corrupt")
         try:
-            if (
-                type(payload) is not bytes
-                or not 1 <= len(payload) <= MAX_CORPORATE_ACTION_RESPONSE_BYTES_V1
-            ):
-                raise ValueError
-            value = json.loads(
-                payload.decode("utf-8"),
-                object_pairs_hook=_unique_object,
-                parse_constant=_reject_constant,
-            )
+            try:
+                value = json.loads(
+                    payload.decode("utf-8"),
+                    object_pairs_hook=_unique_object,
+                    parse_constant=_reject_constant,
+                    parse_int=_parse_json_integer,
+                )
+            except (
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                RecursionError,
+            ) as error:
+                raise _CorporateActionSnapshotValidationError from error
             _assert_depth(value)
             if type(value) is not dict or tuple(cast(dict[str, object], value)) != (
                 "events",
@@ -194,11 +225,11 @@ class CorporateActionSnapshotV1:
                 "source",
                 "source_release",
             ):
-                raise ValueError
+                raise _CorporateActionSnapshotValidationError
             raw = cast(dict[str, object], value)
             raw_events = raw["events"]
             if type(raw_events) is not list:
-                raise ValueError
+                raise _CorporateActionSnapshotValidationError
             typed_events = cast(list[object], raw_events)
             snapshot = cls(
                 cast(int, raw["schema_version"]),
@@ -209,9 +240,9 @@ class CorporateActionSnapshotV1:
                 tuple(_parse_event(event) for event in typed_events),
             )
             if snapshot.canonical_json_bytes() != payload:
-                raise ValueError
+                raise _CorporateActionSnapshotValidationError
             return snapshot
-        except Exception:
+        except _CorporateActionSnapshotValidationError:
             raise CorporateActionCorruptError(
                 "corporate action snapshot corrupt"
             ) from None
@@ -246,7 +277,9 @@ class CorporateActionSnapshotMetadataV1:
             or self.relative_object_path
             != f"corporate_action_snapshots/isin={self.isin}/sha256={self.snapshot_sha256}/snapshot.json"
         ):
-            raise ValueError("invalid corporate action snapshot metadata")
+            raise _CorporateActionSnapshotValidationError(
+                "invalid corporate action snapshot metadata"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
 
@@ -350,11 +383,7 @@ class CorporateActionSnapshotStoreV1:
         self, snapshot: CorporateActionSnapshotV1
     ) -> CorporateActionSnapshotMetadataV1:
         try:
-            if type(snapshot) is not CorporateActionSnapshotV1:
-                raise ValueError
-            snapshot = replace(
-                snapshot, events=tuple(replace(event) for event in snapshot.events)
-            )
+            snapshot = _rebuild_snapshot(snapshot)
             payload = snapshot.canonical_json_bytes()
             digest = hashlib.sha256(payload).hexdigest()
             metadata = CorporateActionSnapshotMetadataV1(
@@ -370,8 +399,9 @@ class CorporateActionSnapshotStoreV1:
             )
             with self._lease.root_operation(self._root) as operation:
                 object_fd = _open_action_object(operation, snapshot.isin, digest, True)
+                active_error: BaseException | None = None
                 try:
-                    publish_exact_storage_object(
+                    _publish_action_object(
                         operation, object_fd, "snapshot.json", payload
                     )
 
@@ -386,21 +416,33 @@ class CorporateActionSnapshotStoreV1:
                     )
                     try:
                         validator()
-                    except Exception:
+                    except BaseException:
                         if inserted:
-                            self._catalog.remove_corporate_action_snapshot_exact(
-                                metadata
-                            )
+                            with suppress(BaseException):
+                                self._catalog.remove_corporate_action_snapshot_exact(
+                                    metadata
+                                )
                         raise
+                except BaseException as error:
+                    active_error = error
+                    raise
                 finally:
-                    os.close(object_fd)
+                    _close_action_object(object_fd, active_error)
             return metadata
-        except CorporateActionError:
-            raise
-        except Exception:
+        except (
+            _CorporateActionSnapshotValidationError,
+            OSError,
+            StorageRootLeaseError,
+        ):
             raise CorporateActionCorruptError(
                 "corporate action snapshot corrupt"
             ) from None
+        except Exception as error:
+            if _is_catalog_error(error):
+                raise CorporateActionCorruptError(
+                    "corporate action snapshot corrupt"
+                ) from None
+            raise
 
     def resolve(
         self, *, isin: str, knowledge_cutoff: datetime
@@ -426,15 +468,19 @@ class CorporateActionSnapshotStoreV1:
                 object_fd = _open_action_object(
                     operation, metadata.isin, metadata.snapshot_sha256, False
                 )
+                active_error: BaseException | None = None
                 try:
-                    payload = read_bounded_storage_object(
+                    payload = _read_action_object(
                         operation, object_fd, "snapshot.json", metadata.byte_count
                     )
                     _validate_action_chain(
                         operation, object_fd, metadata.isin, metadata.snapshot_sha256
                     )
+                except BaseException as error:
+                    active_error = error
+                    raise
                 finally:
-                    os.close(object_fd)
+                    _close_action_object(object_fd, active_error)
                 snapshot = CorporateActionSnapshotV1.from_canonical_json_bytes(payload)
                 if (
                     len(payload) != metadata.byte_count
@@ -442,15 +488,23 @@ class CorporateActionSnapshotStoreV1:
                     or _snapshot_metadata(snapshot, metadata.snapshot_sha256)
                     != metadata
                 ):
-                    raise ValueError
+                    raise _CorporateActionSnapshotValidationError
                 operation.ensure_live()
                 return metadata, snapshot
-        except (CorporateActionUnavailableError, CorporateActionAmbiguousError):
-            raise
-        except Exception:
+        except (
+            _CorporateActionSnapshotValidationError,
+            OSError,
+            StorageRootLeaseError,
+        ):
             raise CorporateActionCorruptError(
                 "corporate action snapshot corrupt"
             ) from None
+        except Exception as error:
+            if _is_catalog_error(error):
+                raise CorporateActionCorruptError(
+                    "corporate action snapshot corrupt"
+                ) from None
+            raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -769,15 +823,31 @@ def _parse_event(value: object) -> CorporateActionEventV1:
         "ratio_numerator",
         "record_date",
     ):
-        raise ValueError
+        raise _CorporateActionSnapshotValidationError
     raw = cast(dict[str, object], value)
-    record = raw["record_date"]
+    kind_value = raw["kind"]
+    effective_value = raw["effective_date"]
+    record_value = raw["record_date"]
+    if (
+        type(kind_value) is not str
+        or type(effective_value) is not str
+        or (record_value is not None and type(record_value) is not str)
+    ):
+        raise _CorporateActionSnapshotValidationError
+    try:
+        kind = CorporateActionKindV1(kind_value)
+        effective_date = date.fromisoformat(effective_value)
+        record_date = (
+            date.fromisoformat(record_value) if record_value is not None else None
+        )
+    except ValueError as error:
+        raise _CorporateActionSnapshotValidationError from error
     return CorporateActionEventV1(
         cast(str, raw["event_digest_sha256"]),
-        CorporateActionKindV1(cast(str, raw["kind"])),
+        kind,
         _parse_timestamp(raw["announced_at"]),
-        date.fromisoformat(cast(str, raw["effective_date"])),
-        date.fromisoformat(cast(str, record)) if record is not None else None,
+        effective_date,
+        record_date,
         cast(str | None, raw["cash_amount_inr"]),
         cast(int | None, raw["ratio_numerator"]),
         cast(int | None, raw["ratio_denominator"]),
@@ -836,69 +906,164 @@ def _snapshot_metadata(
     )
 
 
+def _rebuild_snapshot(value: CorporateActionSnapshotV1) -> CorporateActionSnapshotV1:
+    if type(value) is not CorporateActionSnapshotV1 or any(
+        not hasattr(value, name)
+        for name in CorporateActionSnapshotV1.__dataclass_fields__
+    ):
+        raise _CorporateActionSnapshotValidationError
+    events = value.events
+    if (
+        type(events) is not tuple
+        or len(events) > MAX_CORPORATE_ACTION_EVENTS_V1
+        or any(
+            type(event) is not CorporateActionEventV1
+            or any(
+                not hasattr(event, name)
+                for name in CorporateActionEventV1.__dataclass_fields__
+            )
+            for event in events
+        )
+    ):
+        raise _CorporateActionSnapshotValidationError
+    return replace(value, events=tuple(replace(event) for event in events))
+
+
 def _rebuild_metadata(
     value: object,
 ) -> CorporateActionSnapshotMetadataV1:
     if type(value) is not CorporateActionSnapshotMetadataV1:
-        raise ValueError
-    rebuilt = CorporateActionSnapshotMetadataV1(
+        raise _CorporateActionSnapshotValidationError
+    return CorporateActionSnapshotMetadataV1(
         *(
             getattr(value, name)
             for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
         )
     )
-    return rebuilt
+
+
+def _publish_action_object(
+    operation: StorageRootLeaseOperation,
+    object_fd: int,
+    name: str,
+    payload: bytes,
+) -> None:
+    try:
+        publish_exact_storage_object(operation, object_fd, name, payload)
+    except RetainedObjectValidationError as error:
+        raise _CorporateActionSnapshotValidationError from error
+
+
+def _read_action_object(
+    operation: StorageRootLeaseOperation, object_fd: int, name: str, maximum: int
+) -> bytes:
+    try:
+        return read_bounded_storage_object(operation, object_fd, name, maximum)
+    except RetainedObjectValidationError as error:
+        raise _CorporateActionSnapshotValidationError from error
 
 
 def _open_action_object(
     operation: StorageRootLeaseOperation, isin: str, digest: str, create: bool
 ) -> int:
-    assert_private_storage_operation(operation)
-    root = open_private_storage_directory(
-        operation, operation.descriptor, "corporate_action_snapshots", create
-    )
+    result: int | None = None
+    active_error: BaseException | None = None
     try:
-        identity = open_private_storage_directory(
-            operation, root, f"isin={isin}", create
-        )
         try:
-            result = open_private_storage_directory(
-                operation, identity, f"sha256={digest}", create
+            assert_private_storage_operation(operation)
+        except RetainedObjectValidationError as error:
+            active_error = _CorporateActionSnapshotValidationError()
+            raise active_error from error
+        try:
+            root = open_private_storage_directory(
+                operation, operation.descriptor, "corporate_action_snapshots", create
             )
+        except RetainedObjectValidationError as error:
+            active_error = _CorporateActionSnapshotValidationError()
+            raise active_error from error
+        try:
+            try:
+                identity = open_private_storage_directory(
+                    operation, root, f"isin={isin}", create
+                )
+            except RetainedObjectValidationError as error:
+                active_error = _CorporateActionSnapshotValidationError()
+                raise active_error from error
+            try:
+                try:
+                    result = open_private_storage_directory(
+                        operation, identity, f"sha256={digest}", create
+                    )
+                except RetainedObjectValidationError as error:
+                    active_error = _CorporateActionSnapshotValidationError()
+                    raise active_error from error
+            except BaseException as error:
+                active_error = error
+                raise
+            finally:
+                _close_action_object(identity, active_error)
+        except BaseException as error:
+            active_error = error
+            raise
         finally:
-            os.close(identity)
+            _close_action_object(root, active_error)
+        _validate_action_chain(operation, result, isin, digest)
+        return result
+    except BaseException as error:
+        active_error = error
+        raise
     finally:
-        os.close(root)
-    _validate_action_chain(operation, result, isin, digest)
-    return result
+        if active_error is not None and result is not None:
+            _close_action_object(result, active_error)
 
 
 def _validate_action_chain(
     operation: StorageRootLeaseOperation, object_fd: int, isin: str, digest: str
 ) -> None:
-    assert_private_storage_operation(operation)
-    root = open_private_storage_directory(
-        operation, operation.descriptor, "corporate_action_snapshots", False
-    )
+    active_error: BaseException | None = None
     try:
-        identity = open_private_storage_directory(
-            operation, root, f"isin={isin}", False
+        assert_private_storage_operation(operation)
+        root = open_private_storage_directory(
+            operation, operation.descriptor, "corporate_action_snapshots", False
         )
         try:
-            reopened = open_private_storage_directory(
-                operation, identity, f"sha256={digest}", False
+            identity = open_private_storage_directory(
+                operation, root, f"isin={isin}", False
             )
             try:
-                held, current = os.fstat(object_fd), os.fstat(reopened)
-                if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
-                    raise ValueError
+                reopened = open_private_storage_directory(
+                    operation, identity, f"sha256={digest}", False
+                )
+                try:
+                    held, current = os.fstat(object_fd), os.fstat(reopened)
+                    if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+                        raise _CorporateActionSnapshotValidationError
+                except BaseException as error:
+                    active_error = error
+                    raise
+                finally:
+                    _close_action_object(reopened, active_error)
+            except BaseException as error:
+                active_error = error
+                raise
             finally:
-                os.close(reopened)
+                _close_action_object(identity, active_error)
+        except BaseException as error:
+            active_error = error
+            raise
         finally:
-            os.close(identity)
-    finally:
-        os.close(root)
-    assert_private_storage_operation(operation)
+            _close_action_object(root, active_error)
+        assert_private_storage_operation(operation)
+    except RetainedObjectValidationError as error:
+        raise _CorporateActionSnapshotValidationError from error
+
+
+def _close_action_object(object_fd: int, active_error: BaseException | None) -> None:
+    try:
+        os.close(object_fd)
+    except BaseException:
+        if active_error is None:
+            raise
 
 
 def _validate_retained(
@@ -909,11 +1074,9 @@ def _validate_retained(
     payload: bytes,
 ) -> None:
     _validate_action_chain(operation, object_fd, isin, digest)
-    observed = read_bounded_storage_object(
-        operation, object_fd, "snapshot.json", len(payload)
-    )
+    observed = _read_action_object(operation, object_fd, "snapshot.json", len(payload))
     if observed != payload or hashlib.sha256(observed).hexdigest() != digest:
-        raise ValueError
+        raise _CorporateActionSnapshotValidationError
     _validate_action_chain(operation, object_fd, isin, digest)
 
 
@@ -970,8 +1133,11 @@ def _timestamp(value: datetime) -> str:
 
 def _parse_timestamp(value: object) -> datetime:
     if type(value) is not str:
-        raise ValueError
-    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+        raise _CorporateActionSnapshotValidationError
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    except ValueError as error:
+        raise _CorporateActionSnapshotValidationError from error
 
 
 def _provider_date(value: object) -> date:
@@ -1012,25 +1178,42 @@ def _decimal_is_zero(value: str) -> bool:
     return all(character in "0." for character in value)
 
 
+def _parse_json_integer(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as error:
+        limit = sys.get_int_max_str_digits()
+        if limit and len(value.lstrip("-")) > limit:
+            raise _CorporateActionSnapshotValidationError from error
+        raise
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError
+            raise _CorporateActionSnapshotValidationError
         result[key] = value
     return result
 
 
 def _reject_constant(_value: str) -> None:
-    raise ValueError
+    raise _CorporateActionSnapshotValidationError
 
 
 def _assert_depth(value: object, depth: int = 0) -> None:
     if depth > MAX_CORPORATE_ACTION_JSON_DEPTH_V1:
-        raise ValueError
+        raise _CorporateActionSnapshotValidationError
     if type(value) is dict:
         for child in cast(dict[str, object], value).values():
             _assert_depth(child, depth + 1)
     elif type(value) is list:
         for child in cast(list[object], value):
             _assert_depth(child, depth + 1)
+
+
+def _is_catalog_error(error: Exception) -> bool:
+    """Defer the catalog dependency because it imports snapshot metadata."""
+    from .catalog import CatalogError  # noqa: PLC0415
+
+    return isinstance(error, CatalogError)

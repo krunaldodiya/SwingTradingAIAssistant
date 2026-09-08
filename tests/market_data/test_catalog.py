@@ -885,6 +885,193 @@ def test_snapshot_catalog_preserves_unknown_query_fault_identity(
     assert raised.value is failure
 
 
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1)),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_corporate_action_snapshots(isin="INE062A01020"),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        duckdb.ParserException,
+        duckdb.BinderException,
+    ),
+)
+def test_retained_catalog_queries_preserve_unknown_execution_fault_identity(
+    tmp_path, monkeypatch, query, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1)),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_corporate_action_snapshots(isin="INE062A01020"),
+    ),
+)
+def test_retained_catalog_queries_classify_operational_duckdb_faults(
+    tmp_path, monkeypatch, query
+) -> None:
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise duckdb.IOException("catalog unavailable")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogPersistenceError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+    ),
+)
+def test_retained_catalog_queries_classify_malformed_rows(
+    tmp_path, monkeypatch, query
+) -> None:
+    class InvalidRows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> InvalidRows:
+            return InvalidRows()
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogSchemaError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    ("query", "decoder"),
+    (
+        (
+            lambda catalog: catalog.list_universe_snapshots(),
+            "_universe_metadata_from_row",
+        ),
+        (
+            lambda catalog: catalog.resolve_universe_snapshots(
+                as_of=date(2024, 6, 1),
+                knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+            ),
+            "_universe_metadata_from_row",
+        ),
+        (
+            lambda catalog: catalog.latest_corporate_action_snapshots(
+                isin="INE062A01020",
+                knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+            ),
+            "_corporate_action_metadata_from_row",
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        duckdb.ParserException,
+        duckdb.BinderException,
+    ),
+)
+def test_retained_catalog_queries_preserve_unknown_decoder_fault_identity(
+    tmp_path, monkeypatch, query, decoder: str, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class Rows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+    class QueryConnection:
+        def __init__(self) -> None:
+            self.query_count = 0
+
+        def execute(self, *_args: object, **_kwargs: object) -> Rows:
+            self.query_count += 1
+            return Rows()
+
+    def fail_decoder(_row: tuple[object, ...]) -> object:
+        raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        query_connection = QueryConnection()
+        monkeypatch.setattr(catalog, "_connection", query_connection)
+        monkeypatch.setattr(catalog_module, decoder, fail_decoder)
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+            assert query_connection.query_count == 1
+        finally:
+            catalog._connection = connection
+
+
 def test_catalog_initialization_preserves_unknown_fault_after_cleanup(
     tmp_path, monkeypatch
 ) -> None:

@@ -44,6 +44,100 @@ def test_raw_initial_replay_is_content_addressed_and_exact_readable(
     )
 
 
+@pytest.mark.parametrize("fault_type", (RuntimeError, TypeError, ValueError))
+def test_exact_read_preserves_unknown_validation_helper_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_type: type[Exception],
+) -> None:
+    published = _publish(tmp_path, _inputs())
+    assert published.revision_sha256 is not None
+    calls = 0
+
+    def fail_schedule_decoder(_: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise fault_type("private-retained-validation-fault")
+
+    monkeypatch.setattr(
+        store_module, "parse_canonical_schedule_bytes", fail_schedule_decoder
+    )
+
+    with pytest.raises(fault_type, match="private-retained-validation-fault"):
+        HistoricalOhlcvRevisionStoreV1(tmp_path).read_exact(published.revision_sha256)
+
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, TypeError, ValueError, Exception),
+)
+def test_exact_read_console_propagates_lower_reader_fault_through_secondary_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[Exception],
+) -> None:
+    published = _publish(tmp_path, _inputs())
+    assert published.revision_sha256 is not None
+    retained_before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    original_read = store_module.os.read
+    original_close = store_module.os.close
+    fault_descriptor: int | None = None
+    cleanup_faulted = False
+
+    def fault_retained_object_read(descriptor: int, maximum: int) -> bytes:
+        nonlocal fault_descriptor
+        if fault_descriptor is None and stat.S_ISREG(os.fstat(descriptor).st_mode):
+            fault_descriptor = descriptor
+            raise fault_type("private-retained-reader-fault")
+        return original_read(descriptor, maximum)
+
+    def fail_secondary_cleanup(descriptor: int) -> None:
+        nonlocal cleanup_faulted
+        if descriptor == fault_descriptor:
+            original_close(descriptor)
+            cleanup_faulted = True
+            raise TypeError("private-secondary-cleanup-fault")
+        original_close(descriptor)
+
+    monkeypatch.setattr(store_module.os, "read", fault_retained_object_read)
+    monkeypatch.setattr(store_module.os, "close", fail_secondary_cleanup)
+
+    assert (
+        cli.main(
+            [
+                "historical-ohlcv-upstox-raw-read",
+                "--storage-root",
+                str(tmp_path),
+                "--revision-sha256",
+                published.revision_sha256,
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+
+    assert fault_descriptor is not None
+    assert cleanup_faulted
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert "private-retained-reader-fault" not in captured.err
+    assert "private-secondary-cleanup-fault" not in captured.err
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == retained_before
+
+
 def test_divergent_second_initial_has_no_publication_effect(tmp_path: Path) -> None:
     first = _publish(tmp_path, _inputs())
     assert first.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS

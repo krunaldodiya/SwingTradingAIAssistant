@@ -14,9 +14,7 @@ import swing_trading_ai_assistant.market_data.catalog as catalog_module
 import swing_trading_ai_assistant.market_data.corporate_actions as action_module
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogConflictError,
-    CatalogPersistenceError,
     CatalogSchemaError,
-    CatalogStorageError,
     DuckDBCatalog,
 )
 from swing_trading_ai_assistant.market_data.corporate_actions import (
@@ -611,26 +609,27 @@ def test_catalog_v5_write_remove_and_row_failure_branches(
                 isin=_ISIN, knowledge_cutoff=_RETRIEVED
             )
 
-        def unexpected_failure(_row):
-            raise RuntimeError("untrusted row failure")
+        failure = RuntimeError("untrusted row failure")
+
+        def unexpected_failure(_row: object) -> None:
+            raise failure
 
         monkeypatch.setattr(
             catalog_module, "_corporate_action_metadata_from_row", unexpected_failure
         )
-        with pytest.raises(CatalogPersistenceError, match="catalog read failed"):
+        with pytest.raises(RuntimeError) as raised:
             catalog.latest_corporate_action_snapshots(
                 isin=_ISIN, knowledge_cutoff=_RETRIEVED
             )
+        assert raised.value is failure
         monkeypatch.setattr(
             catalog_module,
             "_corporate_action_metadata_from_row",
             original_converter,
         )
 
-        with pytest.raises(ValueError):
-            catalog_module._corporate_action_metadata_from_row((1,))
         catalog.close()
-        with pytest.raises(CatalogStorageError):
+        with pytest.raises(catalog_module.CatalogPersistenceError):
             catalog.has_corporate_action_snapshots(isin=_ISIN)
     finally:
         catalog.close()
@@ -1037,19 +1036,132 @@ def test_resolve_rejects_catalog_metadata_that_no_longer_matches_object(
         lease.close()
 
 
+@pytest.mark.parametrize(
+    "error_type", (AssertionError, KeyError, RuntimeError, TypeError, ValueError)
+)
+def test_store_propagates_unknown_lower_catalog_decoder_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    failure = error_type("catalog decoder implementation fault")
+    try:
+        store.retain(_snapshot("Dividend"))
+
+        def fail(_row: object) -> None:
+            raise failure
+
+        monkeypatch.setattr(catalog_module, "_corporate_action_metadata_from_row", fail)
+        with pytest.raises(error_type) as raised:
+            store.resolve(isin=_ISIN, knowledge_cutoff=_RETRIEVED)
+        assert raised.value is failure
+    finally:
+        catalog.close()
+        lease.close()
+
+
+@pytest.mark.parametrize("operation", ("retain", "resolve"))
+def test_store_preserves_unknown_primary_over_object_cleanup_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    primary = TypeError("primary implementation fault")
+    cleanup = RuntimeError("cleanup implementation fault")
+    descriptors: set[int] = set()
+    original_open = action_module._open_action_object
+    original_close = action_module.os.close
+    try:
+        if operation == "resolve":
+            store.retain(_snapshot("Dividend"))
+
+        def open_action(*args: object, **kwargs: object) -> int:
+            descriptor = original_open(*args, **kwargs)
+            descriptors.add(descriptor)
+            return descriptor
+
+        def close_action(descriptor: int) -> None:
+            original_close(descriptor)
+            if descriptor in descriptors:
+                descriptors.remove(descriptor)
+                raise cleanup
+
+        monkeypatch.setattr(action_module, "_open_action_object", open_action)
+        monkeypatch.setattr(action_module.os, "close", close_action)
+        if operation == "retain":
+            monkeypatch.setattr(
+                action_module,
+                "publish_exact_storage_object",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+            )
+
+            def invoke() -> object:
+                return store.retain(_snapshot("Bonus"))
+        else:
+            monkeypatch.setattr(
+                action_module,
+                "read_bounded_storage_object",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+            )
+
+            def invoke() -> object:
+                return store.resolve(isin=_ISIN, knowledge_cutoff=_RETRIEVED)
+
+        with pytest.raises(TypeError) as raised:
+            invoke()
+        assert raised.value is primary
+        assert descriptors == set()
+    finally:
+        catalog.close()
+        lease.close()
+
+
+def test_store_propagates_standalone_unknown_object_cleanup_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    cleanup = RuntimeError("cleanup implementation fault")
+    descriptors: set[int] = set()
+    original_open = action_module._open_action_object
+    original_close = action_module.os.close
+    try:
+        store.retain(_snapshot("Dividend"))
+
+        def open_action(*args: object, **kwargs: object) -> int:
+            descriptor = original_open(*args, **kwargs)
+            descriptors.add(descriptor)
+            return descriptor
+
+        def close_action(descriptor: int) -> None:
+            original_close(descriptor)
+            if descriptor in descriptors:
+                descriptors.remove(descriptor)
+                raise cleanup
+
+        monkeypatch.setattr(action_module, "_open_action_object", open_action)
+        monkeypatch.setattr(action_module.os, "close", close_action)
+        with pytest.raises(RuntimeError) as raised:
+            store.resolve(isin=_ISIN, knowledge_cutoff=_RETRIEVED)
+        assert raised.value is cleanup
+        assert descriptors == set()
+    finally:
+        catalog.close()
+        lease.close()
+
+
 def test_persistence_failure_does_not_leave_catalog_evidence(
     tmp_path, monkeypatch
 ) -> None:
     lease, catalog, store = _leased_store(tmp_path)
     try:
         snapshot = _snapshot("Dividend")
+        failure = RuntimeError("injected catalog failure")
 
         def fail_save(*_args, **_kwargs):
-            raise RuntimeError("injected catalog failure")
+            raise failure
 
         monkeypatch.setattr(catalog, "save_corporate_action_snapshot", fail_save)
-        with pytest.raises(CorporateActionCorruptError):
+        with pytest.raises(RuntimeError) as raised:
             store.retain(snapshot)
+        assert raised.value is failure
         assert catalog.connection.execute(
             "SELECT count(*) FROM corporate_action_snapshots"
         ).fetchone() == (0,)

@@ -1031,11 +1031,9 @@ class DuckDBCatalog:
             rows = self.connection.execute(
                 "SELECT schema_version, universe_id, effective_from, effective_to, membership_source, membership_release, CAST(membership_published_at AS VARCHAR), CAST(membership_retrieved_at AS VARCHAR), sector_source, sector_release, CAST(sector_published_at AS VARCHAR), CAST(sector_retrieved_at AS VARCHAR), snapshot_sha256, byte_count, relative_object_path FROM universe_snapshots ORDER BY effective_from, effective_to, snapshot_sha256 LIMIT 1000"
             ).fetchall()
-            return tuple(_universe_metadata_from_row(row) for row in rows)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return tuple(_universe_metadata_from_row(row) for row in rows)
 
     def resolve_universe_snapshots(
         self, *, as_of: date, knowledge_cutoff: datetime
@@ -1060,11 +1058,9 @@ class DuckDBCatalog:
                     knowledge_cutoff,
                 ),
             ).fetchall()
-            return tuple(_universe_metadata_from_row(row) for row in rows)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return tuple(_universe_metadata_from_row(row) for row in rows)
 
     def has_universe_snapshot_coverage(self, *, as_of: date) -> bool:
         """Check coverage with one bounded targeted query, never a list page."""
@@ -1078,9 +1074,7 @@ class DuckDBCatalog:
                 ).fetchone()
                 is not None
             )
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
 
     def save_corporate_action_snapshot(
@@ -1096,13 +1090,15 @@ class DuckDBCatalog:
         ):
             raise CatalogConflictError("invalid corporate action snapshot")
         try:
-            metadata = CorporateActionSnapshotMetadataV1(
-                *(
-                    getattr(metadata, name)
-                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
-                )
+            values = tuple(
+                getattr(metadata, name)
+                for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
             )
-        except Exception:
+        except AttributeError:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(*values)
+        except (TypeError, ValueError):
             raise CatalogConflictError("invalid corporate action snapshot") from None
 
         def operation() -> bool:
@@ -1139,13 +1135,15 @@ class DuckDBCatalog:
         if type(metadata) is not CorporateActionSnapshotMetadataV1:
             raise CatalogConflictError("invalid corporate action snapshot")
         try:
-            metadata = CorporateActionSnapshotMetadataV1(
-                *(
-                    getattr(metadata, name)
-                    for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
-                )
+            values = tuple(
+                getattr(metadata, name)
+                for name in CorporateActionSnapshotMetadataV1.__dataclass_fields__
             )
-        except Exception:
+        except AttributeError:
+            raise CatalogConflictError("invalid corporate action snapshot") from None
+        try:
+            metadata = CorporateActionSnapshotMetadataV1(*values)
+        except (TypeError, ValueError):
             raise CatalogConflictError("invalid corporate action snapshot") from None
 
         def operation() -> None:
@@ -1186,11 +1184,9 @@ class DuckDBCatalog:
                 "ORDER BY snapshot_sha256 LIMIT 2",
                 (isin, isin, knowledge_cutoff),
             ).fetchall()
-            return tuple(_corporate_action_metadata_from_row(row) for row in rows)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return tuple(_corporate_action_metadata_from_row(row) for row in rows)
 
     def has_corporate_action_snapshots(self, *, isin: str) -> bool:
         """Distinguish absent from cutoff-stale evidence without list paging."""
@@ -1204,9 +1200,7 @@ class DuckDBCatalog:
                 ).fetchone()
                 is not None
             )
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
 
     def save_provisional_partition(
@@ -1261,11 +1255,9 @@ class DuckDBCatalog:
                 + " ORDER BY cutoff ASC, schedule_digest_sha256 ASC, checksum_sha256 ASC LIMIT ?",
                 _provisional_plan_key(plan) + (limit,),
             ).fetchall()
-            return tuple(_provisional_metadata_from_row(row) for row in rows)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return tuple(_provisional_metadata_from_row(row) for row in rows)
 
     def latest_provisional_partition(
         self,
@@ -1286,12 +1278,12 @@ class DuckDBCatalog:
             for value in (cutoff_lte, published_at_lte)
         ):
             raise CatalogConflictError("invalid provisional partition query")
+        predicate = _PROVISIONAL_PLAN_PREDICATE
+        parameters: tuple[object, ...] = _provisional_plan_key(plan)
+        if cutoff_lte is not None and published_at_lte is not None:
+            predicate += " AND cutoff <= ? AND published_at <= ?"
+            parameters += (cutoff_lte, published_at_lte)
         try:
-            predicate = _PROVISIONAL_PLAN_PREDICATE
-            parameters: tuple[object, ...] = _provisional_plan_key(plan)
-            if cutoff_lte is not None and published_at_lte is not None:
-                predicate += " AND cutoff <= ? AND published_at <= ?"
-                parameters += (cutoff_lte, published_at_lte)
             row = self.connection.execute(
                 _PROVISIONAL_SELECT
                 + " WHERE "
@@ -1300,11 +1292,9 @@ class DuckDBCatalog:
                 "schedule_digest_sha256 ASC, checksum_sha256 ASC LIMIT 1",
                 parameters,
             ).fetchone()
-            return None if row is None else _provisional_metadata_from_row(row)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return None if row is None else _provisional_metadata_from_row(row)
 
     def latest_provisional_partition_for_symbol(
         self,
@@ -1356,11 +1346,9 @@ class DuckDBCatalog:
                     published_at_lte,
                 ),
             ).fetchone()
-            return None if row is None else _provisional_metadata_from_row(row)
-        except CatalogError:
-            raise
-        except Exception:
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
             raise CatalogPersistenceError("catalog read failed") from None
+        return None if row is None else _provisional_metadata_from_row(row)
 
     def _after_history_insert(self) -> None:
         """Fault-injection seam used to prove transaction rollback."""
@@ -2440,24 +2428,27 @@ def _universe_metadata_from_row(row: tuple[object, ...]) -> UniverseSnapshotMeta
             for index in (1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14)
         )
     ):
-        raise ValueError
-    return UniverseSnapshotMetadataV1(
-        values[0],
-        cast(str, values[1]),
-        values[2],
-        values[3],
-        cast(str, values[4]),
-        cast(str, values[5]),
-        datetime.fromisoformat(cast(str, values[6])).astimezone(UTC),
-        datetime.fromisoformat(cast(str, values[7])).astimezone(UTC),
-        cast(str, values[8]),
-        cast(str, values[9]),
-        datetime.fromisoformat(cast(str, values[10])).astimezone(UTC),
-        datetime.fromisoformat(cast(str, values[11])).astimezone(UTC),
-        cast(str, values[12]),
-        values[13],
-        cast(str, values[14]),
-    )
+        raise CatalogSchemaError("catalog row is invalid")
+    try:
+        return UniverseSnapshotMetadataV1(
+            values[0],
+            cast(str, values[1]),
+            values[2],
+            values[3],
+            cast(str, values[4]),
+            cast(str, values[5]),
+            datetime.fromisoformat(cast(str, values[6])).astimezone(UTC),
+            datetime.fromisoformat(cast(str, values[7])).astimezone(UTC),
+            cast(str, values[8]),
+            cast(str, values[9]),
+            datetime.fromisoformat(cast(str, values[10])).astimezone(UTC),
+            datetime.fromisoformat(cast(str, values[11])).astimezone(UTC),
+            cast(str, values[12]),
+            values[13],
+            cast(str, values[14]),
+        )
+    except (TypeError, ValueError):
+        raise CatalogSchemaError("catalog row is invalid") from None
 
 
 def _corporate_action_metadata_from_row(
@@ -2470,65 +2461,69 @@ def _corporate_action_metadata_from_row(
         or any(type(values[index]) is not str for index in (1, 2, 3, 4, 5, 8))
         or any(type(values[index]) is not int for index in (6, 7))
     ):
-        raise ValueError
-    return CorporateActionSnapshotMetadataV1(
-        values[0],
-        cast(str, values[1]),
-        cast(str, values[2]),
-        cast(str, values[3]),
-        datetime.fromisoformat(cast(str, values[4])).astimezone(UTC),
-        cast(str, values[5]),
-        cast(int, values[6]),
-        cast(int, values[7]),
-        cast(str, values[8]),
-    )
+        raise CatalogSchemaError("catalog row is invalid")
+    try:
+        return CorporateActionSnapshotMetadataV1(
+            values[0],
+            cast(str, values[1]),
+            cast(str, values[2]),
+            cast(str, values[3]),
+            datetime.fromisoformat(cast(str, values[4])).astimezone(UTC),
+            cast(str, values[5]),
+            cast(int, values[6]),
+            cast(int, values[7]),
+            cast(str, values[8]),
+        )
+    except (TypeError, ValueError):
+        raise CatalogSchemaError("catalog row is invalid") from None
 
 
 def _validated_provisional_metadata(
     value: object,
 ) -> ProvisionalPartitionMetadataV1:
+    if type(value) is not ProvisionalPartitionMetadataV1:
+        raise CatalogConflictError("invalid provisional partition")
     try:
-        if type(value) is not ProvisionalPartitionMetadataV1:
-            raise ValueError
-        rebuilt = ProvisionalPartitionMetadataV1(
-            *(
-                getattr(value, name)
-                for name in ProvisionalPartitionMetadataV1.__dataclass_fields__
-            )
+        values = tuple(
+            getattr(value, name)
+            for name in ProvisionalPartitionMetadataV1.__dataclass_fields__
         )
-        if rebuilt != value:
-            raise ValueError
-        _validated_provisional_plan(rebuilt.plan)
-        return rebuilt
-    except CatalogConflictError:
-        raise
-    except Exception:
+    except AttributeError:
         raise CatalogConflictError("invalid provisional partition") from None
+    try:
+        rebuilt = ProvisionalPartitionMetadataV1(*values)
+    except (TypeError, ValueError):
+        raise CatalogConflictError("invalid provisional partition") from None
+    if rebuilt != value:
+        raise CatalogConflictError("invalid provisional partition")
+    _validated_provisional_plan(rebuilt.plan)
+    return rebuilt
 
 
 def _validated_provisional_plan(value: object) -> PlannedInstrumentMonth:
+    if type(value) is not PlannedInstrumentMonth:
+        raise CatalogConflictError("invalid provisional partition query")
     try:
-        if type(value) is not PlannedInstrumentMonth:
-            raise ValueError
-        rebuilt = PlannedInstrumentMonth(
-            *(
-                getattr(value, name)
-                for name in PlannedInstrumentMonth.__dataclass_fields__
-            )
+        values = tuple(
+            getattr(value, name) for name in PlannedInstrumentMonth.__dataclass_fields__
         )
-        if (
-            rebuilt != value
-            or rebuilt.interval != "1m"
-            or rebuilt.instrument_type != "EQ"
-            or (rebuilt.from_date.year, rebuilt.from_date.month)
-            != (rebuilt.year, rebuilt.month)
-            or (rebuilt.to_date.year, rebuilt.to_date.month)
-            != (rebuilt.year, rebuilt.month)
-        ):
-            raise ValueError
-        return rebuilt
-    except Exception:
+    except AttributeError:
         raise CatalogConflictError("invalid provisional partition query") from None
+    try:
+        rebuilt = PlannedInstrumentMonth(*values)
+    except (TypeError, ValueError):
+        raise CatalogConflictError("invalid provisional partition query") from None
+    if (
+        rebuilt != value
+        or rebuilt.interval != "1m"
+        or rebuilt.instrument_type != "EQ"
+        or (rebuilt.from_date.year, rebuilt.from_date.month)
+        != (rebuilt.year, rebuilt.month)
+        or (rebuilt.to_date.year, rebuilt.to_date.month)
+        != (rebuilt.year, rebuilt.month)
+    ):
+        raise CatalogConflictError("invalid provisional partition query")
+    return rebuilt
 
 
 def _provisional_plan_key(plan: PlannedInstrumentMonth) -> tuple[object, ...]:

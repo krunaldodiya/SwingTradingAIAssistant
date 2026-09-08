@@ -23,6 +23,10 @@ MAX_INTRADAY_CANDLES = 500
 _MAX_PROVIDER_JSON_NESTING = 64
 
 
+class IntradayPayloadError(ValueError):
+    """An actual intraday provider payload violates the supported data contract."""
+
+
 def _empty_headers() -> HttpResponseHeaders:
     return HttpResponseHeaders()
 
@@ -135,6 +139,13 @@ def _reject_nonstandard_json_constant(value: str) -> NoReturn:
     raise _RejectedProviderJSON
 
 
+def _parse_provider_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _RejectedProviderJSON from None
+
+
 def _decode_success_candles(
     body: bytes,
 ) -> tuple[_SuccessDecodeStatus, list[list[object]]]:
@@ -145,8 +156,14 @@ def _decode_success_candles(
             body,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_int=_parse_provider_json_int,
         )
-    except (Exception, MemoryError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _RejectedProviderJSON,
+        RecursionError,
+    ):
         return _SuccessDecodeStatus.MALFORMED_JSON, []
     if type(payload) is not dict:
         return _SuccessDecodeStatus.INVALID_ENVELOPE, []
@@ -197,15 +214,17 @@ def _json_nesting_within_limit(value: bytes) -> bool:
 
 
 def _raise_malformed_intraday_json() -> NoReturn:
-    raise ValueError("intraday response is not valid JSON") from None
+    raise IntradayPayloadError("intraday response is not valid JSON") from None
 
 
 def _raise_invalid_success_envelope() -> NoReturn:
-    raise ValueError("intraday response is not a valid success envelope") from None
+    raise IntradayPayloadError(
+        "intraday response is not a valid success envelope"
+    ) from None
 
 
 def _raise_invalid_candles_array() -> NoReturn:
-    raise ValueError(
+    raise IntradayPayloadError(
         "intraday response does not contain a valid candles array"
     ) from None
 

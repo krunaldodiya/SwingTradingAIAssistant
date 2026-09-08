@@ -8,7 +8,8 @@ import os
 import re
 import stat
 from calendar import monthrange
-from contextlib import ExitStack
+from collections.abc import Generator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -21,12 +22,16 @@ from .historical_upstox_raw_runtime_identity_manifest import (
     HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1,
 )
 from .runtime_source_verifier import read_runtime_source
-from .schedule_evidence import parse_canonical_schedule_bytes
+from .schedule_evidence import (
+    ScheduleEvidenceValidationError,
+    parse_canonical_schedule_bytes,
+)
 from .storage_root_lease import (
     LeaseFailureCode,
     LeaseOutcome,
     LeaseResult,
     StorageRootLease,
+    StorageRootLeaseError,
     StorageRootLeaseOperation,
 )
 
@@ -2232,6 +2237,10 @@ class HistoricalOhlcvImportOutcomeV1(StrEnum):
     PUBLICATION_UNCERTAIN_OR_CONFLICT = "PUBLICATION_UNCERTAIN_OR_CONFLICT"
 
 
+class _RetainedRevisionCorruptionError(RuntimeError):
+    """A recognized malformed or conflicting retained revision representation."""
+
+
 @dataclass(frozen=True, slots=True)
 class HistoricalOhlcvImportResultV1:
     outcome: HistoricalOhlcvImportOutcomeV1
@@ -2295,45 +2304,48 @@ def _closed_json(  # noqa: C901 - one closed untrusted JSON boundary
     raw: object, maximum: int
 ) -> dict[str, Any]:
     if type(raw) is not bytes or not raw or len(raw) > maximum:
-        raise ValueError
+        raise _RetainedRevisionCorruptionError
 
     def reject_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         value: dict[str, Any] = {}
         for key, item in pairs:
             if type(key) is not str or key in value:
-                raise ValueError
+                raise _RetainedRevisionCorruptionError
             value[key] = item
         return value
 
     def reject_float(_: str) -> object:
-        raise ValueError
+        raise _RetainedRevisionCorruptionError
 
-    value = json.loads(
-        raw.decode("utf-8"),
-        object_pairs_hook=reject_pairs,
-        parse_float=reject_float,
-        parse_constant=reject_float,
-    )
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_pairs,
+            parse_float=reject_float,
+            parse_constant=reject_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise _RetainedRevisionCorruptionError from None
     pending: list[tuple[object, int]] = [(value, 0)]
     while pending:
         current, container_depth = pending.pop()
         if type(current) is dict:
             next_depth = container_depth + 1
             if next_depth > _JSON_MAX_DEPTH:
-                raise ValueError
+                raise _RetainedRevisionCorruptionError
             object_value = cast(dict[str, Any], current)
             pending.extend((item, next_depth) for item in object_value.values())
         elif type(current) is list:
             next_depth = container_depth + 1
             if next_depth > _JSON_MAX_DEPTH:
-                raise ValueError
+                raise _RetainedRevisionCorruptionError
             list_value = cast(list[Any], current)
             pending.extend((item, next_depth) for item in list_value)
     if type(value) is not dict:
-        raise ValueError
+        raise _RetainedRevisionCorruptionError
     object_value = cast(dict[str, Any], value)
     if _canonical(object_value) != raw:
-        raise ValueError
+        raise _RetainedRevisionCorruptionError
     return object_value
 
 
@@ -2476,13 +2488,7 @@ def _parse_member(value: object) -> dict[str, Any] | None:
 def _parse_request_structure(raw: object) -> dict[str, Any] | None:  # noqa: C901
     try:
         request = _closed_json(raw, _LIMITS["max_source_policy_bytes"])
-    except (
-        RecursionError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ):
+    except _RetainedRevisionCorruptionError:
         return None
     if not _only(request, frozenset(_REQUEST_FIELDS)):
         return None
@@ -2626,13 +2632,7 @@ def _parse_source_structure(
         policy = _closed_json(policy_raw, _LIMITS["max_source_policy_bytes"])
         artifact = _closed_json(artifact_raw, _LIMITS["max_artifact_bytes"])
         receipt = _closed_json(receipt_raw, _LIMITS["max_receipt_bytes"])
-    except (
-        RecursionError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ):
+    except _RetainedRevisionCorruptionError:
         return None
     policy_fields = frozenset(
         {
@@ -2848,7 +2848,7 @@ def _validate_closed_receipts(  # noqa: C901 - one closed source-evidence bounda
         schedule = parse_canonical_schedule_bytes(
             _canonical(cast(dict[str, Any], artifact["schedule"]))
         )
-    except (TypeError, ValueError):
+    except ScheduleEvidenceValidationError:
         return False
     observed = _operator_instant(request["observed_at"])
     if observed is None or schedule.as_of > observed:
@@ -3261,7 +3261,7 @@ def _receipt_aggregate_matches(
 
 def _request_projection_from_revision(value: dict[str, Any]) -> dict[str, Any]:
     if not _only(value, _REVISION_FIELDS):
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
     return {field: value[field] for field in _REQUEST_FIELDS}
 
 
@@ -3470,6 +3470,28 @@ def _validate_transition(  # noqa: C901 - one closed lineage boundary
     return depth + 1, HistoricalOhlcvImportOutcomeV1.SUCCESS
 
 
+def _close_descriptor_preserving_primary(
+    descriptor: int, active_exception: BaseException | None
+) -> None:
+    try:
+        os.close(descriptor)
+    except BaseException:
+        if active_exception is None:
+            raise
+
+
+@contextmanager
+def _closing_descriptor(descriptor: int) -> Generator[int, None, None]:
+    active_exception: BaseException | None = None
+    try:
+        yield descriptor
+    except BaseException as error:
+        active_exception = error
+        raise
+    finally:
+        _close_descriptor_preserving_primary(descriptor, active_exception)
+
+
 def _open_directory(parent: int, name: str) -> int:
     try:
         os.mkdir(name, mode=_DIRECTORY_MODE, dir_fd=parent)
@@ -3482,8 +3504,8 @@ def _open_directory(parent: int, name: str) -> int:
     try:
         _assert_directory_edge(parent, name, descriptor)
         return descriptor
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_descriptor_preserving_primary(descriptor, error)
         raise
 
 
@@ -3495,8 +3517,8 @@ def _open_existing_directory(parent: int, name: str) -> int:
     try:
         _assert_directory_edge(parent, name, descriptor)
         return descriptor
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_descriptor_preserving_primary(descriptor, error)
         raise
 
 
@@ -3509,7 +3531,7 @@ def _assert_directory_edge(parent: int, name: str, descriptor: int) -> None:
         or stat.S_IMODE(held.st_mode) != _DIRECTORY_MODE
         or (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
     ):
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
 
 
 def _assert_owner_private_directory(descriptor: int) -> None:
@@ -3519,7 +3541,7 @@ def _assert_owner_private_directory(descriptor: int) -> None:
         or info.st_uid != os.geteuid()
         or stat.S_IMODE(info.st_mode) & 0o077
     ):
-        raise RuntimeError
+        raise _RetainedRevisionCorruptionError
 
 
 def _read_object(
@@ -3531,6 +3553,7 @@ def _read_object(
     descriptor = os.open(
         name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent
     )
+    active_exception: BaseException | None = None
     try:
         before = os.fstat(descriptor)
         named = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -3545,7 +3568,7 @@ def _read_object(
                 and (before.st_dev, before.st_ino) != expected_identity
             )
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         raw = bytearray()
         while len(raw) <= maximum:
             chunk = os.read(descriptor, min(65_536, maximum + 1 - len(raw)))
@@ -3566,10 +3589,13 @@ def _read_object(
                 and (after.st_dev, after.st_ino) != expected_identity
             )
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         return bytes(raw)
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_descriptor_preserving_primary(descriptor, active_exception)
 
 
 def _write_all(descriptor: int, raw: bytes) -> None:
@@ -3917,7 +3943,7 @@ class HistoricalOhlcvRevisionStoreV1:
         )
         artifact = _closed_json(raw, _LIMITS["max_artifact_bytes"])
         if type(artifact) is not dict:
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         return artifact
 
     def _publish_generated_source(  # noqa: C901 - one publication transaction boundary
@@ -4252,43 +4278,40 @@ class HistoricalOhlcvRevisionStoreV1:
             ):
                 _assert_owner_private_directory(operation.descriptor)
                 root = _open_existing_directory(operation.descriptor, _ROOT_DIRECTORY)
-                try:
+                with _closing_descriptor(root):
                     profile = _open_existing_directory(root, _PROFILE_DIRECTORY)
-                    try:
+                    with _closing_descriptor(profile):
                         version = _open_existing_directory(profile, _SCHEMA_DIRECTORY)
-                        try:
-                            with ExitStack() as directories:
-                                objects = _open_existing_directory(
-                                    version, _OBJECT_DIRECTORY
-                                )
-                                directories.callback(os.close, objects)
+                        with _closing_descriptor(version):
+                            objects = _open_existing_directory(
+                                version, _OBJECT_DIRECTORY
+                            )
+                            with _closing_descriptor(objects):
                                 revisions = _open_existing_directory(
                                     version, _REVISION_DIRECTORY
                                 )
-                                directories.callback(os.close, revisions)
-                                value = self._read_stored_exact_from_directories(
-                                    revision_id, objects, revisions
-                                )
-                                _assert_hierarchy_live(
-                                    operation,
-                                    root,
-                                    profile,
-                                    version,
-                                    objects,
-                                    revisions,
-                                )
-                                return HistoricalOhlcvImportResultV1(
-                                    HistoricalOhlcvImportOutcomeV1.SUCCESS,
-                                    revision_id,
-                                    value,
-                                )
-                        finally:
-                            os.close(version)
-                    finally:
-                        os.close(profile)
-                finally:
-                    os.close(root)
-        except Exception:
+                                with _closing_descriptor(revisions):
+                                    value = self._read_stored_exact_from_directories(
+                                        revision_id, objects, revisions
+                                    )
+                                    _assert_hierarchy_live(
+                                        operation,
+                                        root,
+                                        profile,
+                                        version,
+                                        objects,
+                                        revisions,
+                                    )
+                                    return HistoricalOhlcvImportResultV1(
+                                        HistoricalOhlcvImportOutcomeV1.SUCCESS,
+                                        revision_id,
+                                        value,
+                                    )
+        except (
+            OSError,
+            StorageRootLeaseError,
+            _RetainedRevisionCorruptionError,
+        ):
             return _result(
                 HistoricalOhlcvImportOutcomeV1.PUBLICATION_UNCERTAIN_OR_CONFLICT
             )
@@ -4305,11 +4328,11 @@ class HistoricalOhlcvRevisionStoreV1:
             or value["revision_sha256"] != revision_id
             or _digest(value["revision_sha256"]) is None
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         preimage = dict(value)
         preimage.pop("revision_sha256")
         if _sha(_canonical(preimage)) != revision_id:
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         request = _request_projection_from_revision(value)
         parsed = _parse_request_structure(_canonical(request))
         if any(
@@ -4320,7 +4343,7 @@ class HistoricalOhlcvRevisionStoreV1:
                 "configuration_identity_sha256",
             )
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         if (
             parsed is None
             or _digest(value["completion_request_identity_sha256"]) is None
@@ -4329,7 +4352,7 @@ class HistoricalOhlcvRevisionStoreV1:
             or type(value["lineage_depth"]) is not int
             or not 0 <= value["lineage_depth"] <= _LIMITS["max_lineage_depth"]
         ):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         policy_raw = _read_object(
             objects, parsed["source_policy_sha256"], _LIMITS["max_source_policy_bytes"]
         )
@@ -4343,10 +4366,10 @@ class HistoricalOhlcvRevisionStoreV1:
         )
         source = _parse_source_structure(policy_raw, artifact_raw, receipt_raw)
         if source is None:
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         policy, artifact, receipt = source
         if _find_unsupported_capability(parsed, policy, artifact, receipt):
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         bars = _validate_candidate_evidence(
             parsed,
             policy_raw,
@@ -4357,7 +4380,7 @@ class HistoricalOhlcvRevisionStoreV1:
             receipt,
         )
         if bars is None or bars != value["bars"]:
-            raise RuntimeError
+            raise _RetainedRevisionCorruptionError
         return value
 
     def _validate_stored_lineage_iterative(
@@ -4369,7 +4392,7 @@ class HistoricalOhlcvRevisionStoreV1:
         hop = 0
         while True:
             if hop > _LIMITS["max_lineage_depth"] or current_id in visited:
-                raise RuntimeError
+                raise _RetainedRevisionCorruptionError
             visited.add(current_id)
             current = self._validate_stored_revision_local(
                 current_id, objects, revisions
@@ -4387,7 +4410,7 @@ class HistoricalOhlcvRevisionStoreV1:
                     outcome is not HistoricalOhlcvImportOutcomeV1.SUCCESS
                     or depth != child["lineage_depth"]
                 ):
-                    raise RuntimeError
+                    raise _RetainedRevisionCorruptionError
                 child = None
             if current["operation"] == "INITIAL":
                 if (
@@ -4395,11 +4418,11 @@ class HistoricalOhlcvRevisionStoreV1:
                     or current["correction_coordinates"] != []
                     or current["lineage_depth"] != 0
                 ):
-                    raise RuntimeError
+                    raise _RetainedRevisionCorruptionError
                 break
             parent_id = _digest(current["parent_revision_sha256"])
             if parent_id is None:
-                raise RuntimeError
+                raise _RetainedRevisionCorruptionError
             child = current
             current_id = parent_id
             hop += 1

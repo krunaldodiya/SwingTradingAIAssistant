@@ -8,8 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol
 
-from .catalog import DuckDBCatalog
-from .credentials import AccessToken, AccessTokenProvider
+from .catalog import CatalogError, DuckDBCatalog
+from .credentials import AccessToken, AccessTokenProvider, CredentialNotFoundError
 from .download_preparation import (
     DownloadPreparationReportV1,
     DownloadPreparationRequestV1,
@@ -18,33 +18,65 @@ from .download_preparation import (
 )
 from .historical import (
     AccountRateLimiter,
+    CancellationRequested,
     CancellationToken,
+    HistoricalPayloadError,
     HistoricalRequest,
     HistoricalResponse,
+    RetryWaitBoundExceeded,
 )
-from .intraday import IntradayRequest, IntradayResponse
+from .http import (
+    HttpResponseBodyTooLarge,
+    HttpResponseHeadersInvalid,
+    HttpTransportError,
+)
+from .intraday import IntradayPayloadError, IntradayRequest, IntradayResponse
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
-from .normalization import normalize_candles
+from .normalization import CandleSchemaError, normalize_candles
 from .open_month import (
     OpenMonthPlanV1,
     OpenMonthScheduleV1,
+    OpenMonthValidationError,
     open_month_schedule_from_evidence,
     plan_open_month,
 )
-from .partition_publication import publish_provisional_partition_under_lease
+from .partition_publication import (
+    PartitionPublicationError,
+    publish_provisional_partition_under_lease,
+)
 from .provisional_metadata import (
     ProvisionalPartitionMetadataV1,
     metadata_from_publication,
 )
-from .provisional_store import latest_provisional_partition
-from .provisional_validation import validate_provisional_advance
-from .schedule_evidence import SCHEDULE_SCHEMA_VERSION_V3
-from .schemas import CanonicalCandle
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .provisional_store import (
+    ProvisionalPartitionUnavailableV1,
+    latest_provisional_partition,
+)
+from .provisional_validation import (
+    ProvisionalValidationFailureV1,
+    validate_provisional_advance,
+)
+from .schedule_evidence import (
+    SCHEDULE_SCHEMA_VERSION_V3,
+    ScheduleEvidenceValidationError,
+)
+from .schemas import CanonicalCandle, DuplicateCandleKeyError
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 from .upstox_canonical import canonicalize_upstox_equity_candles
 from .workflow_coordination import PublicationGateV1
 
 _HISTORICAL_SOURCE_V3: Final = "upstox-historical-v3"
+_PROVIDER_CANDLE_FAILURES: Final = (
+    HistoricalPayloadError,
+    IntradayPayloadError,
+    HttpTransportError,
+    HttpResponseBodyTooLarge,
+    HttpResponseHeadersInvalid,
+    CandleSchemaError,
+    DuplicateCandleKeyError,
+    CancellationRequested,
+    RetryWaitBoundExceeded,
+)
 
 
 class OpenMonthDownloadOutcomeV1(StrEnum):
@@ -226,18 +258,18 @@ class OpenMonthDownloadServiceV1:
                 request.storage_root,
                 invocation,
             )
-            preparation = (
-                self._preparation.prepare_open_month(preparation_request)
-                if lease is None
-                else self._preparation.prepare_open_month_under_lease(
-                    preparation_request, lease
-                )
-            )
-        except Exception:
+        except ValueError:
             return _failure(
                 OpenMonthDownloadOutcomeV1.FAILED,
                 OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
             )
+        preparation = (
+            self._preparation.prepare_open_month(preparation_request)
+            if lease is None
+            else self._preparation.prepare_open_month_under_lease(
+                preparation_request, lease
+            )
+        )
         preparation = _validated_preparation(preparation)
         if preparation is None or preparation.prepared is None:
             attempts = (
@@ -263,7 +295,7 @@ class OpenMonthDownloadServiceV1:
         snapshot_attempts = prepared.snapshot_attempt_count
         try:
             if prepared.schedule.schema_version != SCHEDULE_SCHEMA_VERSION_V3:
-                raise ValueError
+                raise OpenMonthValidationError
             schedule = open_month_schedule_from_evidence(prepared.schedule)
             open_plan = plan_open_month(
                 request.from_date, request.to_date, schedule, invocation
@@ -274,7 +306,7 @@ class OpenMonthDownloadServiceV1:
                 request.to_date,
                 "1m",
             )[0]
-        except Exception:
+        except (OpenMonthValidationError, ScheduleEvidenceValidationError):
             return _failure(
                 OpenMonthDownloadOutcomeV1.REJECTED,
                 OpenMonthDownloadFailureCodeV1.INVALID_INPUT,
@@ -294,7 +326,7 @@ class OpenMonthDownloadServiceV1:
                     physical_plan,
                     supplied_lease,
                 )
-            except Exception:
+            except (StorageRootLeaseError, ProvisionalPartitionUnavailableV1):
                 return _failure(
                     OpenMonthDownloadOutcomeV1.FAILED,
                     OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED,
@@ -322,7 +354,7 @@ class OpenMonthDownloadServiceV1:
                     physical_plan,
                     lease,
                 )
-        except Exception:
+        except (StorageRootLeaseError, ProvisionalPartitionUnavailableV1):
             return _failure(
                 OpenMonthDownloadOutcomeV1.FAILED,
                 OpenMonthDownloadFailureCodeV1.PUBLICATION_FAILED,
@@ -498,7 +530,7 @@ class OpenMonthDownloadServiceV1:
                 fetched.historical_rows,
                 fetched.intraday_rows,
             )
-        except Exception:
+        except ProvisionalValidationFailureV1:
             return _failure(
                 OpenMonthDownloadOutcomeV1.FAILED,
                 OpenMonthDownloadFailureCodeV1.VALIDATION_FAILED,
@@ -548,7 +580,7 @@ class OpenMonthDownloadServiceV1:
             )
             with DuckDBCatalog(request.storage_root, lease=lease) as catalog:
                 catalog.save_provisional_partition(metadata)
-        except Exception:
+        except (CatalogError, PartitionPublicationError, StorageRootLeaseError):
             return _failure(
                 OpenMonthDownloadOutcomeV1.FAILED,
                 OpenMonthDownloadFailureCodeV1.CATALOG_UNAVAILABLE,
@@ -588,7 +620,7 @@ class OpenMonthDownloadServiceV1:
         if pending_history is not None or need_intraday:
             try:
                 token = self._token_provider.get_access_token()
-            except Exception:
+            except CredentialNotFoundError:
                 return _failure(
                     OpenMonthDownloadOutcomeV1.UNAVAILABLE,
                     OpenMonthDownloadFailureCodeV1.CREDENTIALS_UNAVAILABLE,
@@ -615,7 +647,7 @@ class OpenMonthDownloadServiceV1:
                 historical_rows = _canonical_rows(
                     response, prepared, invocation, intraday=False
                 )
-            except Exception:
+            except _PROVIDER_CANDLE_FAILURES:
                 return _failure(
                     OpenMonthDownloadOutcomeV1.UNAVAILABLE,
                     OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
@@ -632,7 +664,7 @@ class OpenMonthDownloadServiceV1:
                 intraday_rows = _canonical_rows(
                     response, prepared, invocation, intraday=True
                 )
-            except Exception:
+            except _PROVIDER_CANDLE_FAILURES:
                 return _failure(
                     OpenMonthDownloadOutcomeV1.UNAVAILABLE,
                     OpenMonthDownloadFailureCodeV1.INTRADAY_UNAVAILABLE,
@@ -668,7 +700,7 @@ def _validated_preparation(
         if result.outcome is not PreparationOutcomeV1.SUCCEEDED:
             return result
         return result if result.prepared is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -721,7 +753,7 @@ def _canonical_rows(
     intraday: bool,
 ) -> tuple[CanonicalCandle, ...]:
     if not 200 <= response.status_code < 300 or response.error_category is not None:
-        raise ValueError
+        raise CandleSchemaError("provider response does not supply usable candles")
     normalized = normalize_candles(response.candles)
     rows = canonicalize_upstox_equity_candles(
         normalized, prepared.instrument, ingested_at
@@ -734,17 +766,10 @@ def _canonical_rows(
 
 
 def _now(clock: OpenMonthClockV1) -> datetime | None:
-    try:
-        value = clock.now()
-        if (
-            type(value) is not datetime
-            or value.tzinfo is None
-            or value.utcoffset() is None
-        ):
-            raise ValueError
-        return value.astimezone(UTC)
-    except Exception:
+    value = clock.now()
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
         return None
+    return value.astimezone(UTC)
 
 
 def _failure(

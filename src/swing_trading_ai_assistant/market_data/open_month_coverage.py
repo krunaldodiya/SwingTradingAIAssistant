@@ -6,11 +6,19 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Protocol, cast
 
-from .catalog import DuckDBCatalog
+from .catalog import (
+    CatalogError,
+    CatalogPersistenceError,
+    CatalogStorageError,
+    DuckDBCatalog,
+)
 from .equity_admission import EquityAdmissionPolicyV1
 from .instruments import Instrument
 from .provisional_metadata import ProvisionalPartitionMetadataV1
-from .provisional_store import load_provisional_partition
+from .provisional_store import (
+    ProvisionalPartitionUnavailableV1,
+    load_provisional_partition,
+)
 from .public_contract import (
     CoveragePayloadV1,
     CoverageReportV1,
@@ -23,10 +31,17 @@ from .public_contract import (
     PublicFailureV1,
 )
 from .public_coverage import CoverageRequestV1
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 _MAX_ATOMIC_READ_ATTEMPTS = 3
+
+_ATOMIC_READ_RETRY_ERRORS = (CatalogPersistenceError, CatalogStorageError)
+_READ_UNAVAILABLE_ERRORS = (
+    CatalogError,
+    ProvisionalPartitionUnavailableV1,
+    StorageRootLeaseError,
+)
 
 
 class CoverageClockV1(Protocol):
@@ -74,7 +89,7 @@ class CurrentAwareCoverageServiceV1:
             return self._call_closed(request, lease)
         try:
             invocation = _invocation(self._clock.now())
-        except ValueError:
+        except Exception:
             return _terminal(
                 PublicCommandStatusV1.FAILED,
                 PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
@@ -165,7 +180,14 @@ class OpenMonthCoverageServiceV1:
             if type(request) is not CoverageRequestV1:
                 raise ValueError
             request = replace(request)
-            invocation = _invocation(self._clock.now())
+        except (TypeError, ValueError):
+            return _terminal(
+                PublicCommandStatusV1.REJECTED,
+                PublicFailureCodeV1.INVALID_INPUT,
+            )
+        invocation_value = self._clock.now()
+        try:
+            invocation = _invocation(invocation_value)
             local_today = invocation.astimezone(_IST).date()
             if (
                 request.from_date.year != local_today.year
@@ -175,7 +197,7 @@ class OpenMonthCoverageServiceV1:
                 or request.to_date > local_today
             ):
                 raise ValueError
-        except Exception:
+        except ValueError:
             return _terminal(
                 PublicCommandStatusV1.REJECTED,
                 PublicFailureCodeV1.INVALID_INPUT,
@@ -210,11 +232,11 @@ class OpenMonthCoverageServiceV1:
                         return self._coverage_under_lease(
                             request, local_today, invocation, lease
                         )
-                    except Exception:
+                    except _ATOMIC_READ_RETRY_ERRORS:
                         attempt += 1
                         if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
                             raise
-        except Exception:
+        except _READ_UNAVAILABLE_ERRORS:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
@@ -229,7 +251,7 @@ class OpenMonthCoverageServiceV1:
     ) -> CoverageReportV1:
         try:
             return self._coverage_under_lease(request, local_today, invocation, lease)
-        except Exception:
+        except _READ_UNAVAILABLE_ERRORS:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
@@ -276,7 +298,7 @@ class OpenMonthCoverageServiceV1:
             or rows[0].ts != metadata.actual_from_ts
             or rows[-1].ts != metadata.actual_to_ts
         ):
-            raise ValueError
+            raise ProvisionalPartitionUnavailableV1("provisional partition unavailable")
         return _available_report(request, metadata)
 
 
