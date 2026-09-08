@@ -5362,9 +5362,13 @@ def test_provider_frame_diagnostic_distinguishes_real_rejections(
     )
 
 
-def test_provider_frame_diagnostic_redacts_unknown_lower_reason() -> None:
+@pytest.mark.parametrize(
+    "private_reason", ["FRAME_PRIVATE_MEMBER_CANARY", "PROVIDER_TIMESTAMP_INVALID"]
+)
+def test_provider_frame_diagnostic_redacts_unknown_lower_reason(
+    private_reason: str,
+) -> None:
     request, selection = _admitted()
-    private_reason = "FRAME_PRIVATE_MEMBER_CANARY"
 
     def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
         return core._cohort_outcome_v1(
@@ -5382,7 +5386,8 @@ def test_provider_frame_diagnostic_redacts_unknown_lower_reason() -> None:
     )
     cohorts: Any = payload["cohorts"]
     assert all(
-        row.get("provider_frame_reason") == "UNCLASSIFIED_FRAME_REJECTION"
+        row["reason"] == "PROVIDER_FRAME_INCOMPLETE"
+        and row.get("provider_frame_reason") == "UNCLASSIFIED_FRAME_REJECTION"
         for row in cohorts
     )
     assert private_reason not in json.dumps(payload)
@@ -5453,6 +5458,7 @@ def test_public_provider_frame_diagnostic_rechecks_forged_values(
 
     values: tuple[Any, ...] = (
         private_value,
+        "PROVIDER_TIMESTAMP_INVALID",
         [private_value],
         MasqueradingReason(private_value),
     )

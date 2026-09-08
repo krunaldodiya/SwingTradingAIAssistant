@@ -328,9 +328,6 @@ _PROVIDER_FRAME_REASONS_V1: Final = frozenset(
         "FRAME_SCHEMA_INVALID",
         "FRAME_VALUE_INVALID",
         "PROVIDER_EMPTY",
-        "PROVIDER_TIMESTAMP_INVALID",
-        "PROVIDER_TIMEZONE_INVALID",
-        "PROVIDER_VALUE_INVALID",
         "RETRIEVED_AFTER_DECISION_CUTOFF",
         "RETRIEVED_BEFORE_OFFICIAL_CLOSE",
     }
@@ -3109,6 +3106,12 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
         elif (
             result.reason.startswith("FRAME_")
             or result.reason in _PROVIDER_FRAME_REASONS_V1
+            or result.reason
+            in {
+                "PROVIDER_TIMESTAMP_INVALID",
+                "PROVIDER_TIMEZONE_INVALID",
+                "PROVIDER_VALUE_INVALID",
+            }
         ):
             reason = "PROVIDER_FRAME_INCOMPLETE"
             provider_frame_reason = _safe_provider_frame_reason_v1(result.reason)
