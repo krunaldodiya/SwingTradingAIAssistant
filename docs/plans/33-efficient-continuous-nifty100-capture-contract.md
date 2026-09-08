@@ -557,6 +557,10 @@ requested provider symbol, interval, start/end epochs, response symbol, and
 `Asia/Kolkata` timezone. It rejects duplicate JSON keys and session dates,
 ambiguous query parameters, more than 32 query fields, more than the expected
 session count plus one source timestamp, and inconsistent array lengths.
+Source timestamps at local minute zero in hours 22 or 23 make the projection
+unclassified: the pinned provider shifts those quotes into the next session.
+The observer must not borrow a neighboring raw-date row's category after that
+correction, and does not change or reproduce the provider's date repair.
 Unsupported scalar shapes or numeric strings longer than 64 characters remain
 unclassified. Absent `adjclose` follows the pinned parser's use of `close`
 solely for this diagnostic calculation; no capture input or price is replaced.

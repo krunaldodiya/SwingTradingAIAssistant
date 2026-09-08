@@ -7333,6 +7333,10 @@ def _source_chart_fixture(  # noqa: C901 - explicit source-shape adversarial mat
         timestamps[1] = timestamps[0]
     elif source_case == "other_session":
         opens[1] = None
+    elif source_case in {"pre_midnight_22", "pre_midnight_23"}:
+        shift = 7200 if source_case == "pre_midnight_22" else 3600
+        timestamps = [timestamp - shift for timestamp in timestamps]
+        opens[0] = None
     elif source_case in {"extra_end_row", "too_many_rows"}:
         for _ in range(1 if source_case == "extra_end_row" else 2):
             timestamps.append(timestamps[-1] + 86400)
@@ -7403,6 +7407,8 @@ def _source_chart_fixture(  # noqa: C901 - explicit source-shape adversarial mat
         ("wrong_interval", "UNCLASSIFIED_SOURCE_ORIGIN"),
         ("wrong_timezone", "UNCLASSIFIED_SOURCE_ORIGIN"),
         ("duplicate_parameter", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("pre_midnight_22", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("pre_midnight_23", "UNCLASSIFIED_SOURCE_ORIGIN"),
         ("conflicting", "UNCLASSIFIED_SOURCE_ORIGIN"),
         ("401_recovery", "SOURCE_OPEN_MISSING_OR_NONFINITE"),
     ],

@@ -1421,7 +1421,11 @@ def _source_chart_origins_v1(  # noqa: C901 - bounded source-only projection
         ):
             if type(timestamp) is not int:
                 return None
-            session = datetime.fromtimestamp(timestamp, _NSE_SOURCE_TIMEZONE_V1).date()
+            local_timestamp = datetime.fromtimestamp(timestamp, _NSE_SOURCE_TIMEZONE_V1)
+            if local_timestamp.minute == 0 and local_timestamp.hour in (22, 23):
+                # The pinned provider shifts these quotes into another daily session.
+                return None
+            session = local_timestamp.date()
             if session in seen:
                 return None
             seen.add(session)
