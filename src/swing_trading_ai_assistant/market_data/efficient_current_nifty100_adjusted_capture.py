@@ -321,6 +321,20 @@ NIFTY_100_URL: Final = (
 )
 MAX_REQUEST_BYTES_V1: Final = 262_144
 MAX_RESULT_BYTES_V1: Final = 262_144
+_PROVIDER_FRAME_REASONS_V1: Final = frozenset(
+    {
+        "CORRECTION_CONTENT_UNCHANGED",
+        "FRAME_COVERAGE_INCOMPLETE",
+        "FRAME_SCHEMA_INVALID",
+        "FRAME_VALUE_INVALID",
+        "PROVIDER_EMPTY",
+        "PROVIDER_TIMESTAMP_INVALID",
+        "PROVIDER_TIMEZONE_INVALID",
+        "PROVIDER_VALUE_INVALID",
+        "RETRIEVED_AFTER_DECISION_CUTOFF",
+        "RETRIEVED_BEFORE_OFFICIAL_CLOSE",
+    }
+)
 MAX_SOURCE_BYTES_V1: Final = 262_144
 MIN_START_INTERVAL_SECONDS_V1: Final = 0.125
 MAX_HTTP_STARTS_PER_COHORT_V1: Final = 256
@@ -577,6 +591,7 @@ class CohortOutcomeV1:
     retrieved_at: datetime | None = None
     source_identity_sha256: str | None = None
     source_profile: str | None = None
+    provider_frame_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1565,6 +1580,12 @@ def execute_admitted_v1(
     )
 
 
+def _safe_provider_frame_reason_v1(value: object) -> str:
+    if type(value) is str and value in _PROVIDER_FRAME_REASONS_V1:
+        return value
+    return "UNCLASSIFIED_FRAME_REJECTION"
+
+
 def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
     """Return the fixed bounded public result without member or provider detail."""
 
@@ -1582,6 +1603,12 @@ def serialize_result_v1(result: CurrentNifty100ResultV1) -> dict[str, object]:
                 "cohort": row.cohort,
                 "code": row.code,
                 "reason": row.reason,
+                "provider_frame_reason": (
+                    _safe_provider_frame_reason_v1(row.provider_frame_reason)
+                    if row.code == "INSUFFICIENT_EVIDENCE"
+                    and row.reason == "PROVIDER_FRAME_INCOMPLETE"
+                    else None
+                ),
                 "revision_sha256": row.revision_sha256,
                 "request_identity_sha256": row.request_identity_sha256,
                 "retrieved_at": (
@@ -3069,6 +3096,7 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
             source_identity_sha256=revision.source_identity_sha256,
             source_profile=revision.source_profile,
         )
+    provider_frame_reason: str | None = None
     if session is not None and session.resource_limited:
         reason = "RESOURCE_LIMIT_EXCEEDED"
     elif session is not None and session.rate_limited:
@@ -3078,16 +3106,12 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
             reason = "CONFIGURATION_INVALID"
         elif result.reason == "PROVIDER_CALL_FAILED":
             reason = "PROVIDER_ERROR"
-        elif result.reason.startswith("FRAME_") or result.reason in {
-            "CORRECTION_CONTENT_UNCHANGED",
-            "PROVIDER_EMPTY",
-            "PROVIDER_TIMESTAMP_INVALID",
-            "PROVIDER_TIMEZONE_INVALID",
-            "PROVIDER_VALUE_INVALID",
-            "RETRIEVED_AFTER_DECISION_CUTOFF",
-            "RETRIEVED_BEFORE_OFFICIAL_CLOSE",
-        }:
+        elif (
+            result.reason.startswith("FRAME_")
+            or result.reason in _PROVIDER_FRAME_REASONS_V1
+        ):
             reason = "PROVIDER_FRAME_INCOMPLETE"
+            provider_frame_reason = _safe_provider_frame_reason_v1(result.reason)
         elif result.reason == "PROVIDER_IDENTITY_MISMATCH":
             reason = "PROVIDER_BASIS_INVALID"
         elif result.reason in {
@@ -3104,7 +3128,12 @@ def _cohort_outcome_v1(  # noqa: C901 - frozen failure translation
             reason = "PROVIDER_ERROR"
     else:
         reason = "PROVIDER_ERROR"
-    return CohortOutcomeV1(cohort.name, "INSUFFICIENT_EVIDENCE", reason)
+    return CohortOutcomeV1(
+        cohort.name,
+        "INSUFFICIENT_EVIDENCE",
+        reason,
+        provider_frame_reason=provider_frame_reason,
+    )
 
 
 def _has_effect_stopping_failure(outcomes: list[CohortOutcomeV1 | None]) -> bool:

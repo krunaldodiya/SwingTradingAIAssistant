@@ -5295,6 +5295,185 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
 
 
 @pytest.mark.parametrize(
+    ("fault", "expected_reason"),
+    [
+        ("coverage", "FRAME_COVERAGE_INCOMPLETE"),
+        ("schema", "FRAME_SCHEMA_INVALID"),
+        ("value", "FRAME_VALUE_INVALID"),
+        ("before_close", "RETRIEVED_BEFORE_OFFICIAL_CLOSE"),
+        ("after_cutoff", "RETRIEVED_AFTER_DECISION_CUTOFF"),
+    ],
+)
+def test_provider_frame_diagnostic_distinguishes_real_rejections(
+    fault: str, expected_reason: str
+) -> None:
+    request, selection = _admitted()
+    calls: list[str] = []
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        calls.append(cohort.name)
+        low_request = core.low.parse_capture_forward_request_v1(
+            core._canonical(cohort.request) + b"\n"
+        )
+        rows = {
+            member.provider_symbol: tuple(
+                {"open": 100, "high": 102, "low": 98, "close": 101, "volume": 1000}
+                for _ in low_request.schedule.sessions
+            )
+            for member in low_request.cohort
+        }
+        frame: dict[str, object] = {
+            "provider_source": core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            "timezone": "Asia/Kolkata",
+            "index": low_request.schedule.sessions,
+            "retrieved_at": _NOW,
+            "ohlcv": rows,
+        }
+        if fault == "coverage":
+            frame["index"] = low_request.schedule.sessions[:-1]
+        elif fault == "schema":
+            frame["timezone"] = "UTC"
+        elif fault == "value":
+            rows[low_request.cohort[0].provider_symbol][0]["close"] = float("nan")
+        elif fault == "before_close":
+            frame["retrieved_at"] = (
+                low_request.schedule.decision_session_official_close_at
+                - timedelta(seconds=1)
+            )
+        else:
+            frame["retrieved_at"] = low_request.decision_cutoff + timedelta(seconds=1)
+        failure = core.low._normalize_provider_frame(low_request, frame)
+        return core._cohort_outcome_v1(cohort, low_request, failure, selection, request)
+
+    result = core.execute_admitted_v1(request, selection, capture)
+    payload = core.serialize_result_v1(result)
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert calls == ["NIFTY_50", "NIFTY_NEXT_50"]
+    cohorts: Any = payload["cohorts"]
+    assert [row.get("provider_frame_reason") for row in cohorts] == [
+        expected_reason,
+        expected_reason,
+    ]
+    assert all(
+        row["code"] == "INSUFFICIENT_EVIDENCE"
+        and row["reason"] == "PROVIDER_FRAME_INCOMPLETE"
+        and row["revision_sha256"] is None
+        for row in cohorts
+    )
+
+
+def test_provider_frame_diagnostic_redacts_unknown_lower_reason() -> None:
+    request, selection = _admitted()
+    private_reason = "FRAME_PRIVATE_MEMBER_CANARY"
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        return core._cohort_outcome_v1(
+            cohort,
+            object(),
+            core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", private_reason
+            ),
+            selection,
+            request,
+        )
+
+    payload = core.serialize_result_v1(
+        core.execute_admitted_v1(request, selection, capture)
+    )
+    cohorts: Any = payload["cohorts"]
+    assert all(
+        row.get("provider_frame_reason") == "UNCLASSIFIED_FRAME_REJECTION"
+        for row in cohorts
+    )
+    assert private_reason not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("resource_limited", "rate_limited", "expected_reason"),
+    [
+        (True, True, "RESOURCE_LIMIT_EXCEEDED"),
+        (False, True, "PROVIDER_RATE_LIMITED"),
+    ],
+)
+def test_provider_frame_diagnostic_preserves_transport_failure_precedence(
+    resource_limited: bool, rate_limited: bool, expected_reason: str
+) -> None:
+    request, selection = _admitted()
+    session: Any = SimpleNamespace(
+        resource_limited=resource_limited, rate_limited=rate_limited
+    )
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        return core._cohort_outcome_v1(
+            cohort,
+            object(),
+            core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "FRAME_VALUE_INVALID"
+            ),
+            selection,
+            request,
+            session=session,
+        )
+
+    payload = core.serialize_result_v1(
+        core.execute_admitted_v1(request, selection, capture)
+    )
+    cohorts: Any = payload["cohorts"]
+    assert all(row["reason"] == expected_reason for row in cohorts)
+    assert all(row["provider_frame_reason"] is None for row in cohorts)
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_RATE_LIMITED"),
+        ("REUSED", None),
+    ],
+)
+def test_public_provider_frame_diagnostic_rechecks_forged_values(
+    code: str, reason: str | None
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name, "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+        ),
+    )
+    private_value = "PRIVATE_FRAME_DIAGNOSTIC_CANARY"
+
+    class MasqueradingReason(str):
+        def __hash__(self) -> int:
+            return hash("FRAME_VALUE_INVALID")
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    values: tuple[Any, ...] = (
+        private_value,
+        [private_value],
+        MasqueradingReason(private_value),
+    )
+    expected = (
+        "UNCLASSIFIED_FRAME_REJECTION"
+        if reason == "PROVIDER_FRAME_INCOMPLETE"
+        else None
+    )
+    for value in values:
+        forged = replace(
+            result.cohorts[0], code=code, reason=reason, provider_frame_reason=value
+        )
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(forged, result.cohorts[1]))
+        )
+        cohorts: Any = payload["cohorts"]
+        assert cohorts[0]["provider_frame_reason"] == expected
+        assert private_value not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
     "reason",
     [
         "CORRECTION_CONTENT_UNCHANGED",
@@ -5311,8 +5490,10 @@ def test_nonstorage_low_insufficiency_is_not_retention_failure(reason: str) -> N
         selection,
         request,
     )
-    assert outcome == core.CohortOutcomeV1(
-        "NIFTY_50", "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+    assert (outcome.cohort, outcome.code, outcome.reason) == (
+        "NIFTY_50",
+        "INSUFFICIENT_EVIDENCE",
+        "PROVIDER_FRAME_INCOMPLETE",
     )
 
 

@@ -465,6 +465,30 @@ After shared admission, each cohort returns exactly one ordered outcome:
   `PROVIDER_FRAME_INCOMPLETE`, `PROVIDER_BASIS_INVALID`, or
   `RETENTION_FAILED`.
 
+Under [Issue #176](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/176),
+each serialized cohort also carries nullable `provider_frame_reason`. For
+`INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE`, it preserves only an exact
+plain-string member of this closed lower-level reason set:
+
+- `FRAME_COVERAGE_INCOMPLETE`, `FRAME_SCHEMA_INVALID`, `FRAME_VALUE_INVALID`;
+- `PROVIDER_EMPTY`, `PROVIDER_TIMESTAMP_INVALID`, `PROVIDER_TIMEZONE_INVALID`,
+  `PROVIDER_VALUE_INVALID`;
+- `RETRIEVED_AFTER_DECISION_CUTOFF`, `RETRIEVED_BEFORE_OFFICIAL_CLOSE`; or
+- `CORRECTION_CONTENT_UNCHANGED`.
+
+An unknown, missing, non-string, or string-subclass detail becomes the fixed
+`UNCLASSIFIED_FRAME_REJECTION` marker. Every other outcome carries null,
+including resource/rate-limit failures that take precedence over a frame
+failure and successful/reused outcomes. Public serialization independently
+enforces this rule; it never echoes arbitrary lower-level detail.
+
+This additive diagnostic does not change the coarse outcome, request or
+immutable revision representation, admission, continuation, retry, resource,
+or output-byte rules. It identifies the existing rejection category, not an
+offending member, private value, or proven root cause. No rejected frame or
+dependency log is published or retained by this extension. A new diagnostic
+must not be retroactively attributed to an earlier capture that lacked it.
+
 The higher-level outcome is:
 
 - `COMPLETE_CURRENT_NIFTY100_CAPTURE` only when both ordered cohort outcomes
@@ -502,6 +526,8 @@ only by its own cohort identity and cannot authorize the union claim.
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |
 | Provider raises an ordinary non-rate exception or timeout | `INSUFFICIENT_EVIDENCE/PROVIDER_ERROR` for that cohort | Operator retry; fallback; partial cohort publish | Adapter failure tests |
 | Empty/unexpected-schema frame, missing/duplicated session or ticker, NaN/non-finite/non-positive price, negative/non-integral volume, or wrong timezone | `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE` for that cohort | Invented 429; member/session dropping; value repair | Frame matrix tests |
+| Distinct real schema, coverage, value, or retrieval-time frame failures | Existing incomplete cohort outcome plus its allowlisted `provider_frame_reason`; second cohort still follows existing precedence | New provider call, partial publication, changed failure classification | Real normalized-frame rejection through outcome composition and public serialization |
+| Unknown/forged private diagnostic, non-string or string-subclass value, or diagnostic attached to a non-frame/success outcome | Fixed `UNCLASSIFIED_FRAME_REJECTION` only for frame failure; null otherwise | Raw detail echo, diagnostic overriding resource/rate-limit failure, unbounded payload | Serialization redaction and combined-failure precedence regressions |
 | Complete yfinance-adjusted window crosses a provider-reported corporate action | Capture remains one adjusted revision; volume remains source-reported unadjusted; limitation retained | Upstox/raw substitution; local adjustment inference | Corporate-action basis test |
 | A later authorized request observes revised adjusted bytes, including when its admitted parent was written by an explicitly compatible historical runtime | New immutable revision/lineage; old revision and writer identity unchanged; writer upgrade alone is not changed provider content | Overwrite, historical-writer rejection, spurious correction, or relabelling old known-at | Revision/correction and compatible-writer lineage tests |
 | First cohort has provider/frame failure; second is unresolved | Second is still attempted; ordered tuple carries both exact rows | Nondeterministic short-circuit | Combined-failure precedence test |
