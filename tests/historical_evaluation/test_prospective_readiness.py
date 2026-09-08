@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.historical_evaluation.prospective_readiness as readiness_module
 from swing_trading_ai_assistant.historical_evaluation.prospective_readiness import (
     PROSPECTIVE_READINESS_CONTRACT_VERSION_V1,
     PROSPECTIVE_SOURCE_POLICY_VERSION_V1,
@@ -205,6 +206,42 @@ def request(
         execution_authorization=authorization,
         authorization_validation_receipt=validation,
     )
+
+
+@pytest.mark.parametrize("decoder", ("schedule", "universe", "corporate_action"))
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_readiness_preserves_decoder_fault_instead_of_asserting_corruption(
+    monkeypatch: pytest.MonkeyPatch, decoder: str, error_type: type[Exception]
+) -> None:
+    _, isins = prospective_universe()
+    supplied = request(
+        universe=(universe_candidate(),),
+        schedules=(schedule_candidate(),),
+        actions=tuple(empty_action(isin) for isin in isins),
+    )
+    primary = error_type("decoder implementation fault")
+
+    def fail_decode(*_args: object, **_kwargs: object) -> object:
+        raise primary
+
+    if decoder == "schedule":
+        monkeypatch.setattr(
+            readiness_module, "parse_canonical_schedule_bytes", fail_decode
+        )
+    elif decoder == "universe":
+        monkeypatch.setattr(
+            Nifty50UniverseSnapshotV1, "from_canonical_json_bytes", fail_decode
+        )
+    else:
+        monkeypatch.setattr(
+            CorporateActionSnapshotV1, "from_canonical_json_bytes", fail_decode
+        )
+    with pytest.raises(error_type) as raised:
+        evaluate_prospective_readiness_v1(supplied)
+    assert raised.value is primary
 
 
 def test_empty_bundle_is_valid_blocked_exact_50_and_zero_attempts() -> None:

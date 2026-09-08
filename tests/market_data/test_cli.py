@@ -1018,12 +1018,10 @@ def test_local_reader_preserves_primary_failure_and_closes_all_descriptors(
 
 
 @pytest.mark.parametrize("reader", ("historical", "regime"))
-@pytest.mark.parametrize("close_timing", ("before", "after"))
 def test_traversal_close_fault_preserves_primary_and_closes_owned_descriptors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     reader: str,
-    close_timing: str,
 ) -> None:
     input_file = tmp_path / "nested" / "input.json"
     input_file.parent.mkdir()
@@ -1035,7 +1033,8 @@ def test_traversal_close_fault_preserves_primary_and_closes_owned_descriptors(
     primary = AssertionError("traversal close fault")
     cleanup_error = OSError("secondary descriptor cleanup fault")
     opened: set[int] = set()
-    faulted = False
+    replacement: int | None = None
+    replacement_owned = False
     real_open, real_close = cli.os.open, cli.os.close
 
     def track_open(
@@ -1050,27 +1049,37 @@ def test_traversal_close_fault_preserves_primary_and_closes_owned_descriptors(
         return descriptor
 
     def close_with_fault(descriptor: int) -> None:
-        nonlocal faulted
+        nonlocal replacement, replacement_owned
         if descriptor not in opened:
+            if descriptor == replacement:
+                replacement_owned = False
             real_close(descriptor)
             return
-        if not faulted:
-            faulted = True
-            if close_timing == "after":
-                real_close(descriptor)
-                opened.discard(descriptor)
-            raise primary
+        opened.remove(descriptor)
         real_close(descriptor)
-        opened.discard(descriptor)
+        if replacement is None:
+            replacement = real_open("/dev/null", cli.os.O_RDONLY | cli.os.O_CLOEXEC)
+            replacement_owned = True
+            assert replacement == descriptor
+            raise primary
         raise cleanup_error
 
-    with monkeypatch.context() as scoped:
-        scoped.setattr(cli.os, "open", track_open)
-        scoped.setattr(cli.os, "close", close_with_fault)
-        with pytest.raises(AssertionError) as raised:
-            if reader == "historical":
-                cli._read_historical_local_file(input_file, 1024, admitted_root)
-            else:
-                cli._read_current_regime_input(input_file)
-        assert raised.value is primary
-    assert not opened
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(cli.os, "open", track_open)
+            scoped.setattr(cli.os, "close", close_with_fault)
+            with pytest.raises(AssertionError) as raised:
+                if reader == "historical":
+                    cli._read_historical_local_file(input_file, 1024, admitted_root)
+                else:
+                    cli._read_current_regime_input(input_file)
+            assert raised.value is primary
+        assert not opened
+        assert replacement is not None
+        assert replacement_owned
+        cli.os.fstat(replacement)
+    finally:
+        for descriptor in opened:
+            real_close(descriptor)
+        if replacement_owned and replacement is not None:
+            real_close(replacement)

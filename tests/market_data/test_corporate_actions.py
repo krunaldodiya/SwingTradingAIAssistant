@@ -399,6 +399,35 @@ def test_store_retains_idempotently_resolves_by_cutoff_and_keeps_raw_data(
         lease.close()
 
 
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_availability_preserves_unknown_retained_catalog_decoder_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    lease, catalog, store = _leased_store(tmp_path)
+    primary = error_type("catalog decoder implementation fault")
+    try:
+        store.retain(_snapshot("Dividend"))
+
+        def fail_metadata(_row: object) -> object:
+            raise primary
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                catalog_module, "_corporate_action_metadata_from_row", fail_metadata
+            )
+            with pytest.raises(error_type) as raised:
+                AdjustmentAvailabilityServiceV1(store).inspect(
+                    isin=_ISIN, knowledge_cutoff=_RETRIEVED
+                )
+            assert raised.value is primary
+    finally:
+        catalog.close()
+        lease.close()
+
+
 def test_cutoff_states_are_missing_stale_available_and_ambiguous(tmp_path) -> None:
     lease, catalog, store = _leased_store(tmp_path)
     try:

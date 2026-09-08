@@ -1399,8 +1399,9 @@ def _publish_archive_object(parent: int, name: str, raw: bytes) -> bool:
             offset += written
         os.fchmod(descriptor, 0o400)
         os.fsync(descriptor)
-        os.close(descriptor)
+        closed_descriptor = descriptor
         descriptor = None
+        os.close(closed_descriptor)
         with suppress(FileExistsError):
             os.link(
                 temporary,

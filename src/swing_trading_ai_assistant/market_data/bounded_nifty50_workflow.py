@@ -198,6 +198,7 @@ class CanonicalFileNifty50UniverseSourceV1:
 
     def load(self) -> Nifty50UniverseSnapshotV1:
         descriptor = -1
+        active_error: BaseException | None = None
         try:
             descriptor = os.open(
                 self.path,
@@ -209,7 +210,7 @@ class CanonicalFileNifty50UniverseSourceV1:
                 or not 0 < before.st_size <= MAX_UNIVERSE_JSON_BYTES_V1
                 or before.st_mode & 0o022
             ):
-                raise ValueError
+                raise UniverseSnapshotCorruptError("universe snapshot corrupt")
             chunks: list[bytes] = []
             remaining = before.st_size
             while remaining:
@@ -226,13 +227,21 @@ class CanonicalFileNifty50UniverseSourceV1:
                 or _file_identity(before) != _file_identity(after)
                 or _file_identity(after) != _file_identity(entry)
             ):
-                raise ValueError
+                raise UniverseSnapshotCorruptError("universe snapshot corrupt")
             return Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload)
-        except Exception:
-            raise UniverseSnapshotCorruptError("universe snapshot corrupt") from None
+        except OSError:
+            active_error = UniverseSnapshotCorruptError("universe snapshot corrupt")
+            raise active_error from None
+        except BaseException as error:
+            active_error = error
+            raise
         finally:
             if descriptor >= 0:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                except BaseException:
+                    if active_error is None:
+                        raise
 
 
 class Nifty50SymbolDownloadPortV1(Protocol):

@@ -772,8 +772,9 @@ def _open_snapshot_directories(
         object_fd = _open_directory(
             operation, snapshot_fd, f"sha256={digest}", create=create
         )
-        os.close(snapshot_fd)
+        previous_snapshot_fd = snapshot_fd
         snapshot_fd = None
+        os.close(previous_snapshot_fd)
         observations_fd = _open_directory(
             operation, object_fd, "observations", create=create
         )

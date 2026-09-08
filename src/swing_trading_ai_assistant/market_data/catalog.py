@@ -711,12 +711,14 @@ class DuckDBCatalog:
                     self._source_catalog_identity,
                     target_descriptor,
                 )
-                os.close(target_descriptor)
+                closing_target_descriptor = target_descriptor
                 target_descriptor = None
+                os.close(closing_target_descriptor)
                 os.fsync(operation.descriptor)
                 operation.ensure_live()
-            os.close(snapshot_descriptor)
+            closing_snapshot_descriptor = snapshot_descriptor
             snapshot_descriptor = None
+            os.close(closing_snapshot_descriptor)
         except CatalogError as error:
             publication_error = error
             raise

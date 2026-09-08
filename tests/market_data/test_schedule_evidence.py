@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -617,64 +618,6 @@ def test_calendar_classification_propagates_computation_fault(
     assert raised.value is failure
 
 
-@pytest.mark.parametrize("close_timing", ("before", "after"))
-def test_open_parent_close_fault_preserves_primary_and_closes_owned_descriptors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_timing: str
-) -> None:
-    _, lease = _store(tmp_path)
-    primary = AssertionError("traversal close fault")
-    cleanup_error = OSError("secondary descriptor cleanup fault")
-    opened: set[int] = set()
-    faulted = False
-    real_dup, real_open, real_close = (
-        schedule_module.os.dup,
-        schedule_module.os.open,
-        schedule_module.os.close,
-    )
-
-    def track_dup(descriptor: int) -> int:
-        duplicate = real_dup(descriptor)
-        opened.add(duplicate)
-        return duplicate
-
-    def track_open(
-        path: str,
-        flags: int,
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> int:
-        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
-        if path in ("calendar-schedules", "sha256"):
-            opened.add(descriptor)
-        return descriptor
-
-    def close_with_fault(descriptor: int) -> None:
-        nonlocal faulted
-        if descriptor not in opened:
-            real_close(descriptor)
-            return
-        if not faulted:
-            faulted = True
-            if close_timing == "after":
-                real_close(descriptor)
-                opened.discard(descriptor)
-            raise primary
-        real_close(descriptor)
-        opened.discard(descriptor)
-        raise cleanup_error
-
-    with lease, lease.root_operation(tmp_path) as operation:
-        with monkeypatch.context() as scoped:
-            scoped.setattr(schedule_module.os, "dup", track_dup)
-            scoped.setattr(schedule_module.os, "open", track_open)
-            scoped.setattr(schedule_module.os, "close", close_with_fault)
-            with pytest.raises(AssertionError) as raised:
-                schedule_module._open_parent(operation, create=True)
-            assert raised.value is primary
-        assert not opened
-
-
 @pytest.mark.parametrize("error_type", (OSError, AssertionError))
 def test_publication_cleanup_failure_cannot_report_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
@@ -711,3 +654,110 @@ def test_publication_cleanup_failure_cannot_report_success(
         assert _path(tmp_path, schedule_digest(schedule)).read_bytes() == (
             canonical_schedule_bytes(schedule)
         )
+
+
+def test_open_parent_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, lease = _store(tmp_path)
+    primary = AssertionError("post-close parent traversal fault")
+    replacement: int | None = None
+    child_descriptors: list[int] = []
+    target: int | None = None
+    real_dup = schedule_module.os.dup
+    real_open = schedule_module.os.open
+    real_close = schedule_module.os.close
+
+    def track_dup(descriptor: int) -> int:
+        nonlocal target
+        target = real_dup(descriptor)
+        return target
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path in ("calendar-schedules", "sha256"):
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with lease, lease.root_operation(tmp_path) as operation:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(schedule_module.os, "dup", track_dup)
+                scoped.setattr(schedule_module.os, "open", track_open)
+                scoped.setattr(schedule_module.os, "close", release_then_fail)
+                with pytest.raises(AssertionError) as raised:
+                    schedule_module._open_parent(operation, create=True)
+                assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert child_descriptors
+            for descriptor in child_descriptors:
+                with pytest.raises(OSError):
+                    os.fstat(descriptor)
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)
+
+
+def test_schedule_publication_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    primary = AssertionError("post-close publication fault")
+    replacement: int | None = None
+    target: int | None = None
+    real_open = schedule_module.os.open
+    real_close = schedule_module.os.close
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal target
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path.startswith(".schedule-"):
+            target = descriptor
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with lease, monkeypatch.context() as scoped:
+            scoped.setattr(schedule_module.os, "open", track_open)
+            scoped.setattr(schedule_module.os, "close", release_then_fail)
+            with pytest.raises(AssertionError) as raised:
+                store.retain(_schedule())
+            assert raised.value is primary
+        assert replacement is not None
+        os.fstat(replacement)
+        assert not list(tmp_path.rglob(".schedule-*.tmp"))
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)

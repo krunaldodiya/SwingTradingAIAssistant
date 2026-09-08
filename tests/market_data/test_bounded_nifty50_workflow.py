@@ -710,6 +710,61 @@ def test_aggregate_status_precedence_and_invalid_renderer_fail_closed() -> None:
     assert decoded["status"] == "FAILED"
 
 
+@pytest.mark.parametrize(
+    ("error_type", "cleanup_fault"),
+    (
+        (AssertionError, False),
+        (KeyError, False),
+        (RuntimeError, False),
+        (Exception, False),
+        (TypeError, False),
+        (ValueError, False),
+        (RuntimeError, True),
+    ),
+)
+def test_canonical_file_source_preserves_decoder_fault_and_releases_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+    cleanup_fault: bool,
+) -> None:
+    path = tmp_path / "universe.json"
+    path.write_bytes(_snapshot().canonical_json_bytes())
+    path.chmod(0o400)
+    source = CanonicalFileNifty50UniverseSourceV1(path.resolve())
+    primary = error_type("decoder implementation fault")
+    cleanup = TypeError("secondary close fault")
+    owned: set[int] = set()
+    real_open, real_close = workflow_module.os.open, workflow_module.os.close
+
+    def open_source(path: Path, flags: int) -> int:
+        descriptor = real_open(path, flags)
+        owned.add(descriptor)
+        return descriptor
+
+    def close_source(descriptor: int) -> None:
+        owned.remove(descriptor)
+        real_close(descriptor)
+        if cleanup_fault:
+            raise cleanup
+
+    def fail_member(_value: object) -> object:
+        raise primary
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(workflow_module.os, "open", open_source)
+            scoped.setattr(workflow_module.os, "close", close_source)
+            scoped.setattr(universe_module, "_parse_member", fail_member)
+            with pytest.raises(error_type) as raised:
+                source.load()
+            assert raised.value is primary
+        assert not owned
+    finally:
+        for descriptor in owned:
+            real_close(descriptor)
+
+
 def test_source_short_read_and_identity_change_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -723,10 +778,21 @@ def test_source_short_read_and_identity_change_fail_closed(
         source.load()
     monkeypatch.undo()
 
-    identities = iter(((1,), (1,), (2,)))
-    monkeypatch.setattr(
-        workflow_module, "_file_identity", lambda _value: next(identities)
-    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(b"{}")
+    replacement.chmod(0o400)
+    real_read = workflow_module.os.read
+    replaced = False
+
+    def replace_named_entry(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        raw = real_read(descriptor, size)
+        if not replaced:
+            replacement.replace(path)
+            replaced = True
+        return raw
+
+    monkeypatch.setattr(workflow_module.os, "read", replace_named_entry)
     with pytest.raises(UniverseSnapshotCorruptError):
         source.load()
 

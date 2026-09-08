@@ -679,7 +679,7 @@ def _parse_schedule_json_int(value: str) -> int:
 
 def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int | None:
     root_fd = operation.descriptor
-    current = os.dup(root_fd)
+    current: int | None = os.dup(root_fd)
     child: int | None = None
     try:
         for component in ("calendar-schedules", "sha256"):
@@ -688,7 +688,9 @@ def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int |
                 child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
             except FileNotFoundError:
                 if not create:
-                    os.close(current)
+                    previous = current
+                    current = None
+                    os.close(previous)
                     return None
                 operation.ensure_live()
                 os.mkdir(component, mode=0o700, dir_fd=current)
@@ -696,16 +698,23 @@ def _open_parent(operation: StorageRootLeaseOperation, *, create: bool) -> int |
                 os.fsync(current)
                 operation.ensure_live()
                 child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
-            os.close(current)
+            previous = current
+            current = None
+            os.close(previous)
             current = child
             child = None
         return current
     except BaseException:
         if child is not None:
+            previous_child = child
+            child = None
             with suppress(BaseException):
-                os.close(child)
-        with suppress(BaseException):
-            os.close(current)
+                os.close(previous_child)
+        if current is not None:
+            previous = current
+            current = None
+            with suppress(BaseException):
+                os.close(previous)
         raise
 
 
@@ -788,8 +797,9 @@ def _publish_bytes(
             raise ScheduleEvidenceValidationError
         operation.ensure_live()
         os.fsync(descriptor)
-        os.close(descriptor)
+        previous_descriptor = descriptor
         descriptor = None
+        os.close(previous_descriptor)
         try:
             operation.ensure_live()
             os.link(
@@ -923,8 +933,10 @@ def _finish_publication(
 ) -> None:
     primary_error = active_exception
     if descriptor is not None:
+        previous_descriptor = descriptor
+        descriptor = None
         try:
-            os.close(descriptor)
+            os.close(previous_descriptor)
         except BaseException as error:
             if primary_error is None:
                 primary_error = error

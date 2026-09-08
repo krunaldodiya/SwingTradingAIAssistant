@@ -539,8 +539,10 @@ def _open_directory_without_symlink_components(root: Path) -> int:
     try:
         for component in root.parts[1:]:
             opened = os.open(component, _ROOT_FLAGS, dir_fd=descriptor)
+            previous = descriptor
+            descriptor = None
             try:
-                if not _close_descriptor(descriptor):
+                if not _close_descriptor(previous):
                     raise StorageRootLeaseError
             except BaseException:
                 with suppress(BaseException):

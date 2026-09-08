@@ -1118,9 +1118,10 @@ def _open_partition_descriptor(
         parts = relative_path.split("/")
         for component in parts[:-1]:
             child = os.open(component, _DIRECTORY_FLAGS, dir_fd=parent)
-            os.close(parent)
+            old_parent = parent
             parent = child
             child = None
+            os.close(old_parent)
         return parent, os.open(parts[-1], _FILE_FLAGS, dir_fd=parent)
     except BaseException as error:
         _close_partition_descriptors(parent, child, error)

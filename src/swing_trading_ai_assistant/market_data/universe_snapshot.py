@@ -713,8 +713,9 @@ def _publish_exact(
                 offset += written
             os.fsync(fd)
             temporary_identity = _private_object_identity(fd)
-            os.close(fd)
+            closed_fd = fd
             fd = -1
+            os.close(closed_fd)
             verify_fd = os.open(
                 temporary,
                 os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -511,6 +512,51 @@ def test_publish_same_payload_race_is_idempotent_and_cleans_temporary(
         assert (tmp_path / "snapshot.json").read_bytes() == b"expected"
     finally:
         os.close(descriptor)
+
+
+def test_publish_exact_relinquishes_recycled_temporary_descriptor(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    primary = AssertionError("released universe close fault")
+    real_close = universe_module.os.close
+    real_open = universe_module.os.open
+    replacement: int | None = None
+    faulted = False
+
+    class Operation:
+        def ensure_live(self) -> None:
+            pass
+
+    def release_then_raise(fd: int) -> None:
+        nonlocal faulted, replacement
+        if not faulted:
+            faulted = True
+            real_close(fd)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == fd
+            raise primary
+        real_close(fd)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(universe_module.os, "close", release_then_raise)
+            with pytest.raises(AssertionError) as raised:
+                universe_module._publish_exact(
+                    Operation(), descriptor, "snapshot.json", b"retained"
+                )
+            assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert not (tmp_path / "snapshot.json").exists()
+            quarantines = tuple(tmp_path.iterdir())
+            assert len(quarantines) == 1
+            assert (quarantines[0] / "entry").read_bytes() == b"retained"
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
+        real_close(descriptor)
 
 
 def test_resolve_rejects_invalid_request_and_metadata_mismatch(tmp_path) -> None:

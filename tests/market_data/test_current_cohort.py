@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, replace
@@ -1752,6 +1754,44 @@ def test_default_cohort_cli_propagates_closed_month_catalog_execution_fault_with
     assert captured.out == ""
     assert captured.err == "internal_error\n"
     assert not (root / ".current-fact-archive-v1").exists()
+
+
+def test_publish_archive_object_relinquishes_recycled_temporary_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    primary = AssertionError("released archive close fault")
+    real_close = cohort_module.os.close
+    real_open = cohort_module.os.open
+    replacement: int | None = None
+    faulted = False
+
+    def release_then_raise(descriptor: int) -> None:
+        nonlocal faulted, replacement
+        if not faulted:
+            faulted = True
+            real_close(descriptor)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(cohort_module.os, "close", release_then_raise)
+            with pytest.raises(AssertionError) as raised:
+                cohort_module._publish_archive_object(
+                    parent, "archive.json", b"retained"
+                )
+            assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert tuple(tmp_path.iterdir()) == ()
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
+        real_close(parent)
 
 
 @pytest.mark.parametrize("cleanup_fault", (False, True))

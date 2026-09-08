@@ -617,7 +617,7 @@ class AdjustmentAvailabilityServiceV1:
             state = CorporateActionEvidenceStateV1.STALE
         except CorporateActionMissingError:
             state = CorporateActionEvidenceStateV1.MISSING
-        except Exception:
+        except CorporateActionCorruptError:
             state = CorporateActionEvidenceStateV1.CORRUPT
         return _availability(isin, knowledge_cutoff, state, None, ())
 

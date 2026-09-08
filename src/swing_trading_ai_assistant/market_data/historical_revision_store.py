@@ -2300,6 +2300,13 @@ def historical_upstox_raw_current_identities_v1() -> tuple[str, str, str]:
     return _required_identities()
 
 
+def _parse_json_integer(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _RetainedRevisionCorruptionError from None
+
+
 def _closed_json(  # noqa: C901 - one closed untrusted JSON boundary
     raw: object, maximum: int
 ) -> dict[str, Any]:
@@ -2321,6 +2328,7 @@ def _closed_json(  # noqa: C901 - one closed untrusted JSON boundary
         value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=reject_pairs,
+            parse_int=_parse_json_integer,
             parse_float=reject_float,
             parse_constant=reject_float,
         )

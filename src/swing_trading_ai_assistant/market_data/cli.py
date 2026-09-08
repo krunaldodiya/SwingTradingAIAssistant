@@ -600,20 +600,18 @@ def _read_historical_local_file(
     parts = _absolute_no_follow_parts(path)
     parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     descriptor: int | None = None
-    next_parent: int | None = None
     active_exception: BaseException | None = None
     try:
         metadata = os.fstat(parent)
         parent_identities = {(metadata.st_dev, metadata.st_ino)}
         for part in parts[:-1]:
-            next_parent = os.open(
+            previous_parent = parent
+            parent = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
-            os.close(parent)
-            parent = next_parent
-            next_parent = None
+            os.close(previous_parent)
             metadata = os.fstat(parent)
             parent_identities.add((metadata.st_dev, metadata.st_ino))
         if (
@@ -662,7 +660,7 @@ def _read_historical_local_file(
         active_exception = error
         raise
     finally:
-        _close_cli_file_descriptors((descriptor, next_parent, parent), active_exception)
+        _close_cli_file_descriptors((descriptor, parent), active_exception)
 
 
 def _admit_regime_current_argv(argv: list[str] | None) -> bool:
@@ -800,18 +798,16 @@ def _read_current_regime_input(path: Path) -> bytes:
         "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )
     file_descriptor: int | None = None
-    next_descriptor: int | None = None
     active_exception: BaseException | None = None
     try:
         for part in parts[:-1]:
-            next_descriptor = os.open(
+            previous_descriptor = descriptor
+            descriptor = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=descriptor,
             )
-            os.close(descriptor)
-            descriptor = next_descriptor
-            next_descriptor = None
+            os.close(previous_descriptor)
         file_descriptor = os.open(
             parts[-1],
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -841,9 +837,7 @@ def _read_current_regime_input(path: Path) -> bytes:
         active_exception = error
         raise
     finally:
-        _close_cli_file_descriptors(
-            (file_descriptor, next_descriptor, descriptor), active_exception
-        )
+        _close_cli_file_descriptors((file_descriptor, descriptor), active_exception)
 
 
 def _run_current_cohort_command(

@@ -9,6 +9,7 @@ import pytest
 
 from swing_trading_ai_assistant.market_data import (
     historical,
+    historical_revision_store,
     historical_upstox_raw,
     instrument_snapshot,
     instruments,
@@ -104,6 +105,12 @@ def _journal_bytes() -> bytes:
             id="raw-closed",
         ),
         pytest.param(
+            historical_revision_store,
+            lambda value: historical_revision_store._closed_json(value, 1_000_000),
+            _RAW_CANONICAL_BYTES,
+            id="retained-revision-closed",
+        ),
+        pytest.param(
             instrument_snapshot,
             instrument_snapshot._parse_canonical_journal,
             _journal_bytes(),
@@ -172,6 +179,12 @@ def test_historical_decoder_preserves_memory_error(
             b'{"schema_version":' + b"9" * 5000 + b"}",
             historical_upstox_raw._MalformedSourceJson,
             id="raw-closed",
+        ),
+        pytest.param(
+            lambda value: historical_revision_store._closed_json(value, 1_000_000),
+            b'{"schema_version":' + b"9" * 5000 + b"}",
+            historical_revision_store._RetainedRevisionCorruptionError,
+            id="retained-revision-closed",
         ),
         pytest.param(
             instrument_snapshot._parse_canonical_journal,

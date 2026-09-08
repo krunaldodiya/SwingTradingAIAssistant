@@ -274,6 +274,79 @@ def test_leased_catalog_propagates_unknown_publication_fault_after_cleanup(
         assert frozenset(root.iterdir()) == initial_entries
 
 
+@pytest.mark.parametrize("close_target", ("target", "snapshot"))
+def test_catalog_publication_close_fault_preserves_recycled_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_target: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    primary = AssertionError("publication close fault")
+    selected: int | None = None
+    replacement: int | None = None
+    replacement_owned = False
+    owned: set[int] = set()
+    real_open, real_close = os.open, os.close
+
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        snapshot_path = catalog._snapshot_path
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+
+        def track_open(
+            path: str | Path,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            nonlocal selected
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            owned.add(descriptor)
+            if selected is None and (
+                (
+                    close_target == "target"
+                    and str(path).startswith(".catalog.duckdb.")
+                    and str(path).endswith(".tmp")
+                )
+                or (close_target == "snapshot" and path == snapshot_path)
+            ):
+                selected = descriptor
+            return descriptor
+
+        def close_with_fault(descriptor: int) -> None:
+            nonlocal replacement, replacement_owned
+            owned.discard(descriptor)
+            if descriptor == replacement:
+                replacement_owned = False
+            real_close(descriptor)
+            if replacement is None and selected is not None and descriptor == selected:
+                replacement = real_open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+                replacement_owned = True
+                assert replacement == descriptor
+                raise primary
+
+        try:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(os, "open", track_open)
+                scoped.setattr(os, "close", close_with_fault)
+                with pytest.raises(AssertionError) as raised:
+                    catalog.close()
+                assert raised.value is primary
+            assert not owned
+            assert replacement is not None
+            assert replacement_owned
+            os.fstat(replacement)
+            assert not snapshot_directory.exists()
+        finally:
+            for descriptor in owned:
+                real_close(descriptor)
+            if replacement_owned and replacement is not None:
+                real_close(replacement)
+
+
 def test_leased_catalog_close_fault_propagates_without_publication(
     tmp_path: Path,
 ) -> None:

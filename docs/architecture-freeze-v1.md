@@ -556,9 +556,10 @@ successful fact.
 
 A module advances only after its requirements and validation are complete.
 
-Prior repositories are non-authoritative references. Their concepts may be
-studied, but logic must be independently specified, tested, and validated for
-this project's equity-only scope before adoption.
+Previously supplied external trading repositories are withdrawn from this
+project's reference scope. Do not consult, copy, adapt, or derive trading
+concepts or test oracles from them. Official provider/dependency documentation,
+approved books, and verified project code remain admissible.
 
 ## Internal errors and operator diagnostics
 
@@ -572,16 +573,25 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
   evidence rejection. Known validation and decoder errors are converted only at
   their narrow input/data boundary.
+  Interpreter-limit failures while decoding actual retained JSON integers remain
+  typed corruption; an unrelated decoder `ValueError` still propagates.
   Schedule consumers, partition recovery, range ingestion, and current-cohort
   dependencies follow the same distinction: an execution fault stops the invocation
   without invalidating or quarantining retained evidence. Cleanup preserves
   an active primary failure when cleanup also fails; an unexpected standalone
   cleanup failure propagates.
+  Descriptor ownership is relinquished before a standalone close: a close failure
+  may follow release and reuse of that descriptor number, so cleanup must not retry
+  it. Other owned resources are still closed, and existing quarantine and journal
+  safeguards preserve uncertain objects.
 - Expected schedule, snapshot, and cohort-selection validation signals retain
   `ValueError` compatibility through explicit subclasses. Expected lease-authority failures
   use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
   uses `PartitionReadFailureV1` with the existing finite failure categories;
   an unrelated exception's attributes do not establish an evidence finding.
+  Canonical universe-file loading, corporate-action availability, and prospective
+  readiness catch only their owned validation or documented I/O failures. A lower
+  decoder or catalog defect does not produce a `CORRUPT` evidence state or reason.
 - Recognized malformed/unsupported Arrow data signals remain data failures.
   Native resource exhaustion and cancellation do not assert corrupt evidence.
   Query timeout/resource outcomes remain distinct; unexpected SQL implementation
@@ -594,6 +604,12 @@ unsupported, missing, corrupt, conflicting, invalid, or historically unavailable
   catalog evidence or invalid membership. Bounded wrappers retain their generic
   `FAILED` result with no member results when setup fails unexpectedly.
   Clock and cancellation callback execution faults are not cancellation evidence.
+  Current same-pass raw consumers stop a generic query execution failure before
+  completion-time or raw-evidence reduction; it is not missing, invalid,
+  conflicted, or future-known raw evidence. Supported-data failures retain their
+  existing precedence. The separate prerequisite-manifest service and CLI keep
+  their sanitized no-manifest failure boundary: exit code `3`, empty stdout, and
+  the fixed unavailable diagnostic.
 - Before a completed public response, the `market-data` CLI maps an unexpected
   exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
   stderr. Parser rejection is exactly `request_invalid\n`; existing bounded

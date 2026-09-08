@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
 import stat
@@ -1008,3 +1009,56 @@ def test_live_authority_rejects_standalone_path_close_failure(
         assert target is not None
         with pytest.raises(OSError):
             os.fstat(target)
+
+
+def test_component_traversal_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = AssertionError("post-close traversal fault")
+    target: int | None = None
+    replacement: int | None = None
+    child_descriptors: list[int] = []
+    real_open = lease_module.os.open
+    real_close = lease_module.os.close
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal target
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == os.sep:
+            target = descriptor
+        else:
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(lease_module.os, "open", track_open)
+            scoped.setattr(lease_module.os, "close", release_then_fail)
+            with pytest.raises(AssertionError) as raised:
+                lease_module._open_directory_without_symlink_components(tmp_path)
+            assert raised.value is primary
+        assert replacement is not None
+        os.fstat(replacement)
+        assert child_descriptors
+        for descriptor in child_descriptors:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)

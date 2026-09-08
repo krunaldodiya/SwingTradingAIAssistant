@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import replace
@@ -712,29 +713,17 @@ def test_partition_hardlink_is_rejected_at_read_boundary(tmp_path: Path) -> None
     )
 
 
-@pytest.mark.parametrize("close_timing", ("before", "after"))
-def test_open_partition_descriptor_close_fault_preserves_primary_and_closes_owned_descriptors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_timing: str
+def test_open_partition_descriptor_relinquishes_recycled_parent_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "first" / "second").mkdir(parents=True)
-    partition = tmp_path / "first" / "second" / "bars.parquet"
-    partition.write_bytes(b"partition")
-    partition.chmod(0o600)
+    (tmp_path / "first").mkdir()
     root_descriptor = os.open(tmp_path, coverage_module._DIRECTORY_FLAGS)
-    primary = AssertionError("traversal close fault")
-    cleanup_error = OSError("secondary descriptor cleanup fault")
-    opened: set[int] = set()
+    primary = AssertionError("released parent close fault")
+    real_close = coverage_module.os.close
+    real_open = coverage_module.os.open
+    replacement: int | None = None
+    child: int | None = None
     faulted = False
-    real_dup, real_open, real_close = (
-        coverage_module.os.dup,
-        coverage_module.os.open,
-        coverage_module.os.close,
-    )
-
-    def track_dup(descriptor: int) -> int:
-        duplicate = real_dup(descriptor)
-        opened.add(duplicate)
-        return duplicate
 
     def track_open(
         path: str,
@@ -743,35 +732,38 @@ def test_open_partition_descriptor_close_fault_preserves_primary_and_closes_owne
         *,
         dir_fd: int | None = None,
     ) -> int:
+        nonlocal child
         descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
-        opened.add(descriptor)
+        if path == "first":
+            child = descriptor
         return descriptor
 
-    def close_with_fault(descriptor: int) -> None:
-        nonlocal faulted
-        if descriptor not in opened:
-            real_close(descriptor)
-            return
+    def release_then_raise(descriptor: int) -> None:
+        nonlocal faulted, replacement
         if not faulted:
             faulted = True
-            if close_timing == "after":
-                real_close(descriptor)
-                opened.discard(descriptor)
+            real_close(descriptor)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
             raise primary
         real_close(descriptor)
-        opened.discard(descriptor)
-        raise cleanup_error
 
     try:
         with monkeypatch.context() as scoped:
-            scoped.setattr(coverage_module.os, "dup", track_dup)
             scoped.setattr(coverage_module.os, "open", track_open)
-            scoped.setattr(coverage_module.os, "close", close_with_fault)
+            scoped.setattr(coverage_module.os, "close", release_then_raise)
             with pytest.raises(AssertionError) as raised:
                 coverage_module._open_partition_descriptor(
-                    root_descriptor, "first/second/bars.parquet"
+                    root_descriptor, "first/bars"
                 )
             assert raised.value is primary
-        assert not opened
+            assert replacement is not None
+            os.fstat(replacement)
+            assert child is not None
+            with pytest.raises(OSError):
+                os.fstat(child)
     finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
         real_close(root_descriptor)

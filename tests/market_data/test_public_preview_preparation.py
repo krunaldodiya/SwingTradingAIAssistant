@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import errno
 import gzip
 import json
@@ -2079,3 +2080,67 @@ def test_schedule_source_preserves_read_failure_over_close_failure(
     assert raised.value is primary
     assert faulted_descriptors
     assert closed_descriptors == faulted_descriptors
+
+
+def test_snapshot_directory_opening_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    primary = AssertionError("post-close snapshot traversal fault")
+    target: int | None = None
+    replacement: int | None = None
+    object_descriptors: list[int] = []
+    real_open_root = snapshot_module._open_snapshot_root
+    real_open_directory = snapshot_module._open_directory
+    real_open = snapshot_module.os.open
+    real_close = snapshot_module.os.close
+
+    def track_root(
+        operation: snapshot_module.StorageRootLeaseOperation, *, create: bool
+    ) -> int:
+        nonlocal target
+        target = real_open_root(operation, create=create)
+        return target
+
+    def track_directory(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        name: str,
+        *,
+        create: bool,
+    ) -> int:
+        descriptor = real_open_directory(operation, parent_fd, name, create=create)
+        if name.startswith("sha256="):
+            object_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with acquired.lease as lease, lease.root_operation(tmp_path) as operation:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(snapshot_module, "_open_snapshot_root", track_root)
+                scoped.setattr(snapshot_module, "_open_directory", track_directory)
+                scoped.setattr(snapshot_module.os, "close", release_then_fail)
+                with pytest.raises(AssertionError) as raised:
+                    snapshot_module._open_snapshot_directories(
+                        operation, "a" * 64, create=True
+                    )
+                assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert len(object_descriptors) == 1
+            with pytest.raises(OSError):
+                os.fstat(object_descriptors[0])
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)
