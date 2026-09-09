@@ -34,6 +34,7 @@ from .parquet import (
     IncompatibleCandleParquetSchemaError,
     MissingCandleSchemaVersionError,
     UnsupportedCandleSchemaVersionError,
+    borrow_parquet_stream,
     iter_candles_from_parquet,
 )
 from .partition_directory_maintenance import (
@@ -730,8 +731,7 @@ class PartitionRecoveryObserver:
                         or descriptor_stat.st_ino != path_stat.st_ino
                     ):
                         return _Artifact(True, False, None, None)
-                    with os.fdopen(descriptor, "rb", closefd=True) as stream:
-                        descriptor = -1
+                    with borrow_parquet_stream(descriptor, "rb") as stream:
                         digest = hashlib.sha256()
                         for chunk in iter(lambda: stream.read(64 * 1024), b""):
                             digest.update(chunk)

@@ -25,6 +25,7 @@ from .parquet import (
     IncompatibleCandleParquetSchemaError,
     MissingCandleSchemaVersionError,
     UnsupportedCandleSchemaVersionError,
+    borrow_parquet_stream,
     iter_candles_from_parquet,
     write_candles_parquet,
 )
@@ -715,7 +716,7 @@ def _create_temp(parent_fd: int) -> tuple[str, int]:
 
 def _write_temp(descriptor: int, rows: tuple[CanonicalCandle, ...]) -> None:
     try:
-        with os.fdopen(os.dup(descriptor), "wb") as handle:
+        with borrow_parquet_stream(descriptor, "wb") as handle:
             write_candles_parquet(handle, rows, batch_size=MAX_PARQUET_BATCH_SIZE)
         os.fsync(descriptor)
     except (OSError, *ARROW_DATA_ERRORS, CandleParquetConversionError):
@@ -736,7 +737,7 @@ def _validate_fd(
         raise error_type("partition publication validation failed")
     try:
         with (
-            os.fdopen(os.dup(descriptor), "rb") as handle,
+            borrow_parquet_stream(descriptor, "rb") as handle,
             iter_candles_from_parquet(
                 handle, batch_size=MAX_PARQUET_BATCH_SIZE
             ) as reader,
@@ -768,7 +769,7 @@ def _validate_fd(
 def _sha256_fd(descriptor: int) -> str:
     digest = hashlib.sha256()
     os.lseek(descriptor, 0, os.SEEK_SET)
-    with os.fdopen(os.dup(descriptor), "rb") as handle:
+    with borrow_parquet_stream(descriptor, "rb") as handle:
         while data := handle.read(_READ_BUFFER_SIZE):
             digest.update(data)
     return digest.hexdigest()

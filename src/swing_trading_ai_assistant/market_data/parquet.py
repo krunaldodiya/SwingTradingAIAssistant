@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+import os
+from collections.abc import Generator, Iterable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, BinaryIO, Final, Self, cast
+from typing import Any, BinaryIO, Final, Literal, Self, cast
 
 import pyarrow as _pyarrow
 import pyarrow.compute as _pyarrow_compute
@@ -97,6 +99,22 @@ class CandleParquetConversionError(ValueError):
 
 class NonRepresentableCandleParquetValueError(CandleParquetConversionError):
     """Raised when a logical value cannot be represented in Parquet schema v1."""
+
+
+@contextmanager
+def borrow_parquet_stream(
+    descriptor: int, mode: Literal["rb", "wb"]
+) -> Generator[BinaryIO, None, None]:
+    """Keep descriptor ownership with the caller and preserve active failures."""
+    stream = os.fdopen(descriptor, mode, closefd=False)
+    try:
+        yield stream
+    except BaseException:
+        with suppress(BaseException):
+            stream.close()
+        raise
+    else:
+        stream.close()
 
 
 class CandleParquetReader(Iterator[tuple[CanonicalCandle, ...]]):
@@ -204,7 +222,7 @@ def write_candles_parquet(
 ) -> None:
     """Write bounded canonical batches with the fixed v1 compatibility settings."""
     _validate_batch_size(batch_size)
-    with pq.ParquetWriter(
+    writer = pq.ParquetWriter(
         path,
         CANDLE_ARROW_SCHEMA,
         version="2.6",
@@ -218,7 +236,8 @@ def write_candles_parquet(
         allow_truncated_timestamps=False,
         use_deprecated_int96_timestamps=False,
         store_schema=True,
-    ) as writer:
+    )
+    try:
         batch: list[CanonicalCandle] = []
         for candle in candles:
             _validate_candle_representability(candle)
@@ -228,6 +247,12 @@ def write_candles_parquet(
                 batch.clear()
         if batch:
             writer.write_batch(_candle_record_batch(batch))
+    except BaseException:
+        with suppress(BaseException):
+            writer.close()
+        raise
+    else:
+        writer.close()
 
 
 def iter_candles_from_parquet(

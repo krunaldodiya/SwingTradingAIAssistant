@@ -806,6 +806,106 @@ def test_partition_reader_propagates_internal_decode_fault_and_releases_admissio
 
 
 @pytest.mark.parametrize(
+    "failure_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_partition_stream_construction_fault_releases_all_reader_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+    primary = failure_type("stream construction defect")
+    original_dup = coverage_module.os.dup
+    duplicates: list[int] = []
+    leaked: list[int] = []
+
+    def tracked_dup(source: int) -> int:
+        duplicate = original_dup(source)
+        duplicates.append(duplicate)
+        return duplicate
+
+    evaluator = StoredCoverageEvaluatorV1()
+    with evaluator.admit(tmp_path) as admission, monkeypatch.context() as patch:
+        patch.setattr(coverage_module.os, "dup", tracked_dup)
+        patch.setattr(
+            coverage_module.os,
+            "fdopen",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+        try:
+            with pytest.raises(failure_type) as raised:
+                coverage_module.read_partition_under_lease(
+                    tmp_path, admission.lease, relative_path
+                )
+            assert raised.value is primary
+        finally:
+            for duplicate in duplicates:
+                try:
+                    coverage_module.os.fstat(duplicate)
+                except OSError:
+                    continue
+                leaked.append(duplicate)
+                coverage_module.os.close(duplicate)
+    assert not leaked
+    assert _bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_partition_stream_close_does_not_reclassify_an_active_decode_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception] | None,
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+    primary = failure_type("decode defect") if failure_type else None
+    original_open = coverage_module.os.fdopen
+    closed: list[object] = []
+
+    def open_stream(descriptor: int, *args: object, **kwargs: object) -> object:
+        stream = original_open(descriptor, *args, **kwargs)
+        original_close = stream.close
+
+        def close_then_fail() -> None:
+            original_close()
+            closed.append(stream)
+            raise OSError("secondary close failure")
+
+        monkeypatch.setattr(stream, "close", close_then_fail)
+        return stream
+
+    monkeypatch.setattr(coverage_module.os, "fdopen", open_stream)
+    if primary is not None:
+        monkeypatch.setattr(
+            coverage_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(failure_type or coverage_module.PartitionReadFailureV1) as raised,
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+    if primary is not None:
+        assert raised.value is primary
+    else:
+        assert isinstance(raised.value, coverage_module.PartitionReadFailureV1)
+        assert raised.value.category is FailureCategory.PATH_INVALID_OR_MISMATCHED
+    assert len(closed) == 1
+    assert _bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize(
     "failure",
     (
         pa.ArrowMemoryError("synthetic resource exhaustion"),

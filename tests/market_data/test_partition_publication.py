@@ -4,12 +4,13 @@ import concurrent.futures
 import errno
 import os
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.parquet as parquet_module
 import swing_trading_ai_assistant.market_data.partition_publication as publication
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
@@ -283,6 +284,116 @@ def test_unknown_serializer_fault_preserves_identity_without_publication(
         publish_partition(tmp_path, _plan(), [_candle()])
 
     assert raised.value is fault
+    assert not list(tmp_path.rglob("bars.parquet"))
+    assert not list(tmp_path.rglob(".publish-*.tmp"))
+
+
+@pytest.mark.parametrize("operation", ("write", "validate", "hash"))
+@pytest.mark.parametrize(
+    "failure_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_partition_stream_construction_fault_does_not_leak_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    failure_type: type[Exception],
+) -> None:
+    published = publish_partition(tmp_path, _plan(), [_candle()])
+    descriptor = os.open(tmp_path / published.canonical_path, os.O_RDWR)
+    primary = failure_type("stream construction defect")
+    original_dup = os.dup
+    duplicates: list[int] = []
+    leaked: list[int] = []
+
+    def tracked_dup(source: int) -> int:
+        duplicate = original_dup(source)
+        duplicates.append(duplicate)
+        return duplicate
+
+    monkeypatch.setattr(os, "dup", tracked_dup)
+    monkeypatch.setattr(
+        os, "fdopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(primary)
+    )
+    try:
+        with pytest.raises(failure_type) as raised:
+            if operation == "write":
+                publication._write_temp(descriptor, (_candle(),))
+            elif operation == "validate":
+                publication._validate_fd(
+                    descriptor, (_candle(),), PublicationConflictError
+                )
+            else:
+                publication._sha256_fd(descriptor)
+        assert raised.value is primary
+        assert (
+            os.fstat(descriptor).st_ino
+            == (tmp_path / published.canonical_path).stat().st_ino
+        )
+    finally:
+        for duplicate in duplicates:
+            try:
+                os.fstat(duplicate)
+            except OSError:
+                continue
+            leaked.append(duplicate)
+            os.close(duplicate)
+        os.close(descriptor)
+    assert not leaked
+
+
+@pytest.mark.parametrize("resource", ("stream", "parquet_writer"))
+@pytest.mark.parametrize(
+    "failure_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_publication_preserves_primary_across_stream_and_writer_close_faults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    failure_type: type[Exception] | None,
+) -> None:
+    primary = failure_type("serialization defect") if failure_type else None
+    closed: list[object] = []
+
+    def fail_after_close(resource: object, close: Callable[[], None]) -> object:
+        def close_then_fail() -> None:
+            close()
+            closed.append(resource)
+            raise OSError("secondary close failure")
+
+        monkeypatch.setattr(resource, "close", close_then_fail)
+        return resource
+
+    if resource == "stream":
+        original_open = os.fdopen
+
+        def open_stream(descriptor: int, *args: object, **kwargs: object) -> object:
+            stream = original_open(descriptor, *args, **kwargs)
+            return fail_after_close(stream, stream.close)
+
+        monkeypatch.setattr(os, "fdopen", open_stream)
+    else:
+        original_writer = pq.ParquetWriter
+
+        def open_writer(*args: object, **kwargs: object) -> object:
+            writer = original_writer(*args, **kwargs)
+            return fail_after_close(writer, writer.close)
+
+        monkeypatch.setattr(pq, "ParquetWriter", open_writer)
+    if primary is not None:
+        monkeypatch.setattr(
+            parquet_module,
+            "_candle_record_batch",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+
+    with pytest.raises(failure_type or PartitionWriteError) as raised:
+        publish_partition(tmp_path, _plan(), [_candle()])
+
+    if primary is not None:
+        assert raised.value is primary
+    assert len(closed) == 1
     assert not list(tmp_path.rglob("bars.parquet"))
     assert not list(tmp_path.rglob(".publish-*.tmp"))
 

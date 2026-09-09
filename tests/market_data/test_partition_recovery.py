@@ -2052,3 +2052,57 @@ def test_artifact_open_fault_survives_secondary_descriptor_cleanup_fault(
     assert raised.value is primary
     assert failed_descriptors == set()
     _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_artifact_decode_primary_survives_stream_close_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception] | None,
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    observer = _observer(tmp_path, catalog, _ScheduleStore(schedule))
+    primary = failure_type("artifact decoding defect") if failure_type else None
+    real_open = partition_recovery_module.os.fdopen
+    descriptors: list[int] = []
+
+    def open_stream(descriptor: int, *args: object, **kwargs: object) -> object:
+        stream = real_open(descriptor, *args, **kwargs)
+        descriptors.append(descriptor)
+        original_close = stream.close
+
+        def close_then_fail() -> None:
+            original_close()
+            raise OSError("secondary close failure")
+
+        monkeypatch.setattr(stream, "close", close_then_fail)
+        return stream
+
+    monkeypatch.setattr(partition_recovery_module.os, "fdopen", open_stream)
+    if primary is None:
+        result = observer.observe(plan)
+        assert result.outcome is PartitionRecoveryOutcome.FAILED
+        assert result.error_code == "LOCAL_REPAIR_BLOCKED"
+    else:
+        monkeypatch.setattr(
+            partition_recovery_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+        with pytest.raises(type(primary)) as raised:
+            observer.observe(plan)
+        assert raised.value is primary
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            partition_recovery_module.os.fstat(descriptor)
+    _assert_verified_partition_unchanged(catalog, verified, target, original)

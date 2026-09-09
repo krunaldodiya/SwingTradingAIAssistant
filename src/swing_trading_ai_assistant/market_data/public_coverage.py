@@ -39,6 +39,7 @@ from .parquet import (
     IncompatibleCandleParquetSchemaError,
     MissingCandleSchemaVersionError,
     UnsupportedCandleSchemaVersionError,
+    borrow_parquet_stream,
     iter_candles_from_parquet,
 )
 from .partition_publication import canonical_partition_relative_path
@@ -1210,7 +1211,7 @@ def _require_selection_matches_candles(
 def _decode_partition(
     file_descriptor: int,
 ) -> tuple[str, tuple[CanonicalCandle, ...]]:
-    with os.fdopen(os.dup(file_descriptor), "rb") as handle:
+    with borrow_parquet_stream(file_descriptor, "rb") as handle:
         digest = hashlib.sha256()
         while chunk := handle.read(_READ_BUFFER_SIZE):
             digest.update(chunk)
