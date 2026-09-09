@@ -465,6 +465,122 @@ After shared admission, each cohort returns exactly one ordered outcome:
   `PROVIDER_FRAME_INCOMPLETE`, `PROVIDER_BASIS_INVALID`, or
   `RETENTION_FAILED`.
 
+Under [Issue #176](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/176),
+each serialized cohort also carries nullable `provider_frame_reason`. For
+`INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE`, it preserves only an exact
+plain-string member of this closed lower-level reason set:
+
+- `FRAME_COVERAGE_INCOMPLETE`, `FRAME_SCHEMA_INVALID`, `FRAME_VALUE_INVALID`;
+- `PROVIDER_EMPTY`;
+- `RETRIEVED_AFTER_DECISION_CUTOFF`, `RETRIEVED_BEFORE_OFFICIAL_CLOSE`; or
+- `CORRECTION_CONTENT_UNCHANGED`.
+
+An unknown, missing, non-string, or string-subclass detail becomes the fixed
+`UNCLASSIFIED_FRAME_REJECTION` marker. Every other outcome carries null,
+including resource/rate-limit failures that take precedence over a frame
+failure and successful/reused outcomes. Public serialization independently
+enforces this rule; it never echoes arbitrary lower-level detail.
+
+This additive diagnostic does not change the coarse outcome, request or
+immutable revision representation, admission, continuation, retry, resource,
+or output-byte rules. It identifies the existing rejection category, not an
+offending member, private value, or proven root cause. No rejected frame or
+dependency log is published or retained by this extension. A new diagnostic
+must not be retroactively attributed to an earlier capture that lacked it.
+
+All diagnostic fields require exact plain-string coarse `code` and `reason`;
+subclass-defined equality never decides their eligibility.
+
+The owner-approved Issue #176 continuation adds nullable `provider_value_check`
+only when the outcome is `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE`
+and `provider_frame_reason` is the exact plain string `FRAME_VALUE_INVALID`.
+Its closed vocabulary is:
+
+- each of `OPEN`, `HIGH`, `LOW`, and `CLOSE` followed by `_NOT_NUMERIC`,
+  `_NOT_FINITE`, or `_NOT_POSITIVE`;
+- `VOLUME_NOT_NUMERIC`, `VOLUME_NOT_FINITE`, `VOLUME_NEGATIVE`, or
+  `VOLUME_NONINTEGRAL`; and
+- `OHLC_ORDER_INVALID`.
+
+Missing, unclassified, forged, non-string, or string-subclass detail becomes
+`UNCLASSIFIED_VALUE_REJECTION` in that context; every other context emits null.
+Public serialization independently checks both the context and the finite
+plain-string value. A field label identifies a failed check, not a stock,
+session coordinate, observed price, or proven provider/adapter root cause.
+
+Value-check diagnosis uses the same invocation's already-normalized response after
+the authoritative low-level call reports `FRAME_VALUE_INVALID`. It scans within
+the admitted request's bounds in canonical member/session order. In the first
+rejected row, precedence is price-number conversion in open/high/low/close
+order, volume-number/integrality checks, price positivity in that order, then
+OHLC ordering. It reuses the existing low-level numeric validators. Its scalar
+comparisons explain an already-rejected bar; they never decide data acceptance.
+An unavailable or nonmatching observation remains unclassified.
+
+The provider may hold one transient reference to its already-created response,
+without copying it, during the per-cohort call. A `finally` handoff clears that
+provider-owned reference on every call exit and completes any bounded failure
+diagnosis before the next cohort. No rejected frame, value, identifier, session
+coordinate, private row count, path, URL, exception text, or dependency log is
+archived or emitted. Successful, reused, transport-failed, and exceptional
+paths cannot inherit a previous frame's diagnostic. Low-level source, request
+identities, writer compatibility, immutable revisions, effect precedence, and
+no-retry/no-fallback rules remain unchanged.
+
+The separately owner-approved source-stage continuation adds nullable
+`provider_value_origin` only when all four plain-string contexts above resolve
+to `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE/FRAME_VALUE_INVALID/OPEN_NOT_FINITE`.
+It correlates source evidence with the same canonical first rejected
+member/session, never with an unrelated bad value elsewhere in the cohort.
+Its closed source vocabulary is:
+
+- `SOURCE_OPEN_MISSING_OR_NONFINITE`: the corresponding raw opening value is
+  missing or non-finite under the pinned provider's float conversion;
+- `SOURCE_ADJUSTMENT_INPUT_INVALID`: the corresponding close or adjusted close
+  is non-finite, or close is a zero divisor;
+- `SOURCE_ADJUSTMENT_RESULT_NONFINITE`: finite inputs produce a non-finite
+  opening under the pinned `open * (adjusted_close / close)` calculation;
+- `SOURCE_EXPECTED_SESSION_MISSING`: the matching chart quote series lacks the
+  expected session, regardless of whether a later event merge or batch
+  alignment creates its empty price row; and
+- `SOURCE_ADJUSTED_OPEN_FINITE`: the corresponding source projection is finite.
+  This alone does not prove a downstream defect or that other prices are valid.
+
+Missing, malformed, unsupported, conflicting, mismatched, or forged source
+observations produce `UNCLASSIFIED_SOURCE_ORIGIN` in that exact eligible
+context; all other contexts emit null. Serialization independently rechecks
+every context's exact type and the closed origin vocabulary.
+
+The source observer consumes only already-admitted HTTP 200 response bytes
+from the existing query1/query2 Yahoo daily chart path. It matches the exact
+requested provider symbol, interval, start/end epochs, response symbol, and
+`Asia/Kolkata` timezone. It rejects duplicate JSON keys and session dates,
+ambiguous query parameters, more than 32 query fields, more than the expected
+session count plus one source timestamp, and inconsistent array lengths.
+Source timestamps at local minute zero in hours 22 or 23 make the projection
+unclassified: the pinned provider shifts those quotes into the next session.
+The observer must not borrow a neighboring raw-date row's category after that
+correction, and does not change or reproduce the provider's date repair.
+Unsupported scalar shapes or numeric strings longer than 64 characters remain
+unclassified. Absent `adjclose` follows the pinned parser's use of `close`
+solely for this diagnostic calculation; no capture input or price is replaced.
+
+Existing 2 MiB response and 128 MiB aggregate transport limits still apply.
+Only categorical projections for the current request's at-most-50 members and
+at-most-366 sessions may survive the response inspection. Raw decoded values
+are not retained by the observer. Conflicting matching responses remain
+unclassified rather than choosing a convenient response. A transport request
+holds its entry-time observer; completion cannot attach evidence to a later
+invocation. The provider detaches it in `finally`, and the same-invocation
+frame/observation handoff closes and clears both before diagnosis or the next
+cohort. Late observations after closure are ignored.
+
+This continuation adds no provider effect, retry, data repair, source switch,
+logging/archive mechanism, or change to immutable evidence admission. A live
+diagnostic invocation still requires its own explicit owner authority and
+current-byte verification/review. Synthetic source projections must not be
+attributed to the four earlier capture attempts.
+
 The higher-level outcome is:
 
 - `COMPLETE_CURRENT_NIFTY100_CAPTURE` only when both ordered cohort outcomes
@@ -502,6 +618,11 @@ only by its own cohort identity and cannot authorize the union claim.
 | Non-429 HTTP `>=400` occurs | At most one pinned yfinance alternate-cookie request, within every same bound; complete valid frame may succeed, otherwise exact provider/frame insufficiency | Unbounded or operator retry | Transport-ledger tests |
 | Provider raises an ordinary non-rate exception or timeout | `INSUFFICIENT_EVIDENCE/PROVIDER_ERROR` for that cohort | Operator retry; fallback; partial cohort publish | Adapter failure tests |
 | Empty/unexpected-schema frame, missing/duplicated session or ticker, NaN/non-finite/non-positive price, negative/non-integral volume, or wrong timezone | `INSUFFICIENT_EVIDENCE/PROVIDER_FRAME_INCOMPLETE` for that cohort | Invented 429; member/session dropping; value repair | Frame matrix tests |
+| Distinct real schema, coverage, value, or retrieval-time frame failures | Existing incomplete cohort outcome plus its allowlisted `provider_frame_reason`; second cohort still follows existing precedence | New provider call, partial publication, changed failure classification | Real normalized-frame rejection through outcome composition and public serialization |
+| Unknown/forged private diagnostic, non-string or string-subclass value, or diagnostic attached to a non-frame/success outcome | Fixed `UNCLASSIFIED_FRAME_REJECTION` only for frame failure; null otherwise | Raw detail echo, diagnostic overriding resource/rate-limit failure, unbounded payload | Serialization redaction and combined-failure precedence regressions |
+| A rejected row has competing price-conversion, volume, positivity, or OHLC-order faults | One allowlisted `provider_value_check` in the frozen order, attached only to exact `FRAME_VALUE_INVALID` | Changed admission, invented value diagnosis for another frame reason, values or member/session coordinates | Real normalizer rejection through both ordered cohort outcomes; competing-failure regressions |
+| A value diagnostic or its frame context is missing, unknown, non-string, or a masquerading string subclass | `UNCLASSIFIED_VALUE_REJECTION` only in the exact eligible context; null otherwise | Private canary echo; hash/equality masquerade; diagnostic on rate-limited or reused output | Public serializer context/forgery regressions |
+| A rejected or exceptional first cohort is followed by another cohort; a valid zero-volume/flat-price capture succeeds | Transient response released before the next cohort and session close; later diagnosis comes only from its own response; valid immutable revisions read back with null diagnostic | Raw response retention; inherited diagnostic; rejection of valid zero volume or equality bounds | Weak-reference lifetime checks, exceptional-exit regression, and real low-level capture/readback |
 | Complete yfinance-adjusted window crosses a provider-reported corporate action | Capture remains one adjusted revision; volume remains source-reported unadjusted; limitation retained | Upstox/raw substitution; local adjustment inference | Corporate-action basis test |
 | A later authorized request observes revised adjusted bytes, including when its admitted parent was written by an explicitly compatible historical runtime | New immutable revision/lineage; old revision and writer identity unchanged; writer upgrade alone is not changed provider content | Overwrite, historical-writer rejection, spurious correction, or relabelling old known-at | Revision/correction and compatible-writer lineage tests |
 | First cohort has provider/frame failure; second is unresolved | Second is still attempted; ordered tuple carries both exact rows | Nondeterministic short-circuit | Combined-failure precedence test |

@@ -16,11 +16,13 @@ import sysconfig
 import tempfile
 import threading
 import time
+import weakref
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -2061,7 +2063,11 @@ def test_nonstorage_low_failure_does_not_block_second_cohort(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda _root, **_kwargs: session
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_observation=lambda: (None, None)),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     nifty50_root = tmp_path / "nifty50"
     next50_root = tmp_path / "next50"
@@ -2361,7 +2367,7 @@ def test_plan33_provider_replaces_disabled_threads_with_exact_pool_and_session(
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
     monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
-    session: Any = object()
+    session: Any = SimpleNamespace()
     provider = core._Plan33ProviderV1(session)
     provider.download(threads=False, tickers=("S000.NS",))
     assert captured["threads"] == 8
@@ -3353,7 +3359,11 @@ def test_new_binding_replacement_before_snapshot_stops_second_cohort(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: Session()
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_observation=lambda: (None, None)),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     original_snapshot = core._snapshot_plan33_binding_v1
     replacement = b'{"replacement":true}\n'
@@ -4939,7 +4949,11 @@ def test_source_transition_uses_new_low_identity_and_completes_union(
             )
         ),
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_observation=lambda: (None, None)),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     selection_root = tmp_path / "selection"
     result = core.capture_current_nifty100_v1(
@@ -5010,7 +5024,11 @@ def test_cohort_reset_resource_limit_returns_ordered_bounded_outcomes(
 
     session = Session()
     monkeypatch.setattr(core, "prepare_yfinance_runtime_v1", lambda *_a, **_k: session)
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_observation=lambda: (None, None)),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
 
     result = core.capture_current_nifty100_v1(
@@ -5294,6 +5312,548 @@ def test_prior_retention_failure_preserves_validated_later_reuse(
     assert retain_calls == ["NIFTY_50"]
 
 
+def _capture_with_value_faults(  # noqa: C901 - bounded provider/lifetime fault fixture
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    faults: tuple[dict[str, object], dict[str, object]],
+    *,
+    first_call_raises: bool = False,
+    retain_valid: bool = False,
+    source_case: str | None = None,
+) -> core.CurrentNifty100ResultV1:
+    active_request: Any = None
+    calls = 0
+    frame_values: list[Any] = []
+    source_observations: list[Any] = []
+    original_capture = core.low._capture_forward_adjusted_ohlcv_with_provider_v1
+    for directory in ("nifty50", "next50", "schedule"):
+        (tmp_path / directory).mkdir(mode=0o700)
+
+    class TrackedPrice(float):
+        pass
+
+    class Adapter:
+        def download(self, **_kwargs: object) -> object:
+            if source_case is not None and not (
+                source_case == "first_only" and calls == 2
+            ):
+                params, _body = _source_chart_fixture(active_request, source_case)
+                member = active_request.cohort[source_case == "other_member"]
+                session: Any = _kwargs["session"]
+                source_observations.append(weakref.ref(session._source_observation))
+                session.request(
+                    "GET",
+                    f"https://query1.finance.yahoo.com/v8/finance/chart/{member.provider_symbol}",
+                    params=params,
+                )
+                if source_case in {"conflicting", "401_recovery"}:
+                    session.request(
+                        "GET",
+                        f"https://query1.finance.yahoo.com/v8/finance/chart/{member.provider_symbol}",
+                        params=params,
+                    )
+            rows: dict[str, tuple[dict[str, object], ...]] = {
+                member.provider_symbol: tuple(
+                    {"open": 100, "high": 102, "low": 98, "close": 101, "volume": 0}
+                    for _ in active_request.schedule.sessions
+                )
+                for member in active_request.cohort
+            }
+            rows[active_request.cohort[0].provider_symbol][0].update(faults[calls - 1])
+            marker = TrackedPrice(101)
+            frame_values.append(weakref.ref(marker))
+            rows[active_request.cohort[-1].provider_symbol][-1]["close"] = marker
+            return {
+                "provider_source": core.low.EXPECTED_PROVIDER_SOURCE_V1,
+                "timezone": "Asia/Kolkata",
+                "index": active_request.schedule.sessions,
+                "retrieved_at": _NOW,
+                "ohlcv": rows,
+            }
+
+    class Session(_ProtectedCleanupSessionStub):
+        resource_limited = False
+        rate_limited = False
+
+        def begin_cohort(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+
+        def close(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+
+    class SourceSession(_ProtectedCleanupSessionStub, core.BoundedYahooSessionV1):
+        def begin_cohort(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+            assert all(reference() is None for reference in source_observations)
+            super().begin_cohort()
+
+        def close(self) -> None:
+            assert all(reference() is None for reference in frame_values)
+            assert all(reference() is None for reference in source_observations)
+            super().close()
+
+    source_calls = 0
+
+    def source_transport(_session: Any, _method: str, _url: str, **kwargs: Any) -> Any:
+        nonlocal source_calls
+        source_calls += 1
+        case = source_case or "finite"
+        if case == "conflicting":
+            case = "raw_open" if source_calls % 2 else "finite"
+        _params, body = _source_chart_fixture(active_request, case)
+        kwargs["content_callback"](body)
+        status = 401 if source_case == "401_recovery" and source_calls % 2 else 200
+        return SimpleNamespace(content=b"", status_code=status)
+
+    if source_case is not None:
+        monkeypatch.setattr(core.CurlSession, "request", source_transport)
+
+    def capture(
+        low_request: Any, provider: Any, _root: Path, _schedule: Path, **_kwargs: Any
+    ) -> object:
+        nonlocal active_request, calls
+        if isinstance(provider, core._UnresolvedProbeV1):
+            return core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
+            )
+        active_request = low_request
+        calls += 1
+        if retain_valid:
+            return original_capture(low_request, provider, _root, _schedule, **_kwargs)
+        frame = provider.download(
+            threads=False,
+            tickers=tuple(member.provider_symbol for member in low_request.cohort),
+            expected_sessions=tuple(
+                session.isoformat() for session in low_request.schedule.sessions
+            ),
+            start=low_request.schedule.sessions[0].isoformat(),
+            end=(low_request.decision_session + timedelta(days=1)).isoformat(),
+            interval="1d",
+            auto_adjust=True,
+            back_adjust=False,
+            repair=False,
+            keepna=True,
+            ignore_tz=False,
+        )
+        if first_call_raises and calls == 1:
+            raise RuntimeError("PRIVATE_VALUE_EXCEPTION_CANARY")
+        result = core.low._normalize_provider_frame(low_request, frame)
+        assert isinstance(result, core.low.CaptureForwardAdjustedOhlcvFailureV1)
+        assert result.reason == "FRAME_VALUE_INVALID"
+        return result
+
+    monkeypatch.setattr(
+        core.low, "_retained_schedule_matches_request", lambda *_a, **_k: True
+    )
+    monkeypatch.setattr(
+        core.low, "_capture_forward_adjusted_ohlcv_with_provider_v1", capture
+    )
+    monkeypatch.setattr(
+        core.low, "YfinanceCaptureForwardAdjustedOhlcvAdapterV1", Adapter
+    )
+    monkeypatch.setattr(
+        core,
+        "prepare_yfinance_runtime_v1",
+        lambda *_a, **_k: SourceSession() if source_case is not None else Session(),
+    )
+    monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
+    monkeypatch.setattr(core, "_dependency_logging_is_safe_v1", lambda: True)
+    monkeypatch.setattr(core.multitasking, "get_active_tasks", lambda: [])
+    result = core.capture_current_nifty100_v1(
+        _request(),
+        acknowledged=True,
+        selection_root=tmp_path / "selection",
+        nifty50_root=tmp_path / "nifty50",
+        nifty_next50_root=tmp_path / "next50",
+        schedule_root=tmp_path / "schedule",
+        fetcher=_Fetcher(),
+    )
+    assert isinstance(result, core.CurrentNifty100ResultV1)
+    assert calls == 2
+    expected_source_calls = (
+        4
+        if source_case in {"conflicting", "401_recovery"}
+        else 1
+        if source_case == "first_only"
+        else 2
+        if source_case is not None
+        else 0
+    )
+    assert source_calls == expected_source_calls
+    assert all(reference() is None for reference in frame_values)
+    assert all(reference() is None for reference in source_observations)
+    if not retain_valid:
+        assert all(row.revision_sha256 is None for row in result.cohorts)
+    return result
+
+
+@pytest.mark.parametrize(
+    ("fault", "check"),
+    [
+        ({"open": True}, "OPEN_NOT_NUMERIC"),
+        ({"high": float("nan")}, "HIGH_NOT_FINITE"),
+        ({"low": 0}, "LOW_NOT_POSITIVE"),
+        ({"volume": "PRIVATE_VALUE_CANARY"}, "VOLUME_NOT_NUMERIC"),
+        ({"volume": float("inf")}, "VOLUME_NOT_FINITE"),
+        ({"volume": -1}, "VOLUME_NEGATIVE"),
+        ({"volume": 0.5}, "VOLUME_NONINTEGRAL"),
+        ({"close": 103}, "OHLC_ORDER_INVALID"),
+        ({"open": 0, "volume": 0.5}, "VOLUME_NONINTEGRAL"),
+        ({"open": float("nan"), "volume": 0.5}, "OPEN_NOT_FINITE"),
+        ({"open": 0, "high": 0}, "OPEN_NOT_POSITIVE"),
+    ],
+)
+def test_provider_value_check_explains_actual_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: dict[str, object],
+    check: str,
+) -> None:
+    result = _capture_with_value_faults(monkeypatch, tmp_path, (fault, fault))
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.get("provider_value_check") for row in cohorts] == [check, check]
+    assert all(row["provider_frame_reason"] == "FRAME_VALUE_INVALID" for row in cohorts)
+    encoded = json.dumps(payload)
+    assert "PRIVATE_VALUE_CANARY" not in encoded
+    assert all(
+        _isin(index) not in encoded and _symbol(index) not in encoded
+        for index in range(100)
+    )
+
+
+def test_provider_value_check_does_not_retain_prior_frame_after_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": float("nan")}, {"volume": -1}),
+        first_call_raises=True,
+    )
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert cohorts[0]["reason"] == "CONFIGURATION_INVALID"
+    assert cohorts[0].get("provider_value_check") is None
+    assert cohorts[1].get("provider_value_check") == "VOLUME_NEGATIVE"
+    assert "PRIVATE_VALUE_EXCEPTION_CANARY" not in json.dumps(payload)
+
+
+def test_provider_value_check_keeps_valid_zero_volume_capture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": 100, "high": 100, "low": 100, "close": 100}, {}),
+        retain_valid=True,
+    )
+    assert result.code == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.code for row in result.cohorts] == ["INSERTED", "INSERTED"]
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert all(row["provider_value_check"] is None for row in cohorts)
+    for outcome, directory in zip(result.cohorts, ("nifty50", "next50"), strict=True):
+        assert outcome.revision_sha256 is not None
+        revision = core.low.read_capture_forward_revision_v1(
+            tmp_path / directory, outcome.revision_sha256
+        )
+        assert all(bar.volume == 0 for bar in revision.bars)
+
+
+@pytest.mark.parametrize(
+    ("code", "reason", "frame_reason"),
+    [
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE", "FRAME_VALUE_INVALID"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE", "FRAME_SCHEMA_INVALID"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_RATE_LIMITED", "FRAME_VALUE_INVALID"),
+        ("REUSED", None, "FRAME_VALUE_INVALID"),
+    ],
+)
+def test_provider_value_check_rechecks_public_context_and_forgery(
+    code: str, reason: str | None, frame_reason: str
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name, "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+        ),
+    )
+
+    class MasqueradingCheck(str):
+        def __hash__(self) -> int:
+            return hash("OPEN_NOT_FINITE")
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    for value in (
+        None,
+        "PRIVATE_VALUE_CANARY",
+        ["PRIVATE_VALUE_CANARY"],
+        MasqueradingCheck("PRIVATE_VALUE_CANARY"),
+    ):
+        row = replace(
+            result.cohorts[0],
+            code=code,
+            reason=reason,
+            provider_frame_reason=frame_reason,
+            provider_value_check=value,
+        )
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(row, result.cohorts[1]))
+        )
+        cohorts: Any = payload["cohorts"]
+        expected = (
+            "UNCLASSIFIED_VALUE_REJECTION"
+            if code == "INSUFFICIENT_EVIDENCE"
+            and reason == "PROVIDER_FRAME_INCOMPLETE"
+            and frame_reason == "FRAME_VALUE_INVALID"
+            else None
+        )
+        assert cohorts[0]["provider_value_check"] == expected
+        assert "PRIVATE_VALUE_CANARY" not in json.dumps(payload)
+    forged_context = replace(
+        result.cohorts[0],
+        provider_frame_reason=MasqueradingCheck("PRIVATE_CONTEXT_CANARY"),
+        provider_value_check="OPEN_NOT_FINITE",
+    )
+    payload = core.serialize_result_v1(
+        replace(result, cohorts=(forged_context, result.cohorts[1]))
+    )
+    cohorts = payload["cohorts"]
+    assert cohorts[0]["provider_value_check"] is None
+    assert "PRIVATE_CONTEXT_CANARY" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "public_value"),
+    [("code", "REUSED"), ("reason", "PROVIDER_RATE_LIMITED")],
+)
+def test_provider_diagnostics_reject_forged_coarse_context(
+    field: str, public_value: str
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name,
+            "INSUFFICIENT_EVIDENCE",
+            "PROVIDER_FRAME_INCOMPLETE",
+            provider_frame_reason="FRAME_VALUE_INVALID",
+            provider_value_check="OPEN_NOT_FINITE",
+        ),
+    )
+
+    class MasqueradingContext(str):
+        def __hash__(self) -> int:
+            return str.__hash__(self)
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    row = replace(result.cohorts[0], **{field: MasqueradingContext(public_value)})
+    payload = json.loads(
+        json.dumps(
+            core.serialize_capture_result_v1(
+                replace(result, cohorts=(row, result.cohorts[1]))
+            )
+        )
+    )
+    assert payload["cohorts"][0][field] == public_value
+    assert payload["cohorts"][0]["provider_frame_reason"] is None
+    assert payload["cohorts"][0]["provider_value_check"] is None
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected_reason"),
+    [
+        ("coverage", "FRAME_COVERAGE_INCOMPLETE"),
+        ("schema", "FRAME_SCHEMA_INVALID"),
+        ("value", "FRAME_VALUE_INVALID"),
+        ("before_close", "RETRIEVED_BEFORE_OFFICIAL_CLOSE"),
+        ("after_cutoff", "RETRIEVED_AFTER_DECISION_CUTOFF"),
+    ],
+)
+def test_provider_frame_diagnostic_distinguishes_real_rejections(
+    fault: str, expected_reason: str
+) -> None:
+    request, selection = _admitted()
+    calls: list[str] = []
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        calls.append(cohort.name)
+        low_request = core.low.parse_capture_forward_request_v1(
+            core._canonical(cohort.request) + b"\n"
+        )
+        rows = {
+            member.provider_symbol: tuple(
+                {"open": 100, "high": 102, "low": 98, "close": 101, "volume": 1000}
+                for _ in low_request.schedule.sessions
+            )
+            for member in low_request.cohort
+        }
+        frame: dict[str, object] = {
+            "provider_source": core.low.EXPECTED_PROVIDER_SOURCE_V1,
+            "timezone": "Asia/Kolkata",
+            "index": low_request.schedule.sessions,
+            "retrieved_at": _NOW,
+            "ohlcv": rows,
+        }
+        if fault == "coverage":
+            frame["index"] = low_request.schedule.sessions[:-1]
+        elif fault == "schema":
+            frame["timezone"] = "UTC"
+        elif fault == "value":
+            rows[low_request.cohort[0].provider_symbol][0]["close"] = float("nan")
+        elif fault == "before_close":
+            frame["retrieved_at"] = (
+                low_request.schedule.decision_session_official_close_at
+                - timedelta(seconds=1)
+            )
+        else:
+            frame["retrieved_at"] = low_request.decision_cutoff + timedelta(seconds=1)
+        failure = core.low._normalize_provider_frame(low_request, frame)
+        return core._cohort_outcome_v1(cohort, low_request, failure, selection, request)
+
+    result = core.execute_admitted_v1(request, selection, capture)
+    payload = core.serialize_result_v1(result)
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert calls == ["NIFTY_50", "NIFTY_NEXT_50"]
+    cohorts: Any = payload["cohorts"]
+    assert [row.get("provider_frame_reason") for row in cohorts] == [
+        expected_reason,
+        expected_reason,
+    ]
+    assert all(
+        row["code"] == "INSUFFICIENT_EVIDENCE"
+        and row["reason"] == "PROVIDER_FRAME_INCOMPLETE"
+        and row["revision_sha256"] is None
+        for row in cohorts
+    )
+
+
+@pytest.mark.parametrize(
+    "private_reason", ["FRAME_PRIVATE_MEMBER_CANARY", "PROVIDER_TIMESTAMP_INVALID"]
+)
+def test_provider_frame_diagnostic_redacts_unknown_lower_reason(
+    private_reason: str,
+) -> None:
+    request, selection = _admitted()
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        return core._cohort_outcome_v1(
+            cohort,
+            object(),
+            core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", private_reason
+            ),
+            selection,
+            request,
+        )
+
+    payload = core.serialize_result_v1(
+        core.execute_admitted_v1(request, selection, capture)
+    )
+    cohorts: Any = payload["cohorts"]
+    assert all(
+        row["reason"] == "PROVIDER_FRAME_INCOMPLETE"
+        and row.get("provider_frame_reason") == "UNCLASSIFIED_FRAME_REJECTION"
+        for row in cohorts
+    )
+    assert private_reason not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("resource_limited", "rate_limited", "expected_reason"),
+    [
+        (True, True, "RESOURCE_LIMIT_EXCEEDED"),
+        (False, True, "PROVIDER_RATE_LIMITED"),
+    ],
+)
+def test_provider_frame_diagnostic_preserves_transport_failure_precedence(
+    resource_limited: bool, rate_limited: bool, expected_reason: str
+) -> None:
+    request, selection = _admitted()
+    session: Any = SimpleNamespace(
+        resource_limited=resource_limited, rate_limited=rate_limited
+    )
+
+    def capture(cohort: core.CohortRequestV1) -> core.CohortOutcomeV1:
+        return core._cohort_outcome_v1(
+            cohort,
+            object(),
+            core.low.CaptureForwardAdjustedOhlcvFailureV1(
+                "INSUFFICIENT_EVIDENCE", "FRAME_VALUE_INVALID"
+            ),
+            selection,
+            request,
+            session=session,
+        )
+
+    payload = core.serialize_result_v1(
+        core.execute_admitted_v1(request, selection, capture)
+    )
+    cohorts: Any = payload["cohorts"]
+    assert all(row["reason"] == expected_reason for row in cohorts)
+    assert all(row["provider_frame_reason"] is None for row in cohorts)
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"),
+        ("INSUFFICIENT_EVIDENCE", "PROVIDER_RATE_LIMITED"),
+        ("REUSED", None),
+    ],
+)
+def test_public_provider_frame_diagnostic_rechecks_forged_values(
+    code: str, reason: str | None
+) -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name, "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+        ),
+    )
+    private_value = "PRIVATE_FRAME_DIAGNOSTIC_CANARY"
+
+    class MasqueradingReason(str):
+        def __hash__(self) -> int:
+            return hash("FRAME_VALUE_INVALID")
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    values: tuple[Any, ...] = (
+        private_value,
+        "PROVIDER_TIMESTAMP_INVALID",
+        [private_value],
+        MasqueradingReason(private_value),
+    )
+    expected = (
+        "UNCLASSIFIED_FRAME_REJECTION"
+        if reason == "PROVIDER_FRAME_INCOMPLETE"
+        else None
+    )
+    for value in values:
+        forged = replace(
+            result.cohorts[0], code=code, reason=reason, provider_frame_reason=value
+        )
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(forged, result.cohorts[1]))
+        )
+        cohorts: Any = payload["cohorts"]
+        assert cohorts[0]["provider_frame_reason"] == expected
+        assert private_value not in json.dumps(payload)
+
+
 @pytest.mark.parametrize(
     "reason",
     [
@@ -5311,8 +5871,10 @@ def test_nonstorage_low_insufficiency_is_not_retention_failure(reason: str) -> N
         selection,
         request,
     )
-    assert outcome == core.CohortOutcomeV1(
-        "NIFTY_50", "INSUFFICIENT_EVIDENCE", "PROVIDER_FRAME_INCOMPLETE"
+    assert (outcome.cohort, outcome.code, outcome.reason) == (
+        "NIFTY_50",
+        "INSUFFICIENT_EVIDENCE",
+        "PROVIDER_FRAME_INCOMPLETE",
     )
 
 
@@ -5409,7 +5971,11 @@ def test_distinct_valid_cohort_schedules_are_retained_but_union_incompatible(
     monkeypatch.setattr(
         core, "prepare_yfinance_runtime_v1", lambda *_args, **_kwargs: _Session()
     )
-    monkeypatch.setattr(core, "_Plan33ProviderV1", lambda _session: object())
+    monkeypatch.setattr(
+        core,
+        "_Plan33ProviderV1",
+        lambda _session: SimpleNamespace(take_observation=lambda: (None, None)),
+    )
     monkeypatch.setattr(core, "_pool_is_exact_v1", lambda: True)
     result = core.capture_current_nifty100_v1(
         json.dumps(value).encode(),
@@ -6726,3 +7292,263 @@ def test_locked_dependency_closure_is_admitted_from_exact_descriptors() -> None:
     finally:
         cli._close_native_dependency_handles_v1(native_handles)
     assert native_handles == {}
+
+
+def _source_chart_fixture(  # noqa: C901 - explicit source-shape adversarial matrix
+    request: Any, source_case: str
+) -> tuple[dict[str, object], bytes]:
+    sessions = request.schedule.sessions
+    zone = ZoneInfo("Asia/Kolkata")
+    params: dict[str, object] = {
+        "period1": int(
+            datetime.combine(sessions[0], datetime.min.time(), zone).timestamp()
+        ),
+        "period2": int(
+            datetime.combine(
+                sessions[-1] + timedelta(days=1), datetime.min.time(), zone
+            ).timestamp()
+        ),
+        "interval": "1d",
+    }
+    timestamps = [
+        int(datetime.combine(session, datetime.min.time(), zone).timestamp())
+        for session in sessions
+    ]
+    opens: list[object] = [100.0] * len(sessions)
+    closes: list[object] = [101.0] * len(sessions)
+    adjusted: list[object] = [101.0] * len(sessions)
+    if source_case in {"raw_open", "other_member", "first_only", "401_recovery"}:
+        opens[0] = None
+    elif source_case == "adjustment_input":
+        adjusted[0] = None
+    elif source_case == "zero_divisor":
+        closes[0] = 0.0
+    elif source_case == "adjustment_overflow":
+        opens[0], closes[0], adjusted[0] = 1e308, 1.0, 1e308
+    elif source_case == "missing_session":
+        del timestamps[0], opens[0], closes[0], adjusted[0]
+    elif source_case == "wrong_range":
+        params["period1"] = 1
+    elif source_case == "duplicate_timestamp":
+        timestamps[1] = timestamps[0]
+    elif source_case == "other_session":
+        opens[1] = None
+    elif source_case in {"pre_midnight_22", "pre_midnight_23"}:
+        shift = 7200 if source_case == "pre_midnight_22" else 3600
+        timestamps = [timestamp - shift for timestamp in timestamps]
+        opens[0] = None
+    elif source_case in {"extra_end_row", "too_many_rows"}:
+        for _ in range(1 if source_case == "extra_end_row" else 2):
+            timestamps.append(timestamps[-1] + 86400)
+            opens.append(100.0)
+            closes.append(101.0)
+            adjusted.append(101.0)
+    elif source_case == "wrong_interval":
+        params["interval"] = "1h"
+    elif source_case == "duplicate_parameter":
+        params["interval"] = ["1d", "1d"]
+    symbol = request.cohort[source_case == "other_member"].provider_symbol
+    chart = {
+        "chart": {
+            "error": None,
+            "result": [
+                {
+                    "meta": {
+                        "symbol": symbol
+                        if source_case != "wrong_symbol"
+                        else "PRIVATE_SOURCE_CANARY",
+                        "exchangeTimezoneName": "UTC"
+                        if source_case == "wrong_timezone"
+                        else "Asia/Kolkata",
+                    },
+                    "timestamp": timestamps,
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": opens,
+                                "high": [102.0] * len(opens),
+                                "low": [98.0] * len(opens),
+                                "close": closes,
+                                "volume": [1000] * len(opens),
+                            }
+                        ],
+                        "adjclose": [{"adjclose": adjusted}],
+                    },
+                }
+            ],
+        }
+    }
+    body = json.dumps(chart).encode()
+    if source_case == "duplicate_json":
+        body = body.replace(b'"chart":', b'"chart": null, "chart":', 1)
+    elif source_case == "malformed":
+        body = b'{"PRIVATE_SOURCE_CANARY":'
+    return params, body
+
+
+@pytest.mark.parametrize(
+    ("source_case", "expected"),
+    [
+        ("raw_open", "SOURCE_OPEN_MISSING_OR_NONFINITE"),
+        ("adjustment_input", "SOURCE_ADJUSTMENT_INPUT_INVALID"),
+        ("zero_divisor", "SOURCE_ADJUSTMENT_INPUT_INVALID"),
+        ("adjustment_overflow", "SOURCE_ADJUSTMENT_RESULT_NONFINITE"),
+        ("missing_session", "SOURCE_EXPECTED_SESSION_MISSING"),
+        ("finite", "SOURCE_ADJUSTED_OPEN_FINITE"),
+        ("wrong_range", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("wrong_symbol", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("duplicate_timestamp", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("duplicate_json", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("malformed", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("other_session", "SOURCE_ADJUSTED_OPEN_FINITE"),
+        ("other_member", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("extra_end_row", "SOURCE_ADJUSTED_OPEN_FINITE"),
+        ("too_many_rows", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("wrong_interval", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("wrong_timezone", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("duplicate_parameter", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("pre_midnight_22", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("pre_midnight_23", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("conflicting", "UNCLASSIFIED_SOURCE_ORIGIN"),
+        ("401_recovery", "SOURCE_OPEN_MISSING_OR_NONFINITE"),
+    ],
+)
+def test_provider_source_origin_correlates_bounded_response_with_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    source_case: str,
+    expected: str,
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": float("nan")}, {"open": float("nan")}),
+        source_case=source_case,
+    )
+    payload = core.serialize_result_v1(result)
+    cohorts: Any = payload["cohorts"]
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert [row.get("provider_value_origin") for row in cohorts] == [expected, expected]
+    assert all(row["provider_value_check"] == "OPEN_NOT_FINITE" for row in cohorts)
+    assert all(row["revision_sha256"] is None for row in cohorts)
+    assert "PRIVATE_SOURCE_CANARY" not in json.dumps(payload)
+
+
+def test_provider_source_origin_without_source_observation_is_unclassified(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch, tmp_path, ({"open": float("nan")}, {"high": float("nan")})
+    )
+    cohorts: Any = core.serialize_result_v1(result)["cohorts"]
+    assert cohorts[0].get("provider_value_origin") == "UNCLASSIFIED_SOURCE_ORIGIN"
+    assert cohorts[1].get("provider_value_origin") is None
+
+
+def test_provider_source_origin_is_not_inherited_after_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result = _capture_with_value_faults(
+        monkeypatch,
+        tmp_path,
+        ({"open": float("nan")}, {"open": float("nan")}),
+        first_call_raises=True,
+        source_case="first_only",
+    )
+    cohorts: Any = core.serialize_result_v1(result)["cohorts"]
+    assert cohorts[0]["reason"] == "CONFIGURATION_INVALID"
+    assert cohorts[0]["provider_value_origin"] is None
+    assert cohorts[1]["provider_value_origin"] == "UNCLASSIFIED_SOURCE_ORIGIN"
+
+
+def test_provider_source_origin_rechecks_public_context_and_forgery() -> None:
+    request, selection = _admitted()
+    result = core.execute_admitted_v1(
+        request,
+        selection,
+        lambda cohort: core.CohortOutcomeV1(
+            cohort.name,
+            "INSUFFICIENT_EVIDENCE",
+            "PROVIDER_FRAME_INCOMPLETE",
+            provider_frame_reason="FRAME_VALUE_INVALID",
+            provider_value_check="OPEN_NOT_FINITE",
+            provider_value_origin="SOURCE_OPEN_MISSING_OR_NONFINITE",
+        ),
+    )
+
+    class MasqueradingOrigin(str):
+        def __hash__(self) -> int:
+            return hash("SOURCE_OPEN_MISSING_OR_NONFINITE")
+
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    for value in (
+        None,
+        "PRIVATE_ORIGIN_CANARY",
+        ["PRIVATE_ORIGIN_CANARY"],
+        MasqueradingOrigin("PRIVATE_ORIGIN_CANARY"),
+    ):
+        row = replace(result.cohorts[0], provider_value_origin=value)
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(row, result.cohorts[1]))
+        )
+        cohorts: Any = payload["cohorts"]
+        assert cohorts[0]["provider_value_origin"] == "UNCLASSIFIED_SOURCE_ORIGIN"
+        assert "PRIVATE_ORIGIN_CANARY" not in json.dumps(payload)
+    for field in ("code", "reason", "provider_frame_reason", "provider_value_check"):
+        row = replace(
+            result.cohorts[0], **{field: MasqueradingOrigin("PRIVATE_CONTEXT_CANARY")}
+        )
+        payload = core.serialize_result_v1(
+            replace(result, cohorts=(row, result.cohorts[1]))
+        )
+        cohorts = payload["cohorts"]
+        assert cohorts[0]["provider_value_origin"] is None
+
+
+def test_provider_source_origin_cannot_attach_late_response_to_next_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, _selection = _admitted()
+    low_request = core.low.parse_capture_forward_request_v1(
+        core._canonical(request.cohorts[0].request) + b"\n"
+    )
+    kwargs: dict[str, object] = {
+        "tickers": tuple(member.provider_symbol for member in low_request.cohort),
+        "expected_sessions": tuple(
+            session.isoformat() for session in low_request.schedule.sessions
+        ),
+        "start": low_request.schedule.sessions[0].isoformat(),
+        "end": (low_request.decision_session + timedelta(days=1)).isoformat(),
+        "interval": "1d",
+        "auto_adjust": True,
+    }
+    original = core._SourceFrameObservationV1.from_download(kwargs)
+    following = core._SourceFrameObservationV1.from_download(kwargs)
+    assert original is not None and following is not None
+    params, body = _source_chart_fixture(low_request, "raw_open")
+
+    def transport(session: Any, _method: str, _url: str, **options: Any) -> Any:
+        original.close()
+        session._source_observation = following
+        options["content_callback"](body)
+        return SimpleNamespace(status_code=200, content=b"")
+
+    monkeypatch.setattr(core.CurlSession, "request", transport)
+    session = core.BoundedYahooSessionV1()
+    try:
+        session._source_observation = original
+        member = low_request.cohort[0]
+        session.request(
+            "GET",
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{member.provider_symbol}",
+            params=params,
+        )
+        following.close()
+        assert (
+            following.origin(member.provider_symbol, low_request.schedule.sessions[0])
+            == "UNCLASSIFIED_SOURCE_ORIGIN"
+        )
+    finally:
+        session.close()
