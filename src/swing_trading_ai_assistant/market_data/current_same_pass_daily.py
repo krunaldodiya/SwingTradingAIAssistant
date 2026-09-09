@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from .adjusted_daily import adjusted_daily_request_identity_v2
 from .adjusted_daily.service import _V2Member
-from .catalog import DuckDBCatalog
+from .catalog import CatalogError, DuckDBCatalog
 from .current_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortAdmissionPolicyV1,
@@ -45,7 +45,9 @@ from .provisional_metadata import (
 )
 from .public_contract import (
     CoverageStateV1,
+    PublicCommandReportV1,
     PublicCommandStatusV1,
+    PublicFailureCodeV1,
     QueryPayloadV1,
 )
 from .public_download import SingleSymbolDownloadRequestV1
@@ -1345,6 +1347,19 @@ class _AcquisitionDeadlineGateV1:
         return None
 
 
+class _UnclassifiedQueryExecutionFailure(RuntimeError):
+    """Prevent a generic V1 query execution failure becoming raw evidence."""
+
+
+def _raise_if_unclassified_query_failure(report: PublicCommandReportV1[object]) -> None:
+    if (
+        report.status is PublicCommandStatusV1.FAILED
+        and report.failure is not None
+        and report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    ):
+        raise _UnclassifiedQueryExecutionFailure
+
+
 @dataclass(frozen=True, slots=True)
 class _DefaultCurrentSamePassRawEvidencePortV1:
     storage_root: Path
@@ -1442,7 +1457,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
                 return RawDailyReasonV1.RAW_MAPPING_STALE
             except SnapshotInstrumentAmbiguousError:
                 return RawDailyReasonV1.RAW_MAPPING_CONFLICTED
-            except Exception:
+            except CatalogError:
                 return RawDailyReasonV1.RAW_MAPPING_CONFLICTED
         return tuple(receipts)
 
@@ -1473,7 +1488,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
                         elif not _verified_manifest(manifest):
                             return RawDailyReasonV1.RAW_BAR_CONFLICTED
                 catalog.ensure_read_identity()
-        except Exception:
+        except CatalogError:
             return RawDailyReasonV1.RAW_BAR_INVALID
         return tuple(missing)
 
@@ -1671,6 +1686,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
                     ),
                     lease,
                 )
+                _raise_if_unclassified_query_failure(report)
                 completed_at = self.clock.now()
                 if not _utc(completed_at):
                     return RawDailyReasonV1.RAW_BAR_INVALID
@@ -1748,7 +1764,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
                             ),
                         )
                     )
-            except Exception:
+            except CatalogError:
                 return RawDailyReasonV1.RAW_BAR_INVALID
         return tuple(source_rows), tuple(bars)
 
@@ -2201,7 +2217,7 @@ def _source_bindings_for_mapping(
                 )
             catalog.ensure_read_identity()
         return output
-    except Exception:
+    except CatalogError:
         return RawDailyReasonV1.RAW_BAR_INVALID
 
 

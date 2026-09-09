@@ -14,6 +14,7 @@ import pytest
 
 from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.historical import (
+    HistoricalPayloadError,
     HistoricalRequest,
     UpstoxV3HistoricalClient,
 )
@@ -266,7 +267,7 @@ def test_historical_client_rejects_malformed_success_payload() -> None:
         to_date=date(2026, 7, 31),
     )
 
-    with pytest.raises(ValueError, match="success envelope"):
+    with pytest.raises(HistoricalPayloadError, match="success envelope"):
         client.fetch(request, AccessToken("test-token"))
 
 
@@ -295,7 +296,7 @@ def test_historical_client_requires_the_exact_success_envelope(
         to_date=date(2026, 7, 31),
     )
 
-    with pytest.raises(ValueError, match="success envelope"):
+    with pytest.raises(HistoricalPayloadError, match="success envelope"):
         client.fetch(request, AccessToken("test-token"))
 
 
@@ -339,7 +340,7 @@ def test_historical_client_rejects_ambiguous_or_noncanonical_success_json(
         to_date=date(2026, 7, 31),
     )
 
-    with pytest.raises(ValueError, match=message) as exc_info:
+    with pytest.raises(HistoricalPayloadError, match=message) as exc_info:
         client.fetch(request, AccessToken("test-token"))
 
     assert exc_info.value.__cause__ is None

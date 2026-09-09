@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Never, Protocol
 
 from dotenv import load_dotenv
 
@@ -34,7 +34,11 @@ from .bounded_nifty50_workflow import (
     bounded_nifty50_exit_code,
     render_bounded_nifty50_download_json,
 )
-from .credentials import AccessToken, EnvironmentAccessTokenProvider
+from .credentials import (
+    AccessToken,
+    CredentialNotFoundError,
+    EnvironmentAccessTokenProvider,
+)
 from .current_cohort import (
     CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
     CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
@@ -65,6 +69,7 @@ from .download_preparation import (
 from .equity_admission import EquityAdmissionPolicyV1
 from .historical import (
     AccountRateLimiter,
+    HistoricalPayloadError,
     HistoricalRequest,
     HistoricalResponse,
     UpstoxV3HistoricalClient,
@@ -75,9 +80,23 @@ from .historical_revision_store import (
     HistoricalOhlcvRevisionStoreV1,
 )
 from .historical_upstox_raw import complete_upstox_raw_historical_ohlcv_v1
-from .http import DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES, UrllibHttpTransport
+from .http import (
+    DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES,
+    HttpResponseBodyTooLarge,
+    HttpResponseHeadersInvalid,
+    HttpTransportError,
+    UrllibHttpTransport,
+)
 from .instrument_snapshot import InstrumentSnapshotClientV1
-from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES, InstrumentCatalogClient
+from .instruments import (
+    DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
+    AmbiguousInstrumentError,
+    CatalogPayloadTooLargeError,
+    InstrumentCatalogClient,
+    InstrumentCatalogPayloadError,
+    InstrumentCatalogRequestError,
+    InstrumentNotFoundError,
+)
 from .intraday import UpstoxV3IntradayClient
 from .intraday_views import (
     DerivedIntradayQueryServiceV1,
@@ -139,11 +158,22 @@ from .range_ingestion import (
     IngestionCoordinator,
     ProviderSessionAuthenticationError,
 )
-from .storage_root_lease import StorageRootLease
+from .schedule_evidence import ScheduleEvidenceValidationError
+from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 _DEFAULT_STORAGE_DIRECTORY = "SwingTradingAIAssistantData"
+
+
+class _RequestInvalid(ValueError):
+    """An explicitly rejected CLI input or storage admission."""
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> Never:
+        del message
+        self.exit(2, "request_invalid\n")
 
 
 class PublicDownloadPortV1(Protocol):
@@ -216,7 +246,9 @@ def _trusted_now(clock: _ClockV1) -> datetime:
 
 class _UnavailableAuthoritativeScheduleSource:
     def load(self) -> AuthoritativeScheduleInputV1:
-        raise RuntimeError("authoritative schedule source is not configured")
+        raise ScheduleEvidenceValidationError(
+            "authoritative schedule source is not configured"
+        )
 
 
 class _LazyEnvironmentAccessTokenProvider:
@@ -247,7 +279,7 @@ class _HistoricalProviderSessionFactory:
     def open(self) -> _HistoricalProviderSession:
         try:
             token = self._token_provider.get_access_token()
-        except Exception:
+        except CredentialNotFoundError:
             raise ProviderSessionAuthenticationError from None
         return _HistoricalProviderSession(self._client, token)
 
@@ -279,7 +311,7 @@ def _utc_instant(value: str) -> datetime:
 
 def build_parser() -> argparse.ArgumentParser:
     probe_from, probe_to = _default_probe_range(date.today())
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="market-data",
         description=(
             "Deterministic market-data diagnostics and persistent preview commands."
@@ -461,51 +493,59 @@ def main(
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
-    if not _admit_regime_current_argv(argv):
-        sys.stderr.write("invalid regime-current request\n")
-        return 2
-    args = build_parser().parse_args(argv)
-    if args.command == "probe-upstox":
-        return _run_probe(args)
-    if args.command == "cohort-current":
-        return _run_current_cohort_command(
-            args, current_cohort_service, trusted_clock or _SystemClock()
+    try:
+        if not _admit_regime_current_argv(argv):
+            sys.stderr.write("invalid regime-current request\n")
+            return 2
+        args = build_parser().parse_args(argv)
+        if args.command == "probe-upstox":
+            return _run_probe(args)
+        if args.command == "cohort-current":
+            return _run_current_cohort_command(
+                args, current_cohort_service, trusted_clock or _SystemClock()
+            )
+        if args.command == "regime-current":
+            return _run_current_regime_command(args)
+        if args.command == "historical-ohlcv-upstox-raw":
+            return _run_historical_ohlcv_upstox_raw_command(args)
+        if args.command == "historical-ohlcv-upstox-raw-read":
+            return _run_historical_ohlcv_upstox_raw_read_command(args)
+        return _run_public_command(
+            args, download_service, coverage_service, query_service
         )
-    if args.command == "regime-current":
-        return _run_current_regime_command(args)
-    if args.command == "historical-ohlcv-upstox-raw":
-        return _run_historical_ohlcv_upstox_raw_command(args)
-    if args.command == "historical-ohlcv-upstox-raw-read":
-        return _run_historical_ohlcv_upstox_raw_read_command(args)
-    return _run_public_command(args, download_service, coverage_service, query_service)
+    except _RequestInvalid:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    except Exception:
+        sys.stderr.write("internal_error\n")
+        return 2
 
 
 def _run_historical_ohlcv_upstox_raw_command(args: argparse.Namespace) -> int:
-
     try:
         storage_root = _admit_historical_storage_root(args.storage_root)
         source_root = _admit_historical_storage_root(args.source_storage_root)
-        result = complete_upstox_raw_historical_ohlcv_v1(
-            _read_historical_local_file(args.request_file, 1_048_576, storage_root),
-            source_root.path,
-            storage_root.path,
-            storage_root.identity,
+        request_raw = _read_historical_local_file(
+            args.request_file, 1_048_576, storage_root
         )
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, StorageRootLeaseError, _RequestInvalid):
         sys.stderr.write("invalid historical-ohlcv-upstox-raw request\n")
         return 2
+    result = complete_upstox_raw_historical_ohlcv_v1(
+        request_raw, source_root.path, storage_root.path, storage_root.identity
+    )
     return _render_historical_ohlcv_result(result)
 
 
 def _run_historical_ohlcv_upstox_raw_read_command(args: argparse.Namespace) -> int:
     try:
         storage_root = _admit_historical_storage_root(args.storage_root)
-        result = HistoricalOhlcvRevisionStoreV1(
-            storage_root.path, storage_root.identity
-        ).read_exact(args.revision_sha256)
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, StorageRootLeaseError, _RequestInvalid):
         sys.stderr.write("invalid historical-ohlcv-upstox-raw-read request\n")
         return 2
+    result = HistoricalOhlcvRevisionStoreV1(
+        storage_root.path, storage_root.identity
+    ).read_exact(args.revision_sha256)
     return _render_historical_ohlcv_result(result)
 
 
@@ -516,13 +556,18 @@ def _render_historical_ohlcv_result(result: HistoricalOhlcvImportResultV1) -> in
     }
     if result.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS:
         payload["revision"] = result.revision
+    exit_code = 0 if result.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS else 1
     sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    return 0 if result.outcome is HistoricalOhlcvImportOutcomeV1.SUCCESS else 1
+    return exit_code
 
 
 def _absolute_no_follow_parts(path: object) -> tuple[str, ...]:
-    if not isinstance(path, Path) or not path.is_absolute():
-        raise ValueError
+    if (
+        not isinstance(path, Path)
+        or not path.is_absolute()
+        or any("\x00" in part for part in path.parts)
+    ):
+        raise _RequestInvalid
     normalized: list[str] = []
     for part in path.parts:
         if part in {"/", "."}:
@@ -533,7 +578,7 @@ def _absolute_no_follow_parts(path: object) -> tuple[str, ...]:
             continue
         normalized.append(part)
     if not normalized:
-        raise ValueError
+        raise _RequestInvalid
     return tuple(normalized)
 
 
@@ -544,7 +589,7 @@ def _admit_historical_storage_root(
     path = Path("/", *parts)
     identity = StorageRootLease.admit_existing_private_identity(path)
     if identity is None:
-        raise ValueError
+        raise _RequestInvalid
     return _AdmittedHistoricalStorageRootV1(path, identity, parts)
 
 
@@ -557,24 +602,26 @@ def _read_historical_local_file(
         raise ValueError
     parts = _absolute_no_follow_parts(path)
     parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    parent_identities = {(os.fstat(parent).st_dev, os.fstat(parent).st_ino)}
     descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
+        metadata = os.fstat(parent)
+        parent_identities = {(metadata.st_dev, metadata.st_ino)}
         for part in parts[:-1]:
-            next_parent = os.open(
+            previous_parent = parent
+            parent = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
-            os.close(parent)
-            parent = next_parent
+            os.close(previous_parent)
             metadata = os.fstat(parent)
             parent_identities.add((metadata.st_dev, metadata.st_ino))
         if (
             storage_root.identity in parent_identities
             or parts[: len(storage_root.path_parts)] == storage_root.path_parts
         ):
-            raise ValueError
+            raise _RequestInvalid
         descriptor = os.open(
             parts[-1],
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
@@ -588,7 +635,7 @@ def _read_historical_local_file(
             or before.st_size > maximum
             or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
         ):
-            raise ValueError
+            raise _RequestInvalid
         raw = bytearray()
         while len(raw) <= maximum:
             chunk = os.read(descriptor, min(65_536, maximum + 1 - len(raw)))
@@ -610,12 +657,13 @@ def _read_historical_local_file(
             or before.st_ctime_ns != after.st_ctime_ns
             or admitted.identity != (named_after.st_dev, named_after.st_ino)
         ):
-            raise ValueError
+            raise _RequestInvalid
         return admitted.raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent)
+        _close_cli_file_descriptors((descriptor, parent), active_exception)
 
 
 def _admit_regime_current_argv(argv: list[str] | None) -> bool:
@@ -662,7 +710,7 @@ def _run_public_command(
     else:
         try:
             args.storage_root = _prepare_storage_root(args.storage_root)
-        except (OSError, ValueError):
+        except (OSError, _RequestInvalid):
             return _render_admission_terminal(args, True, public)
         admission = _command_request(args, injected is not None)
     request = admission.request
@@ -674,26 +722,27 @@ def _run_public_command(
         if coverage_service is not None or args.symbol is not None:
             service = coverage_service or _default_nifty50_coverage_service()
             report = service.coverage(request)
+            exit_code = public_exit_code(report.status)
             sys.stdout.write(render_coverage_report_json(report).decode("utf-8"))
-            return public_exit_code(report.status)
+            return exit_code
         batch = _default_bounded_read_service().execute(request)
+        exit_code = bounded_nifty50_exit_code(batch.outcome)
         sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
-        return bounded_nifty50_exit_code(batch.outcome)
+        return exit_code
     if query_service is not None or args.symbol is not None:
         service = query_service or _default_nifty50_query_service()
         report = service.query(request)
+        exit_code = public_exit_code(report.status)
         sys.stdout.write(render_query_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        return exit_code
     batch = _default_bounded_read_service().execute(request)
+    exit_code = bounded_nifty50_exit_code(batch.outcome)
     sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
-    return bounded_nifty50_exit_code(batch.outcome)
+    return exit_code
 
 
 def _run_current_regime_command(args: argparse.Namespace) -> int:
-    lease: StorageRootLease | None = None
-    report_bytes: bytes | None = None
-    exit_code = 2
-    failed = False
+    admitted = False
     try:
         input_file = args.input_file
         root = args.storage_root
@@ -703,37 +752,39 @@ def _run_current_regime_command(args: argparse.Namespace) -> int:
             or type(root) is not type(Path())
             or not root.is_absolute()
         ):
-            raise ValueError
-        # Runtime source verification is a pre-report structural boundary.
-        current_supplied_cohort_market_regime_runtime_code_identity_v1()
+            raise _RequestInvalid
+        # Runtime identity rejection remains a pre-report structural boundary.
+        try:
+            current_supplied_cohort_market_regime_runtime_code_identity_v1()
+        except ValueError:
+            raise _RequestInvalid from None
         admitted_root, identity = _admit_existing_storage_root(root)
         acquired = StorageRootLease.try_acquire_existing_identity(
             admitted_root, identity
         )
         if acquired.lease is None:
-            raise ValueError
-        lease = acquired.lease
-        admitted_input = (
-            CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes(
-                _read_current_regime_input(input_file)
-            )
-        )
-        report = evaluate_current_supplied_cohort_market_regime_v1(
-            admitted_input,
-            DirectCurrentCohortArchiveReaderV1(admitted_root, lease),
-            DirectCurrentCohortScheduleResolverV1(admitted_root, lease),
-        )
-        report_bytes = report.canonical_json_bytes()
-        exit_code = 0 if report.evidence_state == "OBSERVED" else 1
-    except (OSError, RuntimeError, UnicodeError, ValueError):
-        failed = True
-    finally:
-        if lease is not None:
+            raise _RequestInvalid
+        with acquired.lease as lease:
+            raw = _read_current_regime_input(input_file)
             try:
-                lease.close()
-            except RuntimeError:
-                failed = True
-    if failed or report_bytes is None:
+                admitted_input = (
+                    CurrentSuppliedCohortMarketRegimeInputV1.from_canonical_json_bytes(
+                        raw
+                    )
+                )
+            except (RecursionError, ValueError):
+                raise _RequestInvalid from None
+            admitted = True
+            report = evaluate_current_supplied_cohort_market_regime_v1(
+                admitted_input,
+                DirectCurrentCohortArchiveReaderV1(admitted_root, lease),
+                DirectCurrentCohortScheduleResolverV1(admitted_root, lease),
+            )
+            report_bytes = report.canonical_json_bytes()
+            exit_code = 0 if report.evidence_state == "OBSERVED" else 1
+    except (OSError, StorageRootLeaseError, _RequestInvalid):
+        if admitted:
+            raise
         sys.stderr.write("invalid regime-current request\n")
         return 2
     sys.stdout.write(report_bytes.decode("utf-8"))
@@ -742,52 +793,54 @@ def _run_current_regime_command(args: argparse.Namespace) -> int:
 
 def _read_current_regime_input(path: Path) -> bytes:
     if not path.is_absolute():
-        raise ValueError
+        raise _RequestInvalid
     parts = path.parts[1:]
     if not parts:
-        raise ValueError
+        raise _RequestInvalid
     descriptor = os.open(
         "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     )
+    file_descriptor: int | None = None
+    active_exception: BaseException | None = None
     try:
         for part in parts[:-1]:
-            next_descriptor = os.open(
+            previous_descriptor = descriptor
+            descriptor = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=descriptor,
             )
-            os.close(descriptor)
-            descriptor = next_descriptor
+            os.close(previous_descriptor)
         file_descriptor = os.open(
             parts[-1],
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=descriptor,
         )
-        try:
-            before = os.fstat(file_descriptor)
-            if (
-                not stat.S_ISREG(before.st_mode)
-                or before.st_uid != os.geteuid()
-                or before.st_nlink != 1
-                or stat.S_IMODE(before.st_mode) & 0o077
-                or before.st_size < 1
-                or before.st_size > 16 * 1024
-            ):
-                raise ValueError
-            raw = os.read(file_descriptor, 16 * 1024 + 1)
-            after = os.fstat(file_descriptor)
-            if len(raw) != before.st_size or (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-            ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-                raise ValueError
-            return raw
-        finally:
-            os.close(file_descriptor)
+        before = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o077
+            or before.st_size < 1
+            or before.st_size > 16 * 1024
+        ):
+            raise _RequestInvalid
+        raw = os.read(file_descriptor, 16 * 1024 + 1)
+        after = os.fstat(file_descriptor)
+        if len(raw) != before.st_size or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise _RequestInvalid
+        return raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_cli_file_descriptors((file_descriptor, descriptor), active_exception)
 
 
 def _run_current_cohort_command(
@@ -810,21 +863,23 @@ def _run_current_cohort_command(
             or cutoff.utcoffset() != timedelta(0)
             or type(include_partial) is not bool
         ):
-            raise ValueError
+            raise _RequestInvalid
         if cutoff > _trusted_now(trusted_clock):
-            raise ValueError
+            raise _RequestInvalid
         if not _valid_storage_root(storage_root):
-            raise ValueError
-        manifest = parse_current_cohort_manifest_bytes_v1(
-            _read_cohort_file(cohort_file)
-        )
-        request = CurrentCohortMarketDataRequestV1(
-            manifest,
-            cutoff,
-            include_partial,
-            CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
-            CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
-        )
+            raise _RequestInvalid
+        raw = _read_cohort_file(cohort_file)
+        try:
+            manifest = parse_current_cohort_manifest_bytes_v1(raw)
+            request = CurrentCohortMarketDataRequestV1(
+                manifest,
+                cutoff,
+                include_partial,
+                CURRENT_COHORT_SOURCE_POLICY_IDENTITY_SHA256_V1,
+                CURRENT_COHORT_SCHEMA_IDENTITY_SHA256_V1,
+            )
+        except (RecursionError, ValueError):
+            raise _RequestInvalid from None
         service = injected
         expected_root_identity: tuple[int, int] | None = None
         if service is None:
@@ -833,36 +888,32 @@ def _run_current_cohort_command(
             )
         else:
             storage_root = _prepare_storage_root(storage_root)
-        if service is None:
-            policy = CurrentSuppliedCohortAdmissionPolicyV1(manifest.members)
-            query_clock = _FixedClock(cutoff)
-            service = CurrentCohortMarketDataServiceV1(
-                policy=policy,
-                universe_resolver=RetainedCurrentNifty50UniverseResolverV1(
-                    storage_root
-                ),
-                resolver=RetainedCurrentCohortInstrumentResolverV1(
-                    storage_root, cutoff
-                ),
-                query_port=CurrentCohortRetainedQueryPortV1(
-                    _default_query_service(policy, clock=query_clock),
-                    OpenMonthOneMinuteQueryServiceV1(
-                        policy,
-                        clock=query_clock,
-                        allow_prior_month=True,
-                    ),
-                ),
-                query_factory=CurrentCohortQueryRequestFactoryV1(storage_root),
-                storage_root=storage_root,
-                archive_port=ImmutableCurrentFactArchiveV1(storage_root),
-                expected_root_identity=expected_root_identity,
-            )
-        report = service.evaluate(request)
-        sys.stdout.write(report.canonical_json_bytes().decode("utf-8"))
-        return 0 if report.evidence_state is CurrentEvidenceStateV1.COMPLETE else 1
-    except (AttributeError, OSError, RecursionError, TypeError, ValueError):
+    except (OSError, StorageRootLeaseError, _RequestInvalid):
         sys.stderr.write("invalid cohort-current request\n")
         return 2
+    if service is None:
+        policy = CurrentSuppliedCohortAdmissionPolicyV1(manifest.members)
+        query_clock = _FixedClock(cutoff)
+        service = CurrentCohortMarketDataServiceV1(
+            policy=policy,
+            universe_resolver=RetainedCurrentNifty50UniverseResolverV1(storage_root),
+            resolver=RetainedCurrentCohortInstrumentResolverV1(storage_root, cutoff),
+            query_port=CurrentCohortRetainedQueryPortV1(
+                _default_query_service(policy, clock=query_clock),
+                OpenMonthOneMinuteQueryServiceV1(
+                    policy, clock=query_clock, allow_prior_month=True
+                ),
+            ),
+            query_factory=CurrentCohortQueryRequestFactoryV1(storage_root),
+            storage_root=storage_root,
+            archive_port=ImmutableCurrentFactArchiveV1(storage_root),
+            expected_root_identity=expected_root_identity,
+        )
+    report = service.evaluate(request)
+    rendered = report.canonical_json_bytes().decode("utf-8")
+    exit_code = 0 if report.evidence_state is CurrentEvidenceStateV1.COMPLETE else 1
+    sys.stdout.write(rendered)
+    return exit_code
 
 
 def _read_cohort_file(path: Path) -> bytes:
@@ -870,6 +921,7 @@ def _read_cohort_file(path: Path) -> bytes:
         path,
         os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
     )
+    active_exception: BaseException | None = None
     try:
         metadata = os.fstat(descriptor)
         if (
@@ -877,13 +929,32 @@ def _read_cohort_file(path: Path) -> bytes:
             or metadata.st_size < 1
             or metadata.st_size > MAX_COHORT_FILE_BYTES_V1
         ):
-            raise ValueError
+            raise _RequestInvalid
         raw = os.read(descriptor, MAX_COHORT_FILE_BYTES_V1 + 1)
         if len(raw) != metadata.st_size:
-            raise ValueError
+            raise _RequestInvalid
         return raw
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_cli_file_descriptors((descriptor,), active_exception)
+
+
+def _close_cli_file_descriptors(
+    descriptors: tuple[int | None, ...], active_exception: BaseException | None
+) -> None:
+    pending = active_exception
+    for descriptor in descriptors:
+        if descriptor is None:
+            continue
+        try:
+            os.close(descriptor)
+        except BaseException as error:  # noqa: BLE001 - finish cleanup before propagation
+            if pending is None:
+                pending = error
+    if active_exception is None and pending is not None:
+        raise pending
 
 
 def _command_request(args: argparse.Namespace, injected: bool) -> _CommandAdmissionV1:
@@ -1020,8 +1091,9 @@ def _render_admission_terminal(
         else:
             batch = bounded_nifty50_read_terminal(args.command, outcome)
             rendered = render_bounded_nifty50_read_json(batch)
+        exit_code = bounded_nifty50_exit_code(outcome)
         sys.stdout.write(rendered.decode("utf-8"))
-        return bounded_nifty50_exit_code(outcome)
+        return exit_code
     command: Literal["download", "coverage", "query"] = args.command
     code = (
         PublicFailureCodeV1.INGESTION_UNAVAILABLE
@@ -1049,8 +1121,9 @@ def _render_admission_terminal(
         rendered = render_coverage_report_json(report)
     else:
         rendered = render_query_report_json(report)
+    exit_code = public_exit_code(status)
     sys.stdout.write(rendered.decode("utf-8"))
-    return public_exit_code(status)
+    return exit_code
 
 
 def _valid_storage_root(value: object) -> bool:
@@ -1136,18 +1209,21 @@ def _run_download_command(
 ) -> int:
     if download_service is not None:
         report = download_service.download(request)
+        exit_code = public_exit_code(report.status)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        return exit_code
     service = _default_bounded_download_service(
         universe_source, args.schedule_file, args.closed_schedule_file
     )
     if args.symbol is not None:
         report = service.download_single(request)
+        exit_code = public_exit_code(report.status)
         sys.stdout.write(render_download_report_json(report).decode("utf-8"))
-        return public_exit_code(report.status)
+        return exit_code
     batch_report = service.download(request)
+    exit_code = bounded_nifty50_exit_code(batch_report.outcome)
     sys.stdout.write(render_bounded_nifty50_download_json(batch_report).decode("utf-8"))
-    return bounded_nifty50_exit_code(batch_report.outcome)
+    return exit_code
 
 
 def _default_bounded_download_service(
@@ -1308,7 +1384,7 @@ def _prepare_storage_root(value: object) -> Path:
     if type(value) is not type(Path()) or not _valid_storage_root(value):
         return Path()
     if value.is_symlink():
-        raise ValueError("invalid storage root")
+        raise _RequestInvalid
     canonical = value.resolve(strict=False)
     canonical.mkdir(mode=0o700, parents=True, exist_ok=True)
     canonical = canonical.resolve(strict=True)
@@ -1318,17 +1394,17 @@ def _prepare_storage_root(value: object) -> Path:
         or metadata.st_uid != os.geteuid()
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
-        raise ValueError("invalid storage root")
+        raise _RequestInvalid
     return canonical
 
 
 def _admit_existing_storage_root(value: object) -> tuple[Path, tuple[int, int]]:
     """Admit one pre-existing link-free root for identity-pinned cohort reads."""
     if type(value) is not type(Path()) or not _valid_storage_root(value):
-        raise ValueError("invalid storage root")
+        raise _RequestInvalid
     identity = StorageRootLease.admit_existing_private_identity(value)
     if identity is None:
-        raise ValueError("invalid storage root")
+        raise _RequestInvalid
     return value, identity
 
 
@@ -1350,6 +1426,15 @@ def _symbols(value: str) -> tuple[str, ...]:
 
 
 def _run_probe(args: argparse.Namespace) -> int:
+    try:
+        request = ProbeRequest(
+            segment=args.segment,
+            symbol=args.symbol,
+            from_date=args.from_date,
+            to_date=args.to_date,
+        )
+    except ValueError:
+        raise _RequestInvalid from None
     load_dotenv()
     # The public NSE catalog measured 1,934,668 compressed bytes on 2026-08-04.
     # Keep its 4 MB cap separate from the smaller authenticated historical cap.
@@ -1361,23 +1446,29 @@ def _run_probe(args: argparse.Namespace) -> int:
     )
     try:
         report = run_capability_probe(
-            ProbeRequest(
-                segment=args.segment,
-                symbol=args.symbol,
-                from_date=args.from_date,
-                to_date=args.to_date,
-            ),
+            request,
             token_provider=EnvironmentAccessTokenProvider(),
             catalog_client=InstrumentCatalogClient(catalog_transport),
             historical_client=UpstoxV3HistoricalClient(historical_transport),
         )
-    except Exception as exc:
-        # Print only the exception class. Adapter messages and secrets never cross
-        # this diagnostic boundary on failure.
-        print(f"probe_failed:{type(exc).__name__}", file=sys.stderr)
+    except (
+        CredentialNotFoundError,
+        InstrumentNotFoundError,
+        AmbiguousInstrumentError,
+        InstrumentCatalogRequestError,
+        InstrumentCatalogPayloadError,
+        CatalogPayloadTooLargeError,
+        HistoricalPayloadError,
+        HttpTransportError,
+        HttpResponseBodyTooLarge,
+        HttpResponseHeadersInvalid,
+    ):
+        sys.stderr.write("probe_failed\n")
         return 2
-    print(report.to_json())
-    return 0 if report.status == 200 and report.schema_valid else 1
+    rendered = report.to_json()
+    exit_code = 0 if report.status == 200 and report.schema_valid else 1
+    print(rendered)
+    return exit_code
 
 
 if __name__ == "__main__":

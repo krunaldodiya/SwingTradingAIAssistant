@@ -10,6 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from .catalog import CatalogPersistenceError, CatalogStorageError
 from .historical import (
     CancellationRequested,
     CancellationSignal,
@@ -27,18 +28,16 @@ from .manifest_lifecycle import (
     verify_manifest,
 )
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
-from .normalization import normalize_candles
+from .normalization import CandleSchemaError, normalize_candles
 from .partition_publication import (
     PartitionPublicationError,
     PartitionValidationError,
     PartitionWriteError,
-    PublicationConflictError,
-    PublicationOutcomeUnknown,
     PublishedPartitionEvidence,
     publish_partition,
 )
 from .schedule_evidence import ScheduleEvidenceResult
-from .schemas import CANDLE_SCHEMA_VERSION, CanonicalCandle
+from .schemas import CANDLE_SCHEMA_VERSION, CanonicalCandle, DuplicateCandleKeyError
 from .upstox_canonical import canonicalize_upstox_equity_candles
 from .validation import EquityMonthValidationPolicy, ValidationEvidence
 
@@ -268,7 +267,7 @@ class PartitionIngestionExecutor:
     def _fetch_current(self, plan: PlannedInstrumentMonth) -> PartitionManifest | None:
         try:
             current = self._catalog.get_manifest(plan)
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             if self._cancelled():
                 return None
             raise PartitionCatalogFailure("catalog access failed") from None
@@ -303,17 +302,6 @@ class PartitionIngestionExecutor:
         except CancellationRequested:
             return self._terminal_failure(
                 active, FailureCategory.INTERRUPTED, 0, "CANCELLED"
-            )
-        except Exception:
-            if self._cancelled():
-                return self._terminal_failure(
-                    active, FailureCategory.INTERRUPTED, 0, "CANCELLED"
-                )
-            return self._terminal_failure(
-                active,
-                FailureCategory.PROVIDER_NON_RETRYABLE,
-                0,
-                "PROVIDER_CONTRACT",
             )
         if type(fetched) is not HistoricalFetchResult:
             return self._terminal_failure(
@@ -367,7 +355,7 @@ class PartitionIngestionExecutor:
             canonical = canonicalize_upstox_equity_candles(
                 normalized, self._instrument, ingested_at
             )
-        except Exception:
+        except (CandleSchemaError, DuplicateCandleKeyError):
             if self._cancelled():
                 return self._terminal_failure(
                     active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
@@ -420,7 +408,7 @@ class PartitionIngestionExecutor:
 
         try:
             published = self._publish(plan, canonical, active)
-        except Exception as error:
+        except PartitionPublicationError as error:
             return self._publication_failure(active, attempts, error)
         if self._cancelled():
             return self._terminal_failure(
@@ -435,22 +423,15 @@ class PartitionIngestionExecutor:
                 canonical_path=published.canonical_path,
                 candle_schema_version=published.candle_schema_version,
             )
-        try:
-            verified = verify_manifest(
-                active,
-                max(_utc_now(self._clock), active.updated_at),
-                published.actual_from_ts,
-                published.actual_to_ts,
-                published.row_count,
-                published.checksum_sha256,
-                published.canonical_path,
-            )
-        except Exception:
-            if self._cancelled():
-                return self._terminal_failure(
-                    active, FailureCategory.INTERRUPTED, attempts, "CANCELLED"
-                )
-            raise
+        verified = verify_manifest(
+            active,
+            max(_utc_now(self._clock), active.updated_at),
+            published.actual_from_ts,
+            published.actual_to_ts,
+            published.row_count,
+            published.checksum_sha256,
+            published.canonical_path,
+        )
         if self._cancelled():
             return self._terminal_failure(
                 active,
@@ -482,16 +463,13 @@ class PartitionIngestionExecutor:
         raw_candles: Sequence[object],
         normalized: Sequence[object],
     ) -> ValidationEvidence | None:
-        try:
-            validation = self._validation_policy.validate(
-                plan,
-                canonical,
-                self._expected_sessions,
-                raw_row_count=len(raw_candles),
-                normalized_row_count=len(normalized),
-            )
-        except Exception:
-            return None
+        validation = self._validation_policy.validate(
+            plan,
+            canonical,
+            self._expected_sessions,
+            raw_row_count=len(raw_candles),
+            normalized_row_count=len(normalized),
+        )
         return validation if type(validation) is ValidationEvidence else None
 
     def _validation_failure(
@@ -516,7 +494,7 @@ class PartitionIngestionExecutor:
         return published
 
     def _publication_failure(
-        self, active: PartitionManifest, attempts: int, error: Exception
+        self, active: PartitionManifest, attempts: int, error: PartitionPublicationError
     ) -> PartitionLifecycleResult:
         if self._cancelled():
             return self._terminal_failure(
@@ -554,7 +532,7 @@ class PartitionIngestionExecutor:
             )
             try:
                 self._catalog.create_manifest(active)
-            except Exception:
+            except (CatalogPersistenceError, CatalogStorageError):
                 authoritative, reconciled = self._recover_active_manifest(plan, active)
                 if reconciled is not None:
                     return reconciled
@@ -585,7 +563,7 @@ class PartitionIngestionExecutor:
                 return True, None
             if type(observed) is not PartitionManifest or observed != attempted:
                 return False, None
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             raise PartitionCatalogFailure("catalog create failed") from None
         return True, observed
 
@@ -649,16 +627,13 @@ class PartitionIngestionExecutor:
     ) -> None:
         try:
             self._catalog.transition_manifest(current, target)
-        except Exception:
+        except (CatalogPersistenceError, CatalogStorageError):
             if self._cancelled():
                 raise PartitionCatalogFailure("catalog persistence cancelled") from None
             raise PartitionCatalogFailure("catalog persistence failed") from None
 
     def _cancelled(self) -> bool:
-        try:
-            return self._cancellation.is_cancelled()
-        except Exception:
-            return True
+        return self._cancellation.is_cancelled()
 
     def _cancelled_result(
         self, plan: PlannedInstrumentMonth
@@ -692,17 +667,11 @@ def _provider_category(code: HistoricalFetchCode) -> FailureCategory:
     return FailureCategory.PROVIDER_NON_RETRYABLE
 
 
-def _trusted_publication_category(error: Exception) -> FailureCategory:
+def _trusted_publication_category(error: PartitionPublicationError) -> FailureCategory:
     if type(error) is PartitionValidationError:
         return FailureCategory.VALIDATION_FAILED
     if type(error) is PartitionWriteError:
         return FailureCategory.WRITE_FAILED
-    if type(error) in {
-        PartitionPublicationError,
-        PublicationConflictError,
-        PublicationOutcomeUnknown,
-    }:
-        return FailureCategory.PUBLICATION_FAILED
     return FailureCategory.PUBLICATION_FAILED
 
 
@@ -713,14 +682,10 @@ def _bound_policy_version(policy_version: str, digest: str | None) -> str:
 
 
 def _utc_now(clock: UtcClock) -> datetime:
-    try:
-        value = clock.now()
-        if type(value) is not datetime or value.tzinfo is None:
-            raise ValueError
-        result = value.astimezone(UTC)
-    except Exception:
+    value = clock.now()
+    if type(value) is not datetime or value.tzinfo is None:
         raise PartitionClockFailure("clock access failed") from None
-    return result
+    return value.astimezone(UTC)
 
 
 def _validate_publication(
@@ -730,7 +695,7 @@ def _validate_publication(
     active: PartitionManifest,
 ) -> None:
     if type(published) is not PublishedPartitionEvidence or not canonical:
-        raise ValueError("publisher returned invalid evidence")
+        raise PartitionPublicationError("publisher returned invalid evidence")
     if (
         published.plan != plan
         or published.plan != active.plan
@@ -742,7 +707,7 @@ def _validate_publication(
         or published.source_version != _SOURCE_VERSION
         or any(candle.source_version != active.source_version for candle in canonical)
     ):
-        raise ValueError("publisher returned invalid evidence")
+        raise PartitionPublicationError("publisher returned invalid evidence")
 
 
 def _validate_request_plan(

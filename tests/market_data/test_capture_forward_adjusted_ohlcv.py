@@ -1067,17 +1067,28 @@ def test_writer_upgrade_is_not_correction_content_change(
     assert provider.calls == 1
 
 
+@pytest.mark.parametrize(
+    "writer_identity",
+    (
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+        "1054af9a2f2e791444d0198a801d5e728139bcbb12822fd230c5625d35747560",
+    ),
+)
 def test_released_base_writer_revision_remains_exactly_readable(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer_identity: str
 ) -> None:
     request = _request()
     initial = _capture(tmp_path)
-    historical = _retarget_retained_revision_writer(
-        tmp_path,
-        initial.revision,
-        request,
-        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
-    )
+    # Seed a prior admitted writer, then exercise the unmodified current reader.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            core,
+            "_COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1",
+            core._COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1 | {writer_identity},
+        )
+        historical = _retarget_retained_revision_writer(
+            tmp_path, initial.revision, request, writer_identity
+        )
     provider = _Provider(
         retrieved_at=request.schedule.decision_session_official_close_at
         + timedelta(hours=1)
@@ -2737,6 +2748,42 @@ def test_yfinance_distribution_mismatch_precedes_import_and_provider(
         reason="PROVIDER_IDENTITY_MISMATCH",
     )
     assert provider_called is False
+
+
+@pytest.mark.parametrize(
+    "fault_stage", ("schedule_digest", "schedule_covers_full_calendar_range")
+)
+def test_retained_schedule_computation_fault_is_not_evidence_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault_stage: str
+) -> None:
+    request = _request()
+    schedule_root = _retain_schedule(tmp_path, _expected_schedule())
+    retained_before = {
+        path.relative_to(schedule_root): path.read_bytes()
+        for path in schedule_root.rglob("*")
+        if path.is_file()
+    }
+    provider = _Provider(
+        retrieved_at=request.schedule.decision_session_official_close_at
+        + timedelta(hours=1)
+    )
+    failure = ValueError("private schedule computation defect")
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise failure
+
+    monkeypatch.setattr(core, fault_stage, fail)
+    with pytest.raises(ValueError) as raised:
+        _invoke(request, provider, tmp_path, schedule_root=schedule_root)
+
+    assert raised.value is failure
+    assert provider.calls == 0
+    assert tuple(tmp_path.iterdir()) == ()
+    assert {
+        path.relative_to(schedule_root): path.read_bytes()
+        for path in schedule_root.rglob("*")
+        if path.is_file()
+    } == retained_before
 
 
 def test_retained_schedule_substitution_fails_before_store_and_provider(

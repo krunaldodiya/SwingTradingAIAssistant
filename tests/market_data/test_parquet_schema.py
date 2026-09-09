@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import swing_trading_ai_assistant.market_data.parquet as parquet_module
 from swing_trading_ai_assistant.market_data.parquet import (
     CANDLE_ARROW_SCHEMA,
     CANDLE_SCHEMA_VERSION_METADATA_KEY,
@@ -298,6 +299,18 @@ def test_reader_rejects_nullable_required_field_and_accepts_optional_null(
     candle = _candle(underlying_id=None)
     write_candles_parquet(optional_null_path, [candle])
     assert list(iter_candles_from_parquet(optional_null_path)) == [(candle,)]
+
+
+def test_parquet_metadata_programming_fault_propagates_unchanged() -> None:
+    class FaultingMetadata:
+        @property
+        def num_rows(self) -> int:
+            raise AssertionError("internal-metadata-fault")
+
+    with pytest.raises(AssertionError, match="internal-metadata-fault"):
+        parquet_module._validate_parquet_resource_bounds(
+            FaultingMetadata(), max_rows=1, max_uncompressed_bytes=None
+        )
 
 
 def test_reader_rejects_versions_and_incompatible_schema_before_rows(

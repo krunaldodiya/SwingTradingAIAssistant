@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import sys
 from datetime import date
 from pathlib import Path
+from typing import Never
 
 import pytest
 
-from swing_trading_ai_assistant.market_data import cli
+from swing_trading_ai_assistant.market_data import cli, historical
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     Nifty50BatchOutcomeV1,
 )
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import (
     DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES,
+    HttpResponse,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
     DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
@@ -180,28 +185,6 @@ def test_storage_root_creation_fails_closed_for_unsafe_or_blocked_paths(
     assert not cli._prepare_storage_root(tmp_path / "data*").is_absolute()
     with pytest.raises(OSError):
         cli._prepare_storage_root(blocked / "child")
-
-
-def test_cli_explains_that_documentation_date_placeholders_must_be_replaced(
-    capsys,
-) -> None:
-    with pytest.raises(SystemExit, match="2"):
-        cli.build_parser().parse_args(
-            [
-                "probe-upstox",
-                "--segment",
-                "NSE_EQ",
-                "--symbol",
-                "RELIANCE",
-                "--from",
-                "YYYY-MM-DD",
-            ]
-        )
-
-    assert (
-        "replace YYYY-MM-DD with an actual date, for example 2026-08-03"
-        in capsys.readouterr().err
-    )
 
 
 @pytest.mark.parametrize("value", ("20260701", "2026-W27-3"))
@@ -399,9 +382,86 @@ def test_default_multi_download_keeps_the_bounded_aggregate_contract(
     assert '"scope":"nifty50"' in capsys.readouterr().out
 
 
-def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
-    def run_probe(*args: object, **kwargs: object) -> ProbeReport:
-        raise ValueError("secret-token")
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, TypeError, ValueError, Exception),
+)
+def test_unexpected_execution_fault_emits_no_market_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    error_type: type[Exception],
+) -> None:
+    error = error_type("private/path/token/provider-payload")
+
+    class FailingCoverage:
+        def coverage(self, _request: object) -> Never:
+            raise error
+
+    exit_code = cli.main(
+        _persistent_command("coverage", tmp_path), coverage_service=FailingCoverage()
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+
+
+def test_cli_rejects_unknown_arguments_without_echoing_private_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main(
+            _persistent_command("coverage", tmp_path)
+            + ["--private-input=private/path/token"]
+        )
+    assert exited.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "request_invalid\n"
+
+
+def test_cli_does_not_publish_report_before_exit_status_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    report = PublicCommandReportV1(
+        "v1",
+        "coverage",
+        PublicCommandStatusV1.REJECTED,
+        PublicFailureV1(PublicFailureCodeV1.INVALID_INPUT, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Coverage:
+        def coverage(self, _request: object) -> PublicCommandReportV1[object]:
+            return report
+
+    def fail_exit_code(_status: object) -> Never:
+        raise RuntimeError("private/path/token")
+
+    monkeypatch.setattr(cli, "public_exit_code", fail_exit_code)
+    assert (
+        cli.main(
+            _persistent_command("coverage", tmp_path),
+            coverage_service=Coverage(),  # type: ignore[arg-type]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+
+
+def test_probe_fault_does_not_disclose_a_dynamic_exception_name(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    private_error = type("private-provider-token-" * 1024, (Exception,), {})
+
+    def run_probe(*_args: object, **_kwargs: object) -> Never:
+        raise private_error("private/path/provider-payload")
 
     monkeypatch.setattr(cli, "run_capability_probe", run_probe)
 
@@ -411,8 +471,8 @@ def test_cli_redacts_provider_failures(monkeypatch, capsys) -> None:
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert captured.err == "probe_failed:ValueError\n"
-    assert "secret-token" not in captured.err
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
 
 
 def _range_command(
@@ -788,3 +848,238 @@ def test_invalid_injected_segment_preserves_typed_request_without_mkdir(
     assert json.loads(capsys.readouterr().out)["failure"]["code"] == (
         "UNSUPPORTED_PREVIEW_INSTRUMENT"
     )
+
+
+def _install_synthetic_probe(
+    monkeypatch: pytest.MonkeyPatch, source: str, payload: bytes
+) -> None:
+    catalog_payload = gzip.compress(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "exchange": "NSE",
+                    "isin": "INE002A01018",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|INE002A01018",
+                    "trading_symbol": "RELIANCE",
+                }
+            ]
+        ).encode()
+    )
+
+    class TokenProvider:
+        def get_access_token(self) -> AccessToken:
+            return AccessToken("synthetic-probe-token")
+
+    class Transport:
+        def __init__(self, *, max_body_bytes: int) -> None:
+            del max_body_bytes
+
+        def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+            if url.endswith("/NSE.json.gz"):
+                body = payload if source == "catalog" else catalog_payload
+            else:
+                body = payload
+            return HttpResponse(status_code=200, body=body)
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda: False)
+    monkeypatch.setattr(cli, "EnvironmentAccessTokenProvider", TokenProvider)
+    monkeypatch.setattr(cli, "UrllibHttpTransport", Transport)
+
+
+@pytest.mark.parametrize(
+    "source,payload",
+    (
+        ("historical", b"{"),
+        ("historical", b'{"status":"success","data":[]}'),
+        ("historical", b'{"status":"success","data":{"candles":{}}}'),
+        ("catalog", gzip.compress(b"[" * 2000 + b"]" * 2000, mtime=0)),
+        ("catalog", gzip.compress(b"[" + b"9" * 5000 + b"]", mtime=0)),
+        ("catalog", bytes.fromhex("1f8b0800000000000003070000000000000000")),
+    ),
+    ids=(
+        "historical-json",
+        "historical-envelope",
+        "historical-candles",
+        "catalog-depth",
+        "catalog-integer-limit",
+        "catalog-deflate",
+    ),
+)
+def test_real_probe_keeps_malformed_provider_payloads_recognized(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    source: str,
+    payload: bytes,
+) -> None:
+    _install_synthetic_probe(monkeypatch, source, payload)
+    prior_integer_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(4300)
+        status = cli.main(
+            ["probe-upstox", "--segment", "NSE_EQ", "--symbol", "RELIANCE"]
+        )
+    finally:
+        sys.set_int_max_str_digits(prior_integer_limit)
+    output = capsys.readouterr()
+    assert (status, output.out, output.err) == (2, "", "probe_failed\n")
+
+
+def test_real_probe_reports_historical_decoder_defect_as_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_synthetic_probe(
+        monkeypatch, "historical", b'{"status":"success","data":{"candles":[]}}'
+    )
+    failure = RuntimeError("private/path/token")
+    calls: list[str] = []
+
+    def fail_object(_pairs: object) -> Never:
+        calls.append("decode")
+        raise failure
+
+    monkeypatch.setattr(historical, "_unique_json_object", fail_object)
+    status = cli.main(["probe-upstox", "--segment", "NSE_EQ", "--symbol", "RELIANCE"])
+    output = capsys.readouterr()
+    assert calls == ["decode"]
+    assert (status, output.out, output.err) == (2, "", "internal_error\n")
+
+
+@pytest.mark.parametrize("reader", ("cohort", "regime", "historical"))
+@pytest.mark.parametrize("failure_kind", ("admission", "read"))
+def test_local_reader_preserves_primary_failure_and_closes_all_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reader: str,
+    failure_kind: str,
+) -> None:
+    path = (tmp_path / "input.json").resolve()
+    path.write_bytes(b"" if failure_kind == "admission" else b"{}")
+    path.chmod(0o600)
+    metadata = path.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    root = (tmp_path / "storage").resolve()
+    root.mkdir(mode=0o700)
+    admitted_root = cli._admit_historical_storage_root(root)
+    primary = AssertionError("primary local read failure")
+    cleanup_error = (
+        AssertionError("secondary admission close failure")
+        if failure_kind == "admission"
+        else OSError("secondary read close failure")
+    )
+    opened: set[int] = set()
+    real_open, real_close = cli.os.open, cli.os.close
+    real_read, real_fstat = cli.os.read, cli.os.fstat
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.add(descriptor)
+        return descriptor
+
+    def is_input(descriptor: int) -> bool:
+        current = real_fstat(descriptor)
+        return (current.st_dev, current.st_ino) == identity
+
+    def fail_read(descriptor: int, size: int) -> bytes:
+        if is_input(descriptor):
+            raise primary
+        return real_read(descriptor, size)
+
+    def close_after_failure(descriptor: int) -> None:
+        target = is_input(descriptor)
+        real_close(descriptor)
+        opened.discard(descriptor)
+        if target:
+            raise cleanup_error
+
+    monkeypatch.setattr(cli.os, "open", track_open)
+    monkeypatch.setattr(cli.os, "read", fail_read)
+    monkeypatch.setattr(cli.os, "close", close_after_failure)
+    expected = cli._RequestInvalid if failure_kind == "admission" else AssertionError
+    with pytest.raises(expected) as raised:
+        if reader == "cohort":
+            cli._read_cohort_file(path)
+        elif reader == "regime":
+            cli._read_current_regime_input(path)
+        else:
+            cli._read_historical_local_file(path, 1024, admitted_root)
+
+    if failure_kind == "read":
+        assert raised.value is primary
+    assert not opened
+
+
+@pytest.mark.parametrize("reader", ("historical", "regime"))
+def test_traversal_close_fault_preserves_primary_and_closes_owned_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reader: str,
+) -> None:
+    input_file = tmp_path / "nested" / "input.json"
+    input_file.parent.mkdir()
+    input_file.write_bytes(b"{}")
+    input_file.chmod(0o600)
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir(mode=0o700)
+    admitted_root = cli._admit_historical_storage_root(storage_root)
+    primary = AssertionError("traversal close fault")
+    cleanup_error = OSError("secondary descriptor cleanup fault")
+    opened: set[int] = set()
+    replacement: int | None = None
+    replacement_owned = False
+    real_open, real_close = cli.os.open, cli.os.close
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.add(descriptor)
+        return descriptor
+
+    def close_with_fault(descriptor: int) -> None:
+        nonlocal replacement, replacement_owned
+        if descriptor not in opened:
+            if descriptor == replacement:
+                replacement_owned = False
+            real_close(descriptor)
+            return
+        opened.remove(descriptor)
+        real_close(descriptor)
+        if replacement is None:
+            replacement = real_open("/dev/null", cli.os.O_RDONLY | cli.os.O_CLOEXEC)
+            replacement_owned = True
+            assert replacement == descriptor
+            raise primary
+        raise cleanup_error
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(cli.os, "open", track_open)
+            scoped.setattr(cli.os, "close", close_with_fault)
+            with pytest.raises(AssertionError) as raised:
+                if reader == "historical":
+                    cli._read_historical_local_file(input_file, 1024, admitted_root)
+                else:
+                    cli._read_current_regime_input(input_file)
+            assert raised.value is primary
+        assert not opened
+        assert replacement is not None
+        assert replacement_owned
+        cli.os.fstat(replacement)
+    finally:
+        for descriptor in opened:
+            real_close(descriptor)
+        if replacement_owned and replacement is not None:
+            real_close(replacement)

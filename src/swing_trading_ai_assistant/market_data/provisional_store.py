@@ -6,12 +6,12 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from .catalog import DuckDBCatalog
+from .catalog import CatalogError, DuckDBCatalog
 from .monthly_request_planner import PlannedInstrumentMonth
 from .provisional_metadata import ProvisionalPartitionMetadataV1
-from .public_coverage import read_partition_under_lease
+from .public_coverage import PartitionReadFailureV1, read_partition_under_lease
 from .schemas import CanonicalCandle
-from .storage_root_lease import StorageRootLease
+from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 
 
 class ProvisionalPartitionUnavailableV1(RuntimeError):
@@ -39,7 +39,11 @@ def latest_provisional_partition(
             return None
         rows = load_provisional_partition(root, lease, metadata)
         return metadata, rows
-    except Exception:
+    except (
+        CatalogError,
+        ProvisionalPartitionUnavailableV1,
+        StorageRootLeaseError,
+    ):
         raise ProvisionalPartitionUnavailableV1(
             "provisional partition unavailable"
         ) from None
@@ -51,47 +55,47 @@ def load_provisional_partition(
     metadata: ProvisionalPartitionMetadataV1,
 ) -> tuple[CanonicalCandle, ...]:
     """Verify catalog identity, checksum, bounds, and every row identity."""
+    if type(metadata) is not ProvisionalPartitionMetadataV1:
+        raise ProvisionalPartitionUnavailableV1("provisional partition unavailable")
+    metadata = replace(metadata)
     try:
-        if type(metadata) is not ProvisionalPartitionMetadataV1:
-            raise ValueError
-        metadata = replace(metadata)
         digest, rows = read_partition_under_lease(root, lease, metadata.relative_path)
-        plan = metadata.plan
-        expected_identity = (
-            plan.provider,
-            plan.instrument_key,
-            plan.security_id,
-            plan.symbol,
-            plan.exchange,
-            plan.segment,
-            plan.instrument_type,
-            plan.interval,
-        )
-        if (
-            digest != metadata.checksum_sha256
-            or len(rows) != metadata.row_count
-            or not rows
-            or rows[0].ts != metadata.actual_from_ts
-            or rows[-1].ts != metadata.actual_to_ts
-            or rows[-1].ts != metadata.cutoff
-            or any(
-                (
-                    row.provider,
-                    row.instrument_key,
-                    row.security_id,
-                    row.symbol,
-                    row.exchange,
-                    row.segment,
-                    row.instrument_type,
-                    row.interval,
-                )
-                != expected_identity
-                for row in rows
-            )
-        ):
-            raise ValueError
-        return rows
-    except Exception:
+    except (PartitionReadFailureV1, StorageRootLeaseError):
         raise ProvisionalPartitionUnavailableV1(
             "provisional partition unavailable"
         ) from None
+    plan = metadata.plan
+    expected_identity = (
+        plan.provider,
+        plan.instrument_key,
+        plan.security_id,
+        plan.symbol,
+        plan.exchange,
+        plan.segment,
+        plan.instrument_type,
+        plan.interval,
+    )
+    if (
+        digest != metadata.checksum_sha256
+        or len(rows) != metadata.row_count
+        or not rows
+        or rows[0].ts != metadata.actual_from_ts
+        or rows[-1].ts != metadata.actual_to_ts
+        or rows[-1].ts != metadata.cutoff
+        or any(
+            (
+                row.provider,
+                row.instrument_key,
+                row.security_id,
+                row.symbol,
+                row.exchange,
+                row.segment,
+                row.instrument_type,
+                row.interval,
+            )
+            != expected_identity
+            for row in rows
+        )
+    ):
+        raise ProvisionalPartitionUnavailableV1("provisional partition unavailable")
+    return rows

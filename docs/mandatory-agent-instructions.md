@@ -6,6 +6,7 @@ Owner: repository owner and product direction authority
 Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
 Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/170)
 Review-efficiency revision: [#174](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/174)
+Decision-retention revision: [#179](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/179)
 
 This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
@@ -187,6 +188,38 @@ These active owner instructions exist beyond the six execution controls.
 - When a discussion becomes authorized delivery, create or update its own governed Issue and delivery tasks at that point.
 - Keep session context scoped to the active sprint or bounded task. At a new sprint, use a fresh session or equivalent explicit context reset; preserve an evidence-bearing handoff before compaction, session changes, or switching harnesses. No slash command or proprietary session format is required.
 - Use available repository tools, direct GitHub integration, and coordination facilities that satisfy the controls above. Tool availability does not authorize unrelated work or changes to another active agent.
+
+### Durable discussion closeout
+
+When the owner confirms a material direction or asks to retain a proposal, the
+coordinator MUST complete this closeout before unrelated work or a handoff.
+A terminal acknowledgement alone is not a saved decision.
+
+- Classify the conclusion using the existing notes vocabulary: `proposed`,
+  `open`, `accepted`, `rejected`, or `superseded`. Record its scope, owner and
+  authority, source/date, rationale, material open questions, and any replacement
+  link. Approval of a broad direction does not approve every proposed detail,
+  implementation, provider effect, or release.
+- Persist it in the appropriate existing governing Issue, approved
+  specification, or reasoning note, within current write/publication authority.
+  Preserve useful proposals without turning every brainstorm into delivery or
+  creating a competing ledger. Distinguish the decision's status from whether
+  its document is published, its implementation is complete, or its rule is active.
+- Read back the source record and check its content and status. When continuity
+  memory is configured and authorised, retain a concise status-labelled summary
+  and source pointer, then verify it through a relevant retrieval. Memory remains
+  context, not a replacement for the governing record.
+- Report the actual saved location and which persistence/readback checks passed.
+  If authority, storage, or retrieval is unavailable, retain an authorised local
+  pending record where possible and report the exact unverified step; do not say
+  it is saved or recovered merely because text was printed. Block only the
+  dependent persistence/completion claim, not unrelated authorised work.
+- On resumption, retrieve the context and read the current authoritative source.
+  Preserve prior decisions with explicit supersession links; do not let stale
+  memory override current authority or invent unrecovered criteria.
+- Exclude secrets, raw private market/account data, and unnecessary transcripts
+  from discussion records and memory. This procedure authorises no new service,
+  upload destination, background hook, or guarantee of automatic retention.
 
 ### Tracker and lifecycle
 

@@ -4,9 +4,13 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import duckdb
 import pytest
 
-from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+from swing_trading_ai_assistant.market_data.catalog import (
+    CatalogPersistenceError,
+    DuckDBCatalog,
+)
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationRequested,
     CancellationToken,
@@ -36,6 +40,7 @@ from swing_trading_ai_assistant.market_data.partition_ingestion import (
 )
 from swing_trading_ai_assistant.market_data.partition_publication import (
     PartitionPublicationError,
+    PartitionWriteError,
     PublicationOutcome,
     PublishedPartitionEvidence,
 )
@@ -319,7 +324,7 @@ def test_catalog_cancellation_wins_without_leaking_or_republishing() -> None:
             self, current: PartitionManifest, target: PartitionManifest
         ) -> None:
             cancellation.cancel()
-            raise RuntimeError("catalog secret")
+            raise CatalogPersistenceError("catalog unavailable")
 
     fetcher = _Fetcher(_fetched(_raw_response()))
     publisher = _Publisher(_published())
@@ -347,7 +352,7 @@ def test_cancellation_during_manifest_creation_does_not_create_terminal_evidence
     class CancellingCreateCatalog(_Catalog):
         def create_manifest(self, manifest: PartitionManifest) -> None:
             cancellation.cancel()
-            raise RuntimeError("catalog create secret")
+            raise CatalogPersistenceError("catalog unavailable")
 
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = CancellingCreateCatalog()
@@ -489,16 +494,14 @@ def test_fresh_validation_failure_uses_validation_failed_not_invalidation_catego
     assert publisher.calls == []
 
 
-def test_publication_failure_is_terminal_without_a_second_publication_or_fetch() -> (
-    None
-):
+def test_trusted_publication_failure_is_terminal_without_a_second_attempt() -> None:
     fetcher = _Fetcher(_fetched(_raw_response()))
-    publisher = _Publisher(RuntimeError("private publication detail"))
+    publisher = _Publisher(PartitionWriteError("private publication detail"))
     catalog = _Catalog()
 
     result = _executor(fetcher, catalog, publisher=publisher).execute(_plan())
 
-    assert result.failure_category is FailureCategory.PUBLICATION_FAILED
+    assert result.failure_category is FailureCategory.WRITE_FAILED
     assert result.final_manifest is not None
     assert result.final_manifest.state is ManifestState.FAILED
     assert len(fetcher.calls) == 1
@@ -506,22 +509,20 @@ def test_publication_failure_is_terminal_without_a_second_publication_or_fetch()
     assert "private" not in result.error_code
 
 
-def test_publication_exception_without_trusted_metadata_uses_safe_category() -> None:
-    class HostilePublisherError(RuntimeError):
-        @property
-        def failure_category(self) -> FailureCategory:
-            raise RuntimeError("publisher metadata secret")
-
+def test_untyped_publisher_fault_preserves_identity_without_terminal_evidence() -> None:
+    failure = RuntimeError("publisher secret")
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = _Catalog()
-    publisher = _Publisher(HostilePublisherError("publisher secret"))
+    publisher = _Publisher(failure)
 
-    result = _executor(fetcher, catalog, publisher=publisher).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(fetcher, catalog, publisher=publisher).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.FAILED
-    assert result.failure_category is FailureCategory.PUBLICATION_FAILED
-    assert result.error_code == "PUBLICATION_FAILED"
-    assert "secret" not in result.error_code
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
+    assert len(fetcher.calls) == 1
+    assert len(publisher.calls) == 1
 
 
 def test_hostile_partition_publication_subclass_cannot_expose_metadata() -> None:
@@ -667,7 +668,7 @@ def test_catalog_failure_after_publication_does_not_republish_or_refetch() -> No
             self, current: PartitionManifest, target: PartitionManifest
         ) -> None:
             if target.state is ManifestState.VERIFIED:
-                raise RuntimeError("private catalog detail")
+                raise CatalogPersistenceError("catalog unavailable")
             super().transition_manifest(current, target)
 
     fetcher = _Fetcher(_fetched(_raw_response()))
@@ -682,6 +683,65 @@ def test_catalog_failure_after_publication_does_not_republish_or_refetch() -> No
 
     assert len(fetcher.calls) == 1
     assert len(publisher.calls) == 1
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_executor_preserves_unknown_catalog_create_fault_without_terminal_evidence(
+    tmp_path: Path, fault_type: type[Exception]
+) -> None:
+    prior_plan = replace(
+        _plan(),
+        instrument_key="NSE_EQ|INE002A01019",
+        security_id="INE002A01019",
+        symbol="OTHER",
+    )
+    prior = PartitionManifest(
+        1,
+        prior_plan,
+        "prior-run",
+        None,
+        ManifestState.IN_PROGRESS,
+        ValidationOutcome.NOT_RUN,
+        "nse-equity-month@v1+sessions-sha256:dummy",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "upstox-historical-v3",
+        datetime(2026, 1, 31, 23, tzinfo=UTC),
+        datetime(2026, 1, 31, 23, tzinfo=UTC),
+        datetime(2026, 1, 31, 23, tzinfo=UTC),
+        None,
+    )
+    failure = fault_type("injected run lookup fault")
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(prior)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise failure
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(fault_type) as raised:
+                _executor(
+                    fetcher, catalog, publisher=publisher, storage_root=tmp_path
+                ).execute(_plan())
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(prior_plan) == prior
+        assert catalog.get_manifest(_plan()) is None
+        assert fetcher.calls == []
+        assert publisher.calls == []
 
 
 @pytest.mark.parametrize(
@@ -714,38 +774,42 @@ def test_publication_evidence_mismatch_never_becomes_verified(field: str) -> Non
 
     assert result.outcome is PartitionLifecycleOutcome.FAILED
     assert result.failure_category is FailureCategory.PUBLICATION_FAILED
+    assert result.error_code == "PUBLICATION_FAILED"
     assert result.final_manifest is not None
     assert result.final_manifest.state is ManifestState.FAILED
+    assert result.final_manifest.failure_category is FailureCategory.PUBLICATION_FAILED
     assert len(publisher.calls) == 1
     assert len(fetcher.calls) == 1
 
 
-def test_validation_exception_cancellation_wins_and_is_sanitized(
+def test_unknown_validation_fault_is_not_converted_to_terminal_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("validation secret")
 
     def cancel_and_fail(*_: object, **__: object) -> object:
         cancellation.cancel()
-        raise RuntimeError("validation secret")
+        raise failure
 
     monkeypatch.setattr(EquityMonthValidationPolicy, "validate", cancel_and_fail)
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = _Catalog()
 
-    result = _executor(fetcher, catalog, cancellation=cancellation).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(fetcher, catalog, cancellation=cancellation).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.error_code == "CANCELLED"
-    assert result.final_manifest is not None
-    assert result.final_manifest.failure_category is FailureCategory.INTERRUPTED
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
 
 
 def test_wrong_validation_return_is_a_fresh_validation_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(EquityMonthValidationPolicy, "validate", lambda *_: object())
+    monkeypatch.setattr(
+        EquityMonthValidationPolicy, "validate", lambda *_args, **_kwargs: object()
+    )
     result = _executor(_Fetcher(_fetched(_raw_response())), _Catalog()).execute(_plan())
 
     assert result.outcome is PartitionLifecycleOutcome.FAILED
@@ -753,36 +817,40 @@ def test_wrong_validation_return_is_a_fresh_validation_failure(
     assert result.error_code == "VALIDATION_ERROR"
 
 
-def test_publisher_exception_cancellation_wins_and_is_sanitized() -> None:
+def test_unknown_publisher_fault_is_not_converted_when_cancellation_is_signalled() -> (
+    None
+):
     cancellation = CancellationToken()
+    failure = RuntimeError("publisher secret")
 
     class CancellingPublisher(_Publisher):
         def __call__(
             self, root: Path, plan: PlannedInstrumentMonth, candles: object
         ) -> object:
             cancellation.cancel()
-            raise RuntimeError("publisher secret")
+            raise failure
 
     fetcher = _Fetcher(_fetched(_raw_response()))
     publisher = CancellingPublisher(_published())
     catalog = _Catalog()
 
-    result = _executor(
-        fetcher,
-        catalog,
-        publisher=publisher,
-        cancellation=cancellation,
-    ).execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        _executor(
+            fetcher,
+            catalog,
+            publisher=publisher,
+            cancellation=cancellation,
+        ).execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.error_code == "CANCELLED"
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
 
 
 def test_catalog_get_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
     class SecretCatalog(_Catalog):
         def get_manifest(self, plan: PlannedInstrumentMonth) -> None:
-            raise RuntimeError("catalog secret")
+            raise CatalogPersistenceError("catalog unavailable")
 
     with pytest.raises(PartitionCatalogFailure) as error:
         _executor(
@@ -801,7 +869,7 @@ def test_catalog_get_exception_cancellation_wins_before_manifest_creation() -> N
     class CancellingCatalog(_Catalog):
         def get_manifest(self, plan: PlannedInstrumentMonth) -> None:
             cancellation.cancel()
-            raise RuntimeError("catalog secret")
+            raise CatalogPersistenceError("catalog unavailable")
 
     fetcher = _Fetcher(_fetched(_raw_response()))
     catalog = CancellingCatalog()
@@ -814,10 +882,10 @@ def test_catalog_get_exception_cancellation_wins_before_manifest_creation() -> N
     assert fetcher.calls == []
 
 
-def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
-    class SecretClock:
+def test_invalid_clock_return_is_typed_bounded_and_does_not_leak_secret() -> None:
+    class InvalidClock:
         def now(self) -> datetime:
-            raise RuntimeError("clock secret")
+            return datetime(2026, 2, 1)
 
     executor = PartitionIngestionExecutor(
         instrument=_instrument(),
@@ -827,7 +895,7 @@ def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
         publisher=_Publisher(_published()),
         catalog=_Catalog(),
         storage_root=Path("test-market-data"),
-        clock=SecretClock(),
+        clock=InvalidClock(),
         run_id="run-1",
         cancellation=CancellationToken(),
     )
@@ -840,8 +908,72 @@ def test_clock_failure_is_typed_bounded_and_does_not_leak_secret() -> None:
     assert "secret" not in str(error.value)
 
 
-def test_clock_failure_after_publication_uses_cancelled_terminal_evidence() -> None:
+def test_clock_execution_fault_preserves_identity_without_lifecycle_evidence() -> None:
+    failure = RuntimeError("clock secret")
+
+    class FailingClock:
+        def now(self) -> datetime:
+            raise failure
+
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
+    executor = PartitionIngestionExecutor(
+        instrument=_instrument(),
+        expected_sessions=_schedule_evidence(),
+        validation_policy=EquityMonthValidationPolicy("nse-equity-month@v1"),
+        fetcher=fetcher,
+        publisher=publisher,
+        catalog=catalog,
+        storage_root=Path("test-market-data"),
+        clock=FailingClock(),
+        run_id="run-1",
+        cancellation=CancellationToken(),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        executor.execute(_plan())
+
+    assert raised.value is failure
+    assert catalog.current is None
+    assert catalog.created == []
+    assert catalog.transitions == []
+    assert fetcher.calls == []
+    assert publisher.calls == []
+
+
+def test_cancellation_callback_fault_preserves_identity_without_lifecycle_evidence() -> (
+    None
+):
+    failure = AssertionError("cancellation secret")
+
+    class FailingCancellation:
+        def is_cancelled(self) -> bool:
+            raise failure
+
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
+
+    with pytest.raises(AssertionError) as raised:
+        _executor(
+            fetcher,
+            catalog,
+            publisher=publisher,
+            cancellation=FailingCancellation(),  # type: ignore[arg-type]
+        ).execute(_plan())
+
+    assert raised.value is failure
+    assert catalog.current is None
+    assert catalog.created == []
+    assert catalog.transitions == []
+    assert fetcher.calls == []
+    assert publisher.calls == []
+
+
+def test_clock_execution_fault_after_publication_is_not_cancellation_evidence() -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("clock secret")
 
     class CancellingClock(_Clock):
         def __init__(self) -> None:
@@ -852,29 +984,35 @@ def test_clock_failure_after_publication_uses_cancelled_terminal_evidence() -> N
             self.calls += 1
             if self.calls >= 2:
                 cancellation.cancel()
-                raise RuntimeError("clock secret")
+                raise failure
             return super().now()
 
     clock = CancellingClock()
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    catalog = _Catalog()
     executor = PartitionIngestionExecutor(
         instrument=_instrument(),
         expected_sessions=_schedule_evidence(),
         validation_policy=EquityMonthValidationPolicy("nse-equity-month@v1"),
-        fetcher=_Fetcher(_fetched(_raw_response())),
-        publisher=_Publisher(_published()),
-        catalog=_Catalog(),
+        fetcher=fetcher,
+        publisher=publisher,
+        catalog=catalog,
         storage_root=Path("test-market-data"),
         clock=clock,
         run_id="run-1",
         cancellation=cancellation,
     )
 
-    result = executor.execute(_plan())
+    with pytest.raises(RuntimeError) as raised:
+        executor.execute(_plan())
 
-    assert result.outcome is PartitionLifecycleOutcome.CANCELLED
-    assert result.failure_category is FailureCategory.INTERRUPTED
-    assert result.final_manifest is not None
-    assert result.final_manifest.failure_category is FailureCategory.INTERRUPTED
+    assert raised.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
+    assert catalog.transitions == []
+    assert len(fetcher.calls) == 1
+    assert len(publisher.calls) == 1
 
 
 def test_catalog_returning_an_untyped_manifest_is_bounded() -> None:
@@ -1004,7 +1142,7 @@ def test_manifest_create_commit_then_raise_is_reconciled_before_cancellation_ter
             self.create_calls += 1
             self.current = manifest
             cancellation.cancel()
-            raise RuntimeError("catalog commit secret")
+            raise CatalogPersistenceError("catalog commit secret")
 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
@@ -1027,8 +1165,9 @@ def test_manifest_create_commit_then_raise_is_reconciled_before_cancellation_ter
     assert fetcher.calls == []
 
 
-def test_manifest_create_raise_with_uncertain_reobservation_is_catalog_fatal() -> None:
+def test_manifest_recovery_propagates_unexpected_read_fault() -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("catalog read secret")
 
     class UncertainCreateCatalog:
         def __init__(self) -> None:
@@ -1038,11 +1177,11 @@ def test_manifest_create_raise_with_uncertain_reobservation_is_catalog_fatal() -
             self.get_calls += 1
             if self.get_calls == 1:
                 return None
-            raise RuntimeError("catalog read secret")
+            raise failure
 
         def create_manifest(self, manifest: PartitionManifest) -> None:
             cancellation.cancel()
-            raise RuntimeError("catalog commit secret")
+            raise CatalogPersistenceError("catalog commit secret")
 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
@@ -1051,13 +1190,12 @@ def test_manifest_create_raise_with_uncertain_reobservation_is_catalog_fatal() -
 
     fetcher = _Fetcher(_fetched(_raw_response()))
 
-    with pytest.raises(PartitionCatalogFailure) as error:
+    with pytest.raises(RuntimeError) as caught:
         _executor(fetcher, UncertainCreateCatalog(), cancellation=cancellation).execute(
             _plan()
         )
 
-    assert str(error.value) == "catalog create failed"
-    assert error.value.__cause__ is None
+    assert caught.value is failure
     assert fetcher.calls == []
 
 
@@ -1070,10 +1208,11 @@ def test_manifest_create_raise_with_uncertain_reobservation_is_catalog_fatal() -
         ("updated_at", datetime(2026, 2, 1, 0, 0, 1, tzinfo=UTC)),
     ),
 )
-def test_manifest_create_recovery_rejects_provenance_difference_even_if_cancelled(
+def test_manifest_recovery_rejects_provenance_mismatch(
     field: str, value: object
 ) -> None:
     cancellation = CancellationToken()
+    failure = CatalogPersistenceError("catalog commit secret")
 
     class MutatingCreateCatalog:
         def __init__(self) -> None:
@@ -1087,7 +1226,7 @@ def test_manifest_create_recovery_rejects_provenance_difference_even_if_cancelle
         def create_manifest(self, manifest: PartitionManifest) -> None:
             self.current = replace(manifest, **{field: value})
             cancellation.cancel()
-            raise RuntimeError("catalog commit secret")
+            raise failure
 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
@@ -1097,7 +1236,7 @@ def test_manifest_create_recovery_rejects_provenance_difference_even_if_cancelle
     fetcher = _Fetcher(_fetched(_raw_response()))
     publisher = _Publisher(_published())
 
-    with pytest.raises(PartitionCatalogFailure) as error:
+    with pytest.raises(PartitionCatalogFailure):
         _executor(
             fetcher,
             MutatingCreateCatalog(),
@@ -1105,24 +1244,22 @@ def test_manifest_create_recovery_rejects_provenance_difference_even_if_cancelle
             cancellation=cancellation,
         ).execute(_plan())
 
-    assert str(error.value) == "catalog create failed"
-    assert error.value.__cause__ is None
-    assert "secret" not in str(error.value)
     assert fetcher.calls == []
     assert publisher.calls == []
 
 
 @pytest.mark.parametrize("cancelled", (False, True))
-def test_manifest_create_recovery_sanitizes_hostile_provenance_equality(
+def test_manifest_recovery_propagates_unexpected_comparison_fault(
     cancelled: bool,
 ) -> None:
     cancellation = CancellationToken()
+    failure = RuntimeError("provenance equality secret")
 
     class HostileProvenance(str):
         __hash__ = str.__hash__
 
         def __eq__(self, _: object) -> bool:
-            raise RuntimeError("provenance equality secret")
+            raise failure
 
     class HostileCreateCatalog:
         def __init__(self) -> None:
@@ -1143,7 +1280,7 @@ def test_manifest_create_recovery_sanitizes_hostile_provenance_equality(
             self.current = observed
             if cancelled:
                 cancellation.cancel()
-            raise RuntimeError("catalog commit secret")
+            raise CatalogPersistenceError("catalog commit secret")
 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
@@ -1153,7 +1290,7 @@ def test_manifest_create_recovery_sanitizes_hostile_provenance_equality(
     fetcher = _Fetcher(_fetched(_raw_response()))
     publisher = _Publisher(_published())
 
-    with pytest.raises(PartitionCatalogFailure) as error:
+    with pytest.raises(RuntimeError) as caught:
         _executor(
             fetcher,
             HostileCreateCatalog(),
@@ -1161,9 +1298,7 @@ def test_manifest_create_recovery_sanitizes_hostile_provenance_equality(
             cancellation=cancellation,
         ).execute(_plan())
 
-    assert str(error.value) == "catalog create failed"
-    assert error.value.__cause__ is None
-    assert "secret" not in str(error.value)
+    assert caught.value is failure
     assert fetcher.calls == []
     assert publisher.calls == []
 
@@ -1230,3 +1365,31 @@ def test_failed_current_manifest_retries_with_new_run_id_once() -> None:
     assert result.final_manifest.state is ManifestState.VERIFIED
     assert len(fetcher.calls) == 1
     assert len(catalog.transitions) == 2
+
+
+@pytest.mark.parametrize("cancelled", (False, True))
+def test_unknown_create_fault_after_commit_never_recovers_success(
+    cancelled: bool,
+) -> None:
+    cancellation = CancellationToken()
+    failure = AssertionError("post-commit implementation fault")
+
+    class FaultAfterCommit(_Catalog):
+        def create_manifest(self, manifest: PartitionManifest) -> None:
+            super().create_manifest(manifest)
+            if cancelled:
+                cancellation.cancel()
+            raise failure
+
+    catalog = FaultAfterCommit()
+    fetcher = _Fetcher(_fetched(_raw_response()))
+    publisher = _Publisher(_published())
+    with pytest.raises(AssertionError) as caught:
+        _executor(
+            fetcher, catalog, publisher=publisher, cancellation=cancellation
+        ).execute(_plan())
+    assert caught.value is failure
+    assert catalog.current is not None
+    assert catalog.current.state is ManifestState.IN_PROGRESS
+    assert fetcher.calls == []
+    assert publisher.calls == []

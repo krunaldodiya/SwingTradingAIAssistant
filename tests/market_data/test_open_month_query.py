@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+import swing_trading_ai_assistant.market_data.provisional_store as provisional_store
+from swing_trading_ai_assistant.market_data.catalog import (
+    CatalogStorageError,
+    DuckDBCatalog,
+)
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
 )
@@ -25,6 +29,9 @@ from swing_trading_ai_assistant.market_data.preview_admission import (
 from swing_trading_ai_assistant.market_data.provisional_metadata import (
     metadata_from_publication,
 )
+from swing_trading_ai_assistant.market_data.provisional_store import (
+    ProvisionalPartitionUnavailableV1,
+)
 from swing_trading_ai_assistant.market_data.public_contract import (
     CandleFieldV1,
     CoverageStateV1,
@@ -36,6 +43,7 @@ from swing_trading_ai_assistant.market_data.public_contract import (
     PublicQueryRequestV1,
     PublicQueryRowV1,
     QueryPayloadV1,
+    QueryReportV1,
 )
 from swing_trading_ai_assistant.market_data.public_query import (
     QueryRequestV1,
@@ -236,7 +244,7 @@ def test_open_month_query_under_caller_lease_and_invalid_lease_are_bounded(
 
     class BrokenService(OpenMonthOneMinuteQueryServiceV1):
         def _query_under_lease(self, *args: object):
-            raise RuntimeError
+            raise ProvisionalPartitionUnavailableV1("corrupt provisional partition")
 
     acquired = StorageRootLease.try_acquire_existing(tmp_path)
     assert acquired.lease is not None
@@ -630,7 +638,7 @@ def test_open_month_query_retries_one_atomic_catalog_publication_race(
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise RuntimeError("catalog changed during snapshot")
+            raise CatalogStorageError("catalog changed during snapshot")
         return DuckDBCatalog(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -654,6 +662,62 @@ def test_open_month_query_retries_one_atomic_catalog_publication_race(
 
     assert calls == 2
     assert report.status is PublicCommandStatusV1.SUCCEEDED
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_current_aware_query_converts_real_partition_reader_fault_once_at_outer_v1_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_type: type[BaseException],
+) -> None:
+    _seed(tmp_path)
+    error = fault_type("partition reader defect")
+    reader_calls = 0
+
+    def fail_partition_reader(
+        root: object, lease: object, relative_path: object
+    ) -> object:
+        nonlocal reader_calls
+        del root, lease, relative_path
+        reader_calls += 1
+        raise error
+
+    class ClosedPort:
+        def query(self, request: object) -> QueryReportV1:
+            del request
+            raise AssertionError("current-month query must not read closed evidence")
+
+    monkeypatch.setattr(
+        provisional_store, "read_partition_under_lease", fail_partition_reader
+    )
+    report = CurrentAwareQueryServiceV1(
+        ClosedPort(),
+        OpenMonthOneMinuteQueryServiceV1(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"), clock=_Clock()
+        ),
+        clock=_Clock(),
+    ).query(
+        QueryRequestV1(
+            "NSE_EQ",
+            "RELIANCE",
+            date(2026, 8, 1),
+            date(2026, 8, 11),
+            "1m",
+            ("ts", "close"),
+            100,
+            tmp_path,
+        )
+    )
+
+    assert reader_calls == 1
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.payload is None
 
 
 def test_open_month_query_without_persisted_snapshot_is_insufficient(
@@ -851,7 +915,7 @@ def test_open_month_query_fails_closed_on_corrupt_storage(
     _seed(tmp_path)
 
     def _corrupt(*_args: object) -> object:
-        raise ValueError("corrupt")
+        raise ProvisionalPartitionUnavailableV1("corrupt provisional partition")
 
     monkeypatch.setattr(
         "swing_trading_ai_assistant.market_data.open_month_query.load_provisional_partition",

@@ -10,8 +10,11 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from .bounded_nifty50_workflow import Nifty50BatchOutcomeV1
-from .catalog import DuckDBCatalog
-from .equity_admission import Nifty50AdmissionPolicyV1
+from .catalog import CatalogError, DuckDBCatalog
+from .equity_admission import (
+    Nifty50AdmissionPolicyV1,
+    Nifty50AdmissionValidationError,
+)
 from .public_contract import (
     CandleFieldV1,
     CoverageReportV1,
@@ -26,11 +29,12 @@ from .public_contract import (
 )
 from .public_coverage import CoverageRequestV1
 from .public_query import QueryRequestV1
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 from .universe_snapshot import (
     Nifty50UniverseStoreV1,
     UniverseSnapshotAmbiguousError,
     UniverseSnapshotCorruptError,
+    UniverseSnapshotError,
     UniverseSnapshotNotFoundError,
     UniverseSnapshotStaleError,
 )
@@ -96,20 +100,20 @@ class PointInTimeNifty50CoverageServiceV1:
             with acquired.lease as lease:
                 policy = _policy(request, invocation, lease)
                 return self._factory(policy).coverage_under_lease(request, lease)
-        except UniverseSnapshotStaleError:
+        except (UniverseSnapshotError, CatalogError, OSError, StorageRootLeaseError):
             return _coverage_terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
             )
-        except ValueError:
+        except Nifty50AdmissionValidationError:
             return _coverage_terminal(
                 PublicCommandStatusV1.REJECTED,
                 PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
             )
         except Exception:
             return _coverage_terminal(
-                PublicCommandStatusV1.UNAVAILABLE,
-                PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
 
@@ -139,20 +143,20 @@ class PointInTimeNifty50QueryServiceV1:
             with acquired.lease as lease:
                 policy = _policy(request, invocation, lease)
                 return self._factory(policy).query_under_lease(request, lease)
-        except UniverseSnapshotStaleError:
+        except (UniverseSnapshotError, CatalogError, OSError, StorageRootLeaseError):
             return _query_terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
             )
-        except ValueError:
+        except Nifty50AdmissionValidationError:
             return _query_terminal(
                 PublicCommandStatusV1.REJECTED,
                 PublicFailureCodeV1.UNSUPPORTED_PREVIEW_INSTRUMENT,
             )
         except Exception:
             return _query_terminal(
-                PublicCommandStatusV1.UNAVAILABLE,
-                PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
+                PublicCommandStatusV1.FAILED,
+                PublicFailureCodeV1.UNCLASSIFIED_FAILURE,
             )
 
 
@@ -350,7 +354,7 @@ class BoundedPointInTimeNifty50ReadServiceV1:
                     results,
                     worker_count,
                 )
-        except ValueError:
+        except Nifty50AdmissionValidationError:
             return _empty_read(command, Nifty50BatchOutcomeV1.REJECTED)
         except (UniverseSnapshotNotFoundError, UniverseSnapshotStaleError):
             return _empty_read(command, Nifty50BatchOutcomeV1.UNAVAILABLE)

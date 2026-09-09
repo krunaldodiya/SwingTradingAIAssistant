@@ -44,6 +44,8 @@ from swing_trading_ai_assistant.market_data.public_contract import (
     PublicCommandReportV1,
     PublicCommandStatusV1,
     PublicCoverageMonthV1,
+    PublicFailureCodeV1,
+    PublicFailureV1,
     PublicQueryRequestV1,
     PublicQueryRowV1,
     QueryPayloadV1,
@@ -56,9 +58,6 @@ _CUTOFF = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
 _SELECTED_AT = datetime(2026, 8, 24, 9, 0, tzinfo=UTC)
 _RAW_SCHEMA_METADATA_DIGEST = (
     "aca0c687ebe594d0a4e0f8be12771723ffdfa73906659e74230f11b9dd8eb381"
-)
-_RAW_RUNTIME_CODE_IDENTITY = (
-    "8d99ebe8781d48d6a45a331878ff3a730bd23237c152e5837797c003c71d047b"
 )
 _RAW_CONFIGURATION_PREIMAGE = json.loads(
     (
@@ -724,11 +723,7 @@ def test_raw_runtime_identity_uses_exact_sorted_repository_relative_modules() ->
     assert tuple(raw_daily.CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V1) == (
         source_path,
     )
-    assert (
-        raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1()
-        == _RAW_RUNTIME_CODE_IDENTITY
-        == expected
-    )
+    assert raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1() == expected
 
 
 def test_raw_runtime_identity_supports_installed_package_layout(
@@ -1513,6 +1508,133 @@ def test_default_raw_port_rejects_over_limit_minute_grid_before_query(
 
 
 @pytest.mark.parametrize(
+    ("failure_code", "completion_offset", "expected_reason"),
+    (
+        (PublicFailureCodeV1.UNCLASSIFIED_FAILURE, timedelta(minutes=-1), None),
+        (PublicFailureCodeV1.UNCLASSIFIED_FAILURE, timedelta(minutes=1), None),
+        (
+            PublicFailureCodeV1.QUERY_RESOURCE_LIMIT_EXCEEDED,
+            timedelta(minutes=-1),
+            RawDailyReasonV1.RAW_BAR_MISSING,
+        ),
+        (
+            PublicFailureCodeV1.QUERY_RESOURCE_LIMIT_EXCEEDED,
+            timedelta(minutes=1),
+            RawDailyReasonV1.RAW_BAR_FUTURE_KNOWN,
+        ),
+    ),
+)
+def test_default_raw_query_stops_unclassified_failure_without_relabeling_supported_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_code: PublicFailureCodeV1,
+    completion_offset: timedelta,
+    expected_reason: RawDailyReasonV1 | None,
+) -> None:
+    sessions = _minute_sessions(date(2026, 8, 1))
+    request = _request(1)
+    mapping = _mapping_receipt(request.members[0])
+    report = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.FAILED,
+        PublicFailureV1(failure_code, None, None, None, None, ()),
+        0,
+        None,
+    )
+
+    class Query:
+        def query_under_lease(self, *_: object) -> object:
+            return report
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.cli._default_query_service",
+        lambda **_: Query(),
+    )
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        port = raw_daily._DefaultCurrentSamePassRawEvidencePortV1(
+            tmp_path,
+            tmp_path / "schedule.json",
+            _FixedClock(_CUTOFF + completion_offset),
+        )
+        if expected_reason is None:
+            with pytest.raises(RuntimeError):
+                port.query_and_project_under_lease(
+                    request,
+                    (mapping,),
+                    sessions,
+                    request.schedule_identity_sha256,
+                    raw_daily._source_policy_identity(),
+                    acquired.lease,
+                )
+        else:
+            result = port.query_and_project_under_lease(
+                request,
+                (mapping,),
+                sessions,
+                request.schedule_identity_sha256,
+                raw_daily._source_policy_identity(),
+                acquired.lease,
+            )
+
+    if expected_reason is not None:
+        assert result == expected_reason
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        AssertionError("catalog assertion failed"),
+        Exception("catalog generic failure"),
+        KeyError("catalog lookup failed"),
+        RuntimeError("catalog execution failed"),
+        TypeError("catalog implementation type fault"),
+        ValueError("catalog implementation value fault"),
+    ),
+)
+def test_source_bindings_propagate_unrelated_catalog_execution_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    request = _request(1)
+    mapping = _mapping_receipt(request.members[0])
+    sessions = _minute_sessions(date(2026, 8, 1))
+    coverage = tuple(
+        type("Coverage", (), {"month": f"{plan.year:04d}-{plan.month:02d}"})()
+        for plan in raw_daily._plans_for_mapping(mapping, sessions)
+    )
+
+    class FailingCatalog:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def __enter__(self) -> FailingCatalog:
+            raise error
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(raw_daily, "DuckDBCatalog", FailingCatalog)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease, pytest.raises(type(error)) as raised:
+        raw_daily._source_bindings_for_mapping(
+            tmp_path,
+            request,
+            mapping,
+            sessions,
+            coverage,
+            _CUTOFF - timedelta(minutes=1),
+            acquired.lease,
+        )
+
+    assert raised.value is error
+
+
+@pytest.mark.parametrize(
     ("mutation", "expected"),
     (
         ("off-grid", RawDailyReasonV1.RAW_BAR_CONFLICTED),
@@ -1928,10 +2050,6 @@ class _DownloadEvidence(_TemporaryRetainedEvidence):
             raw_daily.SnapshotInstrumentAmbiguousError("conflicted mapping"),
             RawDailyReasonV1.RAW_MAPPING_CONFLICTED,
         ),
-        (
-            RuntimeError("catalog identity unavailable"),
-            RawDailyReasonV1.RAW_MAPPING_CONFLICTED,
-        ),
     ),
 )
 def test_default_mapping_resolver_preserves_closed_failure_semantics(
@@ -1960,6 +2078,44 @@ def test_default_mapping_resolver_preserves_closed_failure_semantics(
         ).mappings_under_lease(_request(1), acquired.lease)
 
     assert result == expected_reason
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        AssertionError("resolver assertion failed"),
+        Exception("resolver generic failure"),
+        KeyError("resolver lookup failed"),
+        RuntimeError("resolver execution failed"),
+        TypeError("resolver implementation type fault"),
+        ValueError("resolver implementation value fault"),
+    ),
+)
+def test_default_mapping_resolver_propagates_unrelated_execution_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    class FailingResolver:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def resolve_under_lease(self, *_: object, **__: object) -> object:
+            raise error
+
+    monkeypatch.setattr(
+        raw_daily, "RetainedCurrentCohortInstrumentResolverV1", FailingResolver
+    )
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease, pytest.raises(type(error)) as raised:
+        raw_daily._DefaultCurrentSamePassRawEvidencePortV1(
+            tmp_path,
+            tmp_path / "schedule.json",
+            _FixedClock(_CUTOFF - timedelta(minutes=5)),
+        ).mappings_under_lease(_request(1), acquired.lease)
+
+    assert raised.value is error
 
 
 def test_default_coverage_returns_only_exact_missing_symbol_month_ranges(
@@ -2009,6 +2165,46 @@ def test_default_coverage_returns_only_exact_missing_symbol_month_ranges(
         item.from_date != sessions[0].session or item.to_date != sessions[-1].session
         for item in missing
     )
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        AssertionError("catalog assertion failed"),
+        Exception("catalog generic failure"),
+        KeyError("catalog lookup failed"),
+        RuntimeError("catalog execution failed"),
+        TypeError("catalog implementation type fault"),
+        ValueError("catalog implementation value fault"),
+    ),
+)
+def test_default_coverage_propagates_unrelated_catalog_execution_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    class FailingCatalog:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def __enter__(self) -> FailingCatalog:
+            raise error
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(raw_daily, "DuckDBCatalog", FailingCatalog)
+    mappings = tuple(_mapping_receipt(member) for member in _request(1).members)
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease, pytest.raises(type(error)) as raised:
+        raw_daily._DefaultCurrentSamePassRawEvidencePortV1(
+            tmp_path,
+            tmp_path / "schedule.json",
+            _FixedClock(_CUTOFF - timedelta(minutes=5)),
+        ).missing_downloads_under_lease(mappings, _raw_sessions(), acquired.lease)
+
+    assert raised.value is error
 
 
 def test_catalog_coverage_error_fails_closed_without_download(

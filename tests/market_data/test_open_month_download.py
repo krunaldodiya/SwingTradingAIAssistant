@@ -9,8 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 import swing_trading_ai_assistant.market_data.open_month_download as subject
-from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
-from swing_trading_ai_assistant.market_data.credentials import AccessToken
+from swing_trading_ai_assistant.market_data.catalog import (
+    CatalogStorageError,
+    DuckDBCatalog,
+)
+from swing_trading_ai_assistant.market_data.credentials import (
+    AccessToken,
+    CredentialNotFoundError,
+)
 from swing_trading_ai_assistant.market_data.download_preparation import (
     DownloadPreparationReportV1,
     PreparationFailureCodeV1,
@@ -29,12 +35,15 @@ from swing_trading_ai_assistant.market_data.provisional_store import (
     load_provisional_partition,
 )
 from swing_trading_ai_assistant.market_data.provisional_validation import (
+    ProvisionalValidationCodeV1,
+    ProvisionalValidationFailureV1,
     ProvisionalValidationV1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleClosure,
+    ScheduleEvidenceValidationError,
     ScheduleSession,
     canonical_schedule_bytes,
     schedule_digest,
@@ -43,6 +52,7 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseFailureCode,
     LeaseResult,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -184,6 +194,88 @@ def _service(root: Path):
     return service, request, clock, historical, intraday, token
 
 
+@pytest.mark.parametrize("supplied_lease", (False, True))
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+@pytest.mark.parametrize(
+    ("stage", "provider_calls"),
+    (
+        ("clock", (0, 0)),
+        ("preparation", (0, 0)),
+        ("planning", (0, 0)),
+        ("retained", (0, 0)),
+        ("token", (0, 0)),
+        ("limiter", (0, 0)),
+        ("historical", (0, 0)),
+        ("normalization", (1, 0)),
+        ("intraday", (1, 0)),
+        ("validation", (1, 1)),
+        ("publication", (1, 1)),
+        ("catalog", (1, 1)),
+    ),
+)
+def test_open_month_unknown_fault_stops_without_fabricated_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    supplied_lease: bool,
+    fault_type: type[Exception],
+    stage: str,
+    provider_calls: tuple[int, int],
+) -> None:
+    service, request, clock, historical, intraday, token = _service(tmp_path)
+    error = fault_type("synthetic open-month execution defect")
+    fault_reached = False
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    targets = {
+        "clock": (clock, "now"),
+        "preparation": (service._preparation, "prepare_open_month"),
+        "planning": (subject, "plan_open_month"),
+        "retained": (subject, "latest_provisional_partition"),
+        "token": (token, "get_access_token"),
+        "historical": (historical, "fetch"),
+        "normalization": (subject, "normalize_candles"),
+        "intraday": (intraday, "fetch"),
+        "validation": (subject, "validate_provisional_advance"),
+        "publication": (subject, "publish_provisional_partition_under_lease"),
+        "catalog": (DuckDBCatalog, "save_provisional_partition"),
+    }
+    if stage == "limiter":
+        monkeypatch.setattr(service, "_limiter", SimpleNamespace(acquire=fail))
+    else:
+        target, attribute = targets[stage]
+        monkeypatch.setattr(target, attribute, fail)
+    lease = None
+    if supplied_lease:
+        acquired = StorageRootLease.try_acquire(tmp_path)
+        assert acquired.lease is not None
+        lease = acquired.lease
+    try:
+        with pytest.raises(fault_type) as raised:
+            if lease is None:
+                service.download(request)
+            else:
+                service.download_under_lease(request, lease)
+    finally:
+        if lease is not None:
+            lease.close()
+        assert fault_reached
+    assert raised.value is error
+    assert (historical.calls, intraday.calls) == provider_calls
+    with DuckDBCatalog(tmp_path) as catalog:
+        assert catalog.connection.execute(
+            "SELECT COUNT(*) FROM provisional_partitions"
+        ).fetchone() == (0,)
+    if stage != "catalog":
+        assert not tuple(tmp_path.rglob("*.parquet"))
+
+
 def test_first_open_month_download_persists_history_and_completed_current_bars(
     tmp_path: Path,
 ) -> None:
@@ -282,7 +374,7 @@ def test_download_under_lost_caller_lease_returns_publication_failure(
     monkeypatch.setattr(
         service,
         "_advance_under_lease",
-        lambda *args: (_ for _ in ()).throw(RuntimeError()),
+        lambda *args: (_ for _ in ()).throw(StorageRootLeaseError()),
     )
     with acquired.lease as lease:
         report = service.download_under_lease(request, lease)
@@ -558,12 +650,6 @@ class _BrokenClock:
         return datetime(2026, 8, 11, 9, 17, 30)
 
 
-class _RaisingPreparation:
-    def prepare_open_month(self, request: object) -> DownloadPreparationReportV1:
-        del request
-        raise RuntimeError
-
-
 class _UnavailablePreparation:
     def prepare_open_month(self, request: object) -> DownloadPreparationReportV1:
         del request
@@ -575,9 +661,9 @@ class _UnavailablePreparation:
         )
 
 
-class _RaisingToken:
+class _MissingToken:
     def get_access_token(self) -> AccessToken:
-        raise RuntimeError
+        raise CredentialNotFoundError
 
 
 def _assert_failure(report, outcome, code, *, snapshot=0, historical=0, intraday=0):
@@ -611,16 +697,8 @@ def test_rejects_wrong_request_and_naive_clock(tmp_path: Path) -> None:
     )
 
 
-def test_reports_preparation_exception_and_unavailable_snapshot(tmp_path: Path) -> None:
+def test_reports_unavailable_snapshot(tmp_path: Path) -> None:
     _, request, clock, *_ = _service(tmp_path)
-    exception_service = OpenMonthDownloadServiceV1(
-        _RaisingPreparation(), _Historical(), _Intraday(), _TokenProvider(), clock=clock
-    )
-    _assert_failure(
-        exception_service.download(request),
-        OpenMonthDownloadOutcomeV1.FAILED,
-        subject.OpenMonthDownloadFailureCodeV1.PREPARATION_FAILED,
-    )
     unavailable_service = OpenMonthDownloadServiceV1(
         _UnavailablePreparation(),
         _Historical(),
@@ -644,7 +722,7 @@ def test_rejects_bad_schedule_and_unavailable_storage(
         patch.setattr(
             subject,
             "open_month_schedule_from_evidence",
-            lambda value: (_ for _ in ()).throw(ValueError()),
+            lambda value: (_ for _ in ()).throw(ScheduleEvidenceValidationError()),
         )
         _assert_failure(
             service.download(request),
@@ -670,7 +748,7 @@ def test_rejects_bad_schedule_and_unavailable_storage(
 def test_provider_credentials_and_response_failures_are_stable(tmp_path: Path) -> None:
     service, request, clock, historical, intraday, _ = _service(tmp_path)
     credentials_service = OpenMonthDownloadServiceV1(
-        _Preparation(), historical, intraday, _RaisingToken(), clock=clock
+        _Preparation(), historical, intraday, _MissingToken(), clock=clock
     )
     _assert_failure(
         credentials_service.download(request),
@@ -718,7 +796,11 @@ def test_validation_and_catalog_failures_are_stable(
         patch.setattr(
             subject,
             "validate_provisional_advance",
-            lambda *args: (_ for _ in ()).throw(ValueError()),
+            lambda *args: (_ for _ in ()).throw(
+                ProvisionalValidationFailureV1(
+                    ProvisionalValidationCodeV1.INVALID_INPUT
+                )
+            ),
         )
         _assert_failure(
             service.download(request),
@@ -730,9 +812,9 @@ def test_validation_and_catalog_failures_are_stable(
 
     service, request, _, *_ = _service(tmp_path)
     monkeypatch.setattr(
-        subject,
-        "metadata_from_publication",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError()),
+        DuckDBCatalog,
+        "save_provisional_partition",
+        lambda *_args: (_ for _ in ()).throw(CatalogStorageError()),
     )
     _assert_failure(
         service.download(request),
@@ -804,7 +886,7 @@ def test_outer_lease_failure_and_empty_validation_are_reported(
     monkeypatch.setattr(
         service,
         "_advance_under_lease",
-        lambda *args: (_ for _ in ()).throw(RuntimeError()),
+        lambda *args: (_ for _ in ()).throw(StorageRootLeaseError()),
     )
     _assert_failure(
         service.download(request),
@@ -833,18 +915,13 @@ def test_fetch_and_helper_noop_boundaries(
     schedule = subject.open_month_schedule_from_evidence(_schedule())
     batch = service._fetch_missing(_Preparation().prepared, clock.now(), None, False)
     assert batch.historical_attempts == batch.intraday_attempts == 0
-    failure = service._fetch_missing(
-        _Preparation().prepared,
-        clock.now(),
-        (date(2026, 8, 11), date(2026, 8, 10)),
-        False,
-    )
-    _assert_failure(
-        failure,
-        OpenMonthDownloadOutcomeV1.UNAVAILABLE,
-        subject.OpenMonthDownloadFailureCodeV1.HISTORICAL_UNAVAILABLE,
-        historical=1,
-    )
+    with pytest.raises(ValueError, match="from_date must be on or before to_date"):
+        service._fetch_missing(
+            _Preparation().prepared,
+            clock.now(),
+            (date(2026, 8, 11), date(2026, 8, 10)),
+            False,
+        )
     no_history = SimpleNamespace(
         historical_from=None, historical_to=None, last_completed_bar_start=None
     )

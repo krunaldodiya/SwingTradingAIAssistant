@@ -1849,6 +1849,31 @@ def test_cli_rejects_canonical_non_object_owner_input_without_output(
     assert captured.err == "invalid regime-current request\n"
 
 
+def test_regime_cli_execution_fault_is_not_malformed_input_and_releases_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module, _ = _api()
+    root = _private_root(tmp_path)
+    fixture, ids = _archive_fixture(root, size=1, directions=(Decimal("1"),))
+    digest, _ = _schedule(root)
+    args = _cli_args(tmp_path, root, _input_value(fixture, ids, digest))
+    cli_module = importlib.import_module("swing_trading_ai_assistant.market_data.cli")
+
+    def fail_execution(*_args: object) -> object:
+        raise ValueError("private/path/token")
+
+    monkeypatch.setattr(
+        cli_module, "evaluate_current_supplied_cohort_market_regime_v1", fail_execution
+    )
+    assert _cli(module)(args) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    reacquired = cli_module.StorageRootLease.try_acquire_existing(root)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
 def test_runtime_identity_is_exact_path_nul_digest_composite() -> None:
     module, _ = _api()
     manifest_module = importlib.import_module(

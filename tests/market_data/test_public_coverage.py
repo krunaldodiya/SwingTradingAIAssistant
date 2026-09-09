@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import replace
@@ -48,7 +49,11 @@ from swing_trading_ai_assistant.market_data.public_coverage import (
     VerifiedPartitionReadHandleV1,
     VerifiedPartitionV1,
 )
-from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.public_query import QueryTimeoutV1
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
 NOW = datetime(2026, 8, 10, 4, 0, tzinfo=UTC)
@@ -423,6 +428,30 @@ def test_existing_admission_rejects_bad_root_and_fails_closed_after_lease_loss(
     admission.close()
 
 
+def test_existing_admission_preserves_timeout_when_real_lease_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded = StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    admission = ExistingCoverageAdmissionV1.acquire(tmp_path)
+    timeout = QueryTimeoutV1()
+    real_close = coverage_module.StorageRootLease.close
+
+    def close_then_fail(self: StorageRootLease) -> None:
+        real_close(self)
+        raise StorageRootLeaseError("injected lease cleanup failure")
+
+    monkeypatch.setattr(coverage_module.StorageRootLease, "close", close_then_fail)
+    with pytest.raises(QueryTimeoutV1) as raised, admission:
+        raise timeout
+
+    assert raised.value is timeout
+    replacement = StorageRootLease.try_acquire(tmp_path)
+    assert replacement.lease is not None
+    real_close(replacement.lease)
+
+
 def test_evaluator_rejects_open_month_before_existing_root_admission(tmp_path) -> None:
     root = tmp_path / "absent"
     request = CoverageRequestV1(
@@ -536,6 +565,29 @@ def test_coverage_service_fails_closed_for_bad_clock_and_evaluator_shape(
     assert malformed.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
 
 
+def test_coverage_service_envelopes_unknown_evaluator_fault_without_evidence(
+    tmp_path: Path,
+) -> None:
+    class FaultingEvaluator:
+        def evaluate(self, *_args: object) -> CoverageEvaluationV1:
+            raise KeyError("private-evaluator-fault")
+
+    report = StoredCoverageServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        FaultingEvaluator(),  # type: ignore[arg-type]
+        clock=_Clock(),
+    ).coverage(
+        CoverageRequestV1(
+            "NSE_EQ", "RELIANCE", date(2026, 7, 1), date(2026, 7, 31), tmp_path
+        )
+    )
+
+    assert report.status is PublicCommandStatusV1.FAILED
+    assert report.failure is not None
+    assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    assert report.payload is None
+
+
 def test_coverage_service_rejects_open_month_and_mutation_before_evaluation(
     tmp_path,
 ) -> None:
@@ -640,19 +692,78 @@ def test_default_coverage_cli_creates_storage_then_requires_retained_universe(
     assert root.is_dir()
 
 
-def test_partition_hardlink_is_rejected_and_changes_identity(tmp_path: Path) -> None:
+def test_partition_hardlink_is_rejected_at_read_boundary(tmp_path: Path) -> None:
     partition = tmp_path / "bars.parquet"
     partition.write_bytes(b"retained-partition")
     partition.chmod(0o600)
-    original = os.stat(partition)
     linked = tmp_path / "linked.parquet"
     os.link(partition, linked)
+    acquisition = coverage_module.StorageRootLease.try_acquire(tmp_path)
+    assert acquisition.lease is not None
 
-    with pytest.raises(coverage_module._PartitionReadFailure):  # pyright: ignore[reportPrivateUsage]
-        coverage_module._validate_partition_stat(os.stat(partition))  # pyright: ignore[reportPrivateUsage]
+    with (
+        acquisition.lease as lease,
+        pytest.raises(coverage_module.PartitionReadFailureV1) as raised,
+    ):
+        coverage_module.read_partition_under_lease(tmp_path, lease, "bars.parquet")
 
-    assert coverage_module._partition_identity(
-        original
-    ) != coverage_module._partition_identity(  # pyright: ignore[reportPrivateUsage]
-        os.stat(partition)
+    assert (
+        raised.value.category
+        is coverage_module.FailureCategory.PATH_INVALID_OR_MISMATCHED
     )
+
+
+def test_open_partition_descriptor_relinquishes_recycled_parent_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "first").mkdir()
+    root_descriptor = os.open(tmp_path, coverage_module._DIRECTORY_FLAGS)
+    primary = AssertionError("released parent close fault")
+    real_close = coverage_module.os.close
+    real_open = coverage_module.os.open
+    replacement: int | None = None
+    child: int | None = None
+    faulted = False
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal child
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "first":
+            child = descriptor
+        return descriptor
+
+    def release_then_raise(descriptor: int) -> None:
+        nonlocal faulted, replacement
+        if not faulted:
+            faulted = True
+            real_close(descriptor)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(coverage_module.os, "open", track_open)
+            scoped.setattr(coverage_module.os, "close", release_then_raise)
+            with pytest.raises(AssertionError) as raised:
+                coverage_module._open_partition_descriptor(
+                    root_descriptor, "first/bars"
+                )
+            assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert child is not None
+            with pytest.raises(OSError):
+                os.fstat(child)
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
+        real_close(root_descriptor)

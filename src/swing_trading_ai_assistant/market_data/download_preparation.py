@@ -5,21 +5,34 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from .catalog import DuckDBCatalog
+from .catalog import CatalogError, DuckDBCatalog
 from .equity_admission import EquityAdmissionPolicyV1
-from .historical import AccountRateLimiter, CancellationToken
+from .historical import (
+    AccountRateLimiter,
+    CancellationRequested,
+    CancellationToken,
+    RetryWaitBoundExceeded,
+)
+from .http import (
+    HttpResponseBodyTooLarge,
+    HttpResponseHeadersInvalid,
+    HttpTransportError,
+)
 from .instrument_snapshot import (
     FetchedInstrumentSnapshotV1,
     InstrumentSnapshotCorruptError,
+    InstrumentSnapshotError,
     InstrumentSnapshotNotFoundError,
     InstrumentSnapshotStoreV1,
     InstrumentSnapshotUnavailableError,
+    InstrumentSnapshotValidationError,
     ResolvedInstrumentSnapshotV1,
     SnapshotInstrumentAmbiguousError,
     SnapshotInstrumentNotFoundError,
@@ -31,13 +44,18 @@ from .schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
     ScheduleEvidenceStore,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
     parse_canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
     schedule_digest,
 )
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from .workflow_coordination import PublicationGateV1
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -93,7 +111,7 @@ class AuthoritativeScheduleInputV1:
             or type(self.canonical_bytes) is not bytes
             or canonical_schedule_bytes(self.schedule) != self.canonical_bytes
         ):
-            raise ValueError("invalid authoritative schedule")
+            raise ScheduleEvidenceValidationError("invalid authoritative schedule")
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,12 +203,14 @@ class CanonicalFileScheduleSourceV1:
     def load(self) -> AuthoritativeScheduleInputV1:
         try:
             if not _valid_schedule_source_path(self._path):
-                raise ValueError
+                raise ScheduleEvidenceValidationError
             canonical = _read_bounded_regular_file(self._path)
             schedule = parse_canonical_schedule_bytes(canonical)
             return AuthoritativeScheduleInputV1(schedule, canonical)
-        except Exception:
-            raise ValueError("invalid authoritative schedule file") from None
+        except (OSError, ScheduleEvidenceValidationError):
+            raise ScheduleEvidenceValidationError(
+                "invalid authoritative schedule file"
+            ) from None
 
 
 class InstrumentSnapshotSourceV1(Protocol):
@@ -273,7 +293,7 @@ class DownloadPreparationServiceV1:
         try:
             supplied = self._schedule_source.load()
             schedule_validator(supplied, request)
-        except Exception:
+        except ScheduleEvidenceValidationError:
             return _failure(
                 PreparationOutcomeV1.INSUFFICIENT_EVIDENCE,
                 PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE,
@@ -294,8 +314,11 @@ class DownloadPreparationServiceV1:
         try:
             with lease_result.lease as lease:
                 return self._prepare_guarded(request, supplied, lease)
-        except Exception as error:
-            return _snapshot_failure(error)
+        except StorageRootLeaseError:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
 
     def _prepare_guarded(
         self,
@@ -328,7 +351,17 @@ class DownloadPreparationServiceV1:
                 store = InstrumentSnapshotStoreV1(request.storage_root, lease, catalog)
                 store.recover_pending()
                 resolved, attempts = self._resolve_or_fetch(store, request)
-        except Exception as error:
+        except StorageRootLeaseError:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
+        except CatalogError:
+            return _failure(
+                PreparationOutcomeV1.UNAVAILABLE,
+                PreparationFailureCodeV1.STORAGE_UNAVAILABLE,
+            )
+        except (InstrumentSnapshotError, _AttemptedSnapshotUnavailable) as error:
             return _snapshot_failure(error)
         if not self._policy.admits_instrument(resolved.instrument):
             return _failure(
@@ -373,6 +406,10 @@ class DownloadPreparationServiceV1:
         self._admit_snapshot_request()
         try:
             fetched = self._snapshot_source.fetch()
+            if type(fetched) is not FetchedInstrumentSnapshotV1:
+                raise InstrumentSnapshotUnavailableError(
+                    "instrument snapshot unavailable"
+                )
             selection_cutoff = request.invocation_time
             if fetched.retrieved_at > selection_cutoff:
                 observed_at = _clock_now(self._clock)
@@ -382,7 +419,7 @@ class DownloadPreparationServiceV1:
                     or fetched.observation_date
                     != request.invocation_time.astimezone(_IST).date()
                 ):
-                    raise ValueError(
+                    raise InstrumentSnapshotUnavailableError(
                         "snapshot is newer than the trusted fetch boundary"
                     )
                 selection_cutoff = fetched.retrieved_at
@@ -399,7 +436,14 @@ class DownloadPreparationServiceV1:
             raise _AttemptedSnapshotNotFound("instrument not found") from None
         except SnapshotInstrumentAmbiguousError:
             raise _AttemptedSnapshotAmbiguous("instrument ambiguous") from None
-        except Exception:
+        except (
+            InstrumentSnapshotUnavailableError,
+            InstrumentSnapshotValidationError,
+            HttpResponseBodyTooLarge,
+            HttpResponseHeadersInvalid,
+            HttpTransportError,
+            OSError,
+        ):
             raise _AttemptedSnapshotUnavailable from None
         return resolved, 1
 
@@ -408,29 +452,26 @@ class DownloadPreparationServiceV1:
             return
         try:
             self._limiter.acquire(CancellationToken(), timedelta(seconds=120))
-        except Exception:
+        except (CancellationRequested, RetryWaitBoundExceeded):
             raise InstrumentSnapshotUnavailableError(
                 "instrument snapshot unavailable"
             ) from None
 
 
 def _clock_now(clock: TrustedPreparationClockV1 | None) -> datetime | None:
-    try:
-        if clock is None:
-            raise ValueError
-        now = clock.now()
-        if type(now) is not datetime or now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError
-        return now.astimezone(UTC)
-    except Exception:
+    if clock is None:
         return None
+    now = clock.now()
+    if type(now) is not datetime or now.tzinfo is None or now.utcoffset() is None:
+        return None
+    return now.astimezone(UTC)
 
 
 def _validate_schedule_input(
     supplied: object, request: DownloadPreparationRequestV1
 ) -> None:
     if type(supplied) is not AuthoritativeScheduleInputV1:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     first = date(request.from_date.year, request.from_date.month, 1)
     if request.to_date.month == 12:
         next_month = date(request.to_date.year + 1, 1, 1)
@@ -442,14 +483,14 @@ def _validate_schedule_input(
         or not schedule_covers_full_calendar_range(supplied.schedule, first, last)
         or supplied.schedule.as_of > request.invocation_time
     ):
-        raise ValueError
+        raise ScheduleEvidenceValidationError
 
 
 def _validate_open_schedule_input(
     supplied: object, request: DownloadPreparationRequestV1
 ) -> None:
     if type(supplied) is not AuthoritativeScheduleInputV1:
-        raise ValueError
+        raise ScheduleEvidenceValidationError
     schedule = supplied.schedule
     local_date = request.invocation_time.astimezone(_IST).date()
     month_start = date(local_date.year, local_date.month, 1)
@@ -465,7 +506,7 @@ def _validate_open_schedule_input(
         or not _schedule_classifies_range(schedule, month_start, request.to_date)
         or schedule.as_of > request.invocation_time
     ):
-        raise ValueError
+        raise ScheduleEvidenceValidationError
 
 
 def _schedule_classifies_range(
@@ -524,11 +565,15 @@ def _snapshot_failure(error: Exception) -> DownloadPreparationReportV1:
             PreparationFailureCodeV1.INSTRUMENT_AMBIGUOUS,
             attempts=attempts,
         )
-    return _failure(
-        PreparationOutcomeV1.UNAVAILABLE,
-        PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
-        attempts=attempts,
-    )
+    if isinstance(
+        error, (_AttemptedSnapshotUnavailable, InstrumentSnapshotUnavailableError)
+    ):
+        return _failure(
+            PreparationOutcomeV1.UNAVAILABLE,
+            PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE,
+            attempts=attempts,
+        )
+    raise error
 
 
 def _valid_storage_root_syntax(value: object) -> bool:
@@ -563,6 +608,7 @@ def _file_identity(value: os.stat_result) -> tuple[int, ...]:
 
 def _read_bounded_regular_file(path: Path) -> bytes:
     descriptor = -1
+    active_exception: BaseException | None = None
     try:
         descriptor = os.open(
             path,
@@ -574,7 +620,7 @@ def _read_bounded_regular_file(path: Path) -> bytes:
             or not 0 < before.st_size <= MAX_SCHEDULE_BYTES
             or before.st_mode & 0o022
         ):
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         chunks: list[bytes] = []
         remaining = before.st_size
         while remaining > 0:
@@ -592,13 +638,21 @@ def _read_bounded_regular_file(path: Path) -> bytes:
             or _file_identity(before) != _file_identity(after)
             or _file_identity(after) != _file_identity(entry)
         ):
-            raise ValueError
+            raise ScheduleEvidenceValidationError
         return canonical
-    except (OSError, ValueError):
-        raise ValueError from None
+    except OSError as error:
+        active_exception = error
+        raise ScheduleEvidenceValidationError from None
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
         if descriptor >= 0:
-            os.close(descriptor)
+            if active_exception is None:
+                os.close(descriptor)
+            else:
+                with suppress(BaseException):
+                    os.close(descriptor)
 
 
 def _touched_months(from_date: date, to_date: date) -> int:

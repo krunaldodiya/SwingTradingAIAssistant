@@ -50,6 +50,7 @@ from .schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
     ScheduleEvidenceStore,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
     schedule_digest,
@@ -105,7 +106,7 @@ class DailyScheduleResolutionV1:
         try:
             sessions = tuple(replace(value) for value in self.sessions)
             closures = tuple(replace(value) for value in self.closures)
-        except Exception:
+        except (TypeError, ValueError):
             raise ValueError("invalid daily schedule resolution") from None
         session_dates = tuple(value.trade_date for value in sessions)
         closure_dates = tuple(value.trade_date for value in closures)
@@ -431,39 +432,34 @@ class RetainedDailyScheduleResolverV1:
         admission.ensure_live(root)
         sessions: list[VerifiedSessionV1] = []
         closures: list[VerifiedClosureV1] = []
-        try:
-            for selection in evaluation.verified_partitions:
-                digest = selection.schedule_digest_sha256
-                evidence = ScheduleEvidenceStore(root, admission.lease).resolve(digest)
-                schedule = _validated_schedule_evidence(evidence, digest, invocation)
-                start = max(request.from_date, selection.plan.from_date)
-                end = min(request.to_date, selection.plan.to_date)
-                if start > end:
-                    raise ValueError
-                if schedule.covered_from > start or schedule.covered_to < end:
-                    raise ValueError
-                covered = {
-                    item.trade_date
-                    for item in (*schedule.sessions, *schedule.closures)
-                    if start <= item.trade_date <= end
-                }
-                if covered != set(_dates(start, end)):
-                    raise ValueError
-                sessions.extend(
-                    VerifiedSessionV1(
-                        item.trade_date, item.open_at, item.close_at, digest
-                    )
-                    for item in schedule.sessions
-                    if start <= item.trade_date <= end
-                )
-                closures.extend(
-                    VerifiedClosureV1(item.trade_date, digest)
-                    for item in schedule.closures
-                    if start <= item.trade_date <= end
-                )
-                admission.ensure_live(root)
-        except Exception:
-            raise QueryExecutionFailureV1 from None
+        for selection in evaluation.verified_partitions:
+            digest = selection.schedule_digest_sha256
+            evidence = ScheduleEvidenceStore(root, admission.lease).resolve(digest)
+            schedule = _validated_schedule_evidence(evidence, digest, invocation)
+            start = max(request.from_date, selection.plan.from_date)
+            end = min(request.to_date, selection.plan.to_date)
+            if start > end:
+                raise QueryExecutionFailureV1
+            if schedule.covered_from > start or schedule.covered_to < end:
+                raise QueryExecutionFailureV1
+            covered = {
+                item.trade_date
+                for item in (*schedule.sessions, *schedule.closures)
+                if start <= item.trade_date <= end
+            }
+            if covered != set(_dates(start, end)):
+                raise QueryExecutionFailureV1
+            sessions.extend(
+                VerifiedSessionV1(item.trade_date, item.open_at, item.close_at, digest)
+                for item in schedule.sessions
+                if start <= item.trade_date <= end
+            )
+            closures.extend(
+                VerifiedClosureV1(item.trade_date, digest)
+                for item in schedule.closures
+                if start <= item.trade_date <= end
+            )
+            admission.ensure_live(root)
         return DailyScheduleResolutionV1(tuple(sessions), tuple(closures))
 
 
@@ -474,19 +470,25 @@ def _validated_schedule_evidence(
         if type(value) is not ScheduleEvidenceResult:
             raise ValueError
         evidence = replace(value)
-        schedule = evidence.schedule
+    except (TypeError, ValueError):
+        raise QueryExecutionFailureV1 from None
+    schedule = evidence.schedule
+    if (
+        evidence != value
+        or evidence.outcome is not ScheduleOutcome.RESOLVED
+        or type(schedule) is not ExpectedSessionSchedule
+        or evidence.digest != digest
+        or schedule.as_of > invocation
+    ):
+        raise QueryExecutionFailureV1
+    try:
         if (
-            evidence != value
-            or evidence.outcome is not ScheduleOutcome.RESOLVED
-            or schedule is None
-            or evidence.digest != digest
-            or schedule.as_of > invocation
-            or schedule_digest(schedule) != digest
+            schedule_digest(schedule) != digest
             or canonical_schedule_bytes(schedule) != evidence.canonical_bytes
         ):
-            raise ValueError
+            raise QueryExecutionFailureV1
         return replace(schedule)
-    except Exception:
+    except ScheduleEvidenceValidationError:
         raise QueryExecutionFailureV1 from None
 
 
@@ -506,7 +508,7 @@ class DuckDBDailyOHLCVEngineV1:
             if type(request) is not PublicQueryRequestV1:
                 raise ValueError
             request = replace(request)
-        except Exception:
+        except (TypeError, ValueError):
             raise QueryExecutionFailureV1 from None
         evaluation = _validated_evaluation(evaluation)
         sessions = _validated_sessions(request, evaluation, sessions)
@@ -524,29 +526,24 @@ class DuckDBDailyOHLCVEngineV1:
         if not sessions:
             return ()
         admission.ensure_live(root)
-        try:
-            with ExitStack() as handles:
-                untyped_pinned = tuple(
-                    handles.enter_context(
-                        evaluator.open_verified_partition_under_admission(
-                            root,
-                            selection,
-                            admission,
-                        )
+        with ExitStack() as handles:
+            untyped_pinned = tuple(
+                handles.enter_context(
+                    evaluator.open_verified_partition_under_admission(
+                        root,
+                        selection,
+                        admission,
                     )
-                    for selection in evaluation.verified_partitions
                 )
-                pinned = _validated_partition_handles(
-                    untyped_pinned, evaluation.verified_partitions
-                )
-                admission.ensure_live(root)
-                rows = self._execute(request, sessions, pinned)
-                admission.ensure_live(root)
-                return rows
-        except (QueryResourceLimitV1, QueryTimeoutV1, QueryExecutionFailureV1):
-            raise
-        except Exception:
-            raise QueryExecutionFailureV1 from None
+                for selection in evaluation.verified_partitions
+            )
+            pinned = _validated_partition_handles(
+                untyped_pinned, evaluation.verified_partitions
+            )
+            admission.ensure_live(root)
+            rows = self._execute(request, sessions, pinned)
+            admission.ensure_live(root)
+            return rows
 
     def _execute(
         self,
@@ -557,6 +554,7 @@ class DuckDBDailyOHLCVEngineV1:
         connection: Any | None = None
         timer: threading.Timer | None = None
         deadline = threading.Event()
+        active_exception: BaseException | None = None
         try:
             active: Any = duckdb.connect(config=_connection_config())
             connection = active
@@ -581,19 +579,22 @@ class DuckDBDailyOHLCVEngineV1:
                 raise QueryTimeoutV1
             return rows
         except duckdb.InterruptException:
-            raise QueryTimeoutV1 from None
+            active_exception = QueryTimeoutV1()
+            raise active_exception from None
         except duckdb.OutOfMemoryException:
-            raise QueryResourceLimitV1 from None
-        except (QueryResourceLimitV1, QueryTimeoutV1, QueryExecutionFailureV1):
+            active_exception = QueryResourceLimitV1()
+            raise active_exception from None
+        except duckdb.IOException:
+            active_exception = QueryExecutionFailureV1()
+            raise active_exception from None
+        except (QueryResourceLimitV1, QueryTimeoutV1, QueryExecutionFailureV1) as error:
+            active_exception = error
             raise
-        except Exception:
-            raise QueryExecutionFailureV1 from None
+        except BaseException as error:
+            active_exception = error
+            raise
         finally:
-            if timer is not None:
-                timer.cancel()
-                timer.join(timeout=1.0)
-            if connection is not None:
-                connection.close()
+            _cleanup_query_resources(timer, connection, active_exception)
 
 
 _DAILY_SQL = """
@@ -708,7 +709,7 @@ def _validated_raw_request(value: object) -> QueryRequestV1:
         if type(value) is not QueryRequestV1:
             raise ValueError
         return replace(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError("invalid daily query request") from None
 
 
@@ -746,7 +747,7 @@ def _validated_evaluation(value: object) -> CoverageEvaluationV1:
             tuple(replace(month) for month in value.months),
             tuple(replace(selection) for selection in value.verified_partitions),
         )
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
 
 
@@ -763,7 +764,7 @@ def _validated_sessions(
             raise ValueError
         typed = cast(tuple[VerifiedSessionV1, ...], untyped)
         sessions = tuple(replace(item) for item in typed)
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
     digests = {
         (selection.plan.year, selection.plan.month): selection.schedule_digest_sha256
@@ -802,7 +803,7 @@ def _validated_daily_rows(
             raise ValueError
         typed = cast(tuple[PublicQueryRowV1, ...], untyped)
         rows = tuple(replace(item) for item in typed)
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
     selected = set(request.fields)
     if (
@@ -834,7 +835,7 @@ def _validated_partition_handles(
             raise ValueError
         typed = cast(tuple[VerifiedPartitionReadHandleV1, ...], untyped)
         pinned = tuple(replace(item) for item in typed)
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
     if (
         pinned != value
@@ -854,7 +855,7 @@ def _validated_resolution(
         if type(value) is not DailyScheduleResolutionV1:
             raise ValueError
         resolution = replace(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise QueryExecutionFailureV1 from None
     sessions = _validated_sessions(request, evaluation, resolution.sessions)
     digests = {
@@ -954,3 +955,33 @@ def _expire_query(deadline: threading.Event, connection: Any) -> None:
     deadline.set()
     with suppress(Exception):
         connection.interrupt()
+
+
+def _cleanup_query_resources(
+    timer: threading.Timer | None,
+    connection: Any | None,
+    active_exception: BaseException | None,
+) -> None:
+    cleanup_error: BaseException | None = None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except BaseException as error:
+            cleanup_error = error
+        try:
+            timer.join(timeout=1.0)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if connection is not None:
+        try:
+            connection.close()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is None:
+        return
+    if active_exception is not None:
+        active_exception.add_note("query resource cleanup failed")
+        return
+    raise cleanup_error

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -10,6 +9,7 @@ from pathlib import Path
 
 from ark74_benchmark_fixture import benchmark_nse_eq_v1
 
+from swing_trading_ai_assistant.market_data.catalog import CatalogPersistenceError
 from swing_trading_ai_assistant.market_data.historical import RetryPolicy
 from swing_trading_ai_assistant.market_data.range_ingestion import (
     IngestionCommand,
@@ -139,16 +139,12 @@ def test_catalog_construction_failure_stops_after_allowed_lease_and_schedule_bou
             (tmp_path / ".ingestion.lock").read_bytes(),
         ),
     )
-    assert (
-        hashlib.sha256(before[0][1]).hexdigest()
-        == hashlib.sha256((tmp_path / ".ingestion.lock").read_bytes()).hexdigest()
-    )
 
     audit = _DependencyAudit()
 
     def unavailable_catalog(_root: object) -> object:
         audit.record("catalog_construction")
-        raise RuntimeError("private catalog connection detail")
+        raise CatalogPersistenceError("private catalog connection detail")
 
     coordinator = IngestionCoordinator(
         session_factory=_NeverUseProvider(audit),  # type: ignore[arg-type]

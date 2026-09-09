@@ -57,6 +57,7 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
     ExpectedSessionSchedule,
+    ScheduleEvidenceValidationError,
     parse_canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
     schedule_digest,
@@ -558,6 +559,8 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
         "7a620872d3b70684811912c46a5c1ef776383d18871ee63e5840a0a423ab020e",
         "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+        # Released f539c5a1 writer; retain exact reads across Issue #145.
+        "1054af9a2f2e791444d0198a801d5e728139bcbb12822fd230c5625d35747560",
     }
 )
 
@@ -1504,7 +1507,7 @@ def _retained_schedule_matches_request(
             and retained_sessions[-1].close_at
             == request.schedule.decision_session_official_close_at
         )
-    except (OSError, ValueError, _ImmutableEvidenceConflict):
+    except (OSError, ScheduleEvidenceValidationError, _ImmutableEvidenceConflict):
         return False
     finally:
         _close_capture_resources_v1(lease)
