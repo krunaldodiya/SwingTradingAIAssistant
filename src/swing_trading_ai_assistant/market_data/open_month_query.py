@@ -6,10 +6,18 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Protocol, cast
 
-from .catalog import DuckDBCatalog
+from .catalog import (
+    CatalogError,
+    CatalogPersistenceError,
+    CatalogStorageError,
+    DuckDBCatalog,
+)
 from .equity_admission import EquityAdmissionPolicyV1
 from .instruments import Instrument
-from .provisional_store import load_provisional_partition
+from .provisional_store import (
+    ProvisionalPartitionUnavailableV1,
+    load_provisional_partition,
+)
 from .public_contract import (
     DERIVED_INTRADAY_BUCKET_MINUTES_V1,
     DERIVED_INTRADAY_CALCULATION_VERSION_V1,
@@ -28,10 +36,17 @@ from .public_contract import (
 )
 from .public_query import QueryRequestV1, QueryTimeoutV1
 from .schemas import CanonicalCandle
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 _MAX_ATOMIC_READ_ATTEMPTS = 3
+
+_ATOMIC_READ_RETRY_ERRORS = (CatalogPersistenceError, CatalogStorageError)
+_READ_UNAVAILABLE_ERRORS = (
+    CatalogError,
+    ProvisionalPartitionUnavailableV1,
+    StorageRootLeaseError,
+)
 
 
 class OpenMonthQueryClockV1(Protocol):
@@ -213,7 +228,13 @@ class OpenMonthOneMinuteQueryServiceV1:
         _ensure_deadline_live(deadline)
         try:
             request = _request(request)
-            invocation = _invocation(self._clock.now())
+        except ValueError:
+            return _terminal(
+                PublicCommandStatusV1.REJECTED, PublicFailureCodeV1.INVALID_INPUT
+            )
+        invocation_value = self._clock.now()
+        try:
+            invocation = _invocation(invocation_value)
             public_request = _public_request(
                 request, invocation, allow_prior_month=self._allow_prior_month
             )
@@ -251,7 +272,7 @@ class OpenMonthOneMinuteQueryServiceV1:
                 )
         except QueryTimeoutV1:
             raise
-        except Exception:
+        except _READ_UNAVAILABLE_ERRORS:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
@@ -273,7 +294,7 @@ class OpenMonthOneMinuteQueryServiceV1:
                 )
             except QueryTimeoutV1:
                 raise
-            except Exception:
+            except _ATOMIC_READ_RETRY_ERRORS:
                 attempt += 1
                 if attempt == _MAX_ATOMIC_READ_ATTEMPTS:
                     raise
@@ -292,7 +313,7 @@ class OpenMonthOneMinuteQueryServiceV1:
             )
         except QueryTimeoutV1:
             raise
-        except Exception:
+        except _READ_UNAVAILABLE_ERRORS:
             return _terminal(
                 PublicCommandStatusV1.UNAVAILABLE,
                 PublicFailureCodeV1.QUERY_CATALOG_UNAVAILABLE,
@@ -394,11 +415,11 @@ class OpenMonthOneMinuteQueryServiceV1:
 
 
 def _request(value: object) -> QueryRequestV1:
+    if type(value) is not QueryRequestV1:
+        raise ValueError("invalid open-month query")
     try:
-        if type(value) is not QueryRequestV1:
-            raise ValueError
         return replace(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError("invalid open-month query") from None
 
 

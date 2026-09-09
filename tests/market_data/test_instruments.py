@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.instruments as instruments_module
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
     HttpResponseHeaders,
@@ -16,6 +17,7 @@ from swing_trading_ai_assistant.market_data.instruments import (
     CatalogPayloadTooLargeError,
     InstrumentCatalog,
     InstrumentCatalogClient,
+    InstrumentCatalogPayloadError,
     InstrumentCatalogRequestError,
     InstrumentNotFoundError,
 )
@@ -61,6 +63,42 @@ def test_catalog_client_downloads_and_decompresses_official_nse_json() -> None:
             {"Accept": "application/json"},
         )
     ]
+
+
+def test_catalog_client_classifies_provider_integer_that_overflows_float() -> None:
+    payload = json.dumps([RELIANCE | {"strike_price": 10**999}]).encode()
+    client = InstrumentCatalogClient(
+        StaticTransport(HttpResponse(status_code=200, body=gzip.compress(payload)))
+    )
+
+    with pytest.raises(InstrumentCatalogPayloadError):
+        client.fetch_nse_catalog()
+
+
+@pytest.mark.parametrize("error_type", (ValueError, MemoryError))
+def test_catalog_preserves_unrelated_numeric_conversion_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    failure = error_type("synthetic numeric conversion fault")
+
+    class NumericFault(int):
+        def __float__(self) -> float:
+            raise failure
+
+    monkeypatch.setattr(
+        instruments_module,
+        "_parse_catalog_json_int",
+        NumericFault,
+    )
+
+    with pytest.raises(error_type) as raised:
+        InstrumentCatalog.from_json_bytes(
+            b'[{"segment":"NSE_EQ","exchange":"NSE","instrument_key":"NSE_EQ|X",'
+            b'"trading_symbol":"X","strike_price":1}]'
+        )
+
+    assert raised.value is failure
 
 
 def test_catalog_resolution_requires_exact_segment_and_isin() -> None:

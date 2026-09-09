@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from .instruments import Instrument
-from .normalization import Candle
+from .normalization import Candle, CandleSchemaError
 from .schemas import (
     CanonicalCandle,
     DuplicateCandleKeyError,
@@ -28,22 +28,30 @@ def canonicalize_upstox_equity_candles(
     _validate_equity_instrument(instrument)
     _validate_ingested_at(ingested_at)
     if not isinstance(candles, Sequence):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise ValueError("candles must be a sequence of normalized Candle values")
+        raise CandleSchemaError(
+            "candles must be a sequence of normalized Candle values"
+        )
     try:
         candle_count = len(candles)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("candles must provide a valid finite sequence length") from exc
+        raise CandleSchemaError(
+            "candles must provide a valid finite sequence length"
+        ) from exc
     if candle_count > MAX_UPSTOX_EQUITY_CANDLES:
-        raise ValueError("candles exceed the maximum one-month equity candle count")
+        raise CandleSchemaError(
+            "candles exceed the maximum one-month equity candle count"
+        )
     canonical: list[CanonicalCandle] = []
     seen_keys: set[tuple[str, str, str, datetime]] = set()
     for index in range(candle_count):
         try:
             candle = candles[index]
         except (IndexError, KeyError, TypeError, ValueError) as exc:
-            raise ValueError("candles sequence is malformed") from exc
+            raise CandleSchemaError("candles sequence is malformed") from exc
         if type(candle) is not Candle:
-            raise ValueError("candles must contain exact normalized Candle values")
+            raise CandleSchemaError(
+                "candles must contain exact normalized Candle values"
+            )
         _validate_source_open_interest(candle)
         canonical_candle = CanonicalCandle(
             provider=_UPSTOX_PROVIDER,
@@ -79,7 +87,7 @@ def canonicalize_upstox_equity_candles(
 
 def _validate_equity_instrument(instrument: Instrument) -> None:
     if type(instrument) is not Instrument:
-        raise ValueError("a resolved Instrument is required")
+        raise CandleSchemaError("a resolved Instrument is required")
     if (
         instrument.exchange != "NSE"
         or instrument.segment != "NSE_EQ"
@@ -94,26 +102,30 @@ def _validate_equity_instrument(instrument: Instrument) -> None:
             )
         )
     ):
-        raise ValueError("Upstox canonicalization supports NSE/NSE_EQ/EQ only")
+        raise CandleSchemaError("Upstox canonicalization supports NSE/NSE_EQ/EQ only")
 
 
 def _validate_source_open_interest(candle: Candle) -> None:
     if candle.oi is None:
         return
     if type(candle.oi) not in (int, float) or candle.oi != 0:
-        raise ValueError("equity candle source open interest must be absent or zero")
+        raise CandleSchemaError(
+            "equity candle source open interest must be absent or zero"
+        )
     if not math.isfinite(candle.oi):
-        raise ValueError("equity candle source open interest must be absent or zero")
+        raise CandleSchemaError(
+            "equity candle source open interest must be absent or zero"
+        )
 
 
 def _validate_ingested_at(ingested_at: object) -> None:
     if type(ingested_at) is not datetime:
-        raise ValueError("ingested_at must be a timezone-aware datetime")
+        raise CandleSchemaError("ingested_at must be a timezone-aware datetime")
     try:
         if ingested_at.tzinfo is None or ingested_at.utcoffset() is None:
             raise ValueError
         ingested_at.astimezone(UTC)
     except (OverflowError, TypeError, ValueError) as exc:
-        raise ValueError(
+        raise CandleSchemaError(
             "ingested_at must be a valid UTC-convertible datetime"
         ) from exc

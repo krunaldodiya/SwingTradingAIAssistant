@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import zlib
 from dataclasses import dataclass
 from io import BytesIO
 from typing import cast
@@ -27,6 +28,10 @@ class AmbiguousInstrumentError(LookupError):
 
 class CatalogPayloadTooLargeError(ValueError):
     """The decompressed provider catalog exceeded its bounded memory budget."""
+
+
+class InstrumentCatalogPayloadError(ValueError):
+    """The provider catalog is not a supported gzip/JSON payload."""
 
 
 class InstrumentCatalogRequestError(RuntimeError):
@@ -69,11 +74,20 @@ class InstrumentCatalog:
     @classmethod
     def from_json_bytes(cls, payload: bytes) -> InstrumentCatalog:
         try:
-            records: object = json.loads(payload)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("instrument catalog is not valid JSON") from exc
+            records: object = json.loads(payload, parse_int=_parse_catalog_json_int)
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            InstrumentCatalogPayloadError,
+            RecursionError,
+        ):
+            raise InstrumentCatalogPayloadError(
+                "instrument catalog is not valid JSON"
+            ) from None
         if not isinstance(records, list):
-            raise ValueError("instrument catalog must be a JSON array")
+            raise InstrumentCatalogPayloadError(
+                "instrument catalog must be a JSON array"
+            )
 
         instruments: list[Instrument] = []
         for record in cast(list[object], records):
@@ -200,9 +214,20 @@ class InstrumentCatalogClient:
             payload = _decompress_gzip_bounded(
                 response.body, max_decompressed_bytes=self._max_decompressed_bytes
             )
-        except (EOFError, gzip.BadGzipFile) as exc:
-            raise ValueError("instrument catalog response is not valid gzip") from exc
+        except (EOFError, gzip.BadGzipFile, zlib.error):
+            raise InstrumentCatalogPayloadError(
+                "instrument catalog response is not valid gzip"
+            ) from None
         return InstrumentCatalog.from_json_bytes(payload)
+
+
+def _parse_catalog_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise InstrumentCatalogPayloadError(
+            "instrument catalog is not valid JSON"
+        ) from None
 
 
 def _text(value: object) -> str:
@@ -212,7 +237,12 @@ def _text(value: object) -> str:
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        raise InstrumentCatalogPayloadError(
+            "instrument catalog contains an unrepresentable numeric field"
+        ) from None
 
 
 def _identity_value(instrument: Instrument, field_name: str) -> object:

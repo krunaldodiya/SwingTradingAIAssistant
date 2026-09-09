@@ -22,6 +22,10 @@ _SAFE_LABEL: Final = re.compile(r"[\x20-\x7e]{1,128}\Z")
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 
 
+class OpenMonthValidationError(ValueError):
+    """An open-month request or schedule violates its supported input contract."""
+
+
 @dataclass(frozen=True, slots=True)
 class OpenMonthScheduleV1:
     """Authoritative classification through today, including a planned session."""
@@ -57,26 +61,26 @@ class OpenMonthScheduleV1:
             or type(self.closures) is not tuple
             or any(type(item) is not ScheduleClosure for item in self.closures)
         ):
-            raise ValueError("invalid open-month schedule")
+            raise OpenMonthValidationError("invalid open-month schedule")
         as_of = self.as_of.astimezone(UTC)
         if self.covered_to > as_of.astimezone(_IST).date():
-            raise ValueError("invalid open-month schedule")
+            raise OpenMonthValidationError("invalid open-month schedule")
         session_dates = tuple(item.trade_date for item in self.sessions)
         closure_dates = tuple(item.trade_date for item in self.closures)
         if session_dates != tuple(sorted(session_dates)) or closure_dates != tuple(
             sorted(closure_dates)
         ):
-            raise ValueError("invalid open-month schedule")
+            raise OpenMonthValidationError("invalid open-month schedule")
         classified = session_dates + closure_dates
         if len(classified) != len(set(classified)):
-            raise ValueError("invalid open-month schedule")
+            raise OpenMonthValidationError("invalid open-month schedule")
         expected: list[date] = []
         current = self.covered_from
         while current <= self.covered_to:
             expected.append(current)
             current += timedelta(days=1)
         if set(classified) != set(expected):
-            raise ValueError("invalid open-month schedule")
+            raise OpenMonthValidationError("invalid open-month schedule")
         object.__setattr__(self, "as_of", as_of)
         object.__setattr__(self, "sessions", tuple(self.sessions))
         object.__setattr__(self, "closures", tuple(self.closures))
@@ -110,26 +114,26 @@ class OpenMonthPlanV1:
             or type(self.schedule_digest) is not str
             or _DIGEST.fullmatch(self.schedule_digest) is None
         ):
-            raise ValueError("invalid open-month plan")
+            raise OpenMonthValidationError("invalid open-month plan")
         if (self.historical_from is None) != (self.historical_to is None):
-            raise ValueError("invalid open-month plan")
+            raise OpenMonthValidationError("invalid open-month plan")
         if self.historical_from is not None and (
             type(self.historical_from) is not date
             or type(self.historical_to) is not date
             or self.historical_from > self.historical_to
         ):
-            raise ValueError("invalid open-month plan")
+            raise OpenMonthValidationError("invalid open-month plan")
         if (self.intraday_trade_date is None) != (
             self.last_completed_bar_start is None
         ):
-            raise ValueError("invalid open-month plan")
+            raise OpenMonthValidationError("invalid open-month plan")
         if self.intraday_trade_date is not None and (
             type(self.intraday_trade_date) is not date
             or type(self.last_completed_bar_start) is not datetime
             or self.last_completed_bar_start.tzinfo is None
             or self.last_completed_bar_start.utcoffset() is None
         ):
-            raise ValueError("invalid open-month plan")
+            raise OpenMonthValidationError("invalid open-month plan")
         object.__setattr__(self, "invocation", self.invocation.astimezone(UTC))
         if self.last_completed_bar_start is not None:
             object.__setattr__(
@@ -142,13 +146,13 @@ class OpenMonthPlanV1:
 def canonical_open_month_schedule_bytes(schedule: object) -> bytes:
     """Return the sole deterministic representation used for provenance."""
     if type(schedule) is not OpenMonthScheduleV1:
-        raise ValueError("invalid open-month schedule")
+        raise OpenMonthValidationError("invalid open-month schedule")
     return canonical_schedule_bytes(_as_evidence(schedule))
 
 
 def open_month_schedule_digest(schedule: object) -> str:
     if type(schedule) is not OpenMonthScheduleV1:
-        raise ValueError("invalid open-month schedule")
+        raise OpenMonthValidationError("invalid open-month schedule")
     return schedule_digest(_as_evidence(schedule))
 
 
@@ -158,7 +162,7 @@ def open_month_schedule_from_evidence(schedule: object) -> OpenMonthScheduleV1:
         type(schedule) is not ExpectedSessionSchedule
         or schedule.schema_version != SCHEDULE_SCHEMA_VERSION_V3
     ):
-        raise ValueError("invalid open-month schedule evidence")
+        raise OpenMonthValidationError("invalid open-month schedule evidence")
     result = OpenMonthScheduleV1(
         schema_version=schedule.schema_version,
         source=schedule.source,
@@ -173,7 +177,7 @@ def open_month_schedule_from_evidence(schedule: object) -> OpenMonthScheduleV1:
     if canonical_open_month_schedule_bytes(result) != canonical_schedule_bytes(
         schedule
     ):
-        raise ValueError("invalid open-month schedule evidence")
+        raise OpenMonthValidationError("invalid open-month schedule evidence")
     return result
 
 
@@ -207,7 +211,7 @@ def plan_open_month(
         or invocation.tzinfo is None
         or invocation.utcoffset() is None
     ):
-        raise ValueError("invalid open-month request")
+        raise OpenMonthValidationError("invalid open-month request")
     invoked = invocation.astimezone(UTC)
     local_today = invoked.astimezone(_IST).date()
     month_start = date(local_today.year, local_today.month, 1)
@@ -222,7 +226,7 @@ def plan_open_month(
         or schedule.covered_to < requested_to
         or schedule.as_of > invoked
     ):
-        raise ValueError("invalid open-month request")
+        raise OpenMonthValidationError("invalid open-month request")
 
     historical_end = min(requested_to, local_today - timedelta(days=1))
     has_historical_session = any(

@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.corporate_actions as action_module
 from swing_trading_ai_assistant.market_data import current_corporate_action_screen
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.corporate_actions import (
@@ -522,6 +523,44 @@ def test_upstox_adapter_maps_each_plan09_failure(
         scenario.close()
 
 
+@pytest.mark.parametrize(
+    "error_type", (AssertionError, KeyError, RuntimeError, TypeError, ValueError)
+)
+def test_default_provider_and_resolver_propagate_lower_canonical_decoder_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, count=1)
+    failure = error_type("canonical decoder implementation fault")
+    published: list[Any] = []
+    try:
+
+        def fail(_value: object) -> Any:
+            raise failure
+
+        monkeypatch.setattr(action_module, "_parse_timestamp", fail)
+        request = api.CurrentSuppliedCohortCorporateActionScreenRequestV1(
+            _input(api, scenario)
+        )
+        provider = api.UpstoxCorporateActionScreenProviderV1(scenario.store)
+        with pytest.raises(error_type) as raised:
+            provider.resolve_exact(
+                request, scenario.manifest.members[0].isin, scenario.lease
+            )
+        assert raised.value is failure
+
+        def resolve_then_publish() -> None:
+            private = _resolve(api, scenario)
+            published.append(api.publish_current_corporate_action_screen_v1(private))
+
+        with pytest.raises(error_type) as raised:
+            resolve_then_publish()
+        assert raised.value is failure
+        assert published == []
+    finally:
+        scenario.close()
+
+
 @pytest.mark.parametrize("count", (1, 5, 50))
 def test_ready_empty_snapshots_cover_every_permitted_cohort_size(
     tmp_path: Path, count: int
@@ -588,6 +627,36 @@ def test_schedule_admission_handles_exact_source_and_availability(
         else:
             assert outcome is not None and outcome.value == expected
             assert close is None
+    finally:
+        scenario.close()
+
+
+def test_schedule_serializer_defect_propagates_before_corporate_action_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api()
+    scenario = _scenario(tmp_path, 1)
+    failure = ValueError("schedule-implementation-fault")
+    provider_reads: list[object] = []
+
+    def fail(_schedule: object) -> bytes:
+        raise failure
+
+    def unexpected_provider(*_args: object) -> None:
+        provider_reads.append(object())
+        raise AssertionError("provider must not run after schedule failure")
+
+    monkeypatch.setattr(api, "canonical_schedule_bytes", fail)
+    monkeypatch.setattr(
+        api.UpstoxCorporateActionScreenProviderV1,
+        "resolve_exact",
+        unexpected_provider,
+    )
+    try:
+        with pytest.raises(ValueError) as raised:
+            _resolve(api, scenario)
+        assert raised.value is failure
+        assert provider_reads == []
     finally:
         scenario.close()
 

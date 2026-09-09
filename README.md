@@ -568,8 +568,20 @@ Use `uv run market-data probe-upstox --help` for the current options.
 
 The diagnostic keeps candles in memory and emits only HTTP status, row count,
 first/last timestamp, and schema validity. It never prints the token or writes
-candle data. Provider and credential failures are intentionally reduced to a
-sanitized `probe_failed:<ErrorType>` message.
+candle data. Recognized provider, payload, and credential failures produce only
+`probe_failed` on stderr and exit code `2`; exception-class suffixes are not
+published. An unexpected implementation failure produces only `internal_error`
+on stderr, empty stdout, and exit code `2`. Argument-parser rejection produces
+only `request_invalid`; existing command-specific admission diagnostics remain
+sanitized.
+
+An internal error does not mean that retained market evidence is missing or
+corrupt. Do not delete or relabel evidence, silently switch providers, or publish
+a partial result. Preserve the private inputs and report only the command name,
+software version, and fixed failure code—not arguments, paths, exception text,
+tracebacks, credentials, or provider payloads. The complete
+[internal-error policy](docs/architecture-freeze-v1.md#internal-errors-and-operator-diagnostics)
+also defines the unchanged V1 coverage/query generic-failure envelope.
 
 Credentials, broker sessions, generated datasets, and private market data must never be committed.
 

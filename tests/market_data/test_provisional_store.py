@@ -137,3 +137,36 @@ def test_load_provisional_partition_rejects_non_metadata_and_wrong_row_identity(
         )
         with pytest.raises(ProvisionalPartitionUnavailableV1):
             load_provisional_partition(tmp_path, lease, metadata)
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_load_provisional_partition_preserves_unrelated_partition_reader_fault(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, fault_type: type[BaseException]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        metadata = _publish(tmp_path, (_candle(45),))
+        error = fault_type("partition reader defect")
+        fault_reached = False
+
+        def fail_partition_reader(
+            root: object, active_lease: object, relative_path: object
+        ) -> object:
+            nonlocal fault_reached
+            del root, active_lease, relative_path
+            fault_reached = True
+            raise error
+
+        monkeypatch.setattr(
+            provisional_store, "read_partition_under_lease", fail_partition_reader
+        )
+        with pytest.raises(fault_type) as raised:
+            load_provisional_partition(tmp_path, lease, metadata)
+
+    assert fault_reached
+    assert raised.value is error

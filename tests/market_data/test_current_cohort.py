@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, replace
@@ -12,6 +14,7 @@ from typing import Any
 import pytest
 
 import swing_trading_ai_assistant.market_data.current_cohort as cohort_module
+import swing_trading_ai_assistant.market_data.provisional_store as provisional_store
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_cohort import (
@@ -39,6 +42,12 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     current_cohort_runtime_code_identity_v1,
     parse_current_cohort_manifest_bytes_v1,
 )
+from swing_trading_ai_assistant.market_data.instrument_snapshot import (
+    InstrumentSnapshotCorruptError,
+    InstrumentSnapshotNotFoundError,
+    SnapshotInstrumentAmbiguousError,
+    SnapshotInstrumentNotFoundError,
+)
 from swing_trading_ai_assistant.market_data.instruments import Instrument
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     ManifestState,
@@ -48,6 +57,16 @@ from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
 )
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     PlannedInstrumentMonth,
+)
+from swing_trading_ai_assistant.market_data.open_month_query import (
+    CurrentAwareQueryServiceV1,
+    OpenMonthOneMinuteQueryServiceV1,
+)
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    publish_provisional_partition_under_lease,
+)
+from swing_trading_ai_assistant.market_data.provisional_metadata import (
+    metadata_from_publication,
 )
 from swing_trading_ai_assistant.market_data.public_contract import (
     CandleFieldV1,
@@ -66,9 +85,11 @@ from swing_trading_ai_assistant.market_data.public_query import QueryRequestV1
 from swing_trading_ai_assistant.market_data.runtime_identity_manifest import (
     MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
 )
+from swing_trading_ai_assistant.market_data.schemas import CanonicalCandle
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 from swing_trading_ai_assistant.market_data.validation import ValidationReason
 
@@ -161,7 +182,107 @@ def test_current_service_archives_completed_daily_and_partial_ledger(
     assert partial["revision_identity_sha256"] == _DIGEST
 
 
-def test_current_service_maps_lease_cleanup_failure_to_closed_report(
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_current_service_propagates_unrelated_snapshot_resolver_fault(
+    tmp_path: Path, fault_type: type[BaseException]
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    error = fault_type("resolver defect")
+    service = _service(root, member, _query_report(), resolver=_FaultingResolver(error))
+
+    with pytest.raises(fault_type) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_current_service_propagates_unrelated_universe_resolver_fault(
+    tmp_path: Path, fault_type: type[BaseException]
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    error = fault_type("universe defect")
+    service = CurrentCohortMarketDataServiceV1(
+        CurrentSuppliedCohortAdmissionPolicyV1((member,)),
+        _FaultingUniverseResolver(error),
+        _Resolver(),
+        _QueryPort(_query_report()),
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+
+    with pytest.raises(fault_type) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    ("snapshot_error", "reason"),
+    (
+        (SnapshotInstrumentAmbiguousError, CurrentCohortReasonV1.IDENTITY_AMBIGUOUS),
+        (InstrumentSnapshotCorruptError, CurrentCohortReasonV1.IDENTITY_STALE),
+        (InstrumentSnapshotNotFoundError, CurrentCohortReasonV1.IDENTITY_UNRESOLVED),
+        (SnapshotInstrumentNotFoundError, CurrentCohortReasonV1.IDENTITY_UNRESOLVED),
+    ),
+    ids=("ambiguous", "corrupt", "snapshot-missing", "instrument-missing"),
+)
+def test_current_service_maps_typed_snapshot_error_to_closed_report(
+    tmp_path: Path,
+    snapshot_error: type[RuntimeError],
+    reason: CurrentCohortReasonV1,
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    service = _service(
+        root,
+        member,
+        _query_report(),
+        resolver=_FaultingResolver(snapshot_error()),
+    )
+
+    report = service.evaluate(_request(member))
+
+    assert report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
+    assert report.members is None
+    assert report.reasons == (reason,)
+
+
+def test_current_service_propagates_unrelated_lease_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    service = _service(root, member, _query_report())
+    original_close = StorageRootLease.close
+    error = RuntimeError("cleanup defect")
+
+    def close_then_fail(lease: StorageRootLease) -> None:
+        original_close(lease)
+        raise error
+
+    monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(RuntimeError) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is error
+
+
+def test_current_service_maps_storage_lease_cleanup_failure_to_closed_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _protected_root(tmp_path)
@@ -171,7 +292,7 @@ def test_current_service_maps_lease_cleanup_failure_to_closed_report(
 
     def close_then_fail(lease: StorageRootLease) -> None:
         original_close(lease)
-        raise RuntimeError("cleanup failure")
+        raise StorageRootLeaseError("lease cleanup failure")
 
     monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
 
@@ -180,6 +301,29 @@ def test_current_service_maps_lease_cleanup_failure_to_closed_report(
     assert report.evidence_state is CurrentEvidenceStateV1.INSUFFICIENT_EVIDENCE
     assert report.members is None
     assert report.reasons == (CurrentCohortReasonV1.PROVIDER_UNAVAILABLE,)
+
+
+def test_current_service_preserves_primary_body_error_over_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    primary = KeyError("body defect")
+    service = _service(
+        root, member, _query_report(), resolver=_FaultingResolver(primary)
+    )
+    original_close = StorageRootLease.close
+
+    def close_then_fail(lease: StorageRootLease) -> None:
+        original_close(lease)
+        raise AssertionError("secondary cleanup defect")
+
+    monkeypatch.setattr(StorageRootLease, "close", close_then_fail)
+
+    with pytest.raises(KeyError) as raised:
+        service.evaluate(_request(member))
+
+    assert raised.value is primary
 
 
 def test_complete_report_rejects_duplicate_and_future_member_evidence(
@@ -831,6 +975,145 @@ def test_rollover_returns_current_success_when_prior_month_is_unavailable(
     assert report == current_report
 
 
+@pytest.mark.parametrize("phase", ("current", "prior", "fallback"))
+def test_month_boundary_router_stops_each_unclassified_constituent_before_later_work(
+    tmp_path: Path, phase: str
+) -> None:
+    generic_failure = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.FAILED,
+        PublicFailureV1(
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE, None, None, None, None, ()
+        ),
+        0,
+        None,
+    )
+    current_aware_calls = 0
+    fallback_calls = 0
+
+    class CurrentAwarePort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal current_aware_calls
+            del request, lease
+            current_aware_calls += 1
+            if phase == "current" and current_aware_calls == 1:
+                return generic_failure
+            if phase == "prior" and current_aware_calls == 2:
+                return generic_failure
+            return (
+                _query_report() if current_aware_calls == 1 else _empty_query_report()
+            )
+
+    class FallbackPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal fallback_calls
+            del request, lease
+            fallback_calls += 1
+            return generic_failure
+
+    root = _protected_root(tmp_path)
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease, pytest.raises(RuntimeError):
+        CurrentCohortRetainedQueryPortV1(
+            CurrentAwarePort(), FallbackPort()
+        ).query_under_lease(
+            QueryRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 8, 25),
+                date(2026, 9, 1),
+                "1m",
+                ("ts", "close"),
+                100,
+                root,
+            ),
+            lease,
+        )
+
+    assert current_aware_calls == (1 if phase == "current" else 2)
+    assert fallback_calls == (1 if phase == "fallback" else 0)
+
+
+def test_month_boundary_cohort_stops_at_current_partition_execution_envelope_before_prior_or_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _protected_root(tmp_path)
+    member = _member()
+    cutoff = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    monkeypatch.setitem(globals(), "_PUBLISHED_AT", cutoff - timedelta(hours=2))
+    _persist_provisional_month(root, member, date(2026, 8, 31))
+    _persist_provisional_month(root, member, date(2026, 9, 1))
+    policy = CurrentSuppliedCohortAdmissionPolicyV1((member,))
+    reader_calls = 0
+    closed_reads = 0
+    fallback_reads = 0
+
+    def fail_partition_reader(
+        root: object, lease: object, relative_path: object
+    ) -> object:
+        nonlocal reader_calls
+        del root, lease, relative_path
+        reader_calls += 1
+        raise RuntimeError("current partition reader defect")
+
+    class ClosedPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal closed_reads
+            del request, lease
+            closed_reads += 1
+            return _empty_query_report()
+
+    class FallbackPort:
+        def query_under_lease(
+            self, request: object, lease: StorageRootLease
+        ) -> QueryReportV1:
+            nonlocal fallback_reads
+            del request, lease
+            fallback_reads += 1
+            return _empty_query_report()
+
+    current_aware = CurrentAwareQueryServiceV1(
+        ClosedPort(),
+        OpenMonthOneMinuteQueryServiceV1(policy, clock=_FixedClock(cutoff)),
+        clock=_FixedClock(cutoff),
+    )
+    service = CurrentCohortMarketDataServiceV1(
+        policy,
+        _UniverseResolver((member,)),
+        _Resolver(),
+        CurrentCohortRetainedQueryPortV1(current_aware, FallbackPort()),
+        CurrentCohortQueryRequestFactoryV1(root),
+        root,
+        archive_port=ImmutableCurrentFactArchiveV1(root),
+    )
+    request = CurrentCohortMarketDataRequestV1(
+        CurrentSuppliedCohortManifestV1(_SELECTED_AT, (member,)),
+        cutoff,
+        False,
+        _POLICY,
+        _SCHEMA,
+    )
+    monkeypatch.setattr(
+        provisional_store, "read_partition_under_lease", fail_partition_reader
+    )
+
+    with pytest.raises(RuntimeError):
+        service.evaluate(request)
+
+    assert reader_calls == 1
+    assert closed_reads == 0
+    assert fallback_reads == 0
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
 def test_current_service_uses_same_lease_for_identity_query_and_archive(
     tmp_path: Path,
 ) -> None:
@@ -1202,6 +1485,517 @@ def test_cohort_current_cli_emits_canonical_complete_report(
     assert service.request is not None
 
 
+def test_cohort_cli_execution_fault_is_not_malformed_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = tmp_path / "retained"
+    service = _CompleteService()
+
+    def fail_execution(_request: object) -> object:
+        raise ValueError("private/path/token")
+
+    monkeypatch.setattr(service, "evaluate", fail_execution)
+    assert (
+        main(
+            _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+            current_cohort_service=service,
+            trusted_clock=_FixedClock(_CUTOFF),
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert tuple(root.iterdir()) == ()
+
+
+def test_default_cohort_cli_reports_retained_resolver_defect_as_internal_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    resolved_members: list[CurrentCohortMemberV1] = []
+
+    def admitted_members(*_args: object) -> frozenset[CurrentCohortMemberV1]:
+        return frozenset((_member(),))
+
+    def fail_resolver(
+        _self: object, member: CurrentCohortMemberV1, _lease: StorageRootLease
+    ) -> None:
+        resolved_members.append(member)
+        raise KeyError("private-retained-resolver-defect")
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        admitted_members,
+    )
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentCohortInstrumentResolverV1,
+        "resolve_under_lease",
+        fail_resolver,
+    )
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+    captured = capsys.readouterr()
+    assert resolved_members == [_member()]
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_universe_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    error = fault_type("universe execution defect")
+    fault_reached = False
+
+    def fail_universe(
+        _self: object, _cutoff: datetime, _lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        fail_universe,
+    )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize("boundary", ("factory", "port"))
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_query_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    boundary: str,
+    fault_type: type[BaseException],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    error = fault_type(f"query {boundary} defect")
+    fault_reached = False
+    _patch_default_cohort_admission(monkeypatch)
+
+    if boundary == "factory":
+
+        def fail_factory(
+            _self: object,
+            _member: CurrentCohortMemberV1,
+            _cutoff: datetime,
+        ) -> QueryRequestV1:
+            nonlocal fault_reached
+            fault_reached = True
+            raise error
+
+        monkeypatch.setattr(
+            cohort_module.CurrentCohortQueryRequestFactoryV1,
+            "__call__",
+            fail_factory,
+        )
+    else:
+
+        def fail_query(*_args: object) -> QueryReportV1:
+            nonlocal fault_reached
+            fault_reached = True
+            raise error
+
+        monkeypatch.setattr(
+            cohort_module.CurrentCohortRetainedQueryPortV1,
+            "query_under_lease",
+            fail_query,
+        )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+def test_default_cohort_cli_propagates_unclassified_query_failure_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    query_reached = False
+    generic_failure = PublicCommandReportV1(
+        "v1",
+        "query",
+        PublicCommandStatusV1.FAILED,
+        PublicFailureV1(
+            PublicFailureCodeV1.UNCLASSIFIED_FAILURE, None, None, None, None, ()
+        ),
+        0,
+        None,
+    )
+
+    def returned_generic_failure(*_args: object) -> QueryReportV1:
+        nonlocal query_reached
+        query_reached = True
+        return generic_failure
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_generic_failure,
+    )
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert query_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_closed_month_catalog_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+) -> None:
+    monkeypatch.setitem(globals(), "_CUTOFF", datetime(2026, 9, 1, 10, tzinfo=UTC))
+    monkeypatch.setitem(globals(), "_PUBLISHED_AT", datetime(2026, 9, 1, 8, tzinfo=UTC))
+    monkeypatch.setitem(
+        globals(), "_FIRST_BAR", datetime(2026, 8, 31, 3, 45, tzinfo=UTC)
+    )
+    monkeypatch.setitem(
+        globals(), "_LAST_BAR", datetime(2026, 8, 31, 3, 46, tzinfo=UTC)
+    )
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes().replace(b"2026-08-17", b"2026-09-01"))
+    root = _protected_root(tmp_path)
+    member = _member()
+    _persist_verified_closed_month_manifest(root, member)
+    _patch_default_cohort_admission(monkeypatch)
+    error = fault_type("closed-month catalog defect")
+    fault_reached = False
+
+    def returned_closed_month(*_args: object) -> QueryReportV1:
+        return _closed_month_query_report()
+
+    def fail_manifest(_self: object, _plan: object) -> object:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_closed_month,
+    )
+    monkeypatch.setattr(DuckDBCatalog, "get_manifest", fail_manifest)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-09-01T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()
+
+
+def test_publish_archive_object_relinquishes_recycled_temporary_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    primary = AssertionError("released archive close fault")
+    real_close = cohort_module.os.close
+    real_open = cohort_module.os.open
+    replacement: int | None = None
+    faulted = False
+
+    def release_then_raise(descriptor: int) -> None:
+        nonlocal faulted, replacement
+        if not faulted:
+            faulted = True
+            real_close(descriptor)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(cohort_module.os, "close", release_then_raise)
+            with pytest.raises(AssertionError) as raised:
+                cohort_module._publish_archive_object(
+                    parent, "archive.json", b"retained"
+                )
+            assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert tuple(tmp_path.iterdir()) == ()
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
+        real_close(parent)
+
+
+@pytest.mark.parametrize("cleanup_fault", (False, True))
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception),
+    ids=("assertion", "key", "runtime", "exception"),
+)
+def test_default_cohort_cli_propagates_archive_execution_fault_without_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault_type: type[BaseException],
+    cleanup_fault: bool,
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    error = fault_type("archive defect")
+    fault_reached = False
+    failed_descriptors: set[int] = set()
+    real_close = cohort_module.os.close
+
+    def returned_query(*_args: object) -> QueryReportV1:
+        return _query_report()
+
+    def fail_publish(_parent: int, _name: str, _raw: bytes) -> bool:
+        nonlocal fault_reached
+        fault_reached = True
+        if cleanup_fault:
+            failed_descriptors.add(_parent)
+        raise error
+
+    def close_descriptor(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in failed_descriptors:
+            failed_descriptors.remove(descriptor)
+            raise OSError("secondary archive cleanup failure")
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        returned_query,
+    )
+    monkeypatch.setattr(cohort_module, "_publish_archive_object", fail_publish)
+    monkeypatch.setattr(cohort_module.os, "close", close_descriptor)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached
+    archive_directory = root / ".current-fact-archive-v1"
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not archive_directory.exists() or not tuple(archive_directory.iterdir())
+    assert failed_descriptors == set()
+
+
+@pytest.mark.parametrize("cleanup_stage", ("close", "unlink"))
+def test_default_cohort_cli_preserves_archive_write_fault_during_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    cleanup_stage: str,
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    error = AssertionError("archive write defect")
+    fault_reached = False
+    cleanup_reached = False
+    archive_descriptors: set[int] = set()
+    archive_names: set[str] = set()
+    real_open = cohort_module.os.open
+    real_write = cohort_module.os.write
+    real_close = cohort_module.os.close
+    real_unlink = cohort_module.os.unlink
+
+    def open_file(
+        path: str | Path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if isinstance(path, str) and ".json." in path and path.endswith(".tmp"):
+            archive_descriptors.add(descriptor)
+            archive_names.add(path)
+        return descriptor
+
+    def write_file(descriptor: int, raw: bytes) -> int:
+        nonlocal fault_reached
+        if descriptor in archive_descriptors:
+            fault_reached = True
+            raise error
+        return real_write(descriptor, raw)
+
+    def close_file(descriptor: int) -> None:
+        nonlocal cleanup_reached
+        real_close(descriptor)
+        if descriptor in archive_descriptors and cleanup_stage == "close":
+            archive_descriptors.remove(descriptor)
+            cleanup_reached = True
+            raise OSError("secondary archive close failure")
+
+    def unlink_file(path: str, *, dir_fd: int | None = None) -> None:
+        nonlocal cleanup_reached
+        real_unlink(path, dir_fd=dir_fd)
+        if path in archive_names and cleanup_stage == "unlink":
+            cleanup_reached = True
+            raise OSError("secondary archive unlink failure")
+
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        lambda *_args: _query_report(),
+    )
+    monkeypatch.setattr(cohort_module.os, "open", open_file)
+    monkeypatch.setattr(cohort_module.os, "write", write_file)
+    monkeypatch.setattr(cohort_module.os, "close", close_file)
+    monkeypatch.setattr(cohort_module.os, "unlink", unlink_file)
+
+    exit_code = main(
+        _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z"),
+        trusted_clock=_FixedClock(_CUTOFF),
+    )
+
+    captured = capsys.readouterr()
+    assert fault_reached and cleanup_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not tuple((root / ".current-fact-archive-v1").iterdir())
+
+
+def test_default_cohort_cli_preserves_archive_read_fault_during_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cohort_file = tmp_path / "cohort.json"
+    cohort_file.write_bytes(_manifest_bytes())
+    root = _protected_root(tmp_path)
+    _patch_default_cohort_admission(monkeypatch)
+    monkeypatch.setattr(
+        cohort_module.CurrentCohortRetainedQueryPortV1,
+        "query_under_lease",
+        lambda *_args: _query_report(),
+    )
+    arguments = _cli_args(cohort_file, root, "2026-08-17T10:00:00.000000Z")
+    assert main(arguments, trusted_clock=_FixedClock(_CUTOFF)) == 0
+    capsys.readouterr()
+    archive_directory = root / ".current-fact-archive-v1"
+    retained = {path.name: path.read_bytes() for path in archive_directory.iterdir()}
+    error = AssertionError("archive read defect")
+    fault_reached = False
+    cleanup_reached = False
+    archive_descriptors: set[int] = set()
+    real_open = cohort_module.os.open
+    real_read = cohort_module.os.read
+    real_close = cohort_module.os.close
+
+    def open_file(
+        path: str | Path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path in retained:
+            archive_descriptors.add(descriptor)
+        return descriptor
+
+    def read_file(descriptor: int, size: int) -> bytes:
+        nonlocal fault_reached
+        if descriptor in archive_descriptors:
+            fault_reached = True
+            raise error
+        return real_read(descriptor, size)
+
+    def close_file(descriptor: int) -> None:
+        nonlocal cleanup_reached
+        real_close(descriptor)
+        if descriptor in archive_descriptors:
+            archive_descriptors.remove(descriptor)
+            cleanup_reached = True
+            raise OSError("secondary archive close failure")
+
+    monkeypatch.setattr(cohort_module.os, "open", open_file)
+    monkeypatch.setattr(cohort_module.os, "read", read_file)
+    monkeypatch.setattr(cohort_module.os, "close", close_file)
+
+    exit_code = main(arguments, trusted_clock=_FixedClock(_CUTOFF))
+
+    captured = capsys.readouterr()
+    assert fault_reached and cleanup_reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert {
+        path.name: path.read_bytes() for path in archive_directory.iterdir()
+    } == retained
+
+
 def test_cohort_current_cli_rejects_future_cutoff_before_service_or_root(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1464,6 +2258,113 @@ def _query_report() -> QueryReportV1:
     return _report(QueryPayloadV1(request, 2, (month,), rows))
 
 
+def _closed_month_query_report() -> QueryReportV1:
+    request = PublicQueryRequestV1(
+        "NSE_EQ",
+        "RELIANCE",
+        date(2026, 8, 25),
+        date(2026, 9, 1),
+        "1m",
+        tuple(CandleFieldV1),
+        10_000,
+    )
+    current_bar = _CUTOFF.replace(hour=3, minute=45)
+    rows = (
+        PublicQueryRowV1(_FIRST_BAR, 100.0, 101.0, 99.0, 100.5, 10),
+        PublicQueryRowV1(_LAST_BAR, 100.5, 103.0, 100.0, 102.0, 15),
+        PublicQueryRowV1(current_bar, 102.0, 104.0, 101.0, 103.0, 5),
+    )
+    month = PublicCoverageMonthV1(
+        "2026-08",
+        CoverageStateV1.VERIFIED,
+        _FIRST_BAR,
+        _LAST_BAR,
+        2,
+        _DIGEST,
+        1,
+        f"nse-equity-month@v1+sessions-sha256:{'d' * 64}",
+        "d" * 64,
+        None,
+        ValidationReason.NONE,
+        None,
+        None,
+        None,
+        None,
+    )
+    current_month = replace(
+        month,
+        month="2026-09",
+        coverage_state=CoverageStateV1.PROVISIONAL,
+        actual_from_ts=current_bar,
+        actual_to_ts=current_bar,
+        row_count=1,
+        checksum_sha256="e" * 64,
+        validation_policy_version=None,
+        validation_reason=None,
+        data_cutoff=current_bar,
+        session_complete=False,
+        evidence_published_at=_PUBLISHED_AT,
+        evidence_known_at=_PUBLISHED_AT,
+    )
+    return _report(QueryPayloadV1(request, 3, (month, current_month), rows))
+
+
+def _persist_verified_closed_month_manifest(
+    root: Path, member: CurrentCohortMemberV1
+) -> None:
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    instrument = _Resolver().resolve_under_lease(member, acquired.lease).instrument
+    plan = PlannedInstrumentMonth(
+        "upstox",
+        instrument.instrument_key,
+        instrument.security_id,
+        instrument.symbol,
+        instrument.exchange,
+        instrument.segment,
+        instrument.instrument_type,
+        "1m",
+        2026,
+        8,
+        date(2026, 8, 1),
+        date(2026, 8, 31),
+    )
+    active = PartitionManifest(
+        1,
+        plan,
+        "current-cohort-test",
+        None,
+        ManifestState.IN_PROGRESS,
+        ValidationOutcome.NOT_RUN,
+        f"nse-equity-month@v1+sessions-sha256:{'d' * 64}",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "upstox-historical-v3",
+        _PUBLISHED_AT,
+        _PUBLISHED_AT,
+        _PUBLISHED_AT,
+        None,
+    )
+    verified = verify_manifest(
+        active,
+        _PUBLISHED_AT,
+        _FIRST_BAR,
+        _LAST_BAR,
+        2,
+        _DIGEST,
+        "verified.parquet",
+    )
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            catalog.create_manifest(active)
+            catalog.transition_manifest(active, verified)
+    finally:
+        acquired.lease.close()
+
+
 def _empty_query_report() -> QueryReportV1:
     full = _query_report()
     assert type(full.payload) is QueryPayloadV1
@@ -1490,6 +2391,78 @@ def _query_report_with_partial() -> QueryReportV1:
     )
 
 
+def _persist_provisional_month(
+    root: Path, member: CurrentCohortMemberV1, month_end: date
+) -> None:
+    acquired = StorageRootLease.try_acquire_existing(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        instrument = _Resolver().resolve_under_lease(member, lease).instrument
+        plan = PlannedInstrumentMonth(
+            "upstox",
+            instrument.instrument_key,
+            instrument.security_id,
+            instrument.symbol,
+            instrument.exchange,
+            instrument.segment,
+            instrument.instrument_type,
+            "1m",
+            month_end.year,
+            month_end.month,
+            date(month_end.year, month_end.month, 1),
+            month_end,
+        )
+        timestamp = datetime(
+            month_end.year, month_end.month, month_end.day, 3, 45, tzinfo=UTC
+        )
+        row = CanonicalCandle(
+            provider="upstox",
+            instrument_key=instrument.instrument_key,
+            security_id=instrument.security_id,
+            symbol=instrument.symbol,
+            exchange=instrument.exchange,
+            segment=instrument.segment,
+            instrument_type=instrument.instrument_type,
+            underlying_id=None,
+            expiry=None,
+            strike=None,
+            option_type=None,
+            interval="1m",
+            ts=timestamp,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=10,
+            oi=None,
+            ingested_at=timestamp + timedelta(minutes=15),
+            source_version="upstox-intraday-v3",
+            adjustment_state="raw",
+        )
+        published = publish_provisional_partition_under_lease(
+            root, lease, plan, timestamp, _DIGEST, (row,)
+        )
+        metadata = metadata_from_publication(
+            plan=plan,
+            schedule_digest_sha256=_DIGEST,
+            cutoff=timestamp,
+            session_complete=month_end != date(2026, 9, 1),
+            actual_from_ts=timestamp,
+            actual_to_ts=timestamp,
+            row_count=1,
+            checksum_sha256=published.checksum_sha256,
+            byte_size=published.byte_size,
+            relative_path=published.canonical_path,
+            instrument_snapshot_digest_sha256="b" * 64,
+            instrument_snapshot_retrieved_at=timestamp,
+            published_at=timestamp + timedelta(minutes=15),
+            historical_attempt_count=1,
+            intraday_attempt_count=1,
+        )
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            catalog.save_provisional_partition(metadata)
+
+
 def _report(payload: QueryPayloadV1) -> QueryReportV1:
     return PublicCommandReportV1(
         "v1", "query", PublicCommandStatusV1.SUCCEEDED, None, 0, payload
@@ -1511,6 +2484,17 @@ class _UniverseResolver:
         del cutoff
         self.lease = lease
         return frozenset(self.members)
+
+
+class _FaultingUniverseResolver:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def members_under_lease(
+        self, cutoff: datetime, lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        del cutoff, lease
+        raise self.error
 
 
 def _service(
@@ -1545,6 +2529,29 @@ def _cli_args(cohort_file: Path, root: Path, cutoff: str) -> list[str]:
     ]
 
 
+def _patch_default_cohort_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    def admitted_members(
+        _self: object, _cutoff: datetime, _lease: StorageRootLease
+    ) -> frozenset[CurrentCohortMemberV1]:
+        return frozenset((_member(),))
+
+    def resolve_member(
+        _self: object, member: CurrentCohortMemberV1, lease: StorageRootLease
+    ) -> CurrentCohortResolvedIdentityV1:
+        return _Resolver().resolve_under_lease(member, lease)
+
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentNifty50UniverseResolverV1,
+        "members_under_lease",
+        admitted_members,
+    )
+    monkeypatch.setattr(
+        cohort_module.RetainedCurrentCohortInstrumentResolverV1,
+        "resolve_under_lease",
+        resolve_member,
+    )
+
+
 class _Resolver:
     def resolve_under_lease(
         self, member: CurrentCohortMemberV1, lease: StorageRootLease
@@ -1562,6 +2569,17 @@ class _Resolver:
             ),
             _PUBLISHED_AT,
         )
+
+
+class _FaultingResolver(_Resolver):
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def resolve_under_lease(
+        self, member: CurrentCohortMemberV1, lease: StorageRootLease
+    ) -> CurrentCohortResolvedIdentityV1:
+        del member, lease
+        raise self.error
 
 
 @dataclass(frozen=True, slots=True)

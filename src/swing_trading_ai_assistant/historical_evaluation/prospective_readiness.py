@@ -11,16 +11,19 @@ from enum import StrEnum
 from typing import Final
 
 from swing_trading_ai_assistant.market_data.corporate_actions import (
+    CorporateActionCorruptError,
     CorporateActionSnapshotV1,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
+    ScheduleEvidenceValidationError,
     canonical_schedule_bytes,
     parse_canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
 )
 from swing_trading_ai_assistant.market_data.universe_snapshot import (
     Nifty50UniverseSnapshotV1,
+    UniverseSnapshotCorruptError,
 )
 
 PROSPECTIVE_READINESS_CONTRACT_VERSION_V1: Final = "forward-pit-evidence-readiness@v1"
@@ -1280,8 +1283,8 @@ def _resolve_schedule(  # noqa: C901 -- frozen gate transaction
             canonical_schedule_bytes(schedule) != candidate.canonical_bytes
             or _sha(candidate.canonical_bytes) not in _PINNED_SCHEDULE_SHA256_V1
         ):
-            raise ValueError
-    except Exception:
+            raise ScheduleEvidenceValidationError
+    except ScheduleEvidenceValidationError:
         return (
             None,
             PrimaryReasonV1.SCHEDULE_CORRUPT,
@@ -1370,8 +1373,8 @@ def _resolve_universe(
             candidate.canonical_bytes
         )
         if snapshot.canonical_json_bytes() != candidate.canonical_bytes:
-            raise ValueError
-    except Exception:
+            raise UniverseSnapshotCorruptError
+    except UniverseSnapshotCorruptError:
         return (
             PrimaryReasonV1.MEMBERSHIP_CORRUPT,
             PrimaryReasonV1.SECTOR_CORRUPT,
@@ -1443,8 +1446,8 @@ def _corporate_action_reason(  # noqa: C901 -- frozen revision reducer
                 observation.canonical_bytes
             )
             if snapshot.canonical_json_bytes() != observation.canonical_bytes:
-                raise ValueError
-        except Exception:
+                raise CorporateActionCorruptError
+        except CorporateActionCorruptError:
             return PrimaryReasonV1.CORPORATE_ACTION_CORRUPT, identity
         if snapshot.isin != candidate.isin:
             return PrimaryReasonV1.EVIDENCE_IDENTITY_MISMATCH, identity

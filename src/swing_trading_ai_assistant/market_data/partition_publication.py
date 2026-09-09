@@ -19,12 +19,18 @@ from typing import Final, cast
 from .manifest_lifecycle import FailureCategory
 from .monthly_request_planner import PlannedInstrumentMonth
 from .parquet import (
+    ARROW_DATA_ERRORS,
     MAX_PARQUET_BATCH_SIZE,
+    CandleParquetConversionError,
+    IncompatibleCandleParquetSchemaError,
+    MissingCandleSchemaVersionError,
+    UnsupportedCandleSchemaVersionError,
+    borrow_parquet_stream,
     iter_candles_from_parquet,
     write_candles_parquet,
 )
 from .schemas import CANDLE_SCHEMA_VERSION, CanonicalCandle
-from .storage_root_lease import StorageRootLease
+from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 
 _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _SAFE_COMPONENT: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -40,6 +46,14 @@ _PATH_VALUE_FIELDS: Final = (
     "instrument_type",
     "security_id",
     "interval",
+)
+
+_PARQUET_VALIDATION_ERRORS: Final = (
+    *ARROW_DATA_ERRORS,
+    CandleParquetConversionError,
+    IncompatibleCandleParquetSchemaError,
+    MissingCandleSchemaVersionError,
+    UnsupportedCandleSchemaVersionError,
 )
 
 
@@ -196,7 +210,7 @@ def publish_provisional_partition_under_lease(
             operation.ensure_live()
     except PartitionPublicationError:
         raise
-    except Exception:
+    except StorageRootLeaseError:
         raise PartitionPublicationError("storage authority unavailable") from None
     return _provisional_evidence(
         validated_plan,
@@ -223,7 +237,7 @@ def _publish_provisional_rows(  # noqa: C901
             if root_descriptor is None
             else os.dup(root_descriptor)
         )
-    except Exception:
+    except OSError:
         raise PartitionPublicationError("storage unavailable") from None
     parent_fd: int | None = None
     temp_name: str | None = None
@@ -233,7 +247,10 @@ def _publish_provisional_rows(  # noqa: C901
     primary: Exception | None = None
     try:
         temp_name, temp_fd = _create_temp(root_fd)
-        _write_temp(temp_fd, rows)
+        try:
+            _write_temp(temp_fd, rows)
+        except OSError:
+            raise PartitionWriteError("partition write failed") from None
         digest, byte_size = _validate_fd(temp_fd, rows, PartitionWriteError)
         relative = _provisional_relative_path(plan, cutoff, schedule_digest, digest)
         parent_fd = _open_or_create_parents(root_fd, relative.split("/")[:-1])
@@ -297,7 +314,7 @@ def _publish_rows(  # noqa: C901
             if root_descriptor is None
             else os.dup(root_descriptor)
         )
-    except Exception:
+    except OSError:
         raise PartitionPublicationError("storage unavailable") from None
     parent_fd: int | None = None
     temp_name: str | None = None
@@ -308,7 +325,10 @@ def _publish_rows(  # noqa: C901
     try:
         parent_fd = _open_or_create_parents(root_fd, relative.split("/")[:-1])
         temp_name, temp_fd = _create_temp(parent_fd)
-        _write_temp(temp_fd, rows)
+        try:
+            _write_temp(temp_fd, rows)
+        except OSError:
+            raise PartitionWriteError("partition write failed") from None
         digest, byte_size = _validate_fd(temp_fd, rows, PartitionWriteError)
         try:
             _link_temp(parent_fd, temp_name)
@@ -371,11 +391,14 @@ def _finish_publication(
     root_fd: int,
 ) -> _PublishedBytes:
     close_succeeded = _close_all(parent_fd, root_fd, primary)
-    if visible and (primary is not None or not close_succeeded):
+    if primary is not None:
+        if not isinstance(primary, PartitionPublicationError):
+            raise primary
+        if not visible:
+            raise primary
         outcome = PublicationOutcomeUnknown("publication outcome unknown")
-        if primary is not None:
-            for note in getattr(primary, "__notes__", ()):
-                outcome.add_note(note)
+        for note in getattr(primary, "__notes__", ()):
+            outcome.add_note(note)
         if (
             not close_succeeded
             and "publication descriptor cleanup failed"
@@ -383,10 +406,10 @@ def _finish_publication(
         ):
             outcome.add_note("publication descriptor cleanup failed")
         raise outcome from None
-    if primary is not None:
-        if isinstance(primary, PartitionPublicationError):
-            raise primary
-        raise PartitionWriteError("partition write failed") from None
+    if visible and not close_succeeded:
+        outcome = PublicationOutcomeUnknown("publication outcome unknown")
+        outcome.add_note("publication descriptor cleanup failed")
+        raise outcome
     if not close_succeeded or result is None:
         raise PartitionWriteError("partition write failed")
     return result
@@ -602,7 +625,7 @@ def _open_root(root: object) -> int:
         raise PartitionValidationError("invalid storage root")
     try:
         return os.open(root, _DIRECTORY_FLAGS)
-    except Exception:
+    except OSError:
         raise PartitionPublicationError("storage unavailable") from None
 
 
@@ -616,7 +639,7 @@ def _open_or_create_parents(  # noqa: C901
         for component in components:
             child_fd = None
             if not _safe_hive_component(component):
-                raise ValueError
+                raise PartitionPublicationError("unsafe publication path")
             try:
                 child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=current_fd)
             except FileNotFoundError:
@@ -624,32 +647,35 @@ def _open_or_create_parents(  # noqa: C901
                     os.mkdir(component, mode=0o700, dir_fd=current_fd)
                 child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=current_fd)
             _fsync_directory(current_fd)
-            failure = PartitionPublicationError("unsafe publication path")
-            if not _close_for_primary(current_fd, failure):
-                _close_for_primary(child_fd, failure)
+            current_already_closed = True
+            if not _close_one(current_fd):
+                failure = PartitionPublicationError("unsafe publication path")
+                _close_one(child_fd, failure)
                 child_fd = None
-                current_already_closed = True
                 raise failure
             current_fd = child_fd
             child_fd = None
+            current_already_closed = False
         return current_fd
     except PartitionPublicationError as failure:
-        if current_already_closed:
-            if child_fd is not None:
-                _close_for_primary(child_fd, failure)
-            raise
-        failure = PartitionPublicationError("unsafe publication path")
         if child_fd is not None:
-            _close_for_primary(child_fd, failure)
-        _close_for_primary(current_fd, failure)
-        raise failure from None
-    except Exception:
-        failure = PartitionPublicationError("unsafe publication path")
-        if child_fd is not None:
-            _close_for_primary(child_fd, failure)
+            _close_one(child_fd, failure)
         if not current_already_closed:
-            _close_for_primary(current_fd, failure)
+            _close_one(current_fd, failure)
+        raise
+    except OSError:
+        failure = PartitionPublicationError("unsafe publication path")
+        if child_fd is not None:
+            _close_one(child_fd, failure)
+        if not current_already_closed:
+            _close_one(current_fd, failure)
         raise failure from None
+    except Exception as error:
+        if child_fd is not None:
+            _close_one(child_fd, error)
+        if not current_already_closed:
+            _close_one(current_fd, error)
+        raise
 
 
 def _create_temp(parent_fd: int) -> tuple[str, int]:
@@ -666,25 +692,34 @@ def _create_temp(parent_fd: int) -> tuple[str, int]:
             if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
                 os.fchmod(descriptor, 0o600)
             if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
-                raise ValueError
+                raise PartitionWriteError("partition write failed")
             return name, descriptor
         except FileExistsError:
             continue
-        except Exception:
-            failure = PartitionWriteError("partition write failed")
+        except (OSError, PartitionWriteError) as error:
+            failure = (
+                error
+                if isinstance(error, PartitionWriteError)
+                else PartitionWriteError("partition write failed")
+            )
             if descriptor is not None:
                 _close_one(descriptor, failure)
                 _cleanup_temp(parent_fd, name, failure)
             raise failure from None
+        except Exception as error:
+            if descriptor is not None:
+                _close_one(descriptor, error)
+                _cleanup_temp(parent_fd, name, error)
+            raise
     raise PartitionWriteError("partition write failed")
 
 
 def _write_temp(descriptor: int, rows: tuple[CanonicalCandle, ...]) -> None:
     try:
-        with os.fdopen(os.dup(descriptor), "wb") as handle:
+        with borrow_parquet_stream(descriptor, "wb") as handle:
             write_candles_parquet(handle, rows, batch_size=MAX_PARQUET_BATCH_SIZE)
         os.fsync(descriptor)
-    except Exception:
+    except (OSError, *ARROW_DATA_ERRORS, CandleParquetConversionError):
         raise PartitionWriteError("partition write failed") from None
 
 
@@ -696,10 +731,13 @@ def _validate_fd(
     try:
         os.lseek(descriptor, 0, os.SEEK_SET)
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
-            raise ValueError
+    except OSError:
+        raise error_type("partition publication validation failed") from None
+    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+        raise error_type("partition publication validation failed")
+    try:
         with (
-            os.fdopen(os.dup(descriptor), "rb") as handle,
+            borrow_parquet_stream(descriptor, "rb") as handle,
             iter_candles_from_parquet(
                 handle, batch_size=MAX_PARQUET_BATCH_SIZE
             ) as reader,
@@ -711,27 +749,27 @@ def _validate_fd(
                         expected_index >= len(expected)
                         or candle != expected[expected_index]
                     ):
-                        raise ValueError
+                        raise error_type("partition publication validation failed")
                     expected_index += 1
             if expected_index != len(expected):
-                raise ValueError
+                raise error_type("partition publication validation failed")
         digest = _sha256_fd(descriptor)
         after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-        ):
-            raise ValueError
-        return digest, after.st_size
-    except Exception:
+    except (OSError, *_PARQUET_VALIDATION_ERRORS):
         raise error_type("partition publication validation failed") from None
+    if (before.st_dev, before.st_ino, before.st_size) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+    ):
+        raise error_type("partition publication validation failed")
+    return digest, after.st_size
 
 
 def _sha256_fd(descriptor: int) -> str:
     digest = hashlib.sha256()
     os.lseek(descriptor, 0, os.SEEK_SET)
-    with os.fdopen(os.dup(descriptor), "rb") as handle:
+    with borrow_parquet_stream(descriptor, "rb") as handle:
         while data := handle.read(_READ_BUFFER_SIZE):
             digest.update(data)
     return digest.hexdigest()
@@ -740,30 +778,37 @@ def _sha256_fd(descriptor: int) -> str:
 def _open_existing_final(parent_fd: int) -> int:
     descriptor: int | None = None
     retained = False
+    primary: Exception | None = None
     try:
         descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ValueError
+            raise PublicationConflictError("partition publication conflict")
         retained = True
         return descriptor
-    except Exception:
-        raise PublicationConflictError("partition publication conflict") from None
+    except OSError:
+        primary = PublicationConflictError("partition publication conflict")
+        raise primary from None
+    except Exception as error:
+        primary = error
+        raise
     finally:
         if descriptor is not None and not retained:
-            _close_one(descriptor)
+            _close_one(descriptor, primary)
 
 
 def _validate_existing_final(
     parent_fd: int, rows: tuple[CanonicalCandle, ...]
 ) -> tuple[str, int]:
     descriptor = _open_existing_final(parent_fd)
-    primary: PublicationConflictError | None = None
+    primary: Exception | None = None
     result: tuple[str, int] | None = None
+    closed = False
     try:
         result = _validate_fd(descriptor, rows, PublicationConflictError)
-    except PublicationConflictError as error:
+    except Exception as error:
         primary = error
-    closed = _close_one(descriptor, primary)
+    finally:
+        closed = _close_one(descriptor, primary)
     if primary is not None:
         raise primary
     if not closed or result is None:
@@ -776,6 +821,7 @@ def _validate_existing_final(
 
 def _final_matches_temp(parent_fd: int, temp_fd: int) -> bool:
     descriptor: int | None = None
+    primary: Exception | None = None
     try:
         descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
         temp = os.fstat(temp_fd)
@@ -784,28 +830,35 @@ def _final_matches_temp(parent_fd: int, temp_fd: int) -> bool:
             final.st_dev,
             final.st_ino,
         )
-        closed = _close_one(descriptor)
-        descriptor = None
+        descriptor, descriptor_to_close = None, descriptor
+        closed = _close_one(descriptor_to_close)
         return matches and closed
-    except Exception:
+    except OSError:
         return False
+    except Exception as error:
+        primary = error
+        raise
     finally:
         if descriptor is not None:
-            _close_one(descriptor)
+            _close_one(descriptor, primary)
 
 
 def _final_visibility(parent_fd: int) -> bool | None:
     descriptor: int | None = None
+    primary: Exception | None = None
     try:
         descriptor = os.open("bars.parquet", _FINAL_FLAGS, dir_fd=parent_fd)
         return stat.S_ISREG(os.fstat(descriptor).st_mode)
     except FileNotFoundError:
         return False
-    except Exception:
+    except OSError:
         return None
+    except Exception as error:
+        primary = error
+        raise
     finally:
         if descriptor is not None:
-            _close_one(descriptor)
+            _close_one(descriptor, primary)
 
 
 def _link_temp(parent_fd: int, temp_name: str) -> None:
@@ -823,7 +876,7 @@ def _close_one(descriptor: int, primary: Exception | None = None) -> bool:
     try:
         os.close(descriptor)
         return True
-    except Exception:
+    except OSError:
         if (
             primary is not None
             and "publication descriptor cleanup failed"
@@ -831,15 +884,14 @@ def _close_one(descriptor: int, primary: Exception | None = None) -> bool:
         ):
             primary.add_note("publication descriptor cleanup failed")
         return False
-
-
-def _close_for_primary(descriptor: int, primary: Exception) -> bool:
-    closed = _close_one(descriptor, primary)
-    if not closed and "publication descriptor cleanup failed" not in getattr(
-        primary, "__notes__", ()
-    ):
-        primary.add_note("publication descriptor cleanup failed")
-    return closed
+    except Exception:
+        if primary is None:
+            raise
+        if "publication descriptor cleanup failed" not in getattr(
+            primary, "__notes__", ()
+        ):
+            primary.add_note("publication descriptor cleanup failed")
+        return False
 
 
 def _close_all(*descriptors: int | Exception | None) -> bool:
@@ -850,26 +902,40 @@ def _close_all(*descriptors: int | Exception | None) -> bool:
     )
     close_descriptors = descriptors[:-1] if primary is not None else descriptors
     success = True
+    cleanup_error: Exception | None = None
     for descriptor in close_descriptors:
-        if isinstance(descriptor, int):
+        if not isinstance(descriptor, int):
+            continue
+        try:
             closed = _close_one(descriptor, primary)
-            if (
-                not closed
-                and primary is not None
-                and (
-                    "publication descriptor cleanup failed"
-                    not in getattr(primary, "__notes__", ())
-                )
+        except Exception as error:
+            closed = False
+            if primary is None and cleanup_error is None:
+                cleanup_error = error
+            elif primary is not None and (
+                "publication descriptor cleanup failed"
+                not in getattr(primary, "__notes__", ())
             ):
                 primary.add_note("publication descriptor cleanup failed")
-            success = closed and success
+        if (
+            not closed
+            and primary is not None
+            and (
+                "publication descriptor cleanup failed"
+                not in getattr(primary, "__notes__", ())
+            )
+        ):
+            primary.add_note("publication descriptor cleanup failed")
+        success = closed and success
+    if cleanup_error is not None:
+        raise cleanup_error
     return success
 
 
 def _fsync_directory(descriptor: int) -> None:
     try:
         os.fsync(descriptor)
-    except Exception:
+    except OSError:
         raise PublicationOutcomeUnknown("publication outcome unknown") from None
 
 
@@ -877,7 +943,7 @@ def _remove_temp(parent_fd: int, name: str) -> None:
     try:
         os.unlink(name, dir_fd=parent_fd)
         _fsync_directory(parent_fd)
-    except Exception:
+    except OSError:
         raise PublicationOutcomeUnknown("publication outcome unknown") from None
 
 

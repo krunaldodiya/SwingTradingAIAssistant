@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
 import stat
@@ -795,3 +796,269 @@ def test_acquisition_attempts_root_and_lock_cleanup_when_both_close_fail(
     assert result.outcome is LeaseOutcome.FAILED
     assert result.failure_code is LeaseFailureCode.STORAGE_UNSAFE
     assert len(set(closed)) >= 2
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (AssertionError, KeyError, RuntimeError, TypeError, ValueError, Exception),
+)
+def test_unknown_admission_fault_is_not_reported_as_unsafe_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    error = error_type("private/path/token")
+
+    def fail_identity(*_args: object) -> bool:
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lease_module, "_valid_lock_identity", fail_identity)
+        with pytest.raises(error_type) as caught:
+            StorageRootLease.try_acquire(tmp_path)
+        assert caught.value is error
+
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_unknown_live_authority_fault_propagates_after_releasing_the_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    error = RuntimeError("private/path/token")
+
+    def fail_identity(*_args: object) -> bool:
+        raise error
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(lease_module, "_valid_root_identity", fail_identity)
+            with (
+                pytest.raises(RuntimeError) as caught,
+                acquired.lease.root_operation(tmp_path),
+            ):
+                pytest.fail("a failed authority check must not admit an operation")
+            assert caught.value is error
+    finally:
+        acquired.lease.close()
+
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_unknown_post_acquisition_fault_releases_the_new_private_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "private-root"
+    root.mkdir(mode=0o700)
+    error = RuntimeError("private/path/token")
+
+    def fail_identity(*_args: object) -> None:
+        raise error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lease_module, "_assert_private_locked_root", fail_identity)
+        with pytest.raises(RuntimeError) as caught:
+            StorageRootLease.try_acquire_private_empty(root)
+        assert caught.value is error
+
+    reacquired = StorageRootLease.try_acquire_existing(root)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+@pytest.mark.parametrize("error_type", (KeyError, KeyboardInterrupt))
+def test_lease_exit_preserves_primary_after_real_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    lease = acquired.lease
+    failure = error_type("primary")
+    real_close = lease.close
+
+    def close_then_fail() -> None:
+        real_close()
+        raise RuntimeError("secondary")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(lease, "close", close_then_fail)
+        with pytest.raises(error_type) as raised, lease:
+            raise failure
+        assert raised.value is failure
+    reacquired = StorageRootLease.try_acquire(tmp_path)
+    assert reacquired.lease is not None
+    reacquired.lease.close()
+
+
+def test_operation_exit_preserves_primary_after_real_descriptor_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    failure = KeyError("primary")
+    real_close = lease_module._close_descriptor
+    with acquired.lease:
+        operation = acquired.lease.root_operation(tmp_path)
+        with monkeypatch.context() as scoped:
+            with pytest.raises(KeyError) as raised, operation:
+                descriptor = operation.descriptor
+
+                def close_then_fail(value: int | None) -> bool:
+                    result = real_close(value)
+                    if value == descriptor:
+                        raise RuntimeError("secondary")
+                    return result
+
+                scoped.setattr(lease_module, "_close_descriptor", close_then_fail)
+                raise failure
+            assert raised.value is failure
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("method", ("try_acquire", "try_admit_read_existing"))
+def test_admission_preserves_primary_and_closes_both_owned_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    seeded = lease_module.StorageRootLease.try_acquire(tmp_path)
+    assert seeded.lease is not None
+    seeded.lease.close()
+    failure = KeyError("primary")
+    armed = False
+    owned: list[int] = []
+    real_open = lease_module.os.open
+    real_close = lease_module._close_descriptor
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == lease_module._LOCK_NAME:
+            assert dir_fd is not None
+            owned.extend((descriptor, dir_fd))
+        return descriptor
+
+    def fail_identity(*_args: object) -> bool:
+        nonlocal armed
+        armed = True
+        raise failure
+
+    def close_then_fail(descriptor: int | None) -> bool:
+        result = real_close(descriptor)
+        if armed and descriptor is not None:
+            raise RuntimeError("secondary")
+        return result
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(lease_module.os, "open", track_open)
+        scoped.setattr(lease_module, "_valid_lock_identity", fail_identity)
+        scoped.setattr(lease_module, "_close_descriptor", close_then_fail)
+        with pytest.raises(KeyError) as raised:
+            getattr(lease_module.StorageRootLease, method)(tmp_path)
+        assert raised.value is failure
+    assert owned
+    for descriptor in owned:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("error_type", (OSError, AssertionError))
+def test_live_authority_rejects_standalone_path_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    target: int | None = None
+    failure = error_type("private cleanup sentinel")
+    real_open = lease_module._open_directory_without_symlink_components
+    real_close = os.close
+
+    def capture_open(root: Path) -> int:
+        nonlocal target
+        target = real_open(root)
+        return target
+
+    def fail_close(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor == target:
+            raise failure
+
+    expected = (
+        lease_module.StorageRootLeaseError if error_type is OSError else error_type
+    )
+    with acquired.lease, acquired.lease.read_operation(tmp_path) as operation:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                lease_module, "_open_directory_without_symlink_components", capture_open
+            )
+            scoped.setattr(os, "close", fail_close)
+            try:
+                raise KeyError("unrelated caller failure")
+            except KeyError:
+                with pytest.raises(expected) as caught:
+                    operation.ensure_live()
+            if error_type is not OSError:
+                assert caught.value is failure
+        assert target is not None
+        with pytest.raises(OSError):
+            os.fstat(target)
+
+
+def test_component_traversal_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = AssertionError("post-close traversal fault")
+    target: int | None = None
+    replacement: int | None = None
+    child_descriptors: list[int] = []
+    real_open = lease_module.os.open
+    real_close = lease_module.os.close
+
+    def track_open(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal target
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == os.sep:
+            target = descriptor
+        else:
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(lease_module.os, "open", track_open)
+            scoped.setattr(lease_module.os, "close", release_then_fail)
+            with pytest.raises(AssertionError) as raised:
+                lease_module._open_directory_without_symlink_components(tmp_path)
+            assert raised.value is primary
+        assert replacement is not None
+        os.fstat(replacement)
+        assert child_descriptors
+        for descriptor in child_descriptors:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)

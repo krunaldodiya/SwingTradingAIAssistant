@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
 import swing_trading_ai_assistant.market_data.bounded_nifty50_workflow as workflow_module
+import swing_trading_ai_assistant.market_data.universe_snapshot as universe_module
+from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -75,6 +78,80 @@ def _snapshot() -> Nifty50UniverseSnapshotV1:
         observed,
         tuple(members),
     )
+
+
+@pytest.mark.parametrize(
+    ("date_range", "expected_status", "expected_code", "expected_exit"),
+    (
+        (
+            ("2026-07-01", "2026-07-31"),
+            PublicCommandStatusV1.INSUFFICIENT_EVIDENCE,
+            PublicFailureCodeV1.SCHEDULE_EVIDENCE_UNAVAILABLE,
+            3,
+        ),
+        (
+            ("2026-08-01", "2026-08-01"),
+            PublicCommandStatusV1.UNAVAILABLE,
+            PublicFailureCodeV1.INGESTION_UNAVAILABLE,
+            4,
+        ),
+    ),
+)
+def test_omitted_schedule_preserves_closed_and_current_month_terminals(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+    date_range: tuple[str, str],
+    expected_status: PublicCommandStatusV1,
+    expected_code: PublicFailureCodeV1,
+    expected_exit: int,
+) -> None:
+    def forbidden_provider_effect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("missing schedule must stop before provider effects")
+
+    monkeypatch.setattr(cli.UrllibHttpTransport, "get", forbidden_provider_effect)
+    monkeypatch.setattr(
+        cli._LazyEnvironmentAccessTokenProvider,
+        "get_access_token",
+        forbidden_provider_effect,
+    )
+    monkeypatch.setattr(
+        cli._SystemClock, "now", lambda _self: datetime(2026, 8, 1, tzinfo=UTC)
+    )
+    universe_file = tmp_path / "universe.json"
+    universe_file.write_bytes(_snapshot().canonical_json_bytes())
+    universe_file.chmod(0o444)
+
+    assert (
+        cli.main(
+            [
+                "download",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                date_range[0],
+                "--to",
+                date_range[1],
+                "--storage-root",
+                str(tmp_path.resolve() / "storage"),
+                "--universe-file",
+                str(universe_file.resolve()),
+                "--output",
+                "json",
+            ]
+        )
+        == expected_exit
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["status"] == expected_status
+    assert report["failure"]["code"] == expected_code
+    assert report["provider_attempt_count"] == 0
+    assert report["payload"] is None
+    assert captured.err == ""
 
 
 def _terminal_report() -> PublicCommandReportV1[None]:
@@ -409,6 +486,51 @@ def test_single_symbol_adapter_maps_unexpected_worker_failure(tmp_path: Path) ->
     assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
 
 
+@pytest.mark.parametrize("single", [False, True])
+@pytest.mark.parametrize("boundary", ["retained_decoder", "factory"])
+def test_download_execution_value_error_is_not_invalid_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    single: bool,
+    boundary: str,
+) -> None:
+    tmp_path.chmod(0o700)
+    request = replace(_request(tmp_path), symbols=("RELIANCE",))
+    worker = _SymbolService()
+    BoundedNifty50DownloadServiceV1(
+        _Source(_snapshot()), lambda _policy: worker, clock=_Clock()
+    ).download(request)
+    assert worker.symbols == ["RELIANCE"]
+    worker.symbols.clear()
+    faults = 0
+
+    def fail(*_args: object, **_kwargs: object):
+        nonlocal faults
+        faults += 1
+        raise ValueError("private-download-execution-fault")
+
+    def factory(_policy: object):
+        if boundary == "factory":
+            fail()
+        pytest.fail("download reader must not follow a retained decoder fault")
+
+    if boundary == "retained_decoder":
+        monkeypatch.setattr(universe_module, "_parse_member", fail)
+    service = BoundedNifty50DownloadServiceV1(None, factory, clock=_Clock())
+    if single:
+        report = service.download_single(request)
+        assert report.status is PublicCommandStatusV1.FAILED
+        assert report.failure is not None
+        assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+        assert report.payload is None
+    else:
+        report = service.download(request)
+        assert report.outcome is Nifty50BatchOutcomeV1.FAILED
+        assert report.results == ()
+    assert faults == 1
+    assert worker.symbols == []
+
+
 def test_retained_universe_supports_zero_source_rerun(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     first_source = _Source(_snapshot())
@@ -663,6 +785,61 @@ def test_aggregate_status_precedence_and_invalid_renderer_fail_closed() -> None:
     assert decoded["status"] == "FAILED"
 
 
+@pytest.mark.parametrize(
+    ("error_type", "cleanup_fault"),
+    (
+        (AssertionError, False),
+        (KeyError, False),
+        (RuntimeError, False),
+        (Exception, False),
+        (TypeError, False),
+        (ValueError, False),
+        (RuntimeError, True),
+    ),
+)
+def test_canonical_file_source_preserves_decoder_fault_and_releases_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+    cleanup_fault: bool,
+) -> None:
+    path = tmp_path / "universe.json"
+    path.write_bytes(_snapshot().canonical_json_bytes())
+    path.chmod(0o400)
+    source = CanonicalFileNifty50UniverseSourceV1(path.resolve())
+    primary = error_type("decoder implementation fault")
+    cleanup = TypeError("secondary close fault")
+    owned: set[int] = set()
+    real_open, real_close = workflow_module.os.open, workflow_module.os.close
+
+    def open_source(path: Path, flags: int) -> int:
+        descriptor = real_open(path, flags)
+        owned.add(descriptor)
+        return descriptor
+
+    def close_source(descriptor: int) -> None:
+        owned.remove(descriptor)
+        real_close(descriptor)
+        if cleanup_fault:
+            raise cleanup
+
+    def fail_member(_value: object) -> object:
+        raise primary
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(workflow_module.os, "open", open_source)
+            scoped.setattr(workflow_module.os, "close", close_source)
+            scoped.setattr(universe_module, "_parse_member", fail_member)
+            with pytest.raises(error_type) as raised:
+                source.load()
+            assert raised.value is primary
+        assert not owned
+    finally:
+        for descriptor in owned:
+            real_close(descriptor)
+
+
 def test_source_short_read_and_identity_change_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -676,10 +853,21 @@ def test_source_short_read_and_identity_change_fail_closed(
         source.load()
     monkeypatch.undo()
 
-    identities = iter(((1,), (1,), (2,)))
-    monkeypatch.setattr(
-        workflow_module, "_file_identity", lambda _value: next(identities)
-    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(b"{}")
+    replacement.chmod(0o400)
+    real_read = workflow_module.os.read
+    replaced = False
+
+    def replace_named_entry(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        raw = real_read(descriptor, size)
+        if not replaced:
+            replacement.replace(path)
+            replaced = True
+        return raw
+
+    monkeypatch.setattr(workflow_module.os, "read", replace_named_entry)
     with pytest.raises(UniverseSnapshotCorruptError):
         source.load()
 

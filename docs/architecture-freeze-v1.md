@@ -62,10 +62,13 @@ Sprint 19 Price Action delivered through PR #153. Closed Issue #154 and
 accepted Plan 33 own only the bounded source decision, benchmark, and contract
 for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
 merged that planning record without changing runtime. Issue #155 delivered the
-exact reviewed Plan 30 runtime prerequisite. Open Project **In Progress** Issue
-#156 then owns the separately bounded Plan 33 implementation.
-Owner-prioritized maintenance Issue #145 follows #156 before another product
-module starts.
+exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
+separately bounded Plan 33 implementation. The owner requires its security
+review/audit follow-up after #145 and before #172 implementation; its closed
+tracker state does not establish that security acceptance.
+Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
+policy below. It changes execution-failure handling, not the product-module
+sequence or the separately bounded scope of #156.
 [Plan 34](plans/34-swing-research-feature-map.md)
 freezes the necessary-only feature taxonomy: no later Price Action, Volume,
 Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
@@ -553,6 +556,89 @@ successful fact.
 
 A module advances only after its requirements and validation are complete.
 
-Prior repositories are non-authoritative references. Their concepts may be
-studied, but logic must be independently specified, tested, and validated for
-this project's equity-only scope before adoption.
+Previously supplied external trading repositories are withdrawn from this
+project's reference scope. Do not consult, copy, adapt, or derive trading
+concepts or test oracles from them. Official provider/dependency documentation,
+approved books, and verified project code remain admissible.
+
+## Internal errors and operator diagnostics
+
+[Issue #145](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/145)
+freezes the maintenance contract for shared market-data execution failures.
+An implementation defect is not evidence that a market input is malformed,
+unsupported, missing, corrupt, conflicting, invalid, or historically unavailable.
+
+- Shared schedule, instrument-snapshot, stored-coverage, partition-read,
+  daily-query, and retained-source internals propagate unexpected exceptions
+  after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
+  evidence rejection. Known validation and decoder errors are converted only at
+  their narrow input/data boundary.
+  Interpreter-limit failures while decoding actual retained JSON integers remain
+  typed corruption; an unrelated decoder `ValueError` still propagates.
+  Schedule consumers, partition recovery, range ingestion, and current-cohort
+  dependencies follow the same distinction: an execution fault stops the invocation
+  without invalidating or quarantining retained evidence. Cleanup preserves
+  an active primary failure when cleanup also fails; an unexpected standalone
+  cleanup failure propagates.
+  Descriptor ownership is relinquished before a standalone close: a close failure
+  may follow release and reuse of that descriptor number, so cleanup must not retry
+  it. Other owned resources are still closed, and existing quarantine and journal
+  safeguards preserve uncertain objects.
+- Expected schedule, snapshot, and cohort-selection validation signals retain
+  `ValueError` compatibility through explicit subclasses. Expected lease-authority failures
+  use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
+  uses `PartitionReadFailureV1` with the existing finite failure categories;
+  an unrelated exception's attributes do not establish an evidence finding.
+  Canonical universe-file loading, corporate-action availability, and prospective
+  readiness catch only their owned validation or documented I/O failures. A lower
+  decoder or catalog defect does not produce a `CORRUPT` evidence state or reason.
+- Recognized malformed/unsupported Arrow data signals remain data failures.
+  Native resource exhaustion and cancellation do not assert corrupt evidence.
+  Query timeout/resource outcomes remain distinct; unexpected SQL implementation
+  faults propagate, and catalog transactions roll back before propagation.
+- Existing V1 public coverage/query adapters retain the closed
+  `FAILED / UNCLASSIFIED_FAILURE` execution-failure envelope, without partial
+  rows or evidence payloads. That envelope is not a market-evidence state and
+  retains the delivered CLI exit code `5`.
+  Point-in-time read wrappers do not call a decoder or factory defect missing
+  catalog evidence or invalid membership. Bounded wrappers retain their generic
+  `FAILED` result with no member results when setup fails unexpectedly.
+  Clock and cancellation callback execution faults are not cancellation evidence.
+  Current same-pass completed-grid consumers stop a generic query execution failure before
+  completion-time or raw-evidence reduction; it is not missing, invalid,
+  conflicted, or future-known raw evidence. Supported-data failures retain their
+  existing precedence. The optional partial-capability boundary remains
+  explicitly nonfatal under [Plan 27](plans/27-current-same-pass-market-regime-contract.md#optional-partial_current_session):
+  query and projection faults produce `UNAVAILABLE` partial snapshots with no
+  rows, without invalidating independently valid completed facts.
+  The separate prerequisite-manifest service and CLI keep
+  their sanitized no-manifest failure boundary: exit code `3`, empty stdout, and
+  the fixed unavailable diagnostic.
+- Before a completed public response, the `market-data` CLI maps an unexpected
+  exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
+  stderr. Parser rejection is exactly `request_invalid\n`; existing bounded
+  command-admission diagnostics remain distinct. Recognized probe failures use
+  exactly `probe_failed\n`, not dynamic exception-class names.
+- A completed valid V1 terminal report retains its existing output and exit
+  behavior. Request admission, execution, exit-code validation, and output
+  publication are ordered so an execution defect is not called an invalid
+  request and no partial success is printed.
+
+The closed public failure code or fixed CLI diagnostic is the operator signal.
+No logger, telemetry backend, or persistent diagnostic file is added. Never
+print or log exception messages, representations, dynamic class names, chained
+exceptions, stacks, private paths, credentials, source payloads, or raw provider
+responses. Applications calling shared internals directly must supply this
+bounded operator boundary rather than exposing propagated exceptions.
+
+On an internal error, stop that invocation without relabeling or deleting its
+evidence. Preserve private inputs; report only the command name, software version,
+and fixed code. A separate authorized debugging session may investigate the
+implementation. There is no automatic provider fallback or evidence acquisition.
+
+Delivered Sprint 10–15 result schemas, evidence enums, supported-input
+precedence, persisted formats, and historical exact-read identities remain
+unchanged. Source-at-rest manifests are refreshed from formatted code, including
+transitively bound manifests; old revisions retain their original writer and
+evidence identities. Current boundary regressions, exact independent review,
+repository gates, and installed-artifact proof are recorded with Issue #145.

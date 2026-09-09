@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import swing_trading_ai_assistant.market_data.nifty50_read_workflow as read_module
+import swing_trading_ai_assistant.market_data.universe_snapshot as universe_module
 from swing_trading_ai_assistant.market_data.bounded_nifty50_workflow import (
     Nifty50BatchOutcomeV1,
 )
@@ -106,6 +107,72 @@ def _terminal(command: str):
         0,
         None,
     )
+
+
+@pytest.mark.parametrize("command", ["coverage", "query", "batch"])
+@pytest.mark.parametrize("boundary", ["retained_decoder", "factory"])
+@pytest.mark.parametrize(
+    "fault_type",
+    [AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError],
+)
+def test_read_workflow_unknown_fault_never_asserts_missing_or_invalid_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    boundary: str,
+    fault_type: type[Exception],
+) -> None:
+    _seed(tmp_path)
+    retained = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    failure = fault_type("private-read-workflow-fault")
+    faults = 0
+
+    def fail(*_args: object, **_kwargs: object):
+        nonlocal faults
+        faults += 1
+        raise failure
+
+    def factory(_policy: Nifty50AdmissionPolicyV1):
+        if boundary == "factory":
+            fail()
+        pytest.fail("reader construction must not follow a retained decoder fault")
+
+    if boundary == "retained_decoder":
+        monkeypatch.setattr(universe_module, "_parse_member", fail)
+    coverage = CoverageRequestV1(
+        "NSE_EQ", "SBIN", date(2026, 8, 1), date(2026, 8, 11), tmp_path
+    )
+    if command == "batch":
+        report = BoundedPointInTimeNifty50ReadServiceV1(
+            factory, factory, clock=_Clock()
+        ).execute(BoundedNifty50ReadRequestV1(("SBIN",), coverage))
+        assert report.outcome is Nifty50BatchOutcomeV1.FAILED
+        assert report.results == ()
+    else:
+        report = (
+            PointInTimeNifty50CoverageServiceV1(factory, clock=_Clock()).coverage(
+                coverage
+            )
+            if command == "coverage"
+            else PointInTimeNifty50QueryServiceV1(factory, clock=_Clock()).query(
+                QueryRequestV1(
+                    "NSE_EQ",
+                    "SBIN",
+                    date(2026, 8, 1),
+                    date(2026, 8, 11),
+                    "1m",
+                    ("ts", "close"),
+                    10,
+                    tmp_path,
+                )
+            )
+        )
+        assert report.status is PublicCommandStatusV1.FAILED
+        assert report.failure is not None
+        assert report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+        assert report.payload is None
+    assert faults == 1
+    assert {path: path.read_bytes() for path in retained} == retained
 
 
 def test_ampersand_symbol_is_admitted_by_read_request_and_result(
@@ -619,13 +686,13 @@ def test_single_read_wrappers_reject_invalid_clock_stale_range_and_factory_failu
         PointInTimeNifty50CoverageServiceV1(broken_coverage, clock=_Clock())
         .coverage(valid_coverage)
         .status
-        is PublicCommandStatusV1.UNAVAILABLE
+        is PublicCommandStatusV1.FAILED
     )
     assert (
         PointInTimeNifty50QueryServiceV1(broken_query, clock=_Clock())
         .query(valid_query)
         .status
-        is PublicCommandStatusV1.UNAVAILABLE
+        is PublicCommandStatusV1.FAILED
     )
 
 

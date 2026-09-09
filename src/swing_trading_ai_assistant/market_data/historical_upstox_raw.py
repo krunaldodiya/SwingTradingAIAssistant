@@ -48,6 +48,7 @@ from .public_coverage import (
     CoverageEvaluationFailureV1,
     CoverageRequestV1,
     ExistingCoverageAdmissionV1,
+    PartitionReadFailureV1,
     StoredCoverageEvaluatorV1,
     VerifiedPartitionV1,
     read_partition_under_lease,
@@ -58,7 +59,7 @@ from .public_query import (
     QueryTimeoutV1,
 )
 from .schedule_evidence import ScheduleEvidenceStore
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 
 COMPLETION_CONTRACT_VERSION: Final = (
     "upstox-raw-fixed-cohort-historical-ohlcv-completion@v1"
@@ -208,13 +209,7 @@ def complete_upstox_raw_historical_ohlcv_v1(  # noqa: C901
 def _decode_request(raw: object) -> dict[str, Any] | None:  # noqa: C901
     try:
         value = _closed_json(raw, _LIMITS["max_source_policy_bytes"])
-    except (
-        RecursionError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ):
+    except _MalformedSourceJson:
         return None
     if frozenset(value) != _REQUEST_FIELDS or value.get("limits") != _LIMITS:
         return None
@@ -379,7 +374,7 @@ def _project_retained_source(  # noqa: C901
             ]
             if schedule_sessions != expected or schedule_as_of > observed:
                 assessment.record(_Conflict)
-        except (TypeError, UnicodeDecodeError, ValueError):
+        except _MalformedSourceJson:
             assessment.record(_Invalid)
             schedule = None
             schedule_as_of = None
@@ -436,7 +431,7 @@ def _project_retained_source(  # noqa: C901
             ):
                 assessment.record(_Conflict)
                 continue
-            except (CatalogSchemaError, TypeError, UnicodeDecodeError, ValueError):
+            except (CatalogSchemaError, _MalformedSourceJson):
                 assessment.record(_Invalid)
                 continue
             mapping_receipts.append(mapping_receipt)
@@ -580,7 +575,7 @@ def _project_retained_source(  # noqa: C901
                 SnapshotInstrumentAmbiguousError,
             ):
                 assessment.record(_Conflict)
-            except (CatalogSchemaError, TypeError, UnicodeDecodeError, ValueError):
+            except (CatalogSchemaError, _MalformedSourceJson):
                 assessment.record(_Invalid)
             except RuntimeError as error:
                 assessment.record_exception(error)
@@ -878,7 +873,7 @@ def _ensure_source_unchanged(
 ) -> None:
     try:
         admission.ensure_live(root)
-    except RuntimeError:
+    except StorageRootLeaseError:
         raise _Conflict from None
     if StorageRootLease.admit_existing_private_identity(root) != admitted_identity:
         raise _Conflict
@@ -1067,33 +1062,53 @@ def _coordinate(value: object) -> tuple[str, str, str] | None:
 
 def _closed_json(raw: object, maximum: int) -> dict[str, Any]:
     if type(raw) is not bytes or not raw or len(raw) > maximum:
-        raise ValueError
+        raise _MalformedSourceJson
 
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         if len({key for key, _ in items}) != len(items):
-            raise ValueError
+            raise _MalformedSourceJson
         return dict(items)
 
-    value = json.loads(
-        raw.decode("utf-8"),
-        object_pairs_hook=pairs,
-        parse_float=_reject_float,
-        parse_constant=_reject_constant,
-    )
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=pairs,
+            parse_float=_reject_float,
+            parse_constant=_reject_constant,
+            parse_int=_parse_closed_json_int,
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _MalformedSourceJson,
+        RecursionError,
+    ):
+        raise _MalformedSourceJson from None
     if type(value) is not dict:
-        raise ValueError
+        raise _MalformedSourceJson
     object_value = cast(dict[str, Any], value)
-    if _depth(object_value) > 64 or _canonical(object_value) != raw:
-        raise ValueError
+    try:
+        depth = _depth(object_value)
+    except RecursionError:
+        raise _MalformedSourceJson from None
+    if depth > 64 or _canonical(object_value) != raw:
+        raise _MalformedSourceJson
     return object_value
 
 
 def _reject_float(_: str) -> object:
-    raise ValueError
+    raise _MalformedSourceJson
 
 
 def _reject_constant(_: str) -> object:
-    raise ValueError
+    raise _MalformedSourceJson
+
+
+def _parse_closed_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _MalformedSourceJson from None
 
 
 def _depth(value: object) -> int:
@@ -1264,6 +1279,10 @@ class _Unsupported(Exception):
     pass
 
 
+class _MalformedSourceJson(ValueError):
+    """An explicitly rejected closed source/request JSON representation."""
+
+
 def _source_finding(error: Exception) -> type[Exception]:
     if isinstance(
         error,
@@ -1278,16 +1297,20 @@ def _source_finding(error: Exception) -> type[Exception]:
         error, (InstrumentSnapshotCorruptError, SnapshotInstrumentAmbiguousError)
     ):
         return _Conflict
-    if getattr(error, "category", None) in {
-        FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED,
-        FailureCategory.PATH_INVALID_OR_MISMATCHED,
-    }:
+    if isinstance(error, PartitionReadFailureV1):
+        if error.category in {
+            FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED,
+            FailureCategory.PATH_INVALID_OR_MISMATCHED,
+        }:
+            return _Conflict
+        if error.category is FailureCategory.FILE_MISSING:
+            return _Missing
+        if error.category is FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE:
+            return _Invalid
+        raise error
+    if isinstance(error, (CatalogConflictError, OSError, StorageRootLeaseError)):
         return _Conflict
-    if isinstance(error, (CatalogConflictError, OSError)):
-        return _Conflict
-    if isinstance(
-        error, (CatalogSchemaError, TypeError, ValueError, UnicodeDecodeError)
-    ):
+    if isinstance(error, (CatalogSchemaError, _MalformedSourceJson)):
         return _Invalid
     if isinstance(error, (CatalogStorageError, InstrumentSnapshotUnavailableError)):
         return _Missing
