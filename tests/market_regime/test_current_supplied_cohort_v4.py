@@ -262,7 +262,6 @@ def _with_partial_request(request: Any) -> Any:
                 )
                 for member in members
             ),
-            apply_adjustment=request.apply_adjustment,
         ),
     )
     values["request_identity_sha256"] = raw_daily._hash(values)
@@ -705,7 +704,6 @@ def test_v4_preserves_supplied_member_order_but_rejects_identity_bridge_drift(
             decision_cutoff=request.decision_cutoff,
             schedule_identity_sha256=request.plan22_schedule_identity_sha256,
             members=instruments,
-            apply_adjustment=request.apply_adjustment,
         )
         values["request_identity_sha256"] = raw_daily._hash(values)
         reordered = raw_daily.CurrentSamePassMarketRegimeRequestV4(**values)

@@ -52,11 +52,14 @@ Upstox raw/current behavior remains separate. Neither the provider decision nor
 the 100-stock input-data check closes
 [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
 The later [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
-selects unchanged provider OHLCV by default, assuming for now that its adjustment
-is correct, with explicit one-time factor application only when requested.
-Volume is always source-reported and unchanged. This supersedes waiting for
-provider clarification before implementing the new mode; it neither relabels
-earlier failed extra-factor evidence nor waives independent review or release.
+selects unchanged provider OHLCV, assuming its adjustment is correct for the
+declared current workflow. After the provider reported a correction and warned
+against multiplying OHLC by its factor, the owner
+[retired the optional transformation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210).
+Adjustment fields remain separate; volume is source-reported and unchanged.
+The provider's report is not independent post-deployment verification or proof
+of uniformly adjusted historical OHLC. Earlier evidence, strict predecessor
+readers and independent review/release requirements remain intact.
 
 ## Delivery priority overlay
 

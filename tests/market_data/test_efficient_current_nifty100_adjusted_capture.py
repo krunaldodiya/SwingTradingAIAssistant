@@ -244,7 +244,6 @@ def _retain_schedule(root: Path) -> ExpectedSessionSchedule:
 def _request(
     members: tuple[BharatStockInstrument, ...],
     parent: str | None = None,
-    apply_adjustment: bool = False,
 ) -> capture.CaptureRequestV2:
     schedule = _schedule()
     return capture.CaptureRequestV2(
@@ -257,7 +256,6 @@ def _request(
         schedule_identity_sha256=capture.schedule_identity_v2(schedule),
         selection_identity_sha256=capture.selection_identity_v2(members),
         parent_revision_sha256=parent,
-        apply_adjustment=apply_adjustment,
     )
 
 
@@ -536,13 +534,12 @@ def test_official_fetcher_rejects_nonexact_sources_before_transport(url, monkeyp
         OfficialSourceFetcherV2().get(url)
 
 
-def test_selection_and_capture_reuse_are_mode_specific(
+def test_selection_and_capture_reuse_bind_one_current_request(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
     members = _members()
-    source_request = _request(members)
-    adjusted_request = _request(members, apply_adjustment=True)
+    request = _request(members)
     selection_root = tmp_path / "selection"
     selection_root.mkdir(mode=0o700)
     capture_root = tmp_path / "capture"
@@ -554,7 +551,7 @@ def test_selection_and_capture_reuse_are_mode_specific(
     assert (
         run_capture_cli(
             _arguments(
-                _write_request(tmp_path / "source", source_request),
+                _write_request(tmp_path / "source", request),
                 selection_root,
                 capture_root,
                 schedule_root,
@@ -564,27 +561,12 @@ def test_selection_and_capture_reuse_are_mode_specific(
         )
         == 0
     )
-    capsys.readouterr()
-    adjusted_client = _CliClient()
-    assert (
-        run_capture_cli(
-            _arguments(
-                _write_request(tmp_path / "adjusted", adjusted_request),
-                selection_root,
-                capture_root,
-                schedule_root,
-            ),
-            _fetcher=_CliFetcher(),
-            _client=adjusted_client,
-        )
-        == 0
-    )
-    adjusted = json.loads(capsys.readouterr().out)
+    captured = json.loads(capsys.readouterr().out)
     warm_client = _CliClient()
     assert (
         run_capture_cli(
             _arguments(
-                _write_request(tmp_path / "adjusted-warm", adjusted_request),
+                _write_request(tmp_path / "warm", request),
                 selection_root,
                 capture_root,
                 schedule_root,
@@ -595,15 +577,9 @@ def test_selection_and_capture_reuse_are_mode_specific(
         == 0
     )
 
-    assert (
-        source_request.request_identity_sha256
-        != adjusted_request.request_identity_sha256
-    )
     assert source_client.calls == [member.isin for member in members]
-    assert adjusted_client.calls == [member.isin for member in members]
     assert warm_client.calls == []
     revision = capture.read_bharatstock_capture_revision_v2(
-        capture_root, adjusted["revision_identity_sha256"]
+        capture_root, captured["revision_identity_sha256"]
     )
-    assert revision.request.apply_adjustment is True
-    assert revision.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    assert revision.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"

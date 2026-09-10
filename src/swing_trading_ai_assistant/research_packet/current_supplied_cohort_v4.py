@@ -24,9 +24,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 from weakref import WeakKeyDictionary
 
-from swing_trading_ai_assistant.market_data.bharatstock import (
-    price_basis_for_adjustment,
-)
+from swing_trading_ai_assistant.market_data.bharatstock import PRICE_BASIS
 from swing_trading_ai_assistant.market_data.current_event_notice import (
     _ARCHIVE_PROTOCOL_VERSION as _EVENT_ARCHIVE_PROTOCOL,
 )
@@ -527,7 +525,6 @@ _PACKET_SCHEMA_DECLARATIONS_V4: Final = {
             "plan21_cohort_identity_sha256:Sha256",
             "canonical_cohort_identity_sha256:Sha256",
             "market_context_identity_sha256:Sha256",
-            "apply_adjustment:bool",
             "request_identity_sha256:Sha256",
         ],
         "CurrentResearchPacketComponentLedgerRowV4": [
@@ -553,7 +550,7 @@ _PACKET_SCHEMA_DECLARATIONS_V4: Final = {
             "source_name:SafeText[1..128] or None",
             "source_url:SafeText[1..2048] or None",
             "source_release:SafeRevision or None",
-            'price_basis:Literal["RAW","BHARATSTOCK_SOURCE_REPORTED_OHLC","BHARATSTOCK_FACTOR_APPLIED_OHLC"] or None',
+            'price_basis:Literal["RAW","BHARATSTOCK_SOURCE_REPORTED_OHLC"] or None',
             "publisher_published_at:UtcInstant or None",
             "known_at:UtcInstant or None",
             "licence_policy_identity:SafeRevision or None",
@@ -790,7 +787,6 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
     plan21_cohort_identity_sha256: str
     canonical_cohort_identity_sha256: str
     market_context_identity_sha256: str
-    apply_adjustment: bool
     request_identity_sha256: str
 
     def __init__(
@@ -800,7 +796,6 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
         cohort_selected_at: datetime,
         members: tuple[object, ...],
         market_context_identity_sha256: str,
-        apply_adjustment: bool,
     ) -> None:
         if (
             not _utc(decision_cutoff)
@@ -809,10 +804,7 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
         ):
             raise ValueError("invalid packet request time")
         admitted_members = _canonical_members(members, decision_cutoff)
-        if (
-            not _digest(market_context_identity_sha256)
-            or type(apply_adjustment) is not bool
-        ):
+        if not _digest(market_context_identity_sha256):
             raise ValueError("invalid market context identity")
         plan21 = _plan21_identity(cohort_selected_at, admitted_members)
         cohort = _canonical_cohort_identity(cohort_selected_at, admitted_members)
@@ -824,7 +816,6 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
             "plan21_cohort_identity_sha256": plan21,
             "canonical_cohort_identity_sha256": cohort,
             "market_context_identity_sha256": market_context_identity_sha256,
-            "apply_adjustment": apply_adjustment,
         }
         if not 1 <= len(_canonical(base)) <= _REQUEST_LIMIT:
             raise ValueError("packet request bounds")
@@ -837,7 +828,6 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
         object.__setattr__(
             self, "market_context_identity_sha256", market_context_identity_sha256
         )
-        object.__setattr__(self, "apply_adjustment", apply_adjustment)
         object.__setattr__(self, "request_identity_sha256", _identity(base))
 
     def value(self, include_identity: bool = True) -> dict[str, object]:
@@ -849,7 +839,6 @@ class CurrentSuppliedCohortResearchPacketRequestV4:
             "plan21_cohort_identity_sha256": self.plan21_cohort_identity_sha256,
             "canonical_cohort_identity_sha256": self.canonical_cohort_identity_sha256,
             "market_context_identity_sha256": self.market_context_identity_sha256,
-            "apply_adjustment": self.apply_adjustment,
         }
         if include_identity:
             value["request_identity_sha256"] = self.request_identity_sha256
@@ -891,12 +880,7 @@ class CurrentResearchPacketSourceAttributionRowV4:
     source_name: str | None
     source_url: str | None
     source_release: str | None
-    price_basis: (
-        Literal[
-            "RAW", "BHARATSTOCK_SOURCE_REPORTED_OHLC", "BHARATSTOCK_FACTOR_APPLIED_OHLC"
-        ]
-        | None
-    )
+    price_basis: Literal["RAW", "BHARATSTOCK_SOURCE_REPORTED_OHLC"] | None
     publisher_published_at: datetime | None
     known_at: datetime | None
     licence_policy_identity: str | None
@@ -1334,7 +1318,6 @@ def _context_seal_bindings(
         str,
         str,
         tuple[str, ...],
-        bool,
         str,
         bool,
     ]
@@ -1363,7 +1346,6 @@ def _context_seal_bindings(
         projection.get("adjusted_component_state"),
         projection.get("adjusted_component_identity_sha256"),
         projection.get("adjusted_component_reasons"),
-        projection.get("apply_adjustment"),
         projection.get("price_basis"),
         projection.get("request_matches"),
     )
@@ -1393,9 +1375,8 @@ def _context_seal_bindings(
         and not _utc(values[5])
         or not _digest(values[8])
         or not adjusted_projection_valid
-        or type(values[10]) is not bool
-        or values[11] != price_basis_for_adjustment(cast(bool, values[10]))
-        or type(values[12]) is not bool
+        or values[10] != PRICE_BASIS
+        or type(values[11]) is not bool
     ):
         return None
     return cast(
@@ -1410,7 +1391,6 @@ def _context_seal_bindings(
             str,
             str,
             tuple[str, ...],
-            bool,
             str,
             bool,
         ],
@@ -1512,7 +1492,6 @@ def _project_context(
         adjusted_state = None
         adjusted_identity = None
         adjusted_reasons: tuple[str, ...] = ()
-        apply_adjustment = None
         selected_price_basis = None
         request_matches = False
     else:
@@ -1527,7 +1506,6 @@ def _project_context(
             adjusted_state,
             adjusted_identity,
             adjusted_reasons,
-            apply_adjustment,
             selected_price_basis,
             request_matches,
         ) = sealed
@@ -1667,8 +1645,7 @@ def _project_context(
         and _digest(getattr(regime, "report_identity_sha256", None))
         and _digest(getattr(regime, "adjusted_handoff_identity_sha256", None))
         and adjusted_state == "SUCCESS"
-        and apply_adjustment is request.apply_adjustment
-        and selected_price_basis == price_basis_for_adjustment(request.apply_adjustment)
+        and selected_price_basis == PRICE_BASIS
     )
     if regime_observed:
         known_at = regime_known_at

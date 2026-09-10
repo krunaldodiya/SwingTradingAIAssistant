@@ -48,11 +48,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", required=True, type=_date, help="inclusive date")
     parser.add_argument("--end", required=True, type=_date, help="inclusive date")
     parser.add_argument(
-        "--apply-adjustment",
-        action="store_true",
-        help="apply the provider-declared adjustment factor to stored OHLC",
-    )
-    parser.add_argument(
         "--storage-root",
         type=Path,
         default=default_storage_root(),
@@ -69,7 +64,6 @@ def main(argv: list[str] | None = None) -> int:
             arguments.start,
             arguments.end,
             arguments.storage_root,
-            apply_adjustment=arguments.apply_adjustment,
         )
     except ValueError as error:
         sys.stderr.write(f"invalid request: {error}\n")
@@ -83,7 +77,6 @@ def main(argv: list[str] | None = None) -> int:
         "format": "PARQUET",
         "outcome": receipt.outcome,
         "price_basis": receipt.price_basis,
-        "apply_adjustment": arguments.apply_adjustment,
         "provider": receipt.provider,
         "provider_version": receipt.provider_version,
         "retrieved_at": receipt.retrieved_at.isoformat().replace("+00:00", "Z"),

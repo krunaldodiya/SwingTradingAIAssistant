@@ -7,7 +7,7 @@
 > The later Yahoo-specific contract and delivery evidence are historical;
 > their immutable data, labels and supported readers are not reinterpreted.
 > The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
-> replaces the provider-clarification wait for new-mode implementation.
+> replaces the provider-clarification wait for source-preserving implementation.
 > Historical evidence and independent review/release requirements remain intact.
 
 ## BharatStock capture V3 and independent facts — unreleased
@@ -16,13 +16,15 @@
 ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
 It verifies the exact retained official schedule, runtime source identity,
 configuration, cutoff, and selection identity before provider effects.
-The provider is `bharatstock-api@v1`. By default `apply_adjustment=False`
-preserves supplied OHLCV with basis `BHARATSTOCK_SOURCE_REPORTED_OHLC`, assuming
-for now that the provider has adjusted it correctly. Opt-in `True` applies the
-factor exactly once to original OHLC with `BHARATSTOCK_FACTOR_APPLIED_OHLC`.
-Volume is always unchanged and labelled `SOURCE_REPORTED`. Original prices and
-optional adjustment fields are retained separately. Mode binds request identity,
-reuse, recovery, correction-parent matching and downstream facts. No hourly
+The provider is `bharatstock-api@v1`. It preserves supplied OHLCV with basis
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`. The owner has
+[retired optional factor application](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210);
+current processing never applies the reported factor to OHLC or volume.
+Volume is unchanged and labelled `SOURCE_REPORTED`. Original prices and
+optional adjustment fields are retained separately. Fixed source-preserving
+semantics bind request identity, reuse, recovery, correction-parent matching
+and downstream facts. Strict predecessor readers retain their original
+interpretation without exposing an active adjustment option. No hourly
 reconstruction, filling, fallback, total-return claim or fabricated historical
 publication time is permitted.
 

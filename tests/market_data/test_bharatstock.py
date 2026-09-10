@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
-from decimal import ROUND_UP, Decimal, Inexact, Underflow, localcontext
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -11,7 +11,6 @@ import pytest
 from swing_trading_ai_assistant.market_data import bharatstock
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
-    BharatStockDailyPrice,
     BharatStockError,
     BharatStockInstrument,
 )
@@ -71,7 +70,7 @@ class _Transport:
         return self.responses.pop(0)
 
 
-def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> None:
+def test_preserves_supplied_prices_and_non_unit_factor_with_inclusive_dates() -> None:
     transport = _Transport(_identity(), _page([_row("2026-08-28"), _row("2026-08-27")]))
     result = BharatStockClient(api_key="test-key", transport=transport).history(
         _MEMBER, _START, _END
@@ -80,7 +79,11 @@ def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> 
     assert result.rows[0].close == Decimal("102")
     assert result.rows[0].adjusted_close == Decimal("51")
     assert result.rows[0].adjustment_factor == Decimal("0.5")
-    assert result.rows[0].open * result.rows[0].adjustment_factor == Decimal("50")
+    assert (result.rows[0].open, result.rows[0].high, result.rows[0].low) == (
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+    )
     assert result.rows[0].volume == 1000
     assert result.request_count == 2
     assert "from=2026-08-27" in transport.urls[1]
@@ -90,117 +93,31 @@ def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> 
     )
 
 
-def test_as_provided_projection_does_not_apply_non_unit_factor() -> None:
-    price = BharatStockDailyPrice(
-        _START,
-        Decimal(100),
-        Decimal(104),
-        Decimal(98),
-        Decimal(102),
-        1000,
-        Decimal(51),
-        Decimal("0.5"),
-    )
-    assert price.project_ohlc() == (
-        Decimal(100),
-        Decimal(104),
-        Decimal(98),
-        Decimal(102),
-    )
-    assert price.project_close() == Decimal(102)
-    assert price.project_ohlc(apply_adjustment=True) == (
-        Decimal(50),
-        Decimal(52),
-        Decimal(49),
-        Decimal(51),
-    )
-    assert price.project_close(apply_adjustment=True) == Decimal(51)
-    assert price.project_ohlc() == (
-        Decimal(100),
-        Decimal(104),
-        Decimal(98),
-        Decimal(102),
-    )
-    assert price.volume == 1000
-
-
 def test_optional_adjustment_fields_do_not_block_as_provided_history() -> None:
     row = {**_row("2026-08-27"), "adjusted_close": None, "adjustment_factor": None}
     client = BharatStockClient(
         api_key="test-key", transport=_Transport(_identity(), _page([row]))
     )
     price = client.history(_MEMBER, _START, _END).rows[0]
-    assert price.project_ohlc() == (
+    assert (price.open, price.high, price.low, price.close) == (
         Decimal(100),
         Decimal(104),
         Decimal(98),
         Decimal(102),
     )
-    with pytest.raises(ValueError):
-        price.project_ohlc(apply_adjustment=True)
-    with pytest.raises(ValueError):
-        price.project_close(apply_adjustment=True)
+    assert price.adjusted_close is None
+    assert price.adjustment_factor is None
 
 
-def test_conflicting_adjustment_fields_only_block_factor_projection() -> None:
+def test_retains_conflicting_adjustment_fields_without_changing_source_prices() -> None:
     row = {**_row("2026-08-27"), "adjusted_close": 52}
     client = BharatStockClient(
         api_key="test-key", transport=_Transport(_identity(), _page([row]))
     )
     price = client.history(_MEMBER, _START, _END).rows[0]
-    assert price.project_close() == Decimal(102)
-    with pytest.raises(ValueError):
-        price.project_ohlc(apply_adjustment=True)
-    with pytest.raises(ValueError):
-        price.project_close(apply_adjustment=True)
-
-
-@pytest.mark.parametrize("mode", [1, None, "false"])
-def test_projection_rejects_non_boolean_mode(mode: object) -> None:
-    price = BharatStockDailyPrice(
-        _START,
-        Decimal(100),
-        Decimal(104),
-        Decimal(98),
-        Decimal(102),
-        1000,
-        Decimal(51),
-        Decimal("0.5"),
-    )
-    with pytest.raises(ValueError):
-        price.project_ohlc(apply_adjustment=mode)
-    with pytest.raises(ValueError):
-        price.project_close(apply_adjustment=mode)
-
-
-def test_daily_price_admission_ignores_callers_decimal_context() -> None:
-    close = Decimal("3." + "0" * 62 + "9")
-    # Exact half is 1.5 + 4.5e-63; 64 significant digits round the tie to even 4.
-    adjusted_close = Decimal("1.5" + "0" * 61 + "4")
-    with localcontext() as caller:
-        caller.prec = 2
-        caller.rounding = ROUND_UP
-        caller.Emax = 1
-        caller.Emin = -1
-        caller.traps[Inexact] = True
-        caller.traps[Underflow] = True
-        price = BharatStockDailyPrice(
-            _START,
-            close,
-            close,
-            close,
-            close,
-            1000,
-            adjusted_close,
-            Decimal("0.5"),
-        )
-        assert caller.prec == 2
-        assert caller.rounding == ROUND_UP
-        assert caller.Emax == 1
-        assert caller.Emin == -1
-        assert caller.traps[Inexact]
-        assert caller.traps[Underflow]
-    assert price.adjusted_close == adjusted_close
+    assert price.close == Decimal(102)
+    assert price.adjusted_close == Decimal(52)
+    assert price.adjustment_factor == Decimal("0.5")
 
 
 def test_invalid_member_does_not_poison_later_member_acquisition() -> None:

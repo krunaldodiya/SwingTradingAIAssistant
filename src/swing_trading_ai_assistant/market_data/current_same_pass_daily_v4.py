@@ -307,7 +307,6 @@ class CurrentSamePassMarketRegimeRequestV4:
     canonical_cohort_identity_sha256: str
     plan22_request_identity_sha256: str
     request_identity_sha256: str
-    apply_adjustment: bool
 
     def __init__(
         self,
@@ -325,7 +324,6 @@ class CurrentSamePassMarketRegimeRequestV4:
         canonical_cohort_identity_sha256: str,
         plan22_request_identity_sha256: str,
         request_identity_sha256: str,
-        apply_adjustment: bool,
     ) -> None:
         if (
             contract_version != REQUEST_CONTRACT_VERSION_V4
@@ -333,7 +331,6 @@ class CurrentSamePassMarketRegimeRequestV4:
             or not _utc(cohort_selected_at)
             or type(members) is not tuple
             or type(include_partial_current_session) is not bool
-            or type(apply_adjustment) is not bool
             or not all(type(item) is CurrentSamePassEquityMemberV4 for item in members)
             or not 1 <= len(members) <= _MAX_COHORT_SIZE_V1
             or not all(
@@ -407,7 +404,6 @@ class CurrentSamePassMarketRegimeRequestV4:
                 )
                 for item in members
             ),
-            apply_adjustment=apply_adjustment,
         )
         if plan22_request_identity_sha256 != plan22_identity:
             raise ValueError("request adjusted-daily identity bridge mismatch")
@@ -425,7 +421,6 @@ class CurrentSamePassMarketRegimeRequestV4:
             ("plan21_cohort_identity_sha256", plan21_cohort_identity_sha256),
             ("canonical_cohort_identity_sha256", canonical_cohort_identity_sha256),
             ("plan22_request_identity_sha256", plan22_request_identity_sha256),
-            ("apply_adjustment", apply_adjustment),
         ):
             object.__setattr__(self, field_name, value)
         calculated_request_identity = _identity(self, "request_identity_sha256")
@@ -3277,7 +3272,6 @@ _RAW_V3_TYPE_FIELDS_V1: Final = (
             "canonical_cohort_identity_sha256",
             "plan22_request_identity_sha256",
             "request_identity_sha256",
-            "apply_adjustment",
         ),
     ),
     (
@@ -3668,13 +3662,6 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "NOT_APPLICABLE",
                 "REQUIRED",
                 "LOWERCASE_64_HEX",
-            ),
-            (
-                "apply_adjustment",
-                "BOOLEAN",
-                "BOOLEAN",
-                "REQUIRED",
-                "EXACT_BOOLEAN",
             ),
         ),
     ),

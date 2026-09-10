@@ -10,9 +10,10 @@
 > Historical V3 contexts/readers keep their original Yahoo identities.
 > The delivered counts, smokes and approvals below do not transfer to V4.
 > The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
-> allows new-mode implementation without waiting for provider clarification.
-> The selected mode binds the raw request, derived price request and retained
-> context; Upstox raw values are unchanged. Review and release remain separate.
+> allows source-preserving implementation without waiting for provider clarification.
+> The owner has retired optional factor application. The fixed source basis
+> binds the raw request, derived price request and retained context; Upstox raw
+> values are unchanged. Review and release remain separate.
 
 The V4 request binds the original ordered selection separately from canonical
 cohort identity. The adjusted request is derived from that exact admitted raw

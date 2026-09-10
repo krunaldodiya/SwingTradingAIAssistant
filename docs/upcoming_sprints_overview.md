@@ -112,12 +112,14 @@ Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
 The unreleased Plan22 V3 candidate follows the
 [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation):
-keep supplied BharatStock prices unchanged by default, assume their adjustment
-is correct for now, and apply the factor once only under explicit opt-in.
-Source volume never changes. This replaces the provider-clarification wait for
-new-mode implementation, not the historical evidence or protected release gates.
-Every fact binds its mode, provider, basis and retrieval provenance. These records
-do not establish exchange-raw volume, total return or historical availability.
+keep supplied BharatStock OHLCV unchanged. Following the provider's reply, the
+owner retired optional factor application; adjustment fields remain separate
+and source volume never changes. This replaces the provider-clarification wait
+for source-preserving implementation, not historical evidence or protected
+release gates. Every fact binds its provider, fixed basis and retrieval
+provenance. Provider-reported corrections do not independently establish
+uniformly comparable historical full OHLC, exchange-raw volume, total return or
+historical availability.
 No provider is a silent fallback.
 Historical Yahoo records remain readable under their original identities;
 their acquisition path is retired by #184. Angel One remains deferred.

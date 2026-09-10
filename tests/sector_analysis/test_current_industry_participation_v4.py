@@ -271,7 +271,7 @@ def test_observed_v4_rows_are_aggregate_only_sorted_reconciled_and_identified(
     )
 
 
-def test_industry_rejects_direction_candidate_with_mismatched_price_mode(
+def test_industry_rejects_direction_candidate_with_mismatched_price_basis(
     tmp_path: Path,
 ) -> None:
     api = _api()
@@ -280,10 +280,9 @@ def test_industry_rejects_direction_candidate_with_mismatched_price_mode(
     candidate = private_context.direction_candidate
 
     assert candidate is not None
-    assert candidate.apply_adjustment is False
     assert candidate.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert not api._valid_candidate(
-        replace(candidate, price_basis="BHARATSTOCK_FACTOR_APPLIED_OHLC"),
+        replace(candidate, price_basis="RAW"),
         context,
         context.market_regime_report,
     )

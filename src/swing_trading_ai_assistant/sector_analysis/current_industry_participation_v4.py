@@ -17,9 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from swing_trading_ai_assistant.market_data.bharatstock import (
-    price_basis_for_adjustment,
-)
+from swing_trading_ai_assistant.market_data.bharatstock import PRICE_BASIS
 from swing_trading_ai_assistant.market_data.current_industry_classification import (
     _PARSED_SEAL,  # pyright: ignore[reportPrivateUsage]
     CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
@@ -1163,9 +1161,7 @@ def _valid_candidate(
                 candidate.direction_candidate_identity_sha256,
             )
         )
-        or type(candidate.apply_adjustment) is not bool
-        or candidate.price_basis
-        != price_basis_for_adjustment(candidate.apply_adjustment)
+        or candidate.price_basis != PRICE_BASIS
         or not _utc(candidate.decision_cutoff)
         or candidate.request_identity_sha256 != report.request_identity_sha256
         or candidate.market_regime_report_identity_sha256
@@ -1198,7 +1194,6 @@ def _valid_candidate(
         "raw_grid_identity_sha256": candidate.raw_grid_identity_sha256,
         "request_identity_sha256": candidate.request_identity_sha256,
         "schedule_identity_sha256": candidate.schedule_identity_sha256,
-        "apply_adjustment": candidate.apply_adjustment,
         "price_basis": candidate.price_basis,
         "rows": [
             {

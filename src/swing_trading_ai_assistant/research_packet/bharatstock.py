@@ -10,7 +10,6 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Literal, TypeAlias, cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
-    FACTOR_APPLIED_PRICE_BASIS,
     PRICE_BASIS,
     BharatStockHistory,
     BharatStockInstrument,
@@ -18,11 +17,13 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
 )
 from swing_trading_ai_assistant.market_data.bharatstock_capture import (
     RetainedCaptureRevisionV2,
+    retained_capture_ohlc_v2,
     validate_capture_revision_v2,
 )
 from swing_trading_ai_assistant.market_structure import current_live as structure
 
 _CONTRACT = "bharatstock-retained-research-packet@v1"
+# The factor-applied literal belongs only to immutable predecessor V2 evidence.
 _RetainedPriceBasis: TypeAlias = (
     BharatStockPriceBasis | Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
 )
@@ -58,7 +59,7 @@ def _identity(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class BharatStockAdjustedBarV1:
-    """One selected-basis BharatStock bar, never an Upstox raw bar."""
+    """One source-reported BharatStock bar, never an Upstox raw bar."""
 
     session: date
     open: Decimal
@@ -87,7 +88,7 @@ class BharatStockPriceActionFactV1:
 
 @dataclass(frozen=True, slots=True)
 class BharatStockAdjustedMarketStructureFactV1:
-    """Structure calculation bound to the selected BharatStock price mode."""
+    """Structure calculation over the revision's declared BharatStock basis."""
 
     price_basis: _RetainedPriceBasis
     adjusted_bar_identities_sha256: tuple[str, ...]
@@ -98,7 +99,6 @@ class BharatStockAdjustedMarketStructureFactV1:
             self.price_basis
             not in {
                 PRICE_BASIS,
-                FACTOR_APPLIED_PRICE_BASIS,
                 "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
             }
             or len(self.adjusted_bar_identities_sha256) != 21
@@ -177,10 +177,7 @@ def _adjusted_bars(
         if row.session != session:
             return None
         try:
-            row.__post_init__()
-            open_, high, low, close = row.project_ohlc(
-                apply_adjustment=revision.request.apply_adjustment
-            )
+            open_, high, low, close = retained_capture_ohlc_v2(revision, row)
         except ValueError:
             return None
         bars.append(
@@ -277,7 +274,7 @@ def _price_action(
 def build_bharatstock_research_packet_v1(
     revision: RetainedCaptureRevisionV2,
 ) -> BharatStockResearchPacketV1:
-    """Build independent selected-basis facts from an exact retained capture."""
+    """Build source-reported current facts or exact predecessor V2 facts."""
     with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
         return _build_bharatstock_research_packet_v1(revision)
 

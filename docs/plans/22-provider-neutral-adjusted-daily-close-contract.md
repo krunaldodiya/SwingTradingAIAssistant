@@ -7,7 +7,7 @@
 > delivery records and Yahoo handoff identities remain historical, not active
 > Yahoo acquisition instructions.
 > The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
-> replaces the provider-clarification wait for the new default mode, not
+> replaces the provider-clarification wait for source-preserving implementation, not
 > historical failed evidence or independent review and release requirements.
 
 ## BharatStock V3 successor — unreleased
@@ -15,13 +15,15 @@
 `provider-neutral-adjusted-daily-close@v3` uses the direct client in
 `market_data/bharatstock.py` through `adjusted_daily/service_v3.py`.
 The provider is `BHARATSTOCK`, source `bharatstock-api@v1`, mapping
-`bharatstock-isin-exchange-mapping@v1`. `apply_adjustment=False` uses the supplied
-close unchanged with basis `BHARATSTOCK_SOURCE_REPORTED_OHLC`, under the owner's
-working assumption that the provider has adjusted it correctly. Explicit
-`apply_adjustment=True` applies the supplied factor once to original prices,
-with basis `BHARATSTOCK_FACTOR_APPLIED_OHLC`. Mode and basis bind request,
-handoff and downstream consumer identities. Volume, where retained by capture,
-is unchanged and labelled `SOURCE_REPORTED`, not certified as exchange-raw.
+`bharatstock-isin-exchange-mapping@v1`. It uses the supplied close unchanged
+with basis `BHARATSTOCK_SOURCE_REPORTED_OHLC`. The owner has
+[retired optional factor application](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210):
+current OHLC/close processing never multiplies the reported factor or silently
+substitutes `adjusted_close`. Adjustment fields are retained separately.
+The fixed basis binds request, handoff and downstream consumer identities.
+Volume, where retained by capture, is unchanged and labelled `SOURCE_REPORTED`,
+not certified as exchange-raw. The provider's reply does not independently
+qualify all historical full-bar comparisons.
 No dividend/rights or total-return equivalence is claimed.
 
 The request binds the exact ordered canonical ISIN/exchange/effective-symbol

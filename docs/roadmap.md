@@ -354,7 +354,7 @@ availability retroactively makes that earlier capture successful.
 
 ### Accepted as-provided OHLCV decision and member isolation
 
-**2026-09-10 — ACCEPTED owner direction; locally implemented, not reviewed or released.**
+**2026-09-10 — ACCEPTED owner direction; not released.**
 The repository owner prioritized finishing the existing BharatStock daily-OHLCV
 replacement for owner-private current research, assuming for now that the
 provider supplies correctly adjusted OHLCV. The owner explicitly chose not to
@@ -362,7 +362,8 @@ wait for further methodology clarification and to revisit the interpretation
 if later concrete evidence shows it is incorrect. This is an accepted working
 assumption, not independent verification of the provider's adjustment method.
 
-The chosen processing contract is:
+The original processing contract is retained here as history. Its optional-mode
+clauses are superseded by the later owner-approved retirement below:
 
 - Default `apply_adjustment=False`: use the supplied `open`, `high`, `low`,
   `close` and `volume` unchanged. Do not silently substitute `adjusted_close`
@@ -405,22 +406,52 @@ merge. Required independent review and protected release controls remain;
 issue closure must describe actual delivered behavior. The separate historical
 qualification status remains truthful rather than being changed to “passed”.
 
-Local implementation now preserves supplied prices by default, offers explicit
-one-time factor application, leaves volume unchanged, and binds that choice
-through downloader, capture and research consumers. The 97/100 independent-fact
-case is exercised with three explicit missing-member outcomes. A clean installed
-wheel exercised both price modes, credential-free CLI reuse, the original
-26-row Yahoo dataset reader, and the retained 100-member negative BharatStock V2
-revision without changing historical bytes or labels. No live provider call was
-made for these checks.
+Candidate `71285807c12b91300b52d5d29ee30aeb5dd61ca3` implemented that original
+two-mode contract. It passed 4,511 nonprivate tests at 87.48% coverage, static
+checks and clean installed-wheel checks, including the 97/100 independent-fact
+case, exact source-decimal retention, credential-free CLI reuse, the original
+26-row Yahoo dataset and the retained 100-member negative BharatStock V2
+revision. Separate functional/domain reviewers approved those exact bytes.
+Hosted quality/build and GitGuardian subsequently passed in
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185).
+These results describe the pre-retirement candidate, not approval of later
+changed bytes or the vendor's newly reported correction.
 
-The first full covered run recorded 4,509 passes and five failures at 87.49%
-coverage. One missed packet-test mode argument was corrected and its scenario
-passed. The other four checks require the absent owner-private
-`~/SwingTradingAIAssistantData/catalog.duckdb`; no replacement catalog was found
-under that data root. This is a separate historical-data prerequisite, not a
-return of the provider-adjustment wait. A full local green, independent current
-approval, hosted checks, merge and issue closure are not claimed.
+The earlier unrestricted run recorded 4,509 passes and five failures. One
+packet-test mode argument was corrected; four historical checks still require
+the absent owner-private `~/SwingTradingAIAssistantData/catalog.duckdb`.
+No full-private-suite pass or independent security/privacy/provenance approval
+is claimed. The preserved safety refusal is not retried or bypassed.
+
+#### Provider reply and accepted optional-mode retirement
+
+The owner supplied a
+[BharatStock support reply](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623631255)
+reporting a deployed query-time correction to double-counted
+`adjustment_factor` and `adjusted_close`. The vendor says OHLCV was unchanged,
+historical prices/volume may already use a restated share basis, and recent
+bhavcopy rows are as-traded. It recommends using OHLC directly, not applying
+the factor to OHLC or volume, and treating `adjusted_close` separately. It
+reports no per-row revision indicator. These are provider statements, not a
+post-deployment check performed by this project. The general adjusted-history
+description and the stated RELIANCE raw event discontinuity do not establish
+uniformly comparable historical full OHLC.
+
+The owner then explicitly
+[accepted retiring the option](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210).
+Current acquisition and research preserve supplied OHLCV, with no
+`apply_adjustment` parameter or `--apply-adjustment` flag and no silent
+substitution of `adjusted_close`. Original adjustment fields remain separate.
+The optional-mode clauses above are superseded; they do not remain a current
+configuration choice. Strict historical readers retain only the arithmetic and
+labels required to reproduce their original immutable versions.
+
+The retirement changes current schemas/identities and requires fresh applicable
+verification and exact-candidate review. Earlier responses are not updated,
+backdated or relabelled after a query-time provider correction. No new provider
+request, mailbox access, email, capture admission or release is authorized by
+this decision. The source collection for September 10 remains distinct from
+unfinished production revision admission and research consumption.
 
 ### September 10 source preservation and evening check guidance
 
@@ -458,12 +489,12 @@ independent-review and protected-release gates remain unchanged.
 ### Versioned provider behavior
 
 The unreleased candidate uses direct `bharatstock-api@v1` acquisition.
-Default `apply_adjustment=False` preserves supplied OHLC with
-`BHARATSTOCK_SOURCE_REPORTED_OHLC`; explicit `True` applies the supplied factor
-once to original OHLC with `BHARATSTOCK_FACTOR_APPLIED_OHLC`. Volume remains
-unchanged and is labelled `SOURCE_REPORTED`. These modes follow the owner's
-accepted as-provided assumption; they do not independently verify the provider's
-economic price/volume basis.
+It preserves supplied OHLC with `BHARATSTOCK_SOURCE_REPORTED_OHLC` and never
+applies the reported factor to current OHLC or volume. Separate adjustment
+fields remain evidence, not an instruction to transform the original bars.
+Volume is unchanged and labelled `SOURCE_REPORTED`. The owner-retired optional
+mode is not a current API or CLI feature. The provider's reported correction
+does not independently verify every historical price/volume basis.
 No dividend/rights-adjusted total-return or as-published point-in-time
 equivalence is claimed. Acquisition uses one account,
 at most 2,000 HTTP attempts per client run, at most 40 price pages per member,

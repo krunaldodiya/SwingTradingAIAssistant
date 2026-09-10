@@ -394,21 +394,18 @@ invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
 storage is rejected before any provider call. The complete derived dataset
 remains under that root; there is no arbitrary output-file option.
 
-The default `apply_adjustment=False` preserves supplied OHLCV unchanged and
-labels prices `BHARATSTOCK_SOURCE_REPORTED_OHLC`. The optional Python argument
-`apply_adjustment=True`, or CLI flag `--apply-adjustment`, multiplies original
-OHLC by the reported factor exactly once and labels prices
-`BHARATSTOCK_FACTOR_APPLIED_OHLC`. It requires an available factor and consistency
-with a provided adjusted close. It does not apply a second change to previously
-processed prices. Original OHLC and separate adjustment fields remain retained
-as exact decimal strings in the `source_*` columns. Processed OHLC columns use
-float64, and reuse recomputes them from those exact source values rather than
-from rounded factors.
+The downloader preserves supplied OHLCV unchanged and labels prices
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`. It does not apply `adjustment_factor` to
+OHLC or volume. The former `apply_adjustment` API argument and
+`--apply-adjustment` CLI flag are retired, not accepted as ignored options.
+Original OHLC and separate optional adjustment fields remain retained as exact
+decimal strings in the `source_*` columns. Processed OHLC columns use float64;
+reuse validates them against the exact original source values.
 The single volume field is never rescaled and is labelled `SOURCE_REPORTED`;
 this does not certify exchange-raw units. No total-return equivalence is claimed.
 The exact request identity binds ordered canonical instruments, dates,
-provider `bharatstock-api@v1`, selected processing mode, configuration, and
-schema/contract V4. Opposite modes cannot reuse the same dataset.
+provider `bharatstock-api@v1`, source-preserving configuration, and
+schema/contract V5. Earlier schema identities cannot be reused as this contract.
 An existing dataset is reused only
 after its owner, permissions, singleton identity, metadata, complete schema, and
 all OHLCV values pass validation; `REUSED` performs zero provider requests and

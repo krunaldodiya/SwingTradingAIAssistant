@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
@@ -144,7 +143,7 @@ def test_complete_hundred_preserves_every_member_and_full_denominator() -> None:
     )
 
 
-def test_capture_structure_is_explicitly_adjusted_basis_not_raw_bar_context() -> None:
+def test_capture_structure_is_explicitly_source_reported_basis() -> None:
     packet = build_bharatstock_research_packet_v1(_revision("OBSERVED"))
 
     fact = packet.members[0].market_structure
@@ -291,29 +290,19 @@ def test_admitted_facts_ignore_the_callers_decimal_context() -> None:
     assert fact.body_size == Decimal("1")
 
 
-def test_selected_price_mode_changes_prices_once_without_changing_volume() -> None:
-    original = _revision("OBSERVED")
-    opted_in = replace(
-        original,
-        request=replace(original.request, apply_adjustment=True),
-        price_basis=None,
+def test_packet_uses_supplied_ohlc_and_source_volume() -> None:
+    packet = build_bharatstock_research_packet_v1(_revision("OBSERVED"))
+
+    bars = packet.members[0].adjusted_bars
+    assert bars is not None
+    assert packet.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert (bars[0].open, bars[0].high, bars[0].low, bars[0].close, bars[0].volume) == (
+        Decimal("10"),
+        Decimal("12"),
+        Decimal("9"),
+        Decimal("11"),
+        100,
     )
-    source = build_bharatstock_research_packet_v1(original)
-    adjusted = build_bharatstock_research_packet_v1(opted_in)
-    source_bars = source.members[0].adjusted_bars
-    adjusted_bars = adjusted.members[0].adjusted_bars
-    assert source_bars is not None and adjusted_bars is not None
-    assert source.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
-    assert adjusted.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
-    for raw, projected in zip(source_bars, adjusted_bars, strict=True):
-        assert (projected.open, projected.high, projected.low, projected.close) == (
-            raw.open / 2,
-            raw.high / 2,
-            raw.low / 2,
-            raw.close / 2,
-        )
-        assert projected.volume == raw.volume
-    assert build_bharatstock_research_packet_v1(original) == source
 
 
 def test_three_missing_members_leave_ninety_seven_results_usable() -> None:

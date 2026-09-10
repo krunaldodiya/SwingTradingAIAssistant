@@ -8,12 +8,13 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
 from . import capture_forward_adjusted_ohlcv as _legacy_store
 from .bharatstock import (
+    PRICE_BASIS,
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
@@ -21,7 +22,6 @@ from .bharatstock import (
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
-    price_basis_for_adjustment,
 )
 from .bharatstock_capture_runtime_identity_manifest import (
     BHARATSTOCK_CAPTURE_RUNTIME_SOURCE_SHA256_V2,
@@ -46,8 +46,7 @@ from .storage_root_lease import (
 
 CONTRACT_VERSION_V3: Final = "bharatstock-capture@v3"
 SOURCE_PROFILE_V3: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3"
-_PROCESSING_REVISION_V3: Final = "source-or-factor-projected-ohlc@v1"
-_PREDECESSOR_CONTRACT_VERSION_V2: Final = "bharatstock-capture@v2"
+_PROCESSING_REVISION_V3: Final = "source-reported-ohlc@v2"
 _PREDECESSOR_SOURCE_PROFILE_V2: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2"
 _PREDECESSOR_PRICE_BASIS_V2: Final = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
 _PREDECESSOR_VOLUME_BASIS_V2: Final = "SOURCE_REPORTED_UNADJUSTED"
@@ -147,13 +146,12 @@ def _schema_identity() -> str:
                     "selection-identity",
                     "schedule-reference",
                     "parent-revision",
-                    "apply-adjustment-strict-bool",
                 ],
                 "member_result": ["observed", "insufficient", "not-attempted"],
                 "revision": [
                     "one-result-per-request-member",
                     "coverage-identity",
-                    "price-basis-derived-from-request-mode",
+                    "source-reported-ohlc",
                     "source-reported-volume",
                 ],
             }
@@ -276,7 +274,6 @@ class CaptureRequestV2:
     schedule_identity_sha256: str
     selection_identity_sha256: str
     parent_revision_sha256: str | None = None
-    apply_adjustment: bool = False
     schema_identity_sha256: str = field(default_factory=_schema_identity)
     runtime_code_identity_sha256: str = field(default_factory=_runtime_identity)
     configuration_identity_sha256: str = field(default_factory=_configuration_identity)
@@ -317,7 +314,6 @@ class CaptureRequestV2:
                 self.parent_revision_sha256 is not None
                 and not _valid_digest(self.parent_revision_sha256)
             )
-            or type(self.apply_adjustment) is not bool
             or self.selection_identity_sha256 != selection_identity_v2(self.members)
             or self.schema_identity_sha256 != _schema_identity()
             or self.runtime_code_identity_sha256 != _runtime_identity()
@@ -338,7 +334,6 @@ class CaptureRequestV2:
             "configuration_identity_sha256": self.configuration_identity_sha256,
             "contract_version": self.contract_version,
             "decision_cutoff": _timestamp(self.decision_cutoff),
-            "apply_adjustment": self.apply_adjustment,
             "members": [_instrument_value(member) for member in self.members],
             "parent_revision_sha256": self.parent_revision_sha256,
             "runtime_code_identity_sha256": self.runtime_code_identity_sha256,
@@ -392,16 +387,12 @@ class CaptureRevisionV2:
     observed_at: datetime
     provider_source: str = PROVIDER_SOURCE
     source_profile: str = SOURCE_PROFILE_V3
-    price_basis: str | None = None
+    price_basis: str = PRICE_BASIS
     volume_basis: str = VOLUME_BASIS
     revision_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         observed_at = _instant(self.observed_at)
-        expected_price_basis = price_basis_for_adjustment(self.request.apply_adjustment)
-        price_basis = (
-            expected_price_basis if self.price_basis is None else self.price_basis
-        )
         if (
             type(self.request) is not CaptureRequestV2
             or type(self.members) is not tuple
@@ -414,7 +405,7 @@ class CaptureRevisionV2:
             )
             or self.provider_source != PROVIDER_SOURCE
             or self.source_profile != SOURCE_PROFILE_V3
-            or price_basis != expected_price_basis
+            or self.price_basis != PRICE_BASIS
             or self.volume_basis != VOLUME_BASIS
             or observed_at > self.request.decision_cutoff
         ):
@@ -429,7 +420,6 @@ class CaptureRevisionV2:
             for item in self.members
         ):
             raise ValueError("BharatStock capture revision is invalid")
-        object.__setattr__(self, "price_basis", price_basis)
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(
             self,
@@ -477,13 +467,11 @@ class _PredecessorCaptureRequestV2:
     configuration_identity_sha256: str
     contract_version: str
     request_identity_sha256: str
-    apply_adjustment: Literal[True] = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         cutoff = _instant(self.decision_cutoff)
         if (
-            self.contract_version != _PREDECESSOR_CONTRACT_VERSION_V2
-            or self.apply_adjustment is not True
+            self.contract_version != "bharatstock-capture@v2"
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= _MAX_MEMBERS
             or any(type(member) is not BharatStockInstrument for member in self.members)
@@ -619,6 +607,39 @@ class _PredecessorCaptureRevisionV2:
         return _line(self.canonical_value())
 
 
+def _project_predecessor_ohlc_v2(
+    revision: _PredecessorCaptureRevisionV2, row: BharatStockDailyPrice
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Replay only the frozen V2 factor arithmetic over its original row fields."""
+    if (
+        type(revision) is not _PredecessorCaptureRevisionV2
+        or type(row) is not BharatStockDailyPrice
+    ):
+        raise ValueError("BharatStock predecessor projection is invalid")
+    row.__post_init__()
+    factor = row.adjustment_factor
+    if factor is None:
+        raise ValueError("BharatStock predecessor adjustment factor is unavailable")
+    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
+        close = row.close * factor
+        if row.adjusted_close is not None and row.adjusted_close != close:
+            raise ValueError("inconsistent BharatStock predecessor adjustment")
+        return row.open * factor, row.high * factor, row.low * factor, close
+
+
+def retained_capture_ohlc_v2(
+    revision: CaptureRevisionV2 | _PredecessorCaptureRevisionV2,
+    row: BharatStockDailyPrice,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Project current source fields or the exact, isolated predecessor formula."""
+    if type(revision) is _PredecessorCaptureRevisionV2:
+        return _project_predecessor_ohlc_v2(revision, row)
+    if type(revision) is CaptureRevisionV2:
+        row.__post_init__()
+        return row.open, row.high, row.low, row.close
+    raise ValueError("BharatStock retained projection is invalid")
+
+
 RetainedCaptureRevisionV2: TypeAlias = CaptureRevisionV2 | _PredecessorCaptureRevisionV2
 
 
@@ -649,8 +670,7 @@ def _validate_capture_members(
                 raise ValueError("BharatStock member history is invalid")
             item.history.__post_init__()
             for row in item.history.rows:
-                row.__post_init__()
-                row.project_ohlc(apply_adjustment=revision.request.apply_adjustment)
+                retained_capture_ohlc_v2(revision, row)
         if item.history is not None and (
             item.history.instrument != item.member
             or tuple(row.session for row in item.history.rows)
@@ -753,7 +773,6 @@ def _request_from_value(value: object) -> CaptureRequestV2:
         schedule_identity_sha256=cast(str, row["schedule_identity_sha256"]),
         selection_identity_sha256=cast(str, row["selection_identity_sha256"]),
         parent_revision_sha256=cast(str | None, row["parent_revision_sha256"]),
-        apply_adjustment=cast(bool, row["apply_adjustment"]),
         schema_identity_sha256=cast(str, row["schema_identity_sha256"]),
         runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
         configuration_identity_sha256=cast(str, row["configuration_identity_sha256"]),
@@ -1137,7 +1156,6 @@ def _is_matching_correction_parent(
         and previous.schema_identity_sha256 == request.schema_identity_sha256
         and previous.configuration_identity_sha256
         == request.configuration_identity_sha256
-        and previous.apply_adjustment == request.apply_adjustment
         and parent.revision_identity_sha256 == request.parent_revision_sha256
     )
 
@@ -1198,7 +1216,6 @@ def _member_result(
         history.__post_init__()
         for row in history.rows:
             row.__post_init__()
-            row.project_ohlc(apply_adjustment=request.apply_adjustment)
     except ValueError:
         return CaptureMemberResultV2(
             member, "INSUFFICIENT_EVIDENCE", "HISTORY_INVALID", None

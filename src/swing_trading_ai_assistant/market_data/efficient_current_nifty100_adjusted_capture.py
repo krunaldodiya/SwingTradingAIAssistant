@@ -252,7 +252,6 @@ def _retain_selection_v2(
     binding = (
         _canonical(
             {
-                "apply_adjustment": request.apply_adjustment,
                 "request_identity_sha256": request.request_identity_sha256,
                 "source_identity_sha256": selection.source_identity_sha256,
             }
@@ -419,12 +418,7 @@ def _read_retained_selection_v2(
                 binding_source_identity = binding.get("source_identity_sha256")
                 if (
                     set(binding)
-                    != {
-                        "apply_adjustment",
-                        "request_identity_sha256",
-                        "source_identity_sha256",
-                    }
-                    or binding.get("apply_adjustment") is not request.apply_adjustment
+                    != {"request_identity_sha256", "source_identity_sha256"}
                     or binding.get("request_identity_sha256")
                     != request.request_identity_sha256
                     or type(binding_source_identity) is not str

@@ -116,7 +116,6 @@ def _request_binding_valid(request: CurrentSamePassMarketRegimeRequestV4) -> boo
             request.canonical_cohort_identity_sha256,
             request.plan22_request_identity_sha256,
             request.request_identity_sha256,
-            request.apply_adjustment,
         )
     except (AttributeError, TypeError, ValueError):
         return False

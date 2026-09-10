@@ -8,13 +8,14 @@
 > The old Yahoo-specific pool, cadence, session and acknowledgement below
 > describe historical V1 only; they are not BharatStock requirements.
 > The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
-> replaces the provider-clarification wait for the new default mode.
+> replaces the provider-clarification wait for source-preserving implementation.
 > Independent review and release requirements remain unchanged.
 
 V3 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
 source identities and retrieval times, then bind the ordered 100-member union,
-source observation and explicit price mode to the exact capture request.
-Opposite processing modes must not reuse the same selection/capture binding.
+source observation and fixed source-preserving price basis to the exact capture
+request. The optional factor mode is retired; earlier mode-bearing request
+identities cannot be silently accepted as the new contract.
 Reuse must resolve the retained request/selection/revision binding before any
 source or provider call.
 Later observations of the same membership have distinct source provenance;
