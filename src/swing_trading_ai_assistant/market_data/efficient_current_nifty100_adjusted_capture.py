@@ -29,11 +29,11 @@ from .http import (
 )
 
 CONTRACT_VERSION_V2 = "current-nifty100-bharatstock-capture@v2"
-NIFTY_50_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
+NIFTY_50_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
 NIFTY_NEXT_50_URL = (
-    "https://www.niftyindices.com/IndexConstituent/ind_niftynext50list.csv"
+    "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv"
 )
-NIFTY_100_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+NIFTY_100_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
 _MAX_SOURCE_BYTES = 1_000_000
 _MAX_RETAINED_SELECTION_BYTES = 3 * 4 * ((_MAX_SOURCE_BYTES + 2) // 3) + 64 * 1024
 

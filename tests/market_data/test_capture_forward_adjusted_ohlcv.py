@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -154,15 +153,62 @@ def _seed_admitted_historical_revision(
     return root
 
 
-def test_historical_yahoo_v1_reader_surface_has_no_provider_loader() -> None:
-    """Historical V1 labels/readers remain import-safe without yfinance acquisition."""
+def test_exact_predecessor_writer_revision_remains_readable(tmp_path: Path) -> None:
+    """A synthetic archive uses the exact writer identity from base 0851102."""
+    writer = "da86373ae8271ebefca852bb7c5447e04c5a17a51aca0ced6b42594441b55d5c"
+    request = _historical_request()
+    revision = _historical_revision(request)
 
-    assert legacy.SOURCE_PROFILE_V1 == "YFINANCE_CAPTURE_FORWARD_ADJUSTED_OHLCV"
-    assert legacy.EXPECTED_PROVIDER_SOURCE_V1 == "yfinance==1.6.0"
-    assert callable(legacy.read_capture_forward_revision_v1)
-    assert callable(legacy.read_capture_forward_request_revision_v1)
-    assert callable(legacy.compose_capture_forward_plan29_v1)
-    assert "yfinance" not in sys.modules
+    def canonical(value: object) -> bytes:
+        return json.dumps(
+            value,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    request_value = request.canonical_value(include_request_identity=False)
+    request_value["runtime_code_identity_sha256"] = writer
+    request_identity = hashlib.sha256(canonical(request_value)).hexdigest()
+    revision_value = revision.canonical_value(include_revision_sha256=False)
+    revision_value["request_identity_sha256"] = request_identity
+    revision_value["runtime_code_identity_sha256"] = writer
+    revision_identity = hashlib.sha256(canonical(revision_value) + b"\n").hexdigest()
+    revision_value["revision_sha256"] = revision_identity
+    archived_bytes = canonical(revision_value) + b"\n"
+
+    root = tmp_path / "predecessor-capture"
+    root.mkdir(mode=0o700)
+    admission = legacy.StorageRootLease.try_acquire_private_empty(root)
+    assert admission.lease is not None
+    admission.lease.close()
+    for name in ("prepared", "revisions", "requests"):
+        (root / name).mkdir(mode=0o700)
+    path = root / "revisions" / f"{revision_identity}.json"
+    path.write_bytes(archived_bytes)
+    path.chmod(0o400)
+    pointer = root / "requests" / f"{request_identity}.json"
+    pointer.write_bytes(
+        canonical(
+            {
+                "request_identity_sha256": request_identity,
+                "revision_sha256": revision_identity,
+            }
+        )
+        + b"\n"
+    )
+    pointer.chmod(0o400)
+
+    restored = legacy.read_capture_forward_revision_v1(root, revision_identity)
+    assert restored.runtime_code_identity_sha256 == writer
+    assert restored.request_identity_sha256 == request_identity
+    assert restored.retrieved_at == revision.retrieved_at
+    assert restored.bars == revision.bars
+    assert restored.provider_source == "yfinance==1.6.0"
+    assert restored.price_basis == revision.price_basis
+    assert legacy.read_capture_forward_request_revision_v1(root, request) == restored
+    assert path.read_bytes() == archived_bytes
 
 
 def test_historical_readers_return_admitted_revision_with_original_metadata(

@@ -488,6 +488,8 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
         # Released f539c5a1 writer; retain exact reads across Issue #145.
         "1054af9a2f2e791444d0198a801d5e728139bcbb12822fd230c5625d35747560",
+        # Released 0851102 writer immediately before the provider cutover.
+        "da86373ae8271ebefca852bb7c5447e04c5a17a51aca0ced6b42594441b55d5c",
     }
 )
 

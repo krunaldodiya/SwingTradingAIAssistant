@@ -422,6 +422,15 @@ derived Parquet path. A member-local missing history contributes zero rows;
 shared authentication, authorization, quota, transport, or provider failures
 stop the run. This transport receipt is not a claim of complete research.
 
+Existing Yahoo V2 Parquet remains readable through
+`equity_data_downloader.read_retained_yahoo_daily_ohlcv_v2(symbols, start, end,
+storage_root=None, *, provider_version="1.6.0")`. Supply the original symbol
+tuple, inclusive dates, storage root, and provider version. Its distinct
+`RetainedYahooDatasetReceiptV2` preserves the original request identity, Yahoo
+price/volume labels, retrieval time, counts, and path. This is a read-only
+operation: no provider client, cache creation, download, repair, conversion, or
+BharatStock identity is involved. Missing or corrupt evidence fails closed.
+
 
 
 ## Sprint 4 historical evidence census

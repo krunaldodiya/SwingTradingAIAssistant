@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Final, NoReturn, cast
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -99,8 +99,7 @@ class BharatStockDailyPrice:
             <= self.high
         ):
             raise ValueError("invalid BharatStock daily price")
-        with localcontext() as context:
-            context.prec = 64
+        with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
             if self.adjusted_close != self.close * self.adjustment_factor:
                 raise ValueError("inconsistent BharatStock adjustment")
 

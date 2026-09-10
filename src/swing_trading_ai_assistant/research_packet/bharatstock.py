@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Literal, cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
@@ -279,6 +279,13 @@ def build_bharatstock_research_packet_v1(
     revision: CaptureRevisionV2,
 ) -> BharatStockResearchPacketV1:
     """Build independent adjusted-basis facts from an exact retained capture only."""
+    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
+        return _build_bharatstock_research_packet_v1(revision)
+
+
+def _build_bharatstock_research_packet_v1(
+    revision: CaptureRevisionV2,
+) -> BharatStockResearchPacketV1:
     validate_capture_revision_v2(revision)
     request = revision.request
     members: list[BharatStockResearchMemberV1] = []

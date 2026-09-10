@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, Underflow, localcontext
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -11,6 +11,7 @@ import pytest
 from swing_trading_ai_assistant.market_data import bharatstock
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
+    BharatStockDailyPrice,
     BharatStockError,
     BharatStockInstrument,
 )
@@ -87,6 +88,37 @@ def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> 
     assert all(
         "/INE002A01018" in url and "exchange=NSE" in url for url in transport.urls
     )
+
+
+def test_daily_price_admission_ignores_callers_decimal_context() -> None:
+    close = Decimal("1.234567890123456789012345678901234567890123456789012345678901")
+    adjusted_close = Decimal(
+        "0.6172839450617283945061728394506172839450617283945061728394505"
+    )
+    with localcontext() as caller:
+        caller.prec = 2
+        caller.rounding = ROUND_UP
+        caller.Emax = 1
+        caller.Emin = -1
+        caller.traps[Inexact] = True
+        caller.traps[Underflow] = True
+        price = BharatStockDailyPrice(
+            _START,
+            close,
+            close,
+            close,
+            close,
+            1000,
+            adjusted_close,
+            Decimal("0.5"),
+        )
+        assert caller.prec == 2
+        assert caller.rounding == ROUND_UP
+        assert caller.Emax == 1
+        assert caller.Emin == -1
+        assert caller.traps[Inexact]
+        assert caller.traps[Underflow]
+    assert price.adjusted_close == adjusted_close
 
 
 def test_invalid_member_does_not_poison_later_member_acquisition() -> None:

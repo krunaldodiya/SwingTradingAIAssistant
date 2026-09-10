@@ -520,6 +520,7 @@ def test_public_cli_reports_full_outcomes_for_storage_local_and_shared_failures(
     (
         "file:///etc/passwd",
         "https://untrusted.example/ind_nifty50list.csv",
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv",
         NIFTY_50_URL + "?source=other",
     ),
 )

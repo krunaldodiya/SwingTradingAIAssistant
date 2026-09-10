@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -15,9 +16,11 @@ import pytest
 from equity_data_downloader import (
     DownloadError,
     PersistenceError,
+    RetainedYahooDatasetReceiptV2,
     cli,
     core,
     download_daily_ohlcv,
+    read_retained_yahoo_daily_ohlcv_v2,
 )
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockDailyPrice,
@@ -90,6 +93,143 @@ def _rewrite(path: Path, transform) -> None:
     path.chmod(0o600)
     pq.write_table(transform(table), path)
     path.chmod(0o400)
+
+
+def _retained_yahoo_v2(root: Path) -> tuple[Path, str, bytes]:
+    """Synthetic V2 fixture from the immutable 0851102 writer contract."""
+    symbols = ("RELIANCE.NS",)
+    configuration = "794989712c1c76f1fb112670ad77c2f096b299259f3155614dde7c576a30ab56"
+    schema_identity = "2ca51c9c4553d4ed0e8ac2f1620ba1c8f3a3abe7450263f2412bbe234aed6c4f"
+    request = {
+        "configuration_identity_sha256": configuration,
+        "contract_version": "equity-data-downloader@v2",
+        "end": _END.isoformat(),
+        "interval": "1d",
+        "price_basis": "YFINANCE_AUTO_ADJUSTED_OHLC",
+        "provider": "YFINANCE",
+        "provider_version": "1.6.0",
+        "schema_identity_sha256": schema_identity,
+        "start": _START.isoformat(),
+        "symbols": list(symbols),
+        "volume_basis": "YFINANCE_SOURCE_REPORTED_VOLUME",
+    }
+    identity = hashlib.sha256(
+        json.dumps(
+            request,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    metadata = {
+        key.encode("ascii"): str(value).encode("ascii")
+        for key, value in request.items()
+        if key not in {"interval", "symbols"}
+    }
+    metadata.update(
+        {
+            b"symbols": b'["RELIANCE.NS"]',
+            b"retrieved_at": b"2026-08-29T00:00:00+00:00",
+            b"schema_version": b"2",
+            b"request_identity_sha256": identity.encode("ascii"),
+        }
+    )
+    schema = pa.schema(
+        (
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("session", pa.date32(), nullable=False),
+            pa.field("open", pa.float64(), nullable=False),
+            pa.field("high", pa.float64(), nullable=False),
+            pa.field("low", pa.float64(), nullable=False),
+            pa.field("close", pa.float64(), nullable=False),
+            pa.field("volume", pa.int64(), nullable=False),
+        ),
+        metadata=metadata,
+    )
+    rows = [
+        {
+            "symbol": "RELIANCE.NS",
+            "session": session,
+            "open": 50.0,
+            "high": 52.0,
+            "low": 49.0,
+            "close": 51.0,
+            "volume": 1000,
+        }
+        for session in (_START, _END)
+    ]
+    lease = core._acquire_storage_root(root)
+    lease.close()
+    directory = root
+    for name in ("adjusted_daily", "provider=yfinance", f"request={identity}"):
+        directory = directory / name
+        directory.mkdir(mode=0o700)
+    path = directory / "data.parquet"
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+    path.chmod(0o400)
+    return path, identity, path.read_bytes()
+
+
+def test_retained_yahoo_v2_remains_readable_without_any_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, identity, original = _retained_yahoo_v2(tmp_path)
+
+    def no_provider(*args: object, **kwargs: object) -> None:
+        pytest.fail("historical reads must not construct an acquisition client")
+
+    monkeypatch.setattr(core, "BharatStockClient", no_provider)
+    receipt = read_retained_yahoo_daily_ohlcv_v2(
+        ("reliance.ns",), _START, _END, tmp_path
+    )
+    assert isinstance(receipt, RetainedYahooDatasetReceiptV2)
+    assert receipt.destination == path
+    assert receipt.request_identity_sha256 == identity
+    assert receipt.symbols == ("RELIANCE.NS",)
+    assert receipt.rows_by_symbol == (("RELIANCE.NS", 2),)
+    assert receipt.row_count == 2
+    assert receipt.retrieved_at == datetime(2026, 8, 29, tzinfo=UTC)
+    assert receipt.provider == "YFINANCE"
+    assert receipt.provider_version == "1.6.0"
+    assert receipt.price_basis == "YFINANCE_AUTO_ADJUSTED_OHLC"
+    assert receipt.volume_basis == "YFINANCE_SOURCE_REPORTED_VOLUME"
+    assert receipt.outcome == "REUSED"
+    assert path.read_bytes() == original
+    assert not (tmp_path / "adjusted_daily" / "provider=bharatstock").exists()
+
+
+def test_retained_yahoo_v2_rejects_corrupt_prices_without_repair(
+    tmp_path: Path,
+) -> None:
+    path, _, _ = _retained_yahoo_v2(tmp_path)
+    _rewrite(
+        path,
+        lambda table: table.set_column(
+            table.schema.get_field_index("high"),
+            table.schema.field("high"),
+            pa.array([0.0, 0.0], type=pa.float64()),
+        ),
+    )
+    corrupted = path.read_bytes()
+    with pytest.raises(PersistenceError):
+        read_retained_yahoo_daily_ohlcv_v2(("RELIANCE.NS",), _START, _END, tmp_path)
+    assert path.read_bytes() == corrupted
+
+
+def test_retained_yahoo_v2_requires_exact_provider_version(tmp_path: Path) -> None:
+    path, _, original = _retained_yahoo_v2(tmp_path)
+
+    with pytest.raises(PersistenceError, match="dataset is unavailable"):
+        read_retained_yahoo_daily_ohlcv_v2(
+            ("RELIANCE.NS",),
+            _START,
+            _END,
+            tmp_path,
+            provider_version="1.6.1",
+        )
+
+    assert path.read_bytes() == original
 
 
 def test_persists_factor_adjusted_parquet_under_canonical_request_namespace(

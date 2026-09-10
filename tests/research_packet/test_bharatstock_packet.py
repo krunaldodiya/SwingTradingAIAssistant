@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
 import pytest
 
@@ -269,6 +269,25 @@ def test_one_session_withholds_both_feature_facts_explicitly() -> None:
         == member.price_action_reason
         == "INSUFFICIENT_HISTORY"
     )
+
+
+def test_admitted_facts_ignore_the_callers_decimal_context() -> None:
+    revision = _revision("OBSERVED")
+    expected = build_bharatstock_research_packet_v1(revision)
+    with localcontext() as caller:
+        caller.prec = 2
+        caller.rounding = ROUND_UP
+        caller.traps[Inexact] = True
+        actual = build_bharatstock_research_packet_v1(revision)
+        assert caller.prec == 2
+        assert caller.rounding == ROUND_UP
+        assert caller.traps[Inexact]
+    assert actual == expected
+    assert actual.coverage.observed == 1
+    fact = actual.members[0].price_action
+    assert fact is not None
+    assert fact.range_size == Decimal("1.5")
+    assert fact.body_size == Decimal("0.5")
 
 
 def test_rejects_unvalidated_arbitrary_input() -> None:
