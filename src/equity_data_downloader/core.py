@@ -24,6 +24,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
+    BharatStockDailyPrice,
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
@@ -1136,17 +1137,31 @@ def _validate_existing_table(
 
 
 def _validate_source_reported_record(record: Mapping[str, object]) -> None:
-    source_ohlc = tuple(
-        _source_decimal(record[field])
-        for field in ("source_open", "source_high", "source_low", "source_close")
+    price = BharatStockDailyPrice(
+        session=cast(date, record["session"]),
+        open=_source_decimal(record["source_open"]),
+        high=_source_decimal(record["source_high"]),
+        low=_source_decimal(record["source_low"]),
+        close=_source_decimal(record["source_close"]),
+        volume=cast(int, record["volume"]),
+        adjusted_close=(
+            None
+            if record["source_adjusted_close"] is None
+            else _source_decimal(record["source_adjusted_close"])
+        ),
+        adjustment_factor=(
+            None
+            if record["source_adjustment_factor"] is None
+            else _source_decimal(record["source_adjustment_factor"])
+        ),
     )
-    source_reported_ohlc = tuple(float(value) for value in source_ohlc)
-    _validate_ohlcv_values(
-        (*source_reported_ohlc, cast(int, record["volume"])), ValueError
+    source_reported_ohlc = (
+        float(price.open),
+        float(price.high),
+        float(price.low),
+        float(price.close),
     )
-    for field in ("source_adjusted_close", "source_adjustment_factor"):
-        if record[field] is not None:
-            _source_decimal(record[field])
+    _validate_ohlcv_values((*source_reported_ohlc, price.volume), ValueError)
     if tuple(record[field] for field in ("open", "high", "low", "close")) != (
         source_reported_ohlc
     ):

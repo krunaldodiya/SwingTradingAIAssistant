@@ -455,9 +455,58 @@ def test_invalid_existing_parquet_semantics_fail_without_acquisition(
         return pa.Table.from_pylist(rows, schema=table.schema)
 
     _rewrite(receipt.destination, transform)
+    original = receipt.destination.read_bytes()
     with pytest.raises(PersistenceError):
         _download(tmp_path, client)
     assert client.calls == [_MEMBER]
+    assert receipt.destination.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        pytest.param({"source_adjusted_close": "NaN"}, id="nonfinite-optional-close"),
+        pytest.param({"source_adjustment_factor": "0"}, id="nonpositive-factor"),
+        pytest.param(
+            {
+                **dict.fromkeys(("open", "high", "low", "close"), 1e19),
+                **dict.fromkeys(
+                    ("source_open", "source_high", "source_low", "source_close"),
+                    "1E+19",
+                ),
+            },
+            id="source-price-above-provider-bound",
+        ),
+        pytest.param(
+            {
+                **dict.fromkeys(("open", "high", "low", "close"), 100.0),
+                **dict.fromkeys(
+                    ("source_open", "source_high", "source_low", "source_close"),
+                    "100",
+                ),
+                "source_open": "100.00000000000000001",
+            },
+            id="exact-price-order-hidden-by-float-rounding",
+        ),
+    ],
+)
+def test_reuse_enforces_exact_source_price_domain(
+    tmp_path: Path, updates: dict[str, object]
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+
+    def transform(table):
+        rows = table.to_pylist()
+        rows[0].update(updates)
+        return pa.Table.from_pylist(rows, schema=table.schema)
+
+    _rewrite(receipt.destination, transform)
+    original = receipt.destination.read_bytes()
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+    assert receipt.destination.read_bytes() == original
 
 
 def test_reuse_rejects_metadata_change_during_validation(
