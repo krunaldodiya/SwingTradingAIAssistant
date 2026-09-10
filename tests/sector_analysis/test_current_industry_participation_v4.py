@@ -1,18 +1,13 @@
 # pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportReturnType=false
-"""RED contract tests for Plan27 aggregate-only Industry Participation V2."""
+"""RED contract tests for Plan27 aggregate-only Industry Participation V4."""
 
 from __future__ import annotations
 
 import hashlib
 import importlib
-import importlib.machinery
 import importlib.util
-import inspect
-import json
-import shutil
 import socket
 import sys
-from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -24,52 +19,11 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRoo
 
 _PRIVATE_CONTEXTS: dict[int, Any] = {}
 
-_PLAN27_INDUSTRY_SCHEMA_PREIMAGE = json.loads(
-    (
-        Path(__file__).parent / "data" / "plan27_industry_v2_schema_preimage.json"
-    ).read_text(encoding="utf-8")
-)
-
 
 def _api() -> Any:
     return importlib.import_module(
-        "swing_trading_ai_assistant.sector_analysis.current_industry_participation_v2"
+        "swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4"
     )
-
-
-def test_industry_v2_runtime_identity_supports_installed_package_layout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = _api()
-    manifest = importlib.import_module(module._RUNTIME_MANIFEST_MODULE)
-    baseline = module.current_industry_participation_runtime_code_identity_v2()
-    installed_root = tmp_path / "site-packages"
-    for loaded, relative_path in (
-        (module, module._SOURCE_PATH),
-        (manifest, module._RUNTIME_MANIFEST_PATH),
-    ):
-        installed = installed_root.joinpath(*relative_path.split("/")[1:])
-        installed.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(loaded.__file__, installed)
-        monkeypatch.setattr(loaded, "__file__", str(installed))
-        monkeypatch.setattr(
-            loaded,
-            "__loader__",
-            importlib.machinery.SourceFileLoader(loaded.__name__, str(installed)),
-        )
-
-    assert module.current_industry_participation_runtime_code_identity_v2() == baseline
-    source = installed_root.joinpath(
-        "swing_trading_ai_assistant/sector_analysis/"
-        "current_industry_participation_v2.py"
-    )
-    with source.open("ab") as copied:
-        copied.write(b"\n")
-
-    with pytest.raises(
-        ValueError, match="industry participation v2 runtime identity invalid"
-    ):
-        module.current_industry_participation_runtime_code_identity_v2()
 
 
 def _test_module(relative: str, name: str) -> ModuleType:
@@ -92,10 +46,10 @@ def _classification_test_module() -> ModuleType:
     )
 
 
-def _v3_test_module() -> ModuleType:
+def _v4_test_module() -> ModuleType:
     return _test_module(
-        "market_regime/test_current_supplied_cohort_v3.py",
-        "test_current_supplied_cohort_v3",
+        "market_regime/test_current_supplied_cohort_v4.py",
+        "test_current_supplied_cohort_v4",
     )
 
 
@@ -108,25 +62,40 @@ def _private_lease(tmp_path: Path) -> StorageRootLease:
 
 
 def _retained_context(tmp_path: Path) -> Any:
+    """Capture the default real V4 composition after archive validation."""
+    return _retained_context_for_directions(tmp_path, None)
+
+
+def _retained_context_for_directions(
+    tmp_path: Path, directions: tuple[str, ...] | None
+) -> tuple[Any, Any]:
     tmp_path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    """Capture the real V3 public composition result after archive validation."""
-    v3_test = _v3_test_module()
-    v3_api = v3_test._v3()
+    v4_test = _v4_test_module()
+    v4_api = v4_test._v4()
     captured: list[tuple[Any, Any]] = []
-    original = v3_api.FileCurrentSamePassMarketContextArchiveV1.archive_exact
+    original = v4_api.FileCurrentSamePassMarketContextArchiveV1.archive_exact
 
     def capture(self: Any, *args: Any, **kwargs: Any) -> Any:
         result = original(self, *args, **kwargs)
-        if type(result) is v3_api.RetainedCurrentSamePassMarketContextV3:
+        if type(result) is v4_api.RetainedCurrentSamePassMarketContextV4:
             captured.append((result, args[1].context_object))
         return result
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
-            v3_api.FileCurrentSamePassMarketContextArchiveV1, "archive_exact", capture
+            v4_api.FileCurrentSamePassMarketContextArchiveV1, "archive_exact", capture
         )
-        v3_test.test_outer_composition_retains_real_context_and_archive_files(
-            tmp_path, monkeypatch
+        kwargs = (
+            {}
+            if directions is None
+            else {
+                "raw_directions": directions,
+                "adjusted_directions": directions,
+                "exercise_archive_contracts": False,
+            }
+        )
+        v4_test.test_outer_composition_retains_real_context_and_archive_files(
+            tmp_path, monkeypatch, **kwargs
         )
     assert captured
     return captured[0]
@@ -209,7 +178,7 @@ def _retained_classification(
 
 def _inputs(tmp_path: Path, **context_kwargs: object) -> tuple[Any, Any]:
     if context_kwargs:
-        raise ValueError("the real V3 integration fixture is observed-only")
+        raise ValueError("the real V4 integration fixture is observed-only")
     context, private_context = _retained_context(tmp_path / "context")
     _PRIVATE_CONTEXTS[id(context)] = private_context
     classification = _retained_classification(
@@ -218,11 +187,11 @@ def _inputs(tmp_path: Path, **context_kwargs: object) -> tuple[Any, Any]:
     return context, classification
 
 
-def _v3_request(context: Any) -> Any:
+def _v4_request(context: Any) -> Any:
     return _PRIVATE_CONTEXTS[id(context)].request
 
 
-def _v3_ledger_known_at(context: Any, position: int) -> Any:
+def _v4_ledger_known_at(context: Any, position: int) -> Any:
     return _PRIVATE_CONTEXTS[id(context)].component_ledger[position].known_at
 
 
@@ -262,41 +231,16 @@ def _assert_failure(result: Any, state: str, reasons: tuple[str, ...]) -> None:
         assert private_value not in encoded
 
 
-def test_reducer_accepts_only_the_exact_sealed_retained_v3_context_and_two_inputs(
+def test_observed_v4_rows_are_aggregate_only_sorted_reconciled_and_identified(
     tmp_path: Path,
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-
-    assert tuple(
-        inspect.signature(api.reduce_current_industry_participation_v2).parameters
-    ) == (
-        "market_context",
-        "classification",
-    )
-    assert api.reduce_current_industry_participation_v2(
-        context, classification
-    ).evidence_state == ("OBSERVED")
-    for bad_context, bad_classification in (
-        (object(), classification),
-        (context, object()),
-    ):
-        with pytest.raises(TypeError):
-            api.reduce_current_industry_participation_v2(
-                bad_context, bad_classification
-            )
-
-
-def test_observed_v2_rows_are_aggregate_only_sorted_reconciled_and_identified(
-    tmp_path: Path,
-) -> None:
-    api = _api()
-    context, classification = _inputs(tmp_path)
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
     regime = context.market_regime_report
 
     assert (
-        result.contract_version == "current-supplied-cohort-industry-participation@v2"
+        result.contract_version == "current-supplied-cohort-industry-participation@v4"
     )
     assert result.evidence_state == "OBSERVED"
     assert result.classification_tier == "INDUSTRY"
@@ -326,48 +270,51 @@ def test_observed_v2_rows_are_aggregate_only_sorted_reconciled_and_identified(
     )
 
 
-@pytest.mark.parametrize("key", ("semantic_type", "unit", "nullability", "bounds"))
-def test_industry_schema_preimage_is_complete_independent_and_rejects_every_field_drift(
-    key: str,
+def test_peer_ordered_v4_classification_preserves_the_whole_cohort(
+    tmp_path: Path,
 ) -> None:
     api = _api()
-    metadata = api.current_industry_participation_schema_metadata_v2()
-
-    assert api._canonical(metadata) == api._canonical(_PLAN27_INDUSTRY_SCHEMA_PREIMAGE)
-    assert (
-        api.current_industry_participation_schema_metadata_digest_v2(metadata)
-        == "0382b0bbb769dd9ec7dfea9229bd00ecc65d25c404d94481fb5f0a82472661fd"
-        == api.SCHEMA_IDENTITY_SHA256
+    directions = ("ADVANCE", "DECLINE", "UNCHANGED")
+    context, private_context = _retained_context_for_directions(
+        tmp_path / "context", directions
+    )
+    assert len(private_context.request.members) == len(directions)
+    classification = _retained_classification(
+        tmp_path / "classification",
+        context,
+        private_context,
+        industries=("Technology", "Banking", "Technology"),
+        row_order=tuple(reversed(range(100))),
     )
 
-    for row_index, row in enumerate(_PLAN27_INDUSTRY_SCHEMA_PREIMAGE["type_rows"]):
-        for field_index, _field in enumerate(row["ordered_fields"]):
-            mutated = deepcopy(metadata)
-            mutated["type_rows"][row_index]["ordered_fields"][field_index][key] = (
-                "FORGED"
-            )
-            with pytest.raises(ValueError, match="frozen contract"):
-                api.current_industry_participation_schema_identity_from_metadata_v2(
-                    mutated
-                )
+    result = api.reduce_current_industry_participation_v4(context, classification)
 
-    state = deepcopy(metadata)
-    state["state_projections"] = ()
-    with pytest.raises(ValueError, match="frozen contract"):
-        api.current_industry_participation_schema_identity_from_metadata_v2(state)
+    assert tuple(
+        (row.industry, row.member_count, row.advances, row.declines, row.unchanged)
+        for row in result.industries
+    ) == (
+        ("Banking", 1, 0, 1, 0),
+        ("Technology", 2, 1, 0, 1),
+    )
+    assert sum(row.member_count for row in result.industries) == result.cohort_size
+    assert (
+        sum(row.advances for row in result.industries),
+        sum(row.declines for row in result.industries),
+        sum(row.unchanged for row in result.industries),
+    ) == (
+        context.market_regime_report.advances,
+        context.market_regime_report.declines,
+        context.market_regime_report.unchanged,
+    )
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
 
-    unknown = deepcopy(metadata)
-    unknown["unexpected"] = "FORGED"
-    with pytest.raises(ValueError, match="unknown Industry schema metadata key"):
-        api.current_industry_participation_schema_metadata_digest_v2(unknown)
 
-
-def test_observed_v2_binds_current_classification_and_context_sessions_exactly(
+def test_observed_v4_binds_current_classification_and_context_sessions_exactly(
     tmp_path: Path,
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
     regime = context.market_regime_report
 
     assert result.market_regime_report_identity_sha256 == regime.report_identity_sha256
@@ -413,7 +360,7 @@ def test_observed_v2_binds_current_classification_and_context_sessions_exactly(
         ),
     ),
 )
-def test_industry_v2_binds_schema_to_non_crossable_source_url(
+def test_industry_v4_binds_schema_to_non_crossable_source_url(
     tmp_path: Path,
     legacy: bool,
     expected_url: str,
@@ -428,7 +375,7 @@ def test_industry_v2_binds_schema_to_non_crossable_source_url(
         private_context,
         legacy=legacy,
     )
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
     expected_schema = (
         classification_api.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256
         if legacy
@@ -443,8 +390,8 @@ def test_industry_v2_binds_schema_to_non_crossable_source_url(
     assert classification.schema_identity_sha256 == expected_schema
     assert result.source_url == expected_url
     assert api._classification_source_url(expected_schema) == expected_url
-    assert api.current_industry_participation_is_exact_valid_v2(result, context)
-    assert not api._industry_value_is_exact_unsealed_v2(
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
+    assert not api._industry_value_is_exact_unsealed_v4(
         result,
         context,
         crossed_schema,
@@ -457,11 +404,11 @@ def test_industry_v2_binds_schema_to_non_crossable_source_url(
         "report_identity_sha256",
         api._object_identity_without(result, "report_identity_sha256", "_reducer_seal"),
     )
-    assert not api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert not api.current_industry_participation_is_exact_valid_v4(result, context)
 
     object.__setattr__(result, "source_url", expected_url)
     object.__setattr__(result, "report_identity_sha256", original_identity)
-    assert api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
 
 
 def test_future_known_classification_failure_is_exact_and_retains_its_time(
@@ -476,7 +423,7 @@ def test_future_known_classification_failure_is_exact_and_retains_its_time(
         known_at=context.market_regime_report.decision_cutoff + timedelta(minutes=1),
     )
 
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
 
     _assert_failure(
         result,
@@ -484,14 +431,14 @@ def test_future_known_classification_failure_is_exact_and_retains_its_time(
         ("CLASSIFICATION_FUTURE_KNOWN",),
     )
     assert result.known_at == classification.known_at
-    assert api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
     future_date = _retained_classification(
         tmp_path / "future-date-classification",
         context,
         private_context,
         known_at=context.market_regime_report.decision_cutoff + timedelta(days=1),
     )
-    future_date_result = api.reduce_current_industry_participation_v2(
+    future_date_result = api.reduce_current_industry_participation_v4(
         context, future_date
     )
     _assert_failure(
@@ -518,7 +465,7 @@ def test_future_known_classification_failure_is_exact_and_retains_its_time(
         ("CLASSIFICATION_ARCHIVE_FAILED", "INSUFFICIENT_EVIDENCE"),
     ),
 )
-def test_classification_failures_remain_independent_closed_redacted_v2_results(
+def test_classification_failures_remain_independent_closed_redacted_v4_results(
     tmp_path: Path,
     reason: str,
     state: str,
@@ -526,7 +473,7 @@ def test_classification_failures_remain_independent_closed_redacted_v2_results(
     api = _api()
     context, _classification = _inputs(tmp_path)
 
-    result = api.reduce_current_industry_participation_v2(
+    result = api.reduce_current_industry_participation_v4(
         context,
         _classification_failure(reason),
     )
@@ -538,7 +485,7 @@ def test_classification_insufficiency_is_closed_and_redacted(tmp_path: Path) -> 
     api = _api()
     context, _classification = _inputs(tmp_path)
 
-    result = api.reduce_current_industry_participation_v2(
+    result = api.reduce_current_industry_participation_v4(
         context,
         _classification_failure("CLASSIFICATION_ARCHIVE_FAILED"),
     )
@@ -565,7 +512,7 @@ def test_failure_state_precedence_and_global_reason_order_are_closed(
         ),
     )
 
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
 
     _assert_failure(
         result,
@@ -584,23 +531,23 @@ def test_reducer_neither_recomputes_direction_nor_performs_effects(
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    v3 = importlib.import_module(
-        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
+    v4 = importlib.import_module(
+        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4"
     )
 
     def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
-        raise AssertionError("Industry V2 performed an effect or direction evaluation")
+        raise AssertionError("Industry V4 performed an effect or direction evaluation")
 
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(
-        v3,
-        "evaluate_current_supplied_cohort_market_regime_v3",
+        v4,
+        "evaluate_current_supplied_cohort_market_regime_v4",
         forbidden,
         raising=False,
     )
 
     assert (
-        api.reduce_current_industry_participation_v2(
+        api.reduce_current_industry_participation_v4(
             context,
             classification,
         ).evidence_state
@@ -613,8 +560,8 @@ def test_observed_and_failure_outputs_never_leak_private_members_or_raw_evidence
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    observed = api.reduce_current_industry_participation_v2(context, classification)
-    failure = api.reduce_current_industry_participation_v2(
+    observed = api.reduce_current_industry_participation_v4(context, classification)
+    failure = api.reduce_current_industry_participation_v4(
         context,
         _classification_failure("CLASSIFICATION_ARTIFACT_MISSING"),
     )
@@ -633,17 +580,17 @@ def test_rejects_wrong_context_seal_splices_and_structural_bounds(
 
     object.__setattr__(context, "_archive_seal", object())
     with pytest.raises((TypeError, ValueError)):
-        api.reduce_current_industry_participation_v2(context, classification)
+        api.reduce_current_industry_participation_v4(context, classification)
 
     context, classification = _inputs(tmp_path / "spliced")
     object.__setattr__(classification, "cohort_identity_sha256", "f" * 64)
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
     _assert_failure(result, "MALFORMED_EVIDENCE", ("COHORT_BINDING_MISMATCH",))
 
     context, classification = _inputs(tmp_path / "bounds")
     object.__setattr__(context.market_regime_report, "cohort_size", 51)
     with pytest.raises((TypeError, ValueError)):
-        api.reduce_current_industry_participation_v2(context, classification)
+        api.reduce_current_industry_participation_v4(context, classification)
 
 
 def test_invalid_classification_drops_forged_provenance_but_valid_stale_retains_it(
@@ -653,7 +600,7 @@ def test_invalid_classification_drops_forged_provenance_but_valid_stale_retains_
     context, classification = _inputs(tmp_path)
 
     object.__setattr__(classification, "retained_identity_sha256", "f" * 64)
-    invalid = api.reduce_current_industry_participation_v2(context, classification)
+    invalid = api.reduce_current_industry_participation_v4(context, classification)
     _assert_failure(invalid, "MALFORMED_EVIDENCE", ("COHORT_BINDING_MISMATCH",))
     assert invalid.classification_identity_sha256 is None
     assert invalid.known_at is None
@@ -669,7 +616,7 @@ def test_invalid_classification_drops_forged_provenance_but_valid_stale_retains_
         stale.known_at.astimezone(api._IST).date()
         != context.market_regime_report.decision_cutoff.astimezone(api._IST).date()
     )
-    result = api.reduce_current_industry_participation_v2(context, stale)
+    result = api.reduce_current_industry_participation_v4(context, stale)
 
     _assert_failure(
         result,
@@ -680,41 +627,23 @@ def test_invalid_classification_drops_forged_provenance_but_valid_stale_retains_
     assert result.known_at == stale.known_at
 
 
-def test_industry_v1_contract_remains_the_frozen_v1_behavior(tmp_path: Path) -> None:
-    v1 = importlib.import_module(
-        "swing_trading_ai_assistant.sector_analysis.current_industry_participation"
-    )
-    v1_tests = _test_module(
-        "sector_analysis/test_current_industry_participation.py",
-        "test_current_industry_participation",
-    )
-
-    result = v1_tests._reduce(tmp_path / "v1")
-
-    assert (
-        result.contract_version == "current-supplied-cohort-industry-participation@v1"
-    )
-    assert result.evidence_state == "OBSERVED"
-    assert callable(v1.reduce_current_industry_participation_v1)
-
-
 def test_exact_industry_validator_rejects_forged_upstream_binding(
     tmp_path: Path,
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
 
-    assert api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
     forged = object.__new__(type(result))
     for name in result.__dataclass_fields__:
         object.__setattr__(forged, name, getattr(result, name))
     object.__setattr__(forged, "market_regime_report_identity_sha256", "0" * 64)
-    assert not api.current_industry_participation_is_exact_valid_v2(forged, context)
+    assert not api.current_industry_participation_is_exact_valid_v4(forged, context)
 
     forged_registry_seal = object.__new__(type(result._reducer_seal))
     object.__setattr__(forged, "_reducer_seal", forged_registry_seal)
-    assert not api.current_industry_participation_is_exact_valid_v2(forged, context)
+    assert not api.current_industry_participation_is_exact_valid_v4(forged, context)
 
 
 def test_exact_industry_validator_rejects_rehashed_registered_result_then_recovers(
@@ -722,7 +651,7 @@ def test_exact_industry_validator_rejects_rehashed_registered_result_then_recove
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    result = api.reduce_current_industry_participation_v2(context, classification)
+    result = api.reduce_current_industry_participation_v4(context, classification)
     original_known_at = result.known_at
     original_identity = result.report_identity_sha256
 
@@ -732,11 +661,11 @@ def test_exact_industry_validator_rejects_rehashed_registered_result_then_recove
         "report_identity_sha256",
         api._object_identity_without(result, "report_identity_sha256", "_reducer_seal"),
     )
-    assert not api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert not api.current_industry_participation_is_exact_valid_v4(result, context)
 
     object.__setattr__(result, "known_at", original_known_at)
     object.__setattr__(result, "report_identity_sha256", original_identity)
-    assert api.current_industry_participation_is_exact_valid_v2(result, context)
+    assert api.current_industry_participation_is_exact_valid_v4(result, context)
 
 
 def test_industry_seal_is_opaque_and_does_not_retain_classification(
@@ -744,7 +673,7 @@ def test_industry_seal_is_opaque_and_does_not_retain_classification(
 ) -> None:
     api = _api()
     context, classification = _inputs(tmp_path)
-    observed = api.reduce_current_industry_participation_v2(context, classification)
+    observed = api.reduce_current_industry_participation_v4(context, classification)
 
     assert all(
         not hasattr(observed._reducer_seal, name)
@@ -761,4 +690,25 @@ def test_industry_seal_is_opaque_and_does_not_retain_classification(
         )
     )
     object.__setattr__(classification._private_rows[0], "industry", "Forged")
-    assert api.current_industry_participation_is_exact_valid_v2(observed, context)
+    assert api.current_industry_participation_is_exact_valid_v4(observed, context)
+
+
+def test_reordered_selection_retains_observed_industry_counts(tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+    _v4_test_module().test_v4_preserves_supplied_member_order_but_rejects_identity_bridge_drift(
+        tmp_path / "context", capture=captured
+    )
+    context = captured["retained"]
+    private_context = captured["candidate"].context_object
+    classification = _retained_classification(
+        tmp_path / "classification",
+        context,
+        private_context,
+        industries=("Technology", "Banks"),
+    )
+    result = _api().reduce_current_industry_participation_v4(context, classification)
+    assert result.evidence_state == "OBSERVED"
+    assert tuple(
+        (row.industry, row.member_count, row.unchanged) for row in result.industries
+    ) == (("Banks", 1, 1), ("Technology", 1, 1))
+    assert _api().current_industry_participation_is_exact_valid_v4(result, context)

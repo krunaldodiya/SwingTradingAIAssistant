@@ -263,7 +263,7 @@ Upstox raw OHLCV and does not make yfinance strict point-in-time authority.
 
 ### BharatStock migration direction
 
-**2026-09-10 owner decision — approved direction, not a completed cutover.**
+**2026-09-10 owner decision — implementation in progress, not released.**
 [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 owns replacement of every active yfinance daily-acquisition path with the
 direct BharatStock API. Use one authorized paid account, no Next.js service,
@@ -299,13 +299,15 @@ The governed cutover must address all of these surfaces:
 | Historical evidence | Preserve original Yahoo labels, hashes, known-at times and supported readers; never rewrite old data as BharatStock. |
 | Documentation, skills, tracker and memory | Update active instructions with the exact delivered revision/date; supersede rather than rewrite historical decisions or conversations. |
 
-Implementation remains blocked by the applicable
-[#156 security follow-up](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156#issuecomment-5612764820),
-which is **INVALID / NO VERDICT**, and by the missing provider
-adjustment/correction and permitted retention/use qualification. The data
-check does not waive these requirements or authorize a new review that
-bypasses the recorded refusal. No production source or capture revision has
-changed as part of this decision record.
+The owner withdrew the project-owned pre-implementation scheduling dependency
+on the old #156 follow-up for this bounded work in
+[the September 10 correction](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5614112378).
+The old review remains **INVALID / NO VERDICT**; Support was stopped without
+sending a message. No refused review is retried or relabelled as passed.
+Reversible implementation and ordinary correctness checks proceed; missing
+independent review and protected release controls are not waived. The scoped
+data check still does not establish provider adjustment/correction methodology,
+permitted redistribution, historical availability, or production capture.
 
 [Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
 remains separate and open: provider replacement cannot prove that 99 valid
@@ -314,26 +316,29 @@ evidence. Its real public-consumer, aggregate-coverage, recovery, review and
 release criteria must pass before closure. A missing member must never be
 silently omitted or a partial list represented as complete.
 
-### Delivered provider behavior pending cutover
+### Versioned provider behavior
 
-Provider routing is by narrow capability, selected explicitly before use, and
-bound into fact provenance. Upstox is primary for live/current raw OHLCV and its
-retained corporate-action screen. The delivered runtime still uses yfinance
-only for adjusted daily research with explicit provider and price basis,
-never as a silent fallback or live broker feed. Angel One is not implemented now and remains a
-future adapter candidate requiring separate qualification.
+The unreleased successor uses direct `bharatstock-api@v1` acquisition with
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; source volume is unadjusted.
+It does not claim dividend/rights adjustment, total-return continuity, or
+as-published point-in-time availability. Acquisition uses one account,
+at most 2,000 HTTP attempts per client run, at most 40 price pages per member,
+no automatic retries, and a sticky stop for shared failures. This per-run
+bound does not claim knowledge of the account's remaining daily quota.
 
-yfinance supplies long daily history, but its intraday history is limited to the
-latest 60 days. It is an unofficial Yahoo client for personal/research use, and
-retrospectively retrieved adjusted series can be revised; they are not
-as-published point-in-time authority. Every admitted fact must bind provider,
+Historical Yahoo records and their supported readers retain original provider
+and adjustment labels. No executable Yahoo acquisition, cache initialization,
+or fallback is retained by the new path. Upstox remains the separate provider
+for raw/current OHLCV and the Plan-21 corporate-action screen. Angel One and
+supplementary financial/ownership/disclosure datasets remain separately scoped.
+Every admitted fact must bind provider,
 price basis, source/schema/policy identity, timestamps, and retained
 receipt/object identity. No generic silent fallback is permitted.
 
-Existing Upstox raw OHLCV remains unchanged. A yfinance adjusted close must never
-be inserted into or used to populate an Upstox raw candle. A future Market
-Structure contract must use one complete, consistent raw-OHLC basis or one
-complete, consistent adjusted-OHLC basis and remains separate from Sprint 11.
+Existing Upstox raw OHLCV remains separate. A BharatStock or historical Yahoo
+adjusted value must never populate an Upstox raw candle. Market Structure uses
+one complete raw-OHLC basis or one complete adjusted-OHLC basis, never a mix;
+shared deterministic mathematics does not change the evidence's basis.
 Historical/backtest studies use only evidence available by the declared cutoff;
 unavailable features are explicitly omitted/not applied, never later-backfilled,
 and do not block unrelated research whose declared profile does not require

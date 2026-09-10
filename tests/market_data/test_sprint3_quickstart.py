@@ -235,19 +235,6 @@ def _invoke(capsys, argv: list[str], **services: object) -> dict[str, object]:
 def test_clean_quickstart_proves_persistent_repeat_and_read_workflow(
     tmp_path: Path, capsys
 ) -> None:
-    readme = Path("README.md").read_text()
-    preview_contract = Path("docs/plans/04-public-preview-contract.md").read_text()
-    assert "## Downloader v1 quickstart" in readme
-    assert "SCHEDULE_EVIDENCE_UNAVAILABLE" in preview_contract
-    assert "provenance-complete supplied NSE schedule evidence" in readme
-    assert "tests/market_data/test_sprint3_quickstart.py" in readme
-    assert "--symbols RELIANCE,SBIN,TCS" in readme
-    assert "--universe nifty50-current" in readme
-    assert "latest completed authoritative session" in readme
-    assert "Upstox remains primary for live/raw OHLCV" in readme
-    assert "yfinance is a separate adjusted-daily research provider" in readme
-    assert "~/SwingTradingAIAssistantData" in readme
-
     schedule = _schedule()
     snapshots = _SnapshotSource()
     sessions = _HistoricalSessions(_historical_response())

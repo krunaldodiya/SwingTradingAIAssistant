@@ -8,6 +8,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
+
 from .core import (
     DownloadError,
     PersistenceError,
@@ -23,13 +25,25 @@ def _date(value: str) -> date:
         raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from None
 
 
+def _instrument(value: str) -> BharatStockInstrument:
+    try:
+        isin, exchange, symbol = value.split(":")
+        return BharatStockInstrument(isin, exchange, symbol)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected ISIN:NSE-or-BSE:SYMBOL") from None
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="equity-data-download")
+    parser = argparse.ArgumentParser(
+        prog="equity-data-download",
+        epilog="New acquisition uses BHARATSTOCK_API_KEY; exact retained reads need no key.",
+    )
     parser.add_argument(
-        "--symbol",
+        "--instrument",
         action="append",
         required=True,
-        help="provider symbol; repeat for multiple stocks",
+        type=_instrument,
+        help="ISIN:EXCHANGE:SYMBOL; repeat in the requested order",
     )
     parser.add_argument("--start", required=True, type=_date, help="inclusive date")
     parser.add_argument("--end", required=True, type=_date, help="inclusive date")
@@ -46,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         receipt = download_daily_ohlcv(
-            tuple(arguments.symbol),
+            tuple(arguments.instrument),
             arguments.start,
             arguments.end,
             arguments.storage_root,
@@ -67,10 +81,13 @@ def main(argv: list[str] | None = None) -> int:
         "provider_version": receipt.provider_version,
         "retrieved_at": receipt.retrieved_at.isoformat().replace("+00:00", "Z"),
         "row_count": receipt.row_count,
-        "rows_by_symbol": dict(receipt.rows_by_symbol),
+        "rows_by_instrument": dict(receipt.rows_by_instrument),
         "request_identity_sha256": receipt.request_identity_sha256,
         "start": receipt.start.isoformat(),
-        "symbols": list(receipt.symbols),
+        "instruments": [
+            {"isin": item.isin, "exchange": item.exchange, "symbol": item.symbol}
+            for item in receipt.instruments
+        ],
         "volume_basis": receipt.volume_basis,
     }
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n")

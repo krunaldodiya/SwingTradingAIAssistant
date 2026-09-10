@@ -6,42 +6,44 @@ import errno
 import hashlib
 import json
 import os
-import re
 import stat
-import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import localcontext
 from math import isfinite
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Final, Protocol, cast
 
-import pandas as pd
 import pyarrow as _pyarrow  # pyright: ignore[reportMissingImports]
 import pyarrow.parquet as _pyarrow_parquet  # pyright: ignore[reportMissingImports]
-import yfinance
 
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    PRICE_BASIS,
+    PROVIDER_SOURCE,
+    VOLUME_BASIS,
+    BharatStockClient,
+    BharatStockError,
+    BharatStockHistory,
+    BharatStockInstrument,
+)
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
     StorageRootLeaseOperation,
 )
 
-_PROVIDER: Final = "YFINANCE"
-_PRICE_BASIS: Final = "YFINANCE_AUTO_ADJUSTED_OHLC"
-_VOLUME_BASIS: Final = "YFINANCE_SOURCE_REPORTED_VOLUME"
-_FIELDS: Final = ("Open", "High", "Low", "Close", "Volume")
-_SYMBOL = re.compile(r"[A-Za-z0-9^][A-Za-z0-9.^=&_-]{0,63}\Z")
+_PROVIDER: Final = "BHARATSTOCK"
+_PRICE_BASIS: Final = PRICE_BASIS
+_VOLUME_BASIS: Final = VOLUME_BASIS
 _MAX_SYMBOLS: Final = 100
-_YFINANCE_MODULE: Final[ModuleType] = cast(ModuleType, yfinance)
 pa: Any = cast(Any, _pyarrow)
 pq: Any = cast(Any, _pyarrow_parquet)
 _DATASET_DIRECTORY: Final = "adjusted_daily"
-_PROVIDER_DIRECTORY: Final = "provider=yfinance"
+_PROVIDER_DIRECTORY: Final = "provider=bharatstock"
 _PARQUET_NAME: Final = "data.parquet"
-_SCHEMA_VERSION: Final = "2"
-_CONTRACT_VERSION: Final = "equity-data-downloader@v2"
+_SCHEMA_VERSION: Final = "3"
+_CONTRACT_VERSION: Final = "equity-data-downloader@v3"
 _MAX_VOLUME: Final = (1 << 63) - 1
 _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _FILE_READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
@@ -51,24 +53,25 @@ _FILE_CREATE_FLAGS: Final = (
 
 
 _CALL_CONFIGURATION: Final[dict[str, object]] = {
-    "actions": False,
-    "threads": True,
-    "ignore_tz": True,
-    "group_by": "ticker",
-    "auto_adjust": True,
-    "back_adjust": False,
-    "repair": False,
-    "keepna": False,
-    "progress": False,
-    "prepost": False,
-    "rounding": False,
-    "timeout": 10,
-    "multi_level_index": True,
+    "endpoint": "https://bharatstockapi.com/v1/stocks/{isin}/prices",
+    "page_size": 1000,
+    "max_requests": 2000,
+    "max_pages_per_member": 40,
+    "max_body_bytes": 2 * 1024 * 1024,
+    "timeout_seconds": 30,
+    "redirects": False,
+    "retries": 0,
+    "price_projection": "raw_ohlc_times_provider_split_bonus_factor",
 }
 
 
-class _Series(Protocol):
-    def tolist(self) -> list[object]: ...
+class _HistoryClient(Protocol):
+    def history(
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+    ) -> BharatStockHistory: ...
 
 
 class DownloadError(RuntimeError):
@@ -83,7 +86,7 @@ class PersistenceError(RuntimeError):
 class DownloadReceipt:
     """Operational receipt for one inserted or reused Parquet dataset."""
 
-    symbols: tuple[str, ...]
+    instruments: tuple[BharatStockInstrument, ...]
     start: date
     end: date
     destination: Path
@@ -94,7 +97,7 @@ class DownloadReceipt:
     price_basis: str
     volume_basis: str
     row_count: int
-    rows_by_symbol: tuple[tuple[str, int], ...]
+    rows_by_instrument: tuple[tuple[str, int], ...]
     outcome: str
 
     def __post_init__(self) -> None:
@@ -129,22 +132,23 @@ class _PrivateDirectory:
 
 
 def download_daily_ohlcv(
-    symbols: tuple[str, ...],
+    instruments: tuple[BharatStockInstrument, ...],
     start: date,
     end: date,
     storage_root: Path | None = None,
+    *,
+    client: _HistoryClient | None = None,
 ) -> DownloadReceipt:
-    """Download daily OHLCV to one configured Parquet source-of-truth root.
+    """Persist directly acquired BharatStock adjusted OHLC and source volume.
 
-    The destination is derived from the normalized request and always resides
-    below ``<storage_root>/adjusted_daily/provider=yfinance``. The default root
-    is ``~/SwingTradingAIAssistantData``. Callers may configure that root but
-    cannot select an arbitrary output file or a second persistence format.
+    Canonical ISIN/exchange/symbol identities and their supplied order bind the
+    request. Exact retained requests are read without credentials or acquisition.
+    Historical Yahoo Parquet files remain unchanged in their original namespace.
+    This transport utility does not itself admit governed capture evidence.
     """
-
     root = default_storage_root() if storage_root is None else storage_root
-    normalized = _validate_request(symbols, start, end, root)
-    provider_version = _provider_version()
+    normalized = _validate_request(instruments, start, end, root)
+    provider_version = PROVIDER_SOURCE
     request_identity = _request_identity(
         normalized,
         start,
@@ -156,9 +160,7 @@ def download_daily_ohlcv(
     try:
         with lease.root_operation(root) as operation:
             existing_chain = _open_dataset_chain(
-                operation,
-                request_identity,
-                create=False,
+                operation, request_identity, create=False
             )
             if existing_chain is not None:
                 try:
@@ -174,221 +176,119 @@ def download_daily_ohlcv(
                     )
                 finally:
                     _close_directories(existing_chain)
-
-            cache_chain = _open_cache_chain(operation)
+            provider = BharatStockClient() if client is None else client
+            rows = _download_rows(provider, instruments, start, end)
+            operation.ensure_live()
+            retrieved_at = datetime.now(UTC)
+            table = _parquet_table(
+                rows,
+                symbols=normalized,
+                start=start,
+                end=end,
+                request_identity_sha256=request_identity,
+                retrieved_at=retrieved_at,
+                provider_version=provider_version,
+            )
+            dataset_chain = _open_dataset_chain(
+                operation, request_identity, create=True
+            )
+            if dataset_chain is None:
+                raise PersistenceError("destination write failed")
+            published_descriptor: int | None = None
             try:
-                _configure_provider_cache(
-                    _descriptor_directory_path(cache_chain[-1].descriptor)
-                )
-                exclusive_end = end + timedelta(days=1)
-                try:
-                    frame = _public_download(
-                        tickers=normalized,
-                        start=start.isoformat(),
-                        end=exclusive_end.isoformat(),
-                        interval="1d",
-                        **_CALL_CONFIGURATION,
-                    )
-                except Exception:
-                    _ensure_directories(cache_chain)
-                    raise DownloadError("provider download failed") from None
-                retrieved_at = datetime.now(UTC)
-                _ensure_directories(cache_chain)
-                rows, _counts = _rows_from_frame(frame, normalized, start, end)
-                table = _parquet_table(
-                    rows,
+                published_descriptor = _persist(table, dataset_chain[-1], _PARQUET_NAME)
+                _ensure_directories(dataset_chain)
+                receipt = _receipt_from_existing(
+                    dataset_chain[-1],
+                    destination=destination,
                     symbols=normalized,
                     start=start,
                     end=end,
                     request_identity_sha256=request_identity,
-                    retrieved_at=retrieved_at,
                     provider_version=provider_version,
+                    outcome="INSERTED",
+                    held_descriptor=published_descriptor,
                 )
-                dataset_chain = _open_dataset_chain(
-                    operation,
-                    request_identity,
-                    create=True,
-                )
-                if dataset_chain is None:
-                    raise PersistenceError("destination write failed")
-                published_descriptor: int | None = None
-                try:
-                    published_descriptor = _persist(
-                        table,
-                        dataset_chain[-1],
-                        _PARQUET_NAME,
-                    )
-                    _ensure_directories(dataset_chain)
-                    _ensure_directories(cache_chain)
-                    receipt = _receipt_from_existing(
-                        dataset_chain[-1],
-                        destination=destination,
-                        symbols=normalized,
-                        start=start,
-                        end=end,
-                        request_identity_sha256=request_identity,
-                        provider_version=provider_version,
-                        outcome="INSERTED",
-                        held_descriptor=published_descriptor,
-                    )
-                finally:
-                    if published_descriptor is not None:
-                        os.close(published_descriptor)
-                    _close_directories(dataset_chain)
             finally:
-                _close_directories(cache_chain)
+                if published_descriptor is not None:
+                    os.close(published_descriptor)
+                _close_directories(dataset_chain)
     finally:
         lease.close()
     return receipt
 
 
 def _validate_request(
-    symbols: object,
+    instruments: object,
     start: object,
     end: object,
     storage_root: object,
 ) -> tuple[str, ...]:
-    if type(symbols) is not tuple:
+    if type(instruments) is not tuple:
         raise ValueError("invalid download request")
-    raw_symbols = cast(tuple[object, ...], symbols)
+    members = cast(tuple[object, ...], instruments)
     if (
-        not 1 <= len(raw_symbols) <= _MAX_SYMBOLS
-        or any(
-            type(symbol) is not str or _SYMBOL.fullmatch(symbol) is None
-            for symbol in raw_symbols
-        )
+        not 1 <= len(members) <= _MAX_SYMBOLS
+        or any(type(member) is not BharatStockInstrument for member in members)
         or type(start) is not date
         or type(end) is not date
         or start > end
-        or end == date.max
+        or (end - start).days > 36525
         or type(storage_root) is not type(Path())
         or not storage_root.is_absolute()
         or any(part in {".", ".."} for part in storage_root.parts)
     ):
         raise ValueError("invalid download request")
-    normalized = tuple(sorted(cast(str, symbol).upper() for symbol in raw_symbols))
-    if len(set(normalized)) != len(normalized):
-        raise ValueError("invalid download request")
-    return normalized
+    typed = cast(tuple[BharatStockInstrument, ...], members)
+    for member in typed:
+        member.__post_init__()
+    if len({(member.isin, member.exchange) for member in typed}) != len(typed):
+        raise ValueError("duplicate download instrument")
+    return tuple(_instrument_key(member) for member in typed)
 
 
-def _provider_version() -> str:
-    version = _YFINANCE_MODULE.__dict__.get("__version__")
-    if type(version) is not str or not version:
-        raise DownloadError("provider identity unavailable")
-    return version
+def _instrument_key(member: BharatStockInstrument) -> str:
+    return f"{member.isin}:{member.exchange}:{member.symbol}"
 
 
-def _public_download(**kwargs: object) -> object:
-    download = _YFINANCE_MODULE.__dict__.get("download")
-    if not callable(download):
-        raise RuntimeError("provider download unavailable")
-    return download(**kwargs)
+def _instrument_from_key(value: str) -> BharatStockInstrument:
+    isin, exchange, symbol = value.split(":")
+    return BharatStockInstrument(isin, exchange, symbol)
 
 
-def _descriptor_directory_path(descriptor: int) -> Path:
-    held = os.fstat(descriptor)
-    if sys.platform == "darwin":
-        location = Path(f"/.vol/{held.st_dev}/{held.st_ino}")
-    elif sys.platform.startswith("linux"):
-        location = Path(f"/proc/self/fd/{descriptor}")
-    else:
-        raise PersistenceError("provider cache descriptor path is unavailable")
-    resolved = os.stat(location)
-    if (
-        not stat.S_ISDIR(held.st_mode)
-        or resolved.st_dev != held.st_dev
-        or resolved.st_ino != held.st_ino
-    ):
-        raise PersistenceError("provider cache descriptor path is unavailable")
-    return location
-
-
-def _configure_provider_cache(location: Path) -> None:
-    """Keep yfinance's cookie and timezone caches under the configured root."""
-
-    setter = _YFINANCE_MODULE.__dict__.get("set_tz_cache_location")
-    if not callable(setter):
-        raise DownloadError("provider cache configuration unavailable")
-    try:
-        setter(str(location))
-    except Exception:
-        raise DownloadError("provider cache configuration failed") from None
-
-
-def _rows_from_frame(  # noqa: C901 - provider frame admission
-    frame: object,
-    symbols: tuple[str, ...],
+def _download_rows(
+    client: _HistoryClient,
+    instruments: tuple[BharatStockInstrument, ...],
     start: date,
     end: date,
-) -> tuple[list[tuple[object, ...]], dict[str, int]]:
-    if (
-        not isinstance(frame, pd.DataFrame)
-        or frame.empty
-        or not isinstance(frame.index, pd.DatetimeIndex)
-        or not frame.index.is_unique
-        or not isinstance(frame.columns, pd.MultiIndex)
-        or frame.columns.nlevels != 2
-        or not frame.columns.is_unique
-    ):
-        raise DownloadError("provider response is invalid")
-    required = {(symbol, field) for symbol in symbols for field in _FIELDS}
-    actual = set(cast(Iterable[tuple[object, object]], frame.columns))
-    if not required.issubset(actual):
-        raise DownloadError("provider response is incomplete")
-    sessions: list[date] = []
-    for timestamp in cast(Iterable[object], frame.index):
-        if not isinstance(timestamp, (datetime, pd.Timestamp)):
-            raise DownloadError("provider response is invalid")
-        session = timestamp.date()
-        if type(session) is not date:
-            raise DownloadError("provider response is invalid")
-        sessions.append(session)
-    if len(set(sessions)) != len(sessions) or sessions != sorted(sessions):
-        raise DownloadError("provider response is invalid")
-
+) -> list[tuple[object, ...]]:
     rows: list[tuple[object, ...]] = []
-    counts = dict.fromkeys(symbols, 0)
-    for symbol in symbols:
-        series: dict[str, list[object]] = {}
-        for field in _FIELDS:
-            value: object = cast(object, frame[(symbol, field)])
-            if not isinstance(value, pd.Series):
-                raise DownloadError("provider response is invalid")
-            series[field] = cast(_Series, value).tolist()
-        for position, session in enumerate(sessions):
-            if session < start or session > end:
+    for member in instruments:
+        try:
+            history = client.history(member, start, end)
+        except BharatStockError as error:
+            if error.member_local:
                 continue
-            values = tuple(
-                _normalize_numeric(series[field][position]) for field in _FIELDS
-            )
-            if all(value is None for value in values):
-                continue
-            _validate_ohlcv_values(values, DownloadError)
-            volume = int(cast(int | float, values[4]))
-            rows.append((symbol, session.isoformat(), *values[:4], volume))
-            counts[symbol] += 1
+            raise DownloadError(error.category) from None
+        if type(history) is not BharatStockHistory or history.instrument != member:
+            raise DownloadError("provider history identity is invalid")
+        history.__post_init__()
+        key = _instrument_key(member)
+        with localcontext() as context:
+            context.prec = 64
+            for bar in history.rows:
+                bar.__post_init__()
+                if not start <= bar.session <= end:
+                    raise DownloadError("provider session outside requested period")
+                values = tuple(
+                    float(value * bar.adjustment_factor)
+                    for value in (bar.open, bar.high, bar.low, bar.close)
+                )
+                _validate_ohlcv_values((*values, bar.volume), DownloadError)
+                rows.append((key, bar.session.isoformat(), *values, bar.volume))
     if not rows:
-        raise DownloadError("provider returned no rows for requested period")
-    return rows, counts
-
-
-def _missing(value: object) -> bool:
-    try:
-        result: object = pd.isna(value)  # pyright: ignore[reportUnknownMemberType]
-        return bool(result)
-    except (TypeError, ValueError):
-        return False
-
-
-def _normalize_numeric(value: object) -> int | float | None:
-    if _missing(value):
-        return None
-    if type(value) is int:
-        return value
-    if type(value) is float and isfinite(value):
-        return value
-    raise DownloadError("provider response contains invalid values")
+        raise DownloadError("provider returned no valid requested member history")
+    return rows
 
 
 def _validate_ohlcv_values(
@@ -449,6 +349,8 @@ def _schema_identity() -> str:
     return hashlib.sha256(
         _canonical(
             (
+                ("isin", "string", False),
+                ("exchange", "string", False),
                 ("symbol", "string", False),
                 ("session", "date32", False),
                 ("open", "float64", False),
@@ -480,7 +382,7 @@ def _request_identity(
                 "provider_version": provider_version,
                 "schema_identity_sha256": _schema_identity(),
                 "start": start.isoformat(),
-                "symbols": list(symbols),
+                "instruments": list(symbols),
                 "volume_basis": _VOLUME_BASIS,
             }
         )
@@ -612,15 +514,6 @@ def _open_dataset_chain(
         ),
         create=create,
     )
-
-
-def _open_cache_chain(
-    operation: StorageRootLeaseOperation,
-) -> list[_PrivateDirectory]:
-    result = _open_chain(operation, (".cache", "yfinance"), create=True)
-    if result is None:
-        raise PersistenceError("provider cache is unavailable")
-    return result
 
 
 def _ensure_directories(directories: list[_PrivateDirectory]) -> None:
@@ -768,7 +661,7 @@ def _receipt_from_existing(
         if owns_descriptor and descriptor is not None:
             os.close(descriptor)
     return DownloadReceipt(
-        symbols=symbols,
+        instruments=tuple(_instrument_from_key(value) for value in symbols),
         start=start,
         end=end,
         destination=destination,
@@ -779,7 +672,7 @@ def _receipt_from_existing(
         price_basis=_PRICE_BASIS,
         volume_basis=_VOLUME_BASIS,
         row_count=table.num_rows,
-        rows_by_symbol=tuple((symbol, counts[symbol]) for symbol in symbols),
+        rows_by_instrument=tuple((symbol, counts[symbol]) for symbol in symbols),
         outcome=outcome,
     )
 
@@ -856,7 +749,7 @@ def _parquet_metadata(
         b"schema_identity_sha256": _schema_identity().encode("ascii"),
         b"schema_version": _SCHEMA_VERSION.encode("ascii"),
         b"start": start.isoformat().encode("ascii"),
-        b"symbols": json.dumps(
+        b"instrument_keys": json.dumps(
             symbols,
             ensure_ascii=True,
             separators=(",", ":"),
@@ -905,6 +798,8 @@ def _validate_existing_table(
     counts = dict.fromkeys(symbols, 0)
     for record in records:
         if set(record) != {
+            "isin",
+            "exchange",
             "symbol",
             "session",
             "open",
@@ -914,7 +809,12 @@ def _validate_existing_table(
             "volume",
         }:
             raise ValueError
-        symbol = record["symbol"]
+        identity = BharatStockInstrument(
+            cast(str, record["isin"]),
+            cast(str, record["exchange"]),
+            cast(str, record["symbol"]),
+        )
+        symbol = _instrument_key(identity)
         session = record["session"]
         if (
             type(symbol) is not str
@@ -947,6 +847,8 @@ def _validate_existing_table(
 def _data_schema() -> Any:
     return pa.schema(
         (
+            pa.field("isin", pa.string(), nullable=False),
+            pa.field("exchange", pa.string(), nullable=False),
             pa.field("symbol", pa.string(), nullable=False),
             pa.field("session", pa.date32(), nullable=False),
             pa.field("open", pa.float64(), nullable=False),
@@ -978,9 +880,12 @@ def _parquet_table(
             provider_version=provider_version,
         )
     )
+    identities = {key: _instrument_from_key(key) for key in symbols}
     records = tuple(
         {
-            "symbol": cast(str, row[0]),
+            "isin": identities[cast(str, row[0])].isin,
+            "exchange": identities[cast(str, row[0])].exchange,
+            "symbol": identities[cast(str, row[0])].symbol,
             "session": date.fromisoformat(cast(str, row[1])),
             "open": row[2],
             "high": row[3],

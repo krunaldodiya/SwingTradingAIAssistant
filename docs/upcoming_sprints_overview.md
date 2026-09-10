@@ -103,22 +103,23 @@ fixed-cohort limitation remain intact.
 [#184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 to replace active yfinance daily acquisition with direct BharatStock access.
 The [migration record](roadmap.md#bharatstock-migration-direction) distinguishes
-the successful 100-stock data check from the blocked, undelivered cutover.
+the scoped 100-stock input-data check from implementation and release evidence.
+The owner withdrew only the old pre-implementation scheduling dependency;
+review limitations and protected release gates remain explicit.
 Issue #183 remains open for its separate member-isolation behavior.
-The provider descriptions below record the still-delivered runtime.
 
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
-The delivered Plan-22 adjusted-close path still uses yfinance; every fact records
-provider and price basis, and no provider is a generic silent fallback.
-Angel One is deferred as a future qualified adapter and is not implemented now.
-yfinance offers long daily history but only the latest 60 days of intraday data;
-it is an unofficial personal/research-use Yahoo client whose retrospective
-adjustments may be revised and are not strict point-in-time authority.
+The unreleased Plan22 V3 successor uses direct BharatStock split/bonus-factor
+adjusted daily prices; source volume is unadjusted. Every fact records provider,
+basis and retrieval provenance. This is not dividend/rights-adjusted total
+return or historical point-in-time authority. No provider is a silent fallback.
+Historical Yahoo records remain readable under their original identities;
+their acquisition path is retired by #184. Angel One remains deferred.
 
-Raw Upstox OHLCV remains unchanged. A yfinance adjusted close never fills an
-Upstox candle. Any later Market Structure calculation must use a complete raw
-OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
+Raw Upstox OHLCV remains separate. No adjusted provider value fills an Upstox
+candle. Market Structure uses a complete raw OHLC series or a complete adjusted
+OHLC series consistently, never mixed bases.
 
 | Sprint | Tracker and lifecycle | Atomic outcome | Minimum dependency and gate | Explicit non-goals |
 | --- | --- | --- | --- | --- |

@@ -45,12 +45,12 @@ replace active yfinance daily acquisition with direct BharatStock access,
 without a separate service or mixed-provider fallback. The
 [provider migration record](roadmap.md#bharatstock-migration-direction)
 owns the scope, measured data-check limits and unresolved prerequisites.
-This is approved direction, not a delivered runtime change. Existing
-Yahoo-specific contracts/evidence remain truthful until their versioned
-successors are delivered; Upstox raw/current behavior is unchanged.
-Neither this decision nor the 100-stock data check closes
-[#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
-or the security-follow-up prerequisite below.
+This source revision is under implementation and is not a delivered runtime
+change. Yahoo-specific evidence keeps its original provider, basis, identities,
+and observation times; versioned successors do not reinterpret it.
+Upstox raw/current behavior remains separate. Neither the provider decision nor
+the 100-stock input-data check closes
+[#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
 
 ## Delivery priority overlay
 
@@ -78,9 +78,14 @@ accepted Plan 33 own only the bounded source decision, benchmark, and contract
 for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
 merged that planning record without changing runtime. Issue #155 delivered the
 exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
-separately bounded Plan 33 implementation. The owner requires its security
-review/audit follow-up after #145 and before #172 implementation; its closed
-tracker state does not establish that security acceptance.
+separately bounded Plan 33 implementation. The original owner instruction
+required its security follow-up after #145 and before #172 implementation.
+On 2026-09-10 the owner withdrew only that pre-implementation scheduling
+dependency for #184/#183 in
+[the scoped correction](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5614112378).
+Reversible implementation can proceed. The old review remains
+**INVALID / NO VERDICT**; no retry, replacement audit, policy bypass, successful
+review, or release waiver is implied. Protected release requirements remain.
 Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
 policy below. It changes execution-failure handling, not the product-module
 sequence or the separately bounded scope of #156.

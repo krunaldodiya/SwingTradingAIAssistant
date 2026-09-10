@@ -6,8 +6,8 @@ from swing_trading_ai_assistant.market_structure.current_live import (
     MarketStructureEventV1,
     MarketStructurePivotV1,
 )
-from swing_trading_ai_assistant.market_structure.current_same_pass import (
-    evaluate_current_same_pass_market_structure_v1,
+from swing_trading_ai_assistant.market_structure.current_same_pass_v4 import (
+    evaluate_current_same_pass_market_structure_v4,
 )
 
 __all__ = [
@@ -15,5 +15,5 @@ __all__ = [
     "CurrentMarketStructureReportV1",
     "MarketStructureEventV1",
     "MarketStructurePivotV1",
-    "evaluate_current_same_pass_market_structure_v1",
+    "evaluate_current_same_pass_market_structure_v4",
 ]

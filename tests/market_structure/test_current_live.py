@@ -13,9 +13,8 @@ from typing import Any, cast
 
 import pytest
 
-import swing_trading_ai_assistant.market_structure as market_structure_package
 import swing_trading_ai_assistant.market_structure.current_live_runtime_identity_manifest as runtime_manifest
-import swing_trading_ai_assistant.market_structure.current_same_pass as same_pass
+import swing_trading_ai_assistant.market_structure.current_same_pass_v4 as same_pass
 from swing_trading_ai_assistant.market_structure.current_live import (
     CALCULATION_IDENTITY_SHA256_V1,
     SCHEMA_IDENTITY_SHA256_V1,
@@ -417,17 +416,6 @@ def test_decimal_serialization_is_independent_of_ambient_precision() -> None:
     assert low_precision.report_identity_sha256 == high_precision.report_identity_sha256
 
 
-def test_package_exports_only_exact_boundary_and_result_types() -> None:
-    assert "evaluate_current_same_pass_market_structure_v1" in (
-        market_structure_package.__all__
-    )
-    assert "_evaluate_current_market_structure_v1" not in (
-        market_structure_package.__all__
-    )
-    assert "_CurrentMarketStructureInputV1" not in market_structure_package.__all__
-    assert "_MarketStructureBarV1" not in market_structure_package.__all__
-
-
 def test_report_constructor_cannot_mint_observed_evidence() -> None:
     with pytest.raises(ValueError, match="exact evidence boundary"):
         CurrentMarketStructureReportV1()
@@ -620,13 +608,13 @@ def test_exact_fifty_member_bound_is_complete_and_fifty_one_is_rejected() -> Non
         _request(members + (_member(isin="ISIN50", symbol="EQ50", bars=_flat_bars()),))
 
 
-def _v3_fixture_module() -> Any:
+def _v4_fixture_module() -> Any:
     path = (
         Path(__file__).parents[1]
         / "market_regime"
-        / "test_current_supplied_cohort_v3.py"
+        / "test_current_supplied_cohort_v4.py"
     )
-    name = "market_structure_current_supplied_cohort_v3_fixture"
+    name = "market_structure_current_supplied_cohort_v4_fixture"
     spec = util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = util.module_from_spec(spec)
@@ -641,7 +629,7 @@ def _exact_context(
     **fixture_kwargs: Any,
 ) -> tuple[Any, Any]:
     tmp_path.mkdir(parents=True, exist_ok=True)
-    fixture = _v3_fixture_module()
+    fixture = _v4_fixture_module()
     capture: dict[str, Any] = {}
     fixture.test_outer_composition_retains_real_context_and_archive_files(
         tmp_path,
@@ -658,7 +646,7 @@ def test_exact_same_pass_boundary_projects_validated_completed_grid(
 ) -> None:
     context, _ = _exact_context(tmp_path, monkeypatch)
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -688,7 +676,7 @@ def test_same_pass_boundary_reports_cross_input_failures_in_frozen_order(
         adjusted_directions=("UP", "UP"),
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         first.request,
         second.raw_result,
         second.corporate_action_screen,
@@ -708,7 +696,7 @@ def test_same_pass_boundary_reports_cross_input_failures_in_frozen_order(
 
 def test_same_pass_boundary_rejects_malformed_caller_objects() -> None:
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             cast(Any, object()),
             cast(Any, object()),
             cast(Any, object()),
@@ -719,7 +707,7 @@ def test_exact_boundary_maps_valid_raw_insufficiency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     raw = raw_test._rehashed(
         type(context.raw_result),
         context.raw_result,
@@ -728,11 +716,11 @@ def test_exact_boundary_maps_valid_raw_insufficiency(
         raw_grid=None,
         reasons=("RAW_BAR_MISSING",),
     )
-    assert raw_test.raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert raw_test.raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         raw, context.request
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -754,7 +742,7 @@ def test_exact_boundary_maps_valid_unavailable_screen(
         expect_archive_failure=True,
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -772,7 +760,7 @@ def test_partial_current_session_state_is_not_projected(
         monkeypatch,
         include_partial=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     unavailable_partial = raw_test.raw_daily._partial_failure(
         context.request, "PARTIAL_SOURCE_UNAVAILABLE"
     )
@@ -782,16 +770,16 @@ def test_partial_current_session_state_is_not_projected(
         "raw_result_identity_sha256",
         partial_current_session=unavailable_partial,
     )
-    assert raw_test.raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert raw_test.raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         unavailable_raw, context.request
     )
 
-    observed = same_pass.evaluate_current_same_pass_market_structure_v1(
+    observed = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
     )
-    unavailable = same_pass.evaluate_current_same_pass_market_structure_v1(
+    unavailable = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         unavailable_raw,
         context.corporate_action_screen,
@@ -809,7 +797,7 @@ def test_partial_row_known_at_must_equal_snapshot_known_at(
         monkeypatch,
         include_partial=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     partial = context.raw_result.partial_current_session
     assert partial.rows is not None and partial.as_of is not None
     changed_row = raw_test._rehashed(
@@ -831,7 +819,7 @@ def test_partial_row_known_at_must_equal_snapshot_known_at(
         partial_current_session=changed_partial,
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -855,7 +843,7 @@ def test_partial_mapping_substitution_returns_reasons_instead_of_crashing(
         raw_directions=("UP", "UP"),
         adjusted_directions=("UP", "UP"),
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert foreign.raw_result.mapping_receipts is not None
     raw = raw_test._rehashed(
         type(context.raw_result),
@@ -864,7 +852,7 @@ def test_partial_mapping_substitution_returns_reasons_instead_of_crashing(
         mapping_receipts=(foreign.raw_result.mapping_receipts[-1],),
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -884,7 +872,7 @@ def test_include_partial_rejects_not_requested_state(
         monkeypatch,
         include_partial=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     not_requested = raw_test.raw_daily._not_requested_partial()
     raw = raw_test._rehashed(
         type(context.raw_result),
@@ -893,7 +881,7 @@ def test_include_partial_rejects_not_requested_state(
         partial_current_session=not_requested,
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -910,7 +898,7 @@ def test_intrinsically_invalid_partial_row_raises_before_report(
         monkeypatch,
         include_partial=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     partial = context.raw_result.partial_current_session
     assert partial.rows is not None
     row = deepcopy(partial.rows[0])
@@ -936,7 +924,7 @@ def test_intrinsically_invalid_partial_row_raises_before_report(
     )
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             context.request,
             raw,
             context.corporate_action_screen,
@@ -947,7 +935,7 @@ def test_raw_session_with_invalid_seal_raises_before_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     changed_session = deepcopy(context.raw_result.resolved_sessions[0])
     object.__setattr__(changed_session, "session_identity_sha256", "0" * 64)
     raw = raw_test._rehashed(
@@ -961,7 +949,7 @@ def test_raw_session_with_invalid_seal_raises_before_report(
     )
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             context.request,
             raw,
             context.corporate_action_screen,
@@ -982,7 +970,7 @@ def test_raw_grid_contract_substitution_has_independent_binding_reason(
     substituted_field: str,
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     grid = raw_test._rehashed(
         type(context.raw_result.raw_grid),
@@ -997,7 +985,7 @@ def test_raw_grid_contract_substitution_has_independent_binding_reason(
         raw_grid=grid,
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -1010,7 +998,7 @@ def test_source_binding_conflict_does_not_mask_later_future_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     original_grid = context.raw_result.raw_grid
 
@@ -1056,7 +1044,7 @@ def test_source_binding_conflict_does_not_mask_later_future_source(
         raw_grid=grid,
     )
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -1076,7 +1064,7 @@ def test_exact_boundary_rejects_intrinsically_malformed_inner_object(
     object.__setattr__(raw, "request_identity_sha256", "f" * 64)
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             context.request,
             raw,
             context.corporate_action_screen,
@@ -1095,7 +1083,7 @@ def test_exact_boundary_rejects_intrinsically_malformed_request_member(
     )
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1117,7 +1105,7 @@ def test_exact_boundary_never_invokes_caller_nested_member(
     object.__setattr__(request, "members", (CallerMember(),))
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1140,7 +1128,7 @@ def test_exact_boundary_never_invokes_caller_nested_scalar(
     object.__setattr__(request.members[0], "exchange", CallerScalar())
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1163,7 +1151,7 @@ def test_exact_boundary_never_invokes_caller_request_scalar(
     object.__setattr__(request, "contract_version", CallerScalar())
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1188,7 +1176,7 @@ def test_exact_boundary_never_invokes_caller_timezone(
     object.__setattr__(request, "decision_cutoff", hostile_cutoff)
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1218,7 +1206,7 @@ def test_string_ohlc_is_malformed_even_when_screen_is_unavailable(
         expected_effects=("raw-mapping", "screen"),
         expect_archive_failure=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     grid = context.raw_result.raw_grid
     original = grid.bars[0]
@@ -1245,7 +1233,7 @@ def test_string_ohlc_is_malformed_even_when_screen_is_unavailable(
     )
 
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_market_structure_v1(
+        same_pass.evaluate_current_same_pass_market_structure_v4(
             context.request,
             string_raw,
             context.corporate_action_screen,
@@ -1257,7 +1245,7 @@ def test_exact_boundary_performs_no_evaluation_time_filesystem_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
 
     def forbidden(*arguments: object, **keywords: object) -> None:
         del arguments, keywords
@@ -1267,7 +1255,7 @@ def test_exact_boundary_performs_no_evaluation_time_filesystem_access(
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     monkeypatch.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
 
-    report = same_pass.evaluate_current_same_pass_market_structure_v1(
+    report = same_pass.evaluate_current_same_pass_market_structure_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,

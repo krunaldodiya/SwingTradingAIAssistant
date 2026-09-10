@@ -1,10 +1,43 @@
 # Provider-neutral adjusted daily close contract
 
-> Provider direction update (2026-09-10):
+> Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
-> The delivered Yahoo-specific versions below remain frozen; this note does
-> not implement a successor, relabel evidence, or satisfy #183.
+> owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> The V3 section below governs the new source path. The following V1/V2
+> delivery records and Yahoo handoff identities remain historical, not active
+> Yahoo acquisition instructions.
+
+## BharatStock V3 successor — unreleased
+
+`provider-neutral-adjusted-daily-close@v3` uses the direct client in
+`market_data/bharatstock.py` through `adjusted_daily/service_v3.py`.
+The provider is `BHARATSTOCK`, source `bharatstock-api@v1`, mapping
+`bharatstock-isin-exchange-mapping@v1`, and basis
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`. Volume, where retained by capture,
+is source-reported and unadjusted. No dividend/rights or total-return
+equivalence is claimed.
+
+The request binds the exact ordered canonical ISIN/exchange/effective-symbol
+list, mapping validity across the entire fact window, cohort identity,
+cutoff, and exact 21-session Plan21 schedule. Acquisition addresses ISIN plus
+exchange, validates returned symbol identity and all daily rows, and produces
+S0/S20 facts with retrieval time and response digests. A complete handoff is
+required for whole-list calculations; member isolation is represented by the
+separate Plan30 V2 envelope, not a partial handoff under the old identity.
+
+The client uses one account, bounded serial requests/pages, no redirect or
+automatic retry, and a sticky stop on shared failures. Unexpected software
+errors retain the project internal-error semantics. `CURRENT_OBSERVATION`
+does not establish historical availability; `REVISED_NON_PIT` is not admissible
+as evidence known before the requested cutoff. A live consumer must check its
+own exact cutoff, mappings and schedule before accepting the handoff.
+
+Dependency-free V1/V2 record models and identity readers remain available with
+their original Yahoo labels. Their acquisition functions and adapter are
+retired, not aliased to BharatStock. Release and review evidence belongs to
+#184; the earlier test counts and approvals below do not transfer to V3.
+
+## Historical V1/V2 contract and delivery
 
 Status: **DELIVERED BOUNDARIES IMPLEMENTED AND MERGED — Issue #127 / PR #129
 delivered the narrow `@v1-mvp`; Issue #132 / PR #133 delivered the lightweight
@@ -26,9 +59,8 @@ Retained original hardening contract revision:
 `provider-neutral-adjusted-daily-close@v1` (**historical/non-shippable**)
 Retained original hardening schema revision:
 `provider-neutral-adjusted-daily-close-schema@v1` (**historical/non-shippable**)
-Any post-`@v2` hardening requires separate owner authorization and a properly
-versioned successor. This plan defines no successor and grants no implementation
-authority.
+The original V1/V2 hardening design below grants no new implementation
+authority. The scoped V3 successor above is authorized separately by #184.
 
 Risk: **R3 / High** — financial-research integrity, revised third-party data,
 dependency/network behavior, identity continuity, and immutable evidence.

@@ -297,17 +297,21 @@ positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
 other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
-**Provider migration approved, not yet implemented (2026-09-10):**
+**BharatStock migration — unreleased, unmerged source revision (2026-09-10):**
 [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-will replace active yfinance daily acquisition with direct BharatStock API
-access. See the [migration scope and prerequisites](docs/roadmap.md#bharatstock-migration-direction).
-The descriptions and commands below still describe the delivered runtime,
-not a completed BharatStock cutover. Existing Yahoo evidence is preserved;
-Upstox raw/current behavior and #183's separate isolation acceptance remain.
+governs the complete daily-provider cutover;
+[Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+governs independent member outcomes. Both Issues remain open. Required exact-byte
+reviews and release gates are not complete.
+The commands below describe this source revision, not a claimed PyPI release or
+completed merge. See the
+[migration scope and evidence limits](docs/roadmap.md#bharatstock-migration-direction).
+Historical Yahoo evidence retains its original labels and supported readers.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
-screening. The delivered runtime still uses yfinance for separate adjusted-daily
-research, not as a silent fallback, live broker feed, or strict point-in-time authority.
+screening. Direct BharatStock acquisition supplies the separately labelled
+split/bonus-factor-adjusted daily basis, not a silent fallback, live broker
+feed, total-return series, or strict point-in-time authority.
 `NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
 integration. A caller-supplied canonical universe snapshot establishes
 historical Nifty 50 membership and sector provenance; it does not supply prices
@@ -320,9 +324,9 @@ execution are not implemented.
 
 ## Structured daily OHLCV downloader
 
-The installed distribution exposes one `equity_data_downloader` implementation
-for bounded daily yfinance acquisition. Its CLI and Python API are adapters over
-the same core; they do not create separate data sources. Parquet is the sole
+This unreleased source revision exposes one `equity_data_downloader`
+implementation for bounded direct BharatStock daily acquisition. Its CLI and
+Python API use the same core. Parquet is the sole
 persisted OHLCV source of truth. Persistent output never uses `Downloads` or an
 arbitrary caller-selected file. Every invocation writes beneath one configured
 structured-data root, whose default is:
@@ -334,16 +338,16 @@ structured-data root, whose default is:
 The derived layout is:
 
 ```text
-adjusted_daily/provider=yfinance/request=<request-sha256>/data.parquet
+adjusted_daily/provider=bharatstock/request=<request-sha256>/data.parquet
 ```
 
 DuckDB is the SQL query engine over those Parquet files; it is not a second
 OHLCV copy. PyArrow is only the Parquet reader/writer library. Feather is not
-used. yfinance's internal cookie/timezone SQLite cache is redirected beneath
-`<storage-root>/.cache/yfinance`; it is auxiliary provider state, never an OHLCV
-source or research input. The utility accepts between 1 and 100
-explicit provider symbols and one inclusive date range in a multi-ticker
-request. It does not infer exchange calendars, canonical mappings, decision
+used. There is no Yahoo cookie/timezone cache or Yahoo fallback. The utility
+accepts between 1 and 100 explicit canonical ISIN/exchange/effective-symbol
+identities and one inclusive date range. Each stock uses an identity lookup
+followed by bounded price pages; acquisition is serial and does not retry.
+It does not infer exchange calendars, canonical mappings, decision
 cutoffs, capture revisions, or project evidence, so the resulting dataset
 remains transport/research data rather than automatically qualified
 capture-forward evidence.
@@ -358,18 +362,20 @@ revalidates its exact physical digest and full table before returning.
 Publication never renames or unlinks a path, so canonical-name substitution
 fails without moving or deleting another file.
 
-Install from PyPI:
+Run from this source checkout with its locked dependencies:
 
 ```bash
-python -m pip install swing-trading-ai-assistant
+uv sync
 ```
 
-Download one or several stocks. Repeat `--symbol` for each provider symbol:
+Provide the authorized account key through `BHARATSTOCK_API_KEY`; do not put
+credentials in request files, command arguments, retained evidence, or logs.
+Repeat `--instrument ISIN:EXCHANGE:SYMBOL` for each stock:
 
 ```bash
-equity-data-download \
-  --symbol SBIN.NS \
-  --symbol RELIANCE.NS \
+uv run equity-data-download \
+  --instrument INE062A01020:NSE:SBIN \
+  --instrument INE002A01018:NSE:RELIANCE \
   --start 2026-08-01 \
   --end 2026-08-28
 ```
@@ -380,10 +386,12 @@ invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
 storage is rejected before any provider call. The complete derived dataset
 remains under that root; there is no arbitrary output-file option.
 
-Prices use yfinance's auto-adjusted OHLC semantics, while volume remains the
-source-reported volume. The exact request identity binds normalized symbols and
-dates, adjusted basis, yfinance release, fixed provider-call configuration, and
-the exact Parquet schema/contract version. An existing dataset is reused only
+All OHLC values use the provider's explicit split/bonus adjustment factor;
+volume stays source-reported and unadjusted. The basis is
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`, not dividend/rights-adjusted
+total return. The exact request identity binds ordered canonical instruments,
+dates, provider `bharatstock-api@v1`, configuration, and schema/contract V3.
+An existing dataset is reused only
 after its owner, permissions, singleton identity, metadata, complete schema, and
 all OHLCV values pass validation; `REUSED` performs zero provider requests and
 zero file writes. A different or expanded request, provider version, call
@@ -396,17 +404,23 @@ The same behavior is available as a Python API:
 from datetime import date
 
 from equity_data_downloader import download_daily_ohlcv
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
 
 receipt = download_daily_ohlcv(
-    ("SBIN.NS", "RELIANCE.NS"),
+    (
+        BharatStockInstrument("INE062A01020", "NSE", "SBIN"),
+        BharatStockInstrument("INE002A01018", "NSE", "RELIANCE"),
+    ),
     date(2026, 8, 1),
     date(2026, 8, 28),
 )
 ```
 
-The receipt reports the normalized symbols, request identity, requested period,
-row count, per-symbol row counts, provider version, retrieval time, and derived
-Parquet path under the shared root.
+The receipt reports canonical instruments, request identity, requested period,
+row count, per-instrument row counts, provider version, retrieval time, and
+derived Parquet path. A member-local missing history contributes zero rows;
+shared authentication, authorization, quota, transport, or provider failures
+stop the run. This transport receipt is not a claim of complete research.
 
 
 

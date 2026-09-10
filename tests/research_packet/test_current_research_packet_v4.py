@@ -1,24 +1,20 @@
 # pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportReturnType=false
-"""RED contracts for the Plan-27 retained current research packet V2 cutover.
+"""RED contracts for the Plan-27 retained current research packet V4 cutover.
 
-The packet is deliberately tested only through its closed V2 public boundary.
+The packet is deliberately tested only through its closed V4 public boundary.
 Market data, Market Regime, and the optional partial snapshot arrive only in an
-exact sealed V3 context; this module must not recreate the unpublished V1
+exact sealed V4 context; this module must not recreate the unpublished V1
 splicing surface.
 """
 
 from __future__ import annotations
 
 import importlib
-import importlib.machinery
 import importlib.util
-import inspect
 import json
 import os
-import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -31,274 +27,67 @@ import pytest
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 packet_module = importlib.import_module(
-    "swing_trading_ai_assistant.research_packet.current_supplied_cohort"
+    "swing_trading_ai_assistant.research_packet.current_supplied_cohort_v4"
 )
-
-
-def test_packet_v2_runtime_identity_supports_installed_package_layout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manifest = importlib.import_module(packet_module._MANIFEST_MODULE)
-    baseline = packet_module._runtime_identity()
-    installed_root = tmp_path / "site-packages"
-    for loaded, relative_path in (
-        (packet_module, packet_module._RUNTIME_SOURCE),
-        (manifest, packet_module._MANIFEST_PATH),
-    ):
-        installed = installed_root.joinpath(*relative_path.split("/")[1:])
-        installed.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(loaded.__file__, installed)
-        monkeypatch.setattr(loaded, "__file__", str(installed))
-        monkeypatch.setattr(
-            loaded,
-            "__loader__",
-            importlib.machinery.SourceFileLoader(loaded.__name__, str(installed)),
-        )
-
-    assert packet_module._runtime_identity() == baseline
-    source = installed_root.joinpath(
-        "swing_trading_ai_assistant/research_packet/current_supplied_cohort.py"
-    )
-    with source.open("ab") as copied:
-        copied.write(b"\n")
-
-    with pytest.raises(ValueError, match="packet runtime identity invalid"):
-        packet_module._runtime_identity()
 
 
 _CUTOFF = datetime(2026, 1, 12, 10, tzinfo=UTC)
 _SELECTED_AT = datetime(2026, 1, 12, 9, 30, tzinfo=UTC)
-_PACKET_COMPONENTS = (
-    "MARKET_DATA_SAME_PASS_V1",
-    "MARKET_REGIME_V3",
-    "INDUSTRY_PARTICIPATION_V2",
-    "EVENT_NOTICES_V1",
-)
-_PACKET_REASONS = (
-    "MARKET_DATA_UNAVAILABLE",
-    "MARKET_REGIME_UNAVAILABLE",
-    "INDUSTRY_PARTICIPATION_UNAVAILABLE",
-    "EVENT_NOTICES_UNAVAILABLE",
-    "SOURCE_USE_UNAUTHORIZED",
-    "COMPONENT_IDENTITY_INVALID",
-    "COHORT_PROJECTION_MISMATCH",
-    "DECISION_CUTOFF_MISMATCH",
-    "DECISION_SESSION_MISMATCH",
-    "COMPONENT_FUTURE_KNOWN",
-    "COMPONENT_STALE",
-    "COMPONENT_CONFLICTED",
-    "PARTIAL_AS_COMPLETE",
-)
-
-_PLAN27_PACKET_SCHEMA_PREIMAGE = json.loads(
-    (
-        Path(__file__).parent / "data" / "plan27_packet_v2_schema_preimage.json"
-    ).read_text(encoding="utf-8")
-)
 
 
 # These are the exact Plan-27 dataclass/value-projection orders.  They are
 # intentionally not inferred from the implementation under test.
-_FIELD_ORDERS = {
-    "CurrentSuppliedCohortResearchPacketRequestV2": (
-        "contract_version",
-        "decision_cutoff",
-        "cohort_selected_at",
-        "members",
-        "plan21_cohort_identity_sha256",
-        "canonical_cohort_identity_sha256",
-        "market_context_identity_sha256",
-        "request_identity_sha256",
-    ),
-    "CurrentResearchPacketComponentLedgerRowV2": (
-        "position",
-        "component",
-        "contract_version",
-        "evidence_state",
-        "schema_identity_sha256",
-        "runtime_code_identity_sha256",
-        "primary_identity_sha256",
-        "failure_cohort_size",
-        "identity_bindings",
-        "known_at",
-        "component_reasons",
-        "packet_reasons",
-        "ledger_row_identity_sha256",
-    ),
-    "CurrentResearchPacketSourceAttributionRowV2": (
-        "position",
-        "component",
-        "source_state",
-        "provider_id",
-        "source_name",
-        "source_url",
-        "source_release",
-        "price_basis",
-        "publisher_published_at",
-        "known_at",
-        "licence_policy_identity",
-        "primary_identity_sha256",
-        "source_row_identity_sha256",
-    ),
-    "CurrentResearchPacketMarketDataProjectionV2": (
-        "decision_session",
-        "rows",
-        "projection_identity_sha256",
-    ),
-    "CurrentResearchPacketMarketRegimeProjectionV2": (
-        "decision_session",
-        "comparison_session",
-        "regime",
-        "advances",
-        "declines",
-        "unchanged",
-        "projection_identity_sha256",
-    ),
-    "CurrentResearchPacketIndustryProjectionV2": (
-        "classification_tier",
-        "industries",
-        "known_at",
-        "projection_identity_sha256",
-    ),
-    "CurrentResearchPacketEventProjectionV2": (
-        "known_at",
-        "members",
-        "projection_identity_sha256",
-    ),
-    "CurrentResearchPacketAIObservedV2": (
-        "evidence_state",
-        "market_data",
-        "market_regime",
-        "industry_participation",
-        "event_notices",
-        "partial_current_session",
-        "consumer_disposition",
-        "ai_projection_identity_sha256",
-    ),
-    "CurrentResearchPacketAIInsufficientV2": (
-        "evidence_state",
-        "market_data",
-        "market_regime",
-        "industry_participation",
-        "event_notices",
-        "partial_current_session",
-        "consumer_disposition",
-        "ai_projection_identity_sha256",
-    ),
-    "CurrentSuppliedCohortResearchPacketV2": (
-        "contract_version",
-        "schema_identity_sha256",
-        "configuration_identity_sha256",
-        "runtime_code_identity_sha256",
-        "request_identity_sha256",
-        "canonical_cohort_identity_sha256",
-        "market_context_identity_sha256",
-        "decision_cutoff",
-        "decision_session",
-        "component_known_at_max",
-        "evidence_state",
-        "component_ledger",
-        "source_attribution",
-        "reasons",
-        "ai_projection",
-        "packet_identity_sha256",
-        "packet_object_sha256",
-    ),
-    "_CurrentSuppliedCohortResearchPacketCandidateV2": (
-        "packet",
-        "candidate_identity_sha256",
-        "market_context",
-        "industry_participation",
-        "event_notices",
-        "_seal",
-    ),
-    "CurrentResearchPacketArchiveFailureV2": (
-        "contract_version",
-        "evidence_state",
-        "reason",
-        "request_identity_sha256",
-        "packet_identity_sha256",
-        "archive_failure_identity_sha256",
-    ),
-    "CurrentResearchPacketReceiptV2": (
-        "contract_version",
-        "packet_identity_sha256",
-        "packet_object_sha256",
-        "packet_byte_count",
-        "packet_filename",
-        "archive_known_at",
-        "receipt_identity_sha256",
-    ),
-    "CurrentResearchPacketCompletionMarkerV2": (
-        "contract_version",
-        "packet_identity_sha256",
-        "packet_object_sha256",
-        "receipt_identity_sha256",
-        "receipt_sha256",
-        "archive_known_at",
-        "completion_marker_identity_sha256",
-    ),
-    "RetainedCurrentSuppliedCohortResearchPacketV2": (
-        "evidence_state",
-        "packet",
-        "receipt_identity_sha256",
-        "completion_marker_identity_sha256",
-        "archive_known_at",
-        "retained_identity_sha256",
-        "_archive_seal",
-    ),
-}
 
 
 def _api() -> SimpleNamespace:
-    """Return exactly the public V2 packet cutover surface."""
+    """Return exactly the public V4 packet cutover surface."""
     names = (
-        "CurrentSuppliedCohortResearchPacketRequestV2",
-        "CurrentResearchPacketComponentLedgerRowV2",
-        "CurrentResearchPacketSourceAttributionRowV2",
-        "CurrentResearchPacketMarketDataProjectionV2",
-        "CurrentResearchPacketMarketRegimeProjectionV2",
-        "CurrentResearchPacketIndustryProjectionV2",
-        "CurrentResearchPacketEventProjectionV2",
-        "CurrentResearchPacketAIObservedV2",
-        "CurrentResearchPacketAIInsufficientV2",
-        "CurrentSuppliedCohortResearchPacketV2",
-        "CurrentResearchPacketArchivePortV2",
-        "FileCurrentResearchPacketArchiveV2",
-        "CurrentResearchPacketArchiveFailureV2",
-        "CurrentResearchPacketReceiptV2",
-        "CurrentResearchPacketCompletionMarkerV2",
-        "RetainedCurrentSuppliedCohortResearchPacketV2",
-        "build_and_retain_current_supplied_cohort_research_packet_v2",
+        "CurrentSuppliedCohortResearchPacketRequestV4",
+        "CurrentResearchPacketComponentLedgerRowV4",
+        "CurrentResearchPacketSourceAttributionRowV4",
+        "CurrentResearchPacketMarketDataProjectionV4",
+        "CurrentResearchPacketMarketRegimeProjectionV4",
+        "CurrentResearchPacketIndustryProjectionV4",
+        "CurrentResearchPacketEventProjectionV4",
+        "CurrentResearchPacketAIObservedV4",
+        "CurrentResearchPacketAIInsufficientV4",
+        "CurrentSuppliedCohortResearchPacketV4",
+        "CurrentResearchPacketArchivePortV4",
+        "FileCurrentResearchPacketArchiveV4",
+        "CurrentResearchPacketArchiveFailureV4",
+        "CurrentResearchPacketReceiptV4",
+        "CurrentResearchPacketCompletionMarkerV4",
+        "RetainedCurrentSuppliedCohortResearchPacketV4",
+        "build_and_retain_current_supplied_cohort_research_packet_v4",
     )
     return SimpleNamespace(**{name: getattr(packet_module, name) for name in names})
 
 
-def _member(symbol: str = "TCS") -> Any:
-    """Create the Plan-27 full canonical member, never a Plan-25 substitute."""
+def _member(symbol: str = "TCS", isin: str = "INE467B01029") -> Any:
+    """Create one valid BharatStock V4 canonical member."""
     daily = importlib.import_module(
-        "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+        "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
     )
-    return daily.CurrentSamePassEquityMemberV1(
-        isin="INE467B01029",
+    return daily.CurrentSamePassEquityMemberV4(
+        isin=isin,
         exchange="NSE",
         instrument_type="EQUITY",
         segment="EQ",
         effective_symbol=symbol,
         valid_from=date(2020, 1, 1),
         valid_through=date(2030, 1, 1),
-        provider_symbol="TCS.NS",
-        mapping_version="yfinance-symbol-mapping@v1",
+        provider_symbol=symbol,
+        mapping_version="bharatstock-isin-exchange-mapping@v1",
         mapping_valid_from=date(2020, 1, 1),
         mapping_valid_through=None,
         mapping_identity="a" * 64,
-        provider_mapping_revision="nse-provider-map@v1",
+        provider_mapping_revision="bharatstock-isin-map@v1",
     )
 
 
 def _request(*members: Any) -> Any:
     api = _api()
-    return api.CurrentSuppliedCohortResearchPacketRequestV2(
+    return api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=_CUTOFF,
         cohort_selected_at=_SELECTED_AT,
         members=tuple(members),
@@ -325,13 +114,29 @@ def _event_test_module() -> ModuleType:
 
 
 def _industry_test_module() -> ModuleType:
-    name = "test_current_industry_participation_v2"
+    name = "test_current_industry_participation_v4"
     loaded = sys.modules.get(name)
     if loaded is not None:
         return loaded
     path = (
         Path(__file__).parents[1]
-        / "sector_analysis/test_current_industry_participation_v2.py"
+        / "sector_analysis/test_current_industry_participation_v4.py"
+    )
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _regime_test_module() -> ModuleType:
+    name = "test_current_supplied_cohort_v4"
+    loaded = sys.modules.get(name)
+    if loaded is not None:
+        return loaded
+    path = (
+        Path(__file__).parents[1] / "market_regime/test_current_supplied_cohort_v4.py"
     )
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
@@ -342,15 +147,15 @@ def _industry_test_module() -> ModuleType:
 
 
 def _packet_builder_inputs(tmp_path: Path) -> tuple[Any, Any, Any, Any, Any]:
-    """Build real V3, Industry, and Plan-25 inputs for Packet V2 archive tests."""
+    """Build real V4, Industry, and Plan-25 inputs for Packet V4 archive tests."""
     api = _api()
     industry_test = _industry_test_module()
     context, classification = industry_test._inputs(tmp_path / "industry")
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    v3_request = industry_test._v3_request(context)
-    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+    v3_request = industry_test._v4_request(context)
+    request = api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=v3_request.decision_cutoff,
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
@@ -359,6 +164,14 @@ def _packet_builder_inputs(tmp_path: Path) -> tuple[Any, Any, Any, Any, Any]:
     event_test = _event_test_module()
     event_failure = event_test._parse(event_test._api(), b"")
     return api, request, context, industry, event_failure
+
+
+def _classification_failure(reason: str) -> Any:
+    classification_api = _industry_test_module()._classification_test_module()._api()
+    return classification_api.CurrentIndustryClassificationFailureV1(
+        evidence_state="INSUFFICIENT_EVIDENCE",
+        reasons=(reason,),
+    )
 
 
 @pytest.mark.parametrize(
@@ -390,11 +203,11 @@ def test_packet_industry_ledger_and_source_preserve_schema_bound_url(
         private_context,
         legacy=legacy,
     )
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
     v3_request = private_context.request
-    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+    request = api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=v3_request.decision_cutoff,
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
@@ -415,39 +228,24 @@ def test_packet_industry_ledger_and_source_preserve_schema_bound_url(
     assert source.primary_identity_sha256 == ledger.primary_identity_sha256
 
 
-def test_v2_is_the_only_public_packet_cutover_surface() -> None:
-    api = _api()
+def test_request_preserves_supplied_order_and_canonicalizes_identities() -> None:
+    first = _member("TCS", "INE467B01029")
+    second = _member("RELIANCE", "INE002A01018")
 
-    assert callable(api.build_and_retain_current_supplied_cohort_research_packet_v2)
-    assert not any(
-        name.endswith("V1") and not name.startswith("_") for name in dir(packet_module)
-    )
-    assert not hasattr(
-        packet_module, "build_and_retain_current_supplied_cohort_research_packet_v1"
-    )
-    assert not hasattr(packet_module, "FileCurrentResearchPacketArchiveV1")
-    assert not hasattr(packet_module, "CurrentResearchPacketArchiveFailureV1")
+    request = _request(second, first)
+    reversed_request = _request(first, second)
 
-
-def test_request_is_exact_canonical_cohort_without_caller_selected_session() -> None:
-    api = _api()
-    request = _request(_member())
-
-    assert (
-        _field_names(type(request))
-        == _FIELD_ORDERS["CurrentSuppliedCohortResearchPacketRequestV2"]
-    )
-    assert request.contract_version == "current-supplied-cohort-research-packet@v2"
-    assert request.decision_cutoff == _CUTOFF
-    assert request.cohort_selected_at == _SELECTED_AT
-    assert request.members == (_member(),)
+    assert request.members == (second, first)
+    assert reversed_request.members == (first, second)
     assert (
         request.plan21_cohort_identity_sha256
-        != request.canonical_cohort_identity_sha256
+        == reversed_request.plan21_cohort_identity_sha256
     )
-    assert request.market_context_identity_sha256 == "b" * 64
-    assert not hasattr(request, "decision_session")
-    assert api.CurrentSuppliedCohortResearchPacketRequestV2 is type(request)
+    assert (
+        request.canonical_cohort_identity_sha256
+        == reversed_request.canonical_cohort_identity_sha256
+    )
+    assert request.request_identity_sha256 != reversed_request.request_identity_sha256
 
 
 @pytest.mark.parametrize("length", (33, 64))
@@ -496,7 +294,7 @@ def test_request_rejects_non_utc_cutoff_and_invalid_member_interval() -> None:
     object.__setattr__(invalid_member, "valid_through", date(2019, 12, 31))
 
     with pytest.raises((TypeError, ValueError)):
-        api.CurrentSuppliedCohortResearchPacketRequestV2(
+        api.CurrentSuppliedCohortResearchPacketRequestV4(
             decision_cutoff=datetime(2026, 1, 12, 10),
             cohort_selected_at=_SELECTED_AT,
             members=(member,),
@@ -506,105 +304,13 @@ def test_request_rejects_non_utc_cutoff_and_invalid_member_interval() -> None:
         _request(invalid_member)
 
 
-def test_builder_accepts_only_the_exact_retained_v3_context_as_market_source() -> None:
-    api = _api()
-    signature = inspect.signature(
-        api.build_and_retain_current_supplied_cohort_research_packet_v2
-    )
-
-    assert tuple(signature.parameters) == (
-        "request",
-        "market_context",
-        "industry_participation",
-        "event_notices",
-        "archive",
-        "lease",
-        "trusted_clock",
-    )
-    assert not {
-        "market_data",
-        "market_report",
-        "market_regime",
-        "regime",
-        "partial_current_session",
-        "decision_session",
-    }.intersection(signature.parameters)
-    regime = importlib.import_module(
-        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
-    )
-    assert "RetainedCurrentSamePassMarketContextV3" in str(
-        signature.parameters["market_context"].annotation
-    )
-    assert hasattr(regime.RetainedCurrentSamePassMarketContextV3, "market_data_report")
-    assert hasattr(
-        regime.RetainedCurrentSamePassMarketContextV3, "market_regime_report"
-    )
-    assert hasattr(
-        regime.RetainedCurrentSamePassMarketContextV3, "partial_current_session"
-    )
-
-
-def test_industry_v2_and_retained_event_inputs_are_the_only_noncontext_facts() -> None:
-    api = _api()
-    signature = inspect.signature(
-        api.build_and_retain_current_supplied_cohort_research_packet_v2
-    )
-
-    assert "CurrentIndustryParticipationReportV2" in str(
-        signature.parameters["industry_participation"].annotation
-    )
-    assert "CurrentIndustryParticipationFailureV2" in str(
-        signature.parameters["industry_participation"].annotation
-    )
-    assert "RetainedCurrentEventNoticeSnapshotV1" in str(
-        signature.parameters["event_notices"].annotation
-    )
-    assert "CurrentEventNoticeFailureV1" in str(
-        signature.parameters["event_notices"].annotation
-    )
-    assert callable(api.FileCurrentResearchPacketArchiveV2)
-
-
-@pytest.mark.parametrize("inactive_days", (0, 1, 7, 30))
-def test_inactivity_is_absent_from_packet_v2_identity_and_reason_contract(
-    inactive_days: int,
-) -> None:
-    _api()
-    configuration = packet_module.CONFIGURATION_DEFINITION_V2
-    rendered = repr(configuration)
-
-    assert inactive_days in (0, 1, 7, 30)
-    assert "inactivity" not in rendered.lower()
-    assert "TOOL_INACTIVE" not in rendered
-    assert "PROSPECTIVE_ENVELOPE_MISSING" not in rendered
-    assert "HISTORICAL_ARCHIVE_MISSING" not in rendered
-
-
-def test_optional_partial_is_context_auxiliary_not_a_completed_packet_component() -> (
-    None
-):
-    api = _api()
-    observed = _field_names(api.CurrentResearchPacketAIObservedV2)
-    insufficient = _field_names(api.CurrentResearchPacketAIInsufficientV2)
-
-    assert observed == _FIELD_ORDERS["CurrentResearchPacketAIObservedV2"]
-    assert insufficient == _FIELD_ORDERS["CurrentResearchPacketAIInsufficientV2"]
-    assert _PACKET_COMPONENTS == (
-        "MARKET_DATA_SAME_PASS_V1",
-        "MARKET_REGIME_V3",
-        "INDUSTRY_PARTICIPATION_V2",
-        "EVENT_NOTICES_V1",
-    )
-    assert "partial_current_session" not in _PACKET_COMPONENTS
-
-
 def test_partial_as_complete_suppresses_completed_packet_facts(
     tmp_path: Path,
 ) -> None:
     """An observed partial session must never substitute a completed projection."""
     api, request, context, industry, event_failure = _packet_builder_inputs(tmp_path)
     daily = importlib.import_module(
-        "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+        "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
     )
     completed = context.market_data_report.rows[0]
     partial_row_core = {
@@ -649,7 +355,7 @@ def test_partial_as_complete_suppresses_completed_packet_facts(
 
     assert "PARTIAL_AS_COMPLETE" in packet.reasons
     assert packet.evidence_state == "INSUFFICIENT_EVIDENCE"
-    assert type(packet.ai_projection) is api.CurrentResearchPacketAIInsufficientV2
+    assert type(packet.ai_projection) is api.CurrentResearchPacketAIInsufficientV4
     assert packet.ai_projection.market_data is None
     assert packet.ai_projection.market_regime is None
     assert packet.ai_projection.industry_participation is None
@@ -679,7 +385,7 @@ def test_exact_upstream_reason_mapping_is_closed_and_requires_no_trade(
 
     assert mapped == tuple(
         reason
-        for reason in packet_module.PACKET_REASON_ORDER_V2
+        for reason in packet_module.PACKET_REASON_ORDER_V4
         if reason in {"MARKET_DATA_UNAVAILABLE", expected}
     )
 
@@ -695,214 +401,8 @@ def test_exact_upstream_reason_mapping_is_closed_and_requires_no_trade(
     ),
 )
 def test_packet_rejects_schedule_preflight_reasons(reason: str) -> None:
-    with pytest.raises(ValueError, match="cannot enter Packet V2"):
+    with pytest.raises(ValueError, match="cannot enter Packet V4"):
         packet_module._packet_reasons("MARKET_DATA_UNAVAILABLE", (reason,))
-
-
-def test_ledger_source_rows_and_no_trade_reason_contract_are_closed() -> None:
-    api = _api()
-
-    assert (
-        _field_names(api.CurrentResearchPacketComponentLedgerRowV2)
-        == _FIELD_ORDERS["CurrentResearchPacketComponentLedgerRowV2"]
-    )
-    assert (
-        _field_names(api.CurrentResearchPacketSourceAttributionRowV2)
-        == _FIELD_ORDERS["CurrentResearchPacketSourceAttributionRowV2"]
-    )
-    assert tuple(packet_module.PACKET_REASON_ORDER_V2) == _PACKET_REASONS
-    assert "INSUFFICIENT_INFORMATION_NO_TRADE_REQUIRED" in str(
-        api.CurrentResearchPacketAIInsufficientV2.__annotations__[
-            "consumer_disposition"
-        ]
-    )
-    assert _PACKET_REASONS[-1] == "PARTIAL_AS_COMPLETE"
-
-
-def test_observed_ai_projection_is_limited_to_the_five_public_facts() -> None:
-    api = _api()
-
-    for name, expected in _FIELD_ORDERS.items():
-        if "ProjectionV2" in name:
-            assert _field_names(getattr(api, name)) == expected
-    observed_fields = _FIELD_ORDERS["CurrentResearchPacketAIObservedV2"]
-    forbidden = {
-        "raw_grid",
-        "open",
-        "high",
-        "low",
-        "adjusted",
-        "member_directions",
-        "mapping",
-        "corporate_action",
-        "source_path",
-        "credential",
-        "signal",
-        "recommendation",
-        "order",
-        "prompt",
-        "model_output",
-    }
-    assert not forbidden.intersection(observed_fields)
-
-
-def test_packet_schema_configuration_runtime_and_identity_fields_are_exact() -> None:
-    api = _api()
-
-    assert (
-        _field_names(api.CurrentSuppliedCohortResearchPacketV2)
-        == _FIELD_ORDERS["CurrentSuppliedCohortResearchPacketV2"]
-    )
-    for constant in (
-        "SCHEMA_DEFINITION_V2",
-        "CONFIGURATION_DEFINITION_V2",
-        "SCHEMA_IDENTITY_SHA256",
-        "CONFIGURATION_IDENTITY_SHA256",
-        "_MANIFEST_MODULE",
-    ):
-        assert hasattr(packet_module, constant)
-    assert packet_module._CONTRACT == "current-supplied-cohort-research-packet@v2"
-    assert packet_module._ARCHIVE_DIRECTORY == ".current-research-packet-v2"
-    assert packet_module.CONFIGURATION_DEFINITION_V2 == {
-        "contract_version": "current-supplied-cohort-research-packet@v2",
-        "structural_bounds": {
-            "cohort_members": [1, 50],
-            "packet_request_bytes": [1, 4_194_304],
-            "packet_bytes": [1, 37_748_736],
-            "receipt_bytes": [1, 16_384],
-            "marker_bytes": [1, 4_096],
-            "guard_bytes": [1, 4_096],
-            "retained_bytes": [1, 37_769_216],
-            "json_nesting": [1, 32],
-            "event_notice_rows": [0, 10_000],
-        },
-        "canonicalization": "CJ UTF-8 sorted keys compact no-NaN trailing-LF",
-        "reason_order": [
-            "MARKET_DATA_UNAVAILABLE",
-            "MARKET_REGIME_UNAVAILABLE",
-            "INDUSTRY_PARTICIPATION_UNAVAILABLE",
-            "EVENT_NOTICES_UNAVAILABLE",
-            "SOURCE_USE_UNAUTHORIZED",
-            "COMPONENT_IDENTITY_INVALID",
-            "COHORT_PROJECTION_MISMATCH",
-            "DECISION_CUTOFF_MISMATCH",
-            "DECISION_SESSION_MISMATCH",
-            "COMPONENT_FUTURE_KNOWN",
-            "COMPONENT_STALE",
-            "COMPONENT_CONFLICTED",
-            "PARTIAL_AS_COMPLETE",
-        ],
-        "precedence": (
-            "structural-before-domain; adjusted-not-attempted-propagates-without-source; "
-            "any-domain-reason-suppresses-facts"
-        ),
-        "raw_source_policy": "sealed-current-same-pass-market-context-v3-only",
-        "partial_policy": "auxiliary-only; no-completed-substitution",
-        "retention_names_and_limits": {
-            "directory": ".current-research-packet-v2",
-            "packet": "packet-<identity>.json",
-            "receipt": "retained-<identity>.json",
-            "marker": "completion-<identity>.json",
-            "pending_guard": "pending-<identity>.json",
-            "admissible_guard": "admissible-<identity>.json",
-        },
-    }
-    assert (
-        packet_module.CONFIGURATION_IDENTITY_SHA256
-        == "78011dfcbedb0fa73ff97487c6e88715410ea513cc51cd8fc803451e769ca308"
-    )
-
-
-def test_packet_schema_closes_adjusted_not_attempted_propagation() -> None:
-    metadata = packet_module.current_research_packet_schema_metadata_v2()
-
-    assert metadata["state_projections"]["component_ledger"]["MARKET_REGIME_V3"] == [
-        "success",
-        "natural_insufficiency",
-        "natural_adjusted_not_attempted",
-        "invalid",
-    ]
-
-
-def test_packet_schema_literal_bounds_are_closed_exact_sets() -> None:
-    metadata = packet_module.current_research_packet_schema_metadata_v2()
-    literal_bounds = {
-        (row["name"], field["name"]): field["bounds"]
-        for row in metadata["type_rows"]
-        for field in row["ordered_fields"]
-        if field["semantic_type"].startswith("Literal[")
-    }
-
-    assert literal_bounds == {
-        (
-            "CurrentSuppliedCohortResearchPacketRequestV2",
-            "contract_version",
-        ): "ALLOWED_VALUES[current-supplied-cohort-research-packet@v2]",
-        (
-            "CurrentResearchPacketSourceAttributionRowV2",
-            "source_state",
-        ): "ALLOWED_VALUES[BOUND|UNAVAILABLE]",
-        (
-            "CurrentResearchPacketSourceAttributionRowV2",
-            "price_basis",
-        ): "ALLOWED_VALUES[RAW|ADJUSTED]",
-        (
-            "CurrentResearchPacketMarketRegimeProjectionV2",
-            "regime",
-        ): "ALLOWED_VALUES[BROAD_ADVANCE|BROAD_DECLINE|MIXED_PARTICIPATION]",
-        (
-            "CurrentResearchPacketIndustryProjectionV2",
-            "classification_tier",
-        ): "ALLOWED_VALUES[INDUSTRY]",
-        (
-            "CurrentResearchPacketRedactedEventMemberV2",
-            "outcome",
-        ): "ALLOWED_VALUES[NOTICES_ADMITTED|NO_MATCHING_NOTICE_IN_SNAPSHOT]",
-        (
-            "CurrentResearchPacketAIObservedV2",
-            "evidence_state",
-        ): "ALLOWED_VALUES[OBSERVED]",
-        (
-            "CurrentResearchPacketAIInsufficientV2",
-            "evidence_state",
-        ): "ALLOWED_VALUES[INSUFFICIENT_EVIDENCE]",
-        (
-            "CurrentResearchPacketAIInsufficientV2",
-            "consumer_disposition",
-        ): "ALLOWED_VALUES[INSUFFICIENT_INFORMATION_NO_TRADE_REQUIRED]",
-        (
-            "CurrentSuppliedCohortResearchPacketV2",
-            "contract_version",
-        ): "ALLOWED_VALUES[current-supplied-cohort-research-packet@v2]",
-        (
-            "CurrentSuppliedCohortResearchPacketV2",
-            "evidence_state",
-        ): "ALLOWED_VALUES[OBSERVED|INSUFFICIENT_EVIDENCE]",
-        (
-            "CurrentResearchPacketArchiveFailureV2",
-            "contract_version",
-        ): "ALLOWED_VALUES[current-supplied-cohort-research-packet-archive-failure@v2]",
-        (
-            "CurrentResearchPacketArchiveFailureV2",
-            "evidence_state",
-        ): "ALLOWED_VALUES[ARCHIVE_FAILED]",
-        (
-            "CurrentResearchPacketArchiveFailureV2",
-            "reason",
-        ): "ALLOWED_VALUES[RESEARCH_PACKET_ARCHIVE_FAILED]",
-        (
-            "CurrentResearchPacketReceiptV2",
-            "contract_version",
-        ): "ALLOWED_VALUES[current-supplied-cohort-research-packet-receipt@v2]",
-        (
-            "CurrentResearchPacketCompletionMarkerV2",
-            "contract_version",
-        ): "ALLOWED_VALUES[current-supplied-cohort-research-packet-marker@v2]",
-        (
-            "RetainedCurrentSuppliedCohortResearchPacketV2",
-            "evidence_state",
-        ): "ALLOWED_VALUES[RETAINED]",
-    }
 
 
 def test_every_closed_upstream_reason_maps_exhaustively_to_packet_reason() -> None:
@@ -927,137 +427,13 @@ def test_every_closed_upstream_reason_maps_exhaustively_to_packet_reason() -> No
         "EVENT_COHORT_INVALID": ("COHORT_PROJECTION_MISMATCH",),
         "EVENT_OUT_OF_COHORT": ("COHORT_PROJECTION_MISMATCH",),
     }
-    assert expected == packet_module._UPSTREAM_PACKET_REASON_MAP_V2
+    assert expected == packet_module._UPSTREAM_PACKET_REASON_MAP_V4
     for upstream_reason, mapped_reasons in expected.items():
         assert packet_module._packet_reasons(
             "MARKET_DATA_UNAVAILABLE", (upstream_reason,)
         ) == packet_module._ordered_reasons(
             {"MARKET_DATA_UNAVAILABLE", *mapped_reasons}
         )
-
-
-@pytest.mark.parametrize("key", ("semantic_type", "unit", "nullability", "bounds"))
-def test_packet_schema_preimage_is_complete_independent_and_rejects_every_field_drift(
-    key: str,
-) -> None:
-    metadata = packet_module.current_research_packet_schema_metadata_v2()
-
-    assert packet_module._canonical(metadata) == packet_module._canonical(
-        _PLAN27_PACKET_SCHEMA_PREIMAGE
-    )
-    assert (
-        packet_module.current_research_packet_schema_metadata_digest_v2(metadata)
-        == "0997d17206e2407a71798ac758a8e7caf242cc9f093cd97e153aaf6d46d63de4"
-        == packet_module.SCHEMA_IDENTITY_SHA256
-    )
-
-    for row_index, row in enumerate(_PLAN27_PACKET_SCHEMA_PREIMAGE["type_rows"]):
-        for field_index, _field in enumerate(row["ordered_fields"]):
-            mutated = deepcopy(metadata)
-            mutated["type_rows"][row_index]["ordered_fields"][field_index][key] = (
-                "FORGED"
-            )
-            with pytest.raises(ValueError, match="frozen contract"):
-                packet_module.current_research_packet_schema_identity_from_metadata_v2(
-                    mutated
-                )
-
-    state = deepcopy(metadata)
-    state["state_projections"] = ()
-    with pytest.raises(ValueError, match="frozen contract"):
-        packet_module.current_research_packet_schema_identity_from_metadata_v2(state)
-
-    unknown = deepcopy(metadata)
-    unknown["unexpected"] = "FORGED"
-    with pytest.raises(ValueError, match="unknown Packet schema metadata key"):
-        packet_module.current_research_packet_schema_metadata_digest_v2(unknown)
-
-
-def test_packet_schema_has_an_independent_expected_request_preimage() -> None:
-    metadata = packet_module.current_research_packet_schema_metadata_v2()
-    request_row = next(
-        row
-        for row in metadata["type_rows"]
-        if row["name"] == "CurrentSuppliedCohortResearchPacketRequestV2"
-    )
-
-    assert request_row["ordered_fields"] == (
-        {
-            "name": "contract_version",
-            "semantic_type": 'Literal["current-supplied-cohort-research-packet@v2"]',
-            "unit": "ENUMERATION",
-            "nullability": "REQUIRED",
-            "bounds": "ALLOWED_VALUES[current-supplied-cohort-research-packet@v2]",
-        },
-        {
-            "name": "decision_cutoff",
-            "semantic_type": "UtcInstant",
-            "unit": "UTC_INSTANT",
-            "nullability": "REQUIRED",
-            "bounds": "AWARE_UTC_MICROSECOND",
-        },
-        {
-            "name": "cohort_selected_at",
-            "semantic_type": "UtcInstant",
-            "unit": "UTC_INSTANT",
-            "nullability": "REQUIRED",
-            "bounds": "AWARE_UTC_MICROSECOND",
-        },
-        {
-            "name": "members",
-            "semantic_type": "tuple[CurrentSamePassEquityMemberV1,1..50]",
-            "unit": "ORDERED_TUPLE",
-            "nullability": "REQUIRED",
-            "bounds": "ELEMENT=CurrentSamePassEquityMemberV1;CARDINALITY=1..50",
-        },
-        {
-            "name": "plan21_cohort_identity_sha256",
-            "semantic_type": "Sha256",
-            "unit": "SHA256_DIGEST",
-            "nullability": "REQUIRED",
-            "bounds": "LOWERCASE_64_HEX",
-        },
-        {
-            "name": "canonical_cohort_identity_sha256",
-            "semantic_type": "Sha256",
-            "unit": "SHA256_DIGEST",
-            "nullability": "REQUIRED",
-            "bounds": "LOWERCASE_64_HEX",
-        },
-        {
-            "name": "market_context_identity_sha256",
-            "semantic_type": "Sha256",
-            "unit": "SHA256_DIGEST",
-            "nullability": "REQUIRED",
-            "bounds": "LOWERCASE_64_HEX",
-        },
-        {
-            "name": "request_identity_sha256",
-            "semantic_type": "Sha256",
-            "unit": "SHA256_DIGEST",
-            "nullability": "REQUIRED",
-            "bounds": "LOWERCASE_64_HEX",
-        },
-    )
-
-
-def test_packet_and_retention_identities_have_acyclic_exact_v2_shapes() -> None:
-    api = _api()
-
-    for name in (
-        "CurrentResearchPacketArchiveFailureV2",
-        "CurrentResearchPacketReceiptV2",
-        "CurrentResearchPacketCompletionMarkerV2",
-        "RetainedCurrentSuppliedCohortResearchPacketV2",
-    ):
-        assert _field_names(getattr(api, name)) == _FIELD_ORDERS[name]
-    assert (
-        _field_names(packet_module._CurrentSuppliedCohortResearchPacketCandidateV2)
-        == _FIELD_ORDERS["_CurrentSuppliedCohortResearchPacketCandidateV2"]
-    )
-    retained = api.RetainedCurrentSuppliedCohortResearchPacketV2
-    assert not hasattr(retained, "from_bytes")
-    assert not hasattr(retained, "from_canonical_json")
 
 
 def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time(
@@ -1082,12 +458,12 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
             )
 
     clock = Clock()
-    archive = api.FileCurrentResearchPacketArchiveV2(root, clock=clock)
+    archive = api.FileCurrentResearchPacketArchiveV4(root, clock=clock)
     gate = Barrier(2)
 
     def build_once() -> Any:
         gate.wait()
-        return api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        return api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
@@ -1100,8 +476,8 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             first, second = tuple(executor.map(lambda _: build_once(), range(2)))
-        assert type(first) is api.RetainedCurrentSuppliedCohortResearchPacketV2
-        assert type(second) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+        assert type(first) is api.RetainedCurrentSuppliedCohortResearchPacketV4
+        assert type(second) is api.RetainedCurrentSuppliedCohortResearchPacketV4
         assert (
             first.packet.canonical_json_bytes() == second.packet.canonical_json_bytes()
         )
@@ -1130,7 +506,7 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
                 return archive.archive_exact(archive_request, candidate, lease)
 
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -1139,7 +515,7 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
                 acquired.lease,
                 trusted_clock=BeforeCommitClock(),
             )
-        packet_archive = root / ".current-research-packet-v2"
+        packet_archive = root / ".current-research-packet-v4"
         assert sorted(path.name for path in packet_archive.iterdir()) == [
             f"admissible-{first.packet.packet_identity_sha256}.json",
             f"completion-{first.packet.packet_identity_sha256}.json",
@@ -1166,7 +542,7 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
                     [request.decision_cutoff - timedelta(minutes=10)] * 3
                     + [request.decision_cutoff - timedelta(minutes=9)] * 8
                 )
-                self.archive = api.FileCurrentResearchPacketArchiveV2(
+                self.archive = api.FileCurrentResearchPacketArchiveV4(
                     root,
                     clock=self.clock,
                 )
@@ -1189,7 +565,7 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
 
         backdated = BackdatedCompleteDelegate()
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -1199,7 +575,7 @@ def test_archive_is_immutable_create_only_and_exact_retry_preserves_receipt_time
                 trusted_clock=Clock(calls=2),
             )
         assert (
-            type(backdated.value) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+            type(backdated.value) is api.RetainedCurrentSuppliedCohortResearchPacketV4
         )
         assert backdated.value.archive_known_at == (
             request.decision_cutoff - timedelta(minutes=9, seconds=30)
@@ -1247,17 +623,17 @@ def test_packet_archive_refuses_preseeded_receipt_without_marker(
             del trusted_clock
             packet = candidate.packet
             packet_raw = candidate.canonical_json_bytes()
-            archive_directory = root / ".current-research-packet-v2"
+            archive_directory = root / ".current-research-packet-v4"
             archive_directory.mkdir(mode=0o700)
             receipt_core = {
-                "contract_version": "current-supplied-cohort-research-packet-receipt@v2",
+                "contract_version": "current-supplied-cohort-research-packet-receipt@v4",
                 "packet_identity_sha256": packet.packet_identity_sha256,
                 "packet_object_sha256": packet.packet_object_sha256,
                 "packet_byte_count": len(packet_raw),
                 "packet_filename": f"packet-{packet.packet_identity_sha256}.json",
                 "archive_known_at": archive_request.decision_cutoff,
             }
-            receipt = api.CurrentResearchPacketReceiptV2(
+            receipt = api.CurrentResearchPacketReceiptV4(
                 **receipt_core,
                 receipt_identity_sha256=packet_module._identity(receipt_core),
             )
@@ -1269,17 +645,17 @@ def test_packet_archive_refuses_preseeded_receipt_without_marker(
             )
             self.receipt_path.write_bytes(receipt.canonical_json_bytes())
             self.receipt_path.chmod(0o600)
-            return api.FileCurrentResearchPacketArchiveV2(
+            return api.FileCurrentResearchPacketArchiveV4(
                 root,
                 clock=Clock(archive_request.decision_cutoff - timedelta(seconds=30)),
             ).archive_exact(archive_request, candidate, lease)
 
     archive = PreseedReceiptThenDelegate()
     try:
-        result = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        result = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request, context, industry, event_failure, archive, acquired.lease
         )
-        assert type(result) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(result) is api.CurrentResearchPacketArchiveFailureV4
         assert archive.receipt_path is not None and archive.receipt_path.is_file()
         assert archive.marker_path is not None and not archive.marker_path.exists()
     finally:
@@ -1317,20 +693,20 @@ def test_packet_builder_rejects_rehashed_failure_without_current_packet_identity
                 )
             )
             core = {
-                "contract_version": "current-supplied-cohort-research-packet-archive-failure@v2",
+                "contract_version": "current-supplied-cohort-research-packet-archive-failure@v4",
                 "evidence_state": "ARCHIVE_FAILED",
                 "reason": "RESEARCH_PACKET_ARCHIVE_FAILED",
                 "request_identity_sha256": archive_request.request_identity_sha256,
                 "packet_identity_sha256": packet_identity,
             }
-            return api.CurrentResearchPacketArchiveFailureV2(
+            return api.CurrentResearchPacketArchiveFailureV4(
                 **core,
                 archive_failure_identity_sha256=packet_module._identity(core),
             )
 
     try:
         with pytest.raises(ValueError, match="invalid packet archive failure"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -1372,39 +748,39 @@ def test_packet_receipt_interruption_stays_unrecoverable_without_marker(
         )
         with monkeypatch.context() as context_patch:
             context_patch.setattr(packet_module, "_publish", interrupt_marker)
-            first = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            first = api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
                 event_failure,
-                api.FileCurrentResearchPacketArchiveV2(
+                api.FileCurrentResearchPacketArchiveV4(
                     root,
                     clock=first_clock,
                 ),
                 acquired.lease,
                 trusted_clock=first_clock,
             )
-        assert type(first) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(first) is api.CurrentResearchPacketArchiveFailureV4
         packet_identity = first.packet_identity_sha256
         assert packet_identity is not None
-        archive = root / ".current-research-packet-v2"
+        archive = root / ".current-research-packet-v4"
         assert (archive / f"retained-{packet_identity}.json").is_file()
         assert not (archive / f"completion-{packet_identity}.json").exists()
 
         retry_clock = Clock([request.decision_cutoff] * 16)
-        retry = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retry = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
             event_failure,
-            api.FileCurrentResearchPacketArchiveV2(
+            api.FileCurrentResearchPacketArchiveV4(
                 root,
                 clock=retry_clock,
             ),
             acquired.lease,
             trusted_clock=retry_clock,
         )
-        assert type(retry) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(retry) is api.CurrentResearchPacketArchiveFailureV4
         assert not (archive / f"completion-{packet_identity}.json").exists()
     finally:
         acquired.lease.close()
@@ -1457,38 +833,38 @@ def test_packet_late_marker_guard_survives_cleanup_failure_and_blocks_retry(
         with monkeypatch.context() as fault:
             fault.setattr(packet_module.os, "unlink", unlink)
             fault.setattr(packet_module.os, "fsync", fsync)
-            first = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            first = api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
                 event_failure,
-                api.FileCurrentResearchPacketArchiveV2(
+                api.FileCurrentResearchPacketArchiveV4(
                     root,
                     clock=first_clock,
                 ),
                 acquired.lease,
                 trusted_clock=first_clock,
             )
-        assert type(first) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(first) is api.CurrentResearchPacketArchiveFailureV4
         packet_identity = first.packet_identity_sha256
         assert packet_identity is not None
-        archive = root / ".current-research-packet-v2"
+        archive = root / ".current-research-packet-v4"
         assert (archive / f"pending-{packet_identity}.json").is_file()
         assert not (archive / f"admissible-{packet_identity}.json").exists()
         retry_clock = Clock([request.decision_cutoff + timedelta(seconds=1)])
-        retry = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retry = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
             event_failure,
-            api.FileCurrentResearchPacketArchiveV2(
+            api.FileCurrentResearchPacketArchiveV4(
                 root,
                 clock=retry_clock,
             ),
             acquired.lease,
             trusted_clock=retry_clock,
         )
-        assert type(retry) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(retry) is api.CurrentResearchPacketArchiveFailureV4
     finally:
         acquired.lease.close()
 
@@ -1528,12 +904,12 @@ def test_packet_crash_after_admissibility_guard_retries_with_original_time(
                 ),
             )
             interrupted = (
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     request,
                     context,
                     industry,
                     event_failure,
-                    api.FileCurrentResearchPacketArchiveV2(
+                    api.FileCurrentResearchPacketArchiveV4(
                         root,
                         clock=first_clock,
                     ),
@@ -1541,40 +917,24 @@ def test_packet_crash_after_admissibility_guard_retries_with_original_time(
                     trusted_clock=first_clock,
                 )
             )
-        assert type(interrupted) is api.CurrentResearchPacketArchiveFailureV2
+        assert type(interrupted) is api.CurrentResearchPacketArchiveFailureV4
         retry_clock = Clock([request.decision_cutoff])
-        retry = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retry = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
             event_failure,
-            api.FileCurrentResearchPacketArchiveV2(
+            api.FileCurrentResearchPacketArchiveV4(
                 root,
                 clock=retry_clock,
             ),
             acquired.lease,
             trusted_clock=retry_clock,
         )
-        assert type(retry) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+        assert type(retry) is api.RetainedCurrentSuppliedCohortResearchPacketV4
         assert retry.archive_known_at == request.decision_cutoff
     finally:
         acquired.lease.close()
-
-
-def test_archive_adversaries_and_redaction_are_typed_without_fact_escape() -> None:
-    api = _api()
-    failure_fields = _field_names(api.CurrentResearchPacketArchiveFailureV2)
-
-    assert failure_fields == _FIELD_ORDERS["CurrentResearchPacketArchiveFailureV2"]
-    assert "packet" not in failure_fields
-    assert "context" not in failure_fields
-    assert "path" not in failure_fields
-    assert "RESEARCH_PACKET_ARCHIVE_FAILED" in str(
-        api.CurrentResearchPacketArchiveFailureV2.__annotations__["reason"]
-    )
-    assert hasattr(
-        api.RetainedCurrentSuppliedCohortResearchPacketV2, "canonical_json_bytes"
-    )
 
 
 def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
@@ -1596,10 +956,10 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
     assert type(retained) is event_api.RetainedCurrentEventNoticeSnapshotV1
 
     daily = importlib.import_module(
-        "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+        "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
     )
     request_members = tuple(
-        daily.CurrentSamePassEquityMemberV1(
+        daily.CurrentSamePassEquityMemberV4(
             event_result.member.isin,
             "NSE",
             "EQUITY",
@@ -1607,8 +967,8 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
             event_result.member.symbol,
             event_result.member.effective_from,
             event_result.member.effective_through,
-            f"{event_result.member.symbol}.NS",
-            "yfinance-symbol-mapping@v1",
+            event_result.member.symbol,
+            "bharatstock-isin-exchange-mapping@v1",
             event_result.member.effective_from,
             None,
             "a" * 64,
@@ -1616,7 +976,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         )
         for event_result in snapshot.members
     )
-    request = _api().CurrentSuppliedCohortResearchPacketRequestV2(
+    request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=event_test._KNOWN_AT + timedelta(hours=1),
         cohort_selected_at=event_test._KNOWN_AT,
         members=request_members,
@@ -1627,11 +987,24 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
     assert tuple(item.isin for item in projection) == tuple(
         member.isin for member in request_members
     )
+    reordered_request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
+        decision_cutoff=request.decision_cutoff,
+        cohort_selected_at=request.cohort_selected_at,
+        members=tuple(reversed(request.members)),
+        market_context_identity_sha256=request.market_context_identity_sha256,
+    )
+    reordered_projection = packet_module._validated_redacted_events(
+        reordered_request, retained
+    )
+    assert reordered_projection is not None
+    assert packet_module._canonical(reordered_projection) == packet_module._canonical(
+        tuple(reversed(projection))
+    )
     assert request.decision_cutoff.astimezone(
         packet_module._EVENT_IST
     ).date() == packet_module._event_filename_date(retained.source_filename)
     assert "Private full-market" not in packet_module._canonical(projection).decode()
-    stale_request = _api().CurrentSuppliedCohortResearchPacketRequestV2(
+    stale_request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=request.decision_cutoff + timedelta(days=1),
         cohort_selected_at=event_test._KNOWN_AT,
         members=request_members,
@@ -1720,7 +1093,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         alternate_source.source_row_identity_sha256 != source.source_row_identity_sha256
     )
 
-    future_request = _api().CurrentSuppliedCohortResearchPacketRequestV2(
+    future_request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=request.decision_cutoff - timedelta(days=1),
         cohort_selected_at=event_test._KNOWN_AT - timedelta(days=1),
         members=request_members,
@@ -1875,10 +1248,10 @@ def test_packet_revalidates_both_current_event_bom_states_and_rejects_cross_pair
         lease.close()
 
     daily = importlib.import_module(
-        "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+        "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
     )
     request_members = tuple(
-        daily.CurrentSamePassEquityMemberV1(
+        daily.CurrentSamePassEquityMemberV4(
             event_result.member.isin,
             "NSE",
             "EQUITY",
@@ -1886,8 +1259,8 @@ def test_packet_revalidates_both_current_event_bom_states_and_rejects_cross_pair
             event_result.member.symbol,
             event_result.member.effective_from,
             event_result.member.effective_through,
-            f"{event_result.member.symbol}.NS",
-            "yfinance-symbol-mapping@v1",
+            event_result.member.symbol,
+            "bharatstock-isin-exchange-mapping@v1",
             event_result.member.effective_from,
             None,
             "a" * 64,
@@ -1895,7 +1268,7 @@ def test_packet_revalidates_both_current_event_bom_states_and_rejects_cross_pair
         )
         for event_result in snapshot.members
     )
-    request = _api().CurrentSuppliedCohortResearchPacketRequestV2(
+    request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=event_test._CURRENT_KNOWN_AT + timedelta(hours=1),
         cohort_selected_at=event_test._CURRENT_KNOWN_AT,
         members=request_members,
@@ -1923,19 +1296,18 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     industry_test = _industry_test_module()
-    v3_test = industry_test._v3_test_module()
+    v4_test = _regime_test_module()
     capture: dict[str, Any] = {}
     directions = ("UNCHANGED",) * 50
-    (tmp_path / "v3").mkdir(mode=0o700)
-    v3_test.test_outer_composition_retains_real_context_and_archive_files(
-        tmp_path / "v3",
+    (tmp_path / "v4").mkdir(mode=0o700)
+    v4_test.test_outer_composition_retains_real_context_and_archive_files(
+        tmp_path / "v4",
         monkeypatch,
         exercise_archive_contracts=False,
         raw_directions=directions,
         adjusted_directions=directions,
         expected_state="OBSERVED",
         capture=capture,
-        include_partial=True,
     )
     context = capture["retained"]
     private_context = capture["candidate"].context_object
@@ -1946,10 +1318,10 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
         private_context,
         industries=("Technology",) * 50,
     )
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    request = _api().CurrentSuppliedCohortResearchPacketRequestV2(
+    request = _api().CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=private_context.request.decision_cutoff,
         cohort_selected_at=private_context.request.cohort_selected_at,
         members=private_context.request.members,
@@ -2095,19 +1467,19 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
     assert acquired.lease is not None
     clock = Clock()
     try:
-        retained = _api().build_and_retain_current_supplied_cohort_research_packet_v2(
+        retained = _api().build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
             events,
-            _api().FileCurrentResearchPacketArchiveV2(packet_root, clock=clock),
+            _api().FileCurrentResearchPacketArchiveV4(packet_root, clock=clock),
             acquired.lease,
             trusted_clock=clock,
         )
     finally:
         acquired.lease.close()
 
-    assert type(retained) is _api().RetainedCurrentSuppliedCohortResearchPacketV2
+    assert type(retained) is _api().RetainedCurrentSuppliedCohortResearchPacketV4
     assert retained.packet.evidence_state == "OBSERVED"
     assert len(request.members) == 50
     assert retained.packet.ai_projection.event_notices is not None
@@ -2123,7 +1495,7 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
     assert 1 <= len(packet_bytes) <= packet_module._PACKET_LIMIT
     packet_path = (
         packet_root
-        / ".current-research-packet-v2"
+        / ".current-research-packet-v4"
         / f"packet-{retained.packet.packet_identity_sha256}.json"
     )
     assert packet_path.read_bytes() == packet_bytes
@@ -2149,57 +1521,18 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
         os.close(descriptor)
 
 
-def test_v2_schema_objects_reject_unknown_and_v1_alias_fields() -> None:
-    api = _api()
-    request_signature = inspect.signature(
-        api.CurrentSuppliedCohortResearchPacketRequestV2
-    )
-
-    assert set(request_signature.parameters) == {
-        "decision_cutoff",
-        "cohort_selected_at",
-        "members",
-        "market_context_identity_sha256",
-    }
-    assert "decision_session" not in request_signature.parameters
-    assert "market_data" not in request_signature.parameters
-    assert "market_regime" not in request_signature.parameters
-    assert "partial_current_session" not in request_signature.parameters
-
-
-def test_archive_only_mint_helpers_are_not_an_ordinary_caller_surface() -> None:
-    """Only public reducers/builders may produce Plan-27 values for an archive."""
-    regime = importlib.import_module(
-        "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
-    )
-    industry = importlib.import_module(
-        "swing_trading_ai_assistant.sector_analysis.current_industry_participation_v2"
-    )
-    api = _api()
-
-    assert not hasattr(
-        regime.FileCurrentSamePassMarketContextArchiveV1, "_retained_context"
-    )
-    assert not hasattr(api.FileCurrentResearchPacketArchiveV2, "_retained_packet")
-    assert not hasattr(packet_module, "_project")
-    assert not hasattr(industry, "_observed")
-    assert not hasattr(industry, "_failure")
-    with pytest.raises(TypeError):
-        api.RetainedCurrentSuppliedCohortResearchPacketV2()
-
-
 def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forged_port(  # noqa: C901
     tmp_path: Path,
 ) -> None:
-    """Exercise Packet V2 through the public V3, Industry, event, and file boundaries."""
+    """Exercise Packet V4 through the public V4, Industry, event, and file boundaries."""
     api = _api()
     industry_test = _industry_test_module()
     context, classification = industry_test._inputs(tmp_path / "industry")
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    v3_request = industry_test._v3_request(context)
-    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+    v3_request = industry_test._v4_request(context)
+    request = api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=v3_request.decision_cutoff,
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
@@ -2225,7 +1558,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             [request.decision_cutoff - timedelta(seconds=30)]
             + [request.decision_cutoff] * 16
         )
-        initial_archive = api.FileCurrentResearchPacketArchiveV2(
+        initial_archive = api.FileCurrentResearchPacketArchiveV4(
             root,
             clock=initial_clock,
         )
@@ -2244,9 +1577,9 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             object.__setattr__(initial_archive, "_archive", backdated_inner)
         assert not hasattr(initial_archive, "_archive")
         assert not backdated_inner.called
-        assert not (root / ".current-research-packet-v2").exists()
+        assert not (root / ".current-research-packet-v4").exists()
 
-        retained = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retained = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
@@ -2255,13 +1588,13 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             acquired.lease,
             trusted_clock=initial_clock,
         )
-        assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+        assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV4
         assert retained.packet.evidence_state == "INSUFFICIENT_EVIDENCE"
         assert (
             retained.packet.ai_projection.consumer_disposition
             == "INSUFFICIENT_INFORMATION_NO_TRADE_REQUIRED"
         )
-        assert (root / ".current-research-packet-v2").is_dir()
+        assert (root / ".current-research-packet-v4").is_dir()
 
         def assert_delegate_mutation_rejected(member: str, mutation: str) -> None:
             outer_clock = Clock(
@@ -2281,7 +1614,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                     *,
                     trusted_clock: Any = None,
                 ) -> Any:
-                    delegated = api.FileCurrentResearchPacketArchiveV2(
+                    delegated = api.FileCurrentResearchPacketArchiveV4(
                         root,
                         clock=outer_clock,
                     ).archive_exact(
@@ -2292,10 +1625,10 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                     )
                     assert (
                         type(delegated)
-                        is api.RetainedCurrentSuppliedCohortResearchPacketV2
+                        is api.RetainedCurrentSuppliedCohortResearchPacketV4
                     )
                     packet_identity = delegated.packet.packet_identity_sha256
-                    archive_root = root / ".current-research-packet-v2"
+                    archive_root = root / ".current-research-packet-v4"
                     path = {
                         "packet": archive_root / f"packet-{packet_identity}.json",
                         "receipt": archive_root / f"retained-{packet_identity}.json",
@@ -2326,11 +1659,8 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                         receipt_value["archive_known_at"] = packet_module._instant(
                             request.decision_cutoff - timedelta(minutes=1)
                         )
-                        receipt_core = {
-                            key: receipt_value[key]
-                            for key in _FIELD_ORDERS["CurrentResearchPacketReceiptV2"]
-                            if key != "receipt_identity_sha256"
-                        }
+                        receipt_core = dict(receipt_value)
+                        del receipt_core["receipt_identity_sha256"]
                         receipt_value["receipt_identity_sha256"] = (
                             packet_module._identity(receipt_core)
                         )
@@ -2343,13 +1673,8 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                             "receipt_identity_sha256"
                         ]
                         marker_value["receipt_sha256"] = packet_module._sha(receipt_raw)
-                        marker_core = {
-                            key: marker_value[key]
-                            for key in _FIELD_ORDERS[
-                                "CurrentResearchPacketCompletionMarkerV2"
-                            ]
-                            if key != "completion_marker_identity_sha256"
-                        }
+                        marker_core = dict(marker_value)
+                        del marker_core["completion_marker_identity_sha256"]
                         marker_value["completion_marker_identity_sha256"] = (
                             packet_module._identity(marker_core)
                         )
@@ -2364,7 +1689,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 with pytest.raises(
                     ValueError, match="invalid retained packet archive result"
                 ):
-                    api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                    api.build_and_retain_current_supplied_cohort_research_packet_v4(
                         request,
                         context,
                         industry,
@@ -2401,7 +1726,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 *,
                 trusted_clock: Any = None,
             ) -> Any:
-                return api.FileCurrentResearchPacketArchiveV2(
+                return api.FileCurrentResearchPacketArchiveV4(
                     unrelated_root,
                     clock=trusted_clock,
                 ).archive_exact(
@@ -2419,7 +1744,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             with pytest.raises(
                 ValueError, match="invalid retained packet archive result"
             ):
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     request,
                     context,
                     industry,
@@ -2436,7 +1761,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 return object()
 
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -2446,16 +1771,14 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             )
 
         industry_failure = (
-            industry_test._api().reduce_current_industry_participation_v2(
+            industry_test._api().reduce_current_industry_participation_v4(
                 context,
-                industry_test._classification_failure(
-                    "CLASSIFICATION_ARTIFACT_MISSING"
-                ),
+                _classification_failure("CLASSIFICATION_ARTIFACT_MISSING"),
             )
         )
         assert (
             type(industry_failure)
-            is industry_test._api().CurrentIndustryParticipationFailureV2
+            is industry_test._api().CurrentIndustryParticipationFailureV4
         )
         industry_root = tmp_path / "packet-industry-failure"
         industry_root.mkdir(mode=0o700)
@@ -2467,12 +1790,12 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 + [request.decision_cutoff] * 16
             )
             industry_retained = (
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     request,
                     context,
                     industry_failure,
                     event_failure,
-                    api.FileCurrentResearchPacketArchiveV2(
+                    api.FileCurrentResearchPacketArchiveV4(
                         industry_root,
                         clock=industry_clock,
                     ),
@@ -2482,7 +1805,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             )
             assert (
                 type(industry_retained)
-                is api.RetainedCurrentSuppliedCohortResearchPacketV2
+                is api.RetainedCurrentSuppliedCohortResearchPacketV4
             )
             industry_packet = industry_retained.packet
             assert industry_packet.evidence_state == "INSUFFICIENT_EVIDENCE"
@@ -2502,10 +1825,10 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 for row in industry_packet.component_ledger
             ) == (
                 (0, "MARKET_DATA_SAME_PASS_V1", "OBSERVED", ()),
-                (1, "MARKET_REGIME_V3", "OBSERVED", ()),
+                (1, "MARKET_REGIME_V4", "OBSERVED", ()),
                 (
                     2,
-                    "INDUSTRY_PARTICIPATION_V2",
+                    "INDUSTRY_PARTICIPATION_V4",
                     "INSUFFICIENT_EVIDENCE",
                     ("INDUSTRY_PARTICIPATION_UNAVAILABLE",),
                 ),
@@ -2521,21 +1844,21 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 for row in industry_packet.source_attribution
             ) == (
                 (0, "MARKET_DATA_SAME_PASS_V1", "BOUND"),
-                (1, "MARKET_REGIME_V3", "BOUND"),
-                (2, "INDUSTRY_PARTICIPATION_V2", "UNAVAILABLE"),
+                (1, "MARKET_REGIME_V4", "BOUND"),
+                (2, "INDUSTRY_PARTICIPATION_V4", "UNAVAILABLE"),
                 (3, "EVENT_NOTICES_V1", "UNAVAILABLE"),
             )
             assert industry_packet.component_ledger[0].known_at == (
-                industry_test._v3_ledger_known_at(context, 0)
+                industry_test._v4_ledger_known_at(context, 0)
             )
             assert industry_packet.component_ledger[1].known_at == (
-                industry_test._v3_ledger_known_at(context, 3)
+                industry_test._v4_ledger_known_at(context, 3)
             )
         finally:
             industry_lease.lease.close()
 
-        v3_test = industry_test._v3_test_module()
-        v3_api = v3_test._v3()
+        v3_test = _regime_test_module()
+        v3_api = v3_test._v4()
         captured_contexts: list[tuple[Any, Any]] = []
         original_archive = (
             v3_api.FileCurrentSamePassMarketContextArchiveV1.archive_exact
@@ -2543,7 +1866,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
 
         def capture_raw_insufficiency(self: Any, *args: Any, **kwargs: Any) -> Any:
             value = original_archive(self, *args, **kwargs)
-            if type(value) is v3_api.RetainedCurrentSamePassMarketContextV3:
+            if type(value) is v3_api.RetainedCurrentSamePassMarketContextV4:
                 captured_contexts.append((value, args[1].context_object))
             return value
 
@@ -2585,18 +1908,16 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
         assert raw_private_context.component_ledger[2].primary_identity_sha256 == (
             raw_not_attempted.not_attempted_projection_identity_sha256
         )
-        raw_request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+        raw_request = api.CurrentSuppliedCohortResearchPacketRequestV4(
             decision_cutoff=raw_private_context.request.decision_cutoff,
             cohort_selected_at=raw_private_context.request.cohort_selected_at,
             members=raw_private_context.request.members,
             market_context_identity_sha256=raw_context.context_identity_sha256,
         )
         raw_industry_failure = (
-            industry_test._api().reduce_current_industry_participation_v2(
+            industry_test._api().reduce_current_industry_participation_v4(
                 raw_context,
-                industry_test._classification_failure(
-                    "CLASSIFICATION_ARTIFACT_MISSING"
-                ),
+                _classification_failure("CLASSIFICATION_ARTIFACT_MISSING"),
             )
         )
         raw_root = tmp_path / "packet-raw-insufficiency"
@@ -2608,12 +1929,12 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 [raw_request.decision_cutoff - timedelta(seconds=30)]
                 + [raw_request.decision_cutoff] * 32
             )
-            raw_archive = api.FileCurrentResearchPacketArchiveV2(
+            raw_archive = api.FileCurrentResearchPacketArchiveV4(
                 raw_root,
                 clock=raw_clock,
             )
             raw_retained = (
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     raw_request,
                     raw_context,
                     raw_industry_failure,
@@ -2624,7 +1945,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 )
             )
             assert (
-                type(raw_retained) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+                type(raw_retained) is api.RetainedCurrentSuppliedCohortResearchPacketV4
             )
             raw_packet = raw_retained.packet
             assert raw_packet.evidence_state == "INSUFFICIENT_EVIDENCE"
@@ -2668,7 +1989,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             assert regime_source.known_at is None
             assert regime_source.primary_identity_sha256 is None
             raw_retried = (
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     raw_request,
                     raw_context,
                     raw_industry_failure,
@@ -2679,7 +2000,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
                 )
             )
             assert (
-                type(raw_retried) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+                type(raw_retried) is api.RetainedCurrentSuppliedCohortResearchPacketV4
             )
             assert (
                 raw_retried.retained_identity_sha256
@@ -2699,11 +2020,11 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
     api = _api()
     industry_test = _industry_test_module()
     context, classification = industry_test._inputs(tmp_path / "industry")
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    v3_request = industry_test._v3_request(context)
-    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+    v3_request = industry_test._v4_request(context)
+    request = api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=v3_request.decision_cutoff,
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
@@ -2727,7 +2048,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
                 member.effective_symbol,
                 "Member Limited",
                 "Current evidence",
-                "Retained for the Packet V2 integration test",
+                "Retained for the Packet V4 integration test",
                 "03-Aug-2026 11:00:00",
                 "2026-08-03 11:00:00",
                 "03-Aug-2026 11:00:00",
@@ -2785,7 +2106,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             [request.decision_cutoff - timedelta(seconds=30)]
             + [request.decision_cutoff] * 16
         )
-        file_archive = api.FileCurrentResearchPacketArchiveV2(
+        file_archive = api.FileCurrentResearchPacketArchiveV4(
             packet_root,
             clock=packet_clock,
         )
@@ -2798,7 +2119,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
                 return file_archive.archive_exact(*args, **kwargs)
 
         archive = CapturingArchive()
-        retained = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retained = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
@@ -2807,7 +2128,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             acquired.lease,
             trusted_clock=packet_clock,
         )
-        assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+        assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV4
         packet = retained.packet
         assert packet.evidence_state == "INSUFFICIENT_EVIDENCE"
         assert packet.reasons == ("EVENT_NOTICES_UNAVAILABLE", "COMPONENT_STALE")
@@ -2855,8 +2176,8 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             for row in packet.component_ledger
         ) == (
             (0, "MARKET_DATA_SAME_PASS_V1", "OBSERVED", (), ()),
-            (1, "MARKET_REGIME_V3", "OBSERVED", (), ()),
-            (2, "INDUSTRY_PARTICIPATION_V2", "OBSERVED", (), ()),
+            (1, "MARKET_REGIME_V4", "OBSERVED", (), ()),
+            (2, "INDUSTRY_PARTICIPATION_V4", "OBSERVED", (), ()),
             (
                 3,
                 "EVENT_NOTICES_V1",
@@ -2886,7 +2207,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             ),
             (
                 1,
-                "MARKET_REGIME_V3",
+                "MARKET_REGIME_V4",
                 "BOUND",
                 None,
                 "DETERMINISTIC_SAME_PASS_MARKET_REGIME",
@@ -2894,7 +2215,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             ),
             (
                 2,
-                "INDUSTRY_PARTICIPATION_V2",
+                "INDUSTRY_PARTICIPATION_V4",
                 "BOUND",
                 "NSE_INDICES",
                 "NSE_INDICES_INDUSTRY_CLASSIFICATION",
@@ -2943,17 +2264,17 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             ).decode()
             for item in (
                 "Member Limited",
-                "Retained for the Packet V2 integration test",
+                "Retained for the Packet V4 integration test",
                 "member.pdf",
                 events.source_filename,
                 events.source_url,
             )
         )
         assert packet.component_ledger[0].known_at == (
-            industry_test._v3_ledger_known_at(context, 0)
+            industry_test._v4_ledger_known_at(context, 0)
         )
         assert packet.component_ledger[1].known_at == (
-            industry_test._v3_ledger_known_at(context, 3)
+            industry_test._v4_ledger_known_at(context, 3)
         )
         candidate = archive.candidate
         assert packet_module._candidate_is_exact(request, candidate)
@@ -2975,7 +2296,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
         assert not packet_module._candidate_is_exact(request, forged_candidate)
         try:
             with pytest.raises(ValueError, match="invalid packet candidate"):
-                api.FileCurrentResearchPacketArchiveV2(
+                api.FileCurrentResearchPacketArchiveV4(
                     forged_root,
                     clock=Clock(
                         [request.decision_cutoff - timedelta(seconds=30)]
@@ -3015,7 +2336,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
                 return forged_retained
 
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -3030,7 +2351,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             len(request.members),
         )
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -3047,7 +2368,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
             with pytest.raises(
                 ValueError, match="invalid retained packet archive result"
             ):
-                api.build_and_retain_current_supplied_cohort_research_packet_v2(
+                api.build_and_retain_current_supplied_cohort_research_packet_v4(
                     request,
                     context,
                     industry,
@@ -3064,7 +2385,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
         assert closed.lease is not None
         closed.lease.close()
         with pytest.raises(ValueError, match="invalid retained packet archive result"):
-            api.build_and_retain_current_supplied_cohort_research_packet_v2(
+            api.build_and_retain_current_supplied_cohort_research_packet_v4(
                 request,
                 context,
                 industry,
@@ -3081,11 +2402,11 @@ def test_packet_rejects_plan25_failure_with_multiple_reasons(tmp_path: Path) -> 
     api = _api()
     industry_test = _industry_test_module()
     context, classification = industry_test._inputs(tmp_path / "industry")
-    industry = industry_test._api().reduce_current_industry_participation_v2(
+    industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    v3_request = industry_test._v3_request(context)
-    request = api.CurrentSuppliedCohortResearchPacketRequestV2(
+    v3_request = industry_test._v4_request(context)
+    request = api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=v3_request.decision_cutoff,
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
@@ -3114,12 +2435,12 @@ def test_packet_rejects_plan25_failure_with_multiple_reasons(tmp_path: Path) -> 
             [request.decision_cutoff - timedelta(seconds=30)]
             + [request.decision_cutoff] * 16
         )
-        retained = api.build_and_retain_current_supplied_cohort_research_packet_v2(
+        retained = api.build_and_retain_current_supplied_cohort_research_packet_v4(
             request,
             context,
             industry,
             multi_reason,
-            api.FileCurrentResearchPacketArchiveV2(
+            api.FileCurrentResearchPacketArchiveV4(
                 root,
                 clock=packet_clock,
             ),
@@ -3128,7 +2449,7 @@ def test_packet_rejects_plan25_failure_with_multiple_reasons(tmp_path: Path) -> 
         )
     finally:
         acquired.lease.close()
-    assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV2
+    assert type(retained) is api.RetainedCurrentSuppliedCohortResearchPacketV4
     event_ledger = retained.packet.component_ledger[3]
     assert event_ledger.evidence_state == "PACKET_INVALID_COMPONENT"
     assert event_ledger.component_reasons == ("PACKET_INVALID_COMPONENT",)

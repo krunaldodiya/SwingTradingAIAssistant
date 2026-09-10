@@ -1,10 +1,62 @@
 # Capture-forward adjusted OHLCV evidence contract
 
-> Provider direction update (2026-09-10):
+> Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
-> The Yahoo-specific profile and immutable revisions below remain unchanged.
-> A new provider requires a qualified successor, not relabelled historical data.
+> and [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+> govern the unreleased BharatStock V2 and member-isolation path below.
+> The later Yahoo-specific contract and delivery evidence are historical;
+> their immutable data, labels and supported readers are not reinterpreted.
+
+## BharatStock capture V2 and independent facts — unreleased
+
+`bharatstock-capture@v2` accepts an ordered list of 1–100 explicit
+ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
+It verifies the exact retained official schedule, runtime source identity,
+configuration, cutoff, and selection identity before provider effects.
+The provider/basis is `bharatstock-api@v1` /
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; volume is source-reported,
+unadjusted. No hourly reconstruction, filling, provider fallback, total-return
+claim, or fabricated historical publication time is permitted.
+
+Every requested member has exactly one result: `OBSERVED`,
+`INSUFFICIENT_EVIDENCE` with its local reason, or `NOT_ATTEMPTED` after the
+recorded shared failure. The original ordered selection identity remains
+separate from actual evidence coverage. Invalid local history does not discard
+another member's valid history. Authentication, authorization, quota,
+runtime/source, schedule and storage boundaries remain shared; unexpected
+software exceptions are not disguised as missing stock evidence.
+
+The immutable namespace is `bharatstock-capture-v2`, with separate prepared,
+revision and exact-request admission records beneath a held private root.
+Exact reuse precedes transport. Interrupted publication recovers validated
+prepared bytes without downloading again. Corrections name an admitted parent,
+preserve the old revision, and produce a new immutable identity only for changed
+material member evidence. Conflicting, unadmitted or unsafe files fail closed.
+The acquisition deadline is checked before each member and before retention.
+No automatic provider retries are introduced by recovery.
+
+`build_bharatstock_research_packet_v1` consumes the admitted V2 revision.
+Owner-private independent facts use one consistent adjusted basis: Price Action
+requires the latest two completed supplied sessions; Market Structure requires
+the latest 21. Missing history for one feature must not erase an independently
+valid fact for another. Each feature must expose its own evidence state/reason.
+Shared deterministic mathematics must use neutral price/source inputs, never
+forge an Upstox raw-grid envelope from adjusted prices.
+
+Requested, observed, insufficient and unattempted membership remains explicit.
+Whole-list breadth, regime, Industry and other dependent conclusions retain
+their original denominators and evidence prerequisites; coverage is not a
+confidence score. Sanitized CLI output exposes only governed aggregate status
+and revision handles. Member identities, prices, source payloads and detailed
+facts stay owner-private.
+
+The generic downloader's Parquet output is not automatic Plan30 admission.
+The old Yahoo readers and Plan29 projections stay separate. The historical
+qualification and original provider approvals below do not qualify V2.
+Current delivery, exact-byte review and required verification remain governed
+by #184/#183; no merge or closure is claimed by this successor specification.
+
+## Historical Yahoo contract and delivery
 
 **Status:** ACCEPTED — Sprint 17 / Issue #147
 **Parent:** Issue #139

@@ -1,7 +1,7 @@
 # pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportOptionalSubscript=false, reportReturnType=false
-"""Owner-private retained current supplied-cohort research packets V2.
+"""Owner-private retained current supplied-cohort research packets V4.
 
-The packet has one market source: an exact archive-sealed same-pass V3 context.
+The packet has one market source: an exact archive-sealed same-pass V4 context.
 It never accepts a raw grid, Market Regime report, or partial-session snapshot
 from a caller. Publication is create-only; current commits require the completion
 marker plus an admissibility guard, and retained results are archive-minted only.
@@ -66,11 +66,11 @@ from swing_trading_ai_assistant.market_data.current_event_notice import (
 from swing_trading_ai_assistant.market_data.current_event_notice import (
     _parse_filename as _event_filename_date,
 )
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
-    CurrentSamePassEquityMemberV1 as _CurrentSamePassEquityMemberV1,
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    CurrentSamePassEquityMemberV4 as _CurrentSamePassEquityMemberV4,
 )
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
-    current_same_pass_raw_daily_schema_identity_v1,
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    current_same_pass_raw_daily_schema_identity_v4,
 )
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256 as _runtime_source_sha256,
@@ -85,19 +85,19 @@ if TYPE_CHECKING:
         CurrentEventNoticeFailureV1,
         RetainedCurrentEventNoticeSnapshotV1,
     )
-    from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3 import (
-        RetainedCurrentSamePassMarketContextV3,
+    from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+        RetainedCurrentSamePassMarketContextV4,
     )
-    from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v2 import (
-        CurrentIndustryParticipationFailureV2,
-        CurrentIndustryParticipationReportV2,
+    from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+        CurrentIndustryParticipationFailureV4,
+        CurrentIndustryParticipationReportV4,
     )
 
-_CONTRACT: Final = "current-supplied-cohort-research-packet@v2"
-_FAILURE_CONTRACT: Final = "current-supplied-cohort-research-packet-archive-failure@v2"
-_RECEIPT_CONTRACT: Final = "current-supplied-cohort-research-packet-receipt@v2"
-_MARKER_CONTRACT: Final = "current-supplied-cohort-research-packet-marker@v2"
-_ARCHIVE_DIRECTORY: Final = ".current-research-packet-v2"
+_CONTRACT: Final = "current-supplied-cohort-research-packet@v4"
+_FAILURE_CONTRACT: Final = "current-supplied-cohort-research-packet-archive-failure@v4"
+_RECEIPT_CONTRACT: Final = "current-supplied-cohort-research-packet-receipt@v4"
+_MARKER_CONTRACT: Final = "current-supplied-cohort-research-packet-marker@v4"
+_ARCHIVE_DIRECTORY: Final = ".current-research-packet-v4"
 _PACKET_LIMIT: Final = 37_748_736
 _RECEIPT_LIMIT: Final = 16_384
 _MARKER_LIMIT: Final = 4_096
@@ -109,22 +109,22 @@ _ISIN: Final = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _NSE_SYMBOL: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _MANIFEST_MODULE: Final = (
     "swing_trading_ai_assistant.research_packet."
-    "current_supplied_cohort_runtime_identity_manifest"
+    "current_supplied_cohort_v4_runtime_identity_manifest"
 )
 _MANIFEST_PATH: Final = (
     "src/swing_trading_ai_assistant/research_packet/"
-    "current_supplied_cohort_runtime_identity_manifest.py"
+    "current_supplied_cohort_v4_runtime_identity_manifest.py"
 )
 _RUNTIME_SOURCE: Final = (
-    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort.py"
+    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v4.py"
 )
 _PACKET_COMPONENTS: Final = (
     "MARKET_DATA_SAME_PASS_V1",
-    "MARKET_REGIME_V3",
-    "INDUSTRY_PARTICIPATION_V2",
+    "MARKET_REGIME_V4",
+    "INDUSTRY_PARTICIPATION_V4",
     "EVENT_NOTICES_V1",
 )
-PACKET_REASON_ORDER_V2: Final = (
+PACKET_REASON_ORDER_V4: Final = (
     "MARKET_DATA_UNAVAILABLE",
     "MARKET_REGIME_UNAVAILABLE",
     "INDUSTRY_PARTICIPATION_UNAVAILABLE",
@@ -140,7 +140,7 @@ PACKET_REASON_ORDER_V2: Final = (
     "PARTIAL_AS_COMPLETE",
 )
 _REASON_RANK: Final = {
-    reason: index for index, reason in enumerate(PACKET_REASON_ORDER_V2)
+    reason: index for index, reason in enumerate(PACKET_REASON_ORDER_V4)
 }
 _ARCHIVE_LOCK: Final = Lock()
 _PACKET_BUILD_LOCK: Final = Lock()
@@ -199,7 +199,7 @@ _SCHEDULE_PREFLIGHT_REASONS: Final = frozenset(
 )
 
 
-_UPSTREAM_PACKET_REASON_MAP_V2: Final = {
+_UPSTREAM_PACKET_REASON_MAP_V4: Final = {
     "RAW_MAPPING_STALE": ("COMPONENT_STALE",),
     "RAW_BAR_STALE": ("COMPONENT_STALE",),
     "CLASSIFICATION_SESSION_STALE": ("COMPONENT_STALE",),
@@ -290,7 +290,7 @@ def _utc(value: object) -> bool:
 
 
 def _ordered_reasons(values: set[str]) -> tuple[str, ...]:
-    return tuple(reason for reason in PACKET_REASON_ORDER_V2 if reason in values)
+    return tuple(reason for reason in PACKET_REASON_ORDER_V4 if reason in values)
 
 
 def _object_value(value: object, *, omit: str | None = None) -> dict[str, object]:
@@ -321,7 +321,7 @@ def _valid_isin(value: object) -> bool:
 
 
 def _member_value(member: object) -> dict[str, object]:
-    if type(member) is not _CurrentSamePassEquityMemberV1:
+    if type(member) is not _CurrentSamePassEquityMemberV4:
         raise ValueError("invalid canonical cohort member")
     value = member.value()
     if (
@@ -335,7 +335,7 @@ def _member_value(member: object) -> dict[str, object]:
         or member.valid_from > member.valid_through
         or type(member.provider_symbol) is not str
         or not 1 <= len(member.provider_symbol.encode("utf-8")) <= 64
-        or member.mapping_version != "yfinance-symbol-mapping@v1"
+        or member.mapping_version != "bharatstock-isin-exchange-mapping@v1"
         or type(member.mapping_valid_from) is not date
         or (
             member.mapping_valid_through is not None
@@ -357,8 +357,6 @@ def _canonical_members(members: object, cutoff: object) -> tuple[object, ...]:
         raise ValueError("invalid canonical cohort")
     values = tuple(members)
     projections = tuple(_member_value(member) for member in values)
-    if tuple(sorted(values, key=lambda member: member.isin)) != values:
-        raise ValueError("canonical cohort order required")
     if len({item["isin"] for item in projections}) != len(projections):
         raise ValueError("duplicate ISIN")
     if len({item["effective_symbol"] for item in projections}) != len(projections):
@@ -378,7 +376,7 @@ def _plan21_identity(selected_at: datetime, members: tuple[object, ...]) -> str:
                     "isin": member.isin,
                     "symbol": member.effective_symbol,
                 }
-                for member in members
+                for member in sorted(members, key=lambda item: item.isin)
             ],
         }
     )
@@ -391,7 +389,10 @@ def _canonical_cohort_identity(
         {
             "contract_version": "current-same-pass-canonical-cohort@v1",
             "cohort_selected_at": _instant(selected_at),
-            "members": [_member_value(member) for member in members],
+            "members": [
+                _member_value(member)
+                for member in sorted(members, key=lambda item: item.isin)
+            ],
         }
     )
 
@@ -405,13 +406,13 @@ def _schema_field_from_contract(field: str) -> dict[str, str]:
     return {
         "name": name,
         "semantic_type": semantic_type,
-        "unit": _schema_unit_v2(semantic_type),
+        "unit": _schema_unit_v4(semantic_type),
         "nullability": "NULLABLE" if nullable else "REQUIRED",
-        "bounds": _schema_bounds_v2(semantic_type),
+        "bounds": _schema_bounds_v4(semantic_type),
     }
 
 
-def _schema_unit_v2(semantic_type: str) -> str:  # noqa: C901
+def _schema_unit_v4(semantic_type: str) -> str:  # noqa: C901
     if semantic_type.startswith('Literal["'):
         return "ENUMERATION"
     if semantic_type.startswith("int["):
@@ -439,7 +440,7 @@ def _schema_unit_v2(semantic_type: str) -> str:  # noqa: C901
     return "CLOSED_OBJECT"
 
 
-def _schema_bounds_v2(semantic_type: str) -> str:  # noqa: C901
+def _schema_bounds_v4(semantic_type: str) -> str:  # noqa: C901
     if semantic_type.startswith("Literal[") and semantic_type.endswith("]"):
         literal_values = json.loads(f"[{semantic_type[8:-1]}]")
         if (
@@ -502,7 +503,7 @@ def _packet_schema_type_rows(
     return tuple(rows)
 
 
-_PACKET_SCHEMA_DECLARATIONS_V2: Final = {
+_PACKET_SCHEMA_DECLARATIONS_V4: Final = {
     "contract_version": _CONTRACT,
     "unknown_key_policy": "REJECT",
     "canonical_json": {
@@ -515,17 +516,17 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
         "maximum_depth": _MAX_DEPTH,
     },
     "type_rows": {
-        "CurrentSuppliedCohortResearchPacketRequestV2": [
-            'contract_version:Literal["current-supplied-cohort-research-packet@v2"]',
+        "CurrentSuppliedCohortResearchPacketRequestV4": [
+            'contract_version:Literal["current-supplied-cohort-research-packet@v4"]',
             "decision_cutoff:UtcInstant",
             "cohort_selected_at:UtcInstant",
-            "members:tuple[CurrentSamePassEquityMemberV1,1..50]",
+            "members:tuple[CurrentSamePassEquityMemberV4,1..50]",
             "plan21_cohort_identity_sha256:Sha256",
             "canonical_cohort_identity_sha256:Sha256",
             "market_context_identity_sha256:Sha256",
             "request_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketComponentLedgerRowV2": [
+        "CurrentResearchPacketComponentLedgerRowV4": [
             "position:int[0..3]",
             "component:PacketComponent",
             "contract_version:SafeRevision or None",
@@ -534,13 +535,13 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "runtime_code_identity_sha256:Sha256 or None",
             "primary_identity_sha256:Sha256 or None",
             "failure_cohort_size:int[1..50] or None",
-            "identity_bindings:tuple[NamedIdentityV2,0..16]",
+            "identity_bindings:tuple[NamedIdentityV4,0..16]",
             "known_at:UtcInstant or None",
             "component_reasons:tuple[SafeRevision,0..32]",
             "packet_reasons:tuple[PacketReason,0..13]",
             "ledger_row_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketSourceAttributionRowV2": [
+        "CurrentResearchPacketSourceAttributionRowV4": [
             "position:int[0..3]",
             "component:PacketComponent",
             'source_state:Literal["BOUND","UNAVAILABLE"]',
@@ -548,19 +549,19 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "source_name:SafeText[1..128] or None",
             "source_url:SafeText[1..2048] or None",
             "source_release:SafeRevision or None",
-            'price_basis:Literal["RAW","ADJUSTED"] or None',
+            'price_basis:Literal["RAW","BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"] or None',
             "publisher_published_at:UtcInstant or None",
             "known_at:UtcInstant or None",
             "licence_policy_identity:SafeRevision or None",
             "primary_identity_sha256:Sha256 or None",
             "source_row_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketMarketDataProjectionV2": [
+        "CurrentResearchPacketMarketDataProjectionV4": [
             "decision_session:LocalDate",
             "rows:tuple[CurrentSamePassDecisionMarketDataRowV1,N]",
             "projection_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketMarketRegimeProjectionV2": [
+        "CurrentResearchPacketMarketRegimeProjectionV4": [
             "decision_session:LocalDate",
             "comparison_session:LocalDate",
             'regime:Literal["BROAD_ADVANCE","BROAD_DECLINE","MIXED_PARTICIPATION"]',
@@ -569,38 +570,38 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "unchanged:int[0..50]",
             "projection_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketIndustryProjectionV2": [
+        "CurrentResearchPacketIndustryProjectionV4": [
             'classification_tier:Literal["INDUSTRY"]',
-            "industries:tuple[CurrentIndustryCountV2,1..N]",
+            "industries:tuple[CurrentIndustryCountV4,1..N]",
             "known_at:UtcInstant",
             "projection_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketRedactedEventNoticeV2": [
+        "CurrentResearchPacketRedactedEventNoticeV4": [
             "observation_identity_sha256:Sha256",
             "deduplication_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketRedactedEventMemberV2": [
+        "CurrentResearchPacketRedactedEventMemberV4": [
             "isin:Isin",
             "symbol:NseSymbol",
             'outcome:Literal["NOTICES_ADMITTED","NO_MATCHING_NOTICE_IN_SNAPSHOT"]',
-            "notices:tuple[CurrentResearchPacketRedactedEventNoticeV2,0..10_000]",
+            "notices:tuple[CurrentResearchPacketRedactedEventNoticeV4,0..10_000]",
         ],
-        "CurrentResearchPacketEventProjectionV2": [
+        "CurrentResearchPacketEventProjectionV4": [
             "known_at:UtcInstant",
-            "members:tuple[CurrentResearchPacketRedactedEventMemberV2,N]",
+            "members:tuple[CurrentResearchPacketRedactedEventMemberV4,N]",
             "projection_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketAIObservedV2": [
+        "CurrentResearchPacketAIObservedV4": [
             'evidence_state:Literal["OBSERVED"]',
-            "market_data:CurrentResearchPacketMarketDataProjectionV2",
-            "market_regime:CurrentResearchPacketMarketRegimeProjectionV2",
-            "industry_participation:CurrentResearchPacketIndustryProjectionV2",
-            "event_notices:CurrentResearchPacketEventProjectionV2",
+            "market_data:CurrentResearchPacketMarketDataProjectionV4",
+            "market_regime:CurrentResearchPacketMarketRegimeProjectionV4",
+            "industry_participation:CurrentResearchPacketIndustryProjectionV4",
+            "event_notices:CurrentResearchPacketEventProjectionV4",
             "partial_current_session:PartialCurrentSessionSnapshotV1",
             "consumer_disposition:None",
             "ai_projection_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketAIInsufficientV2": [
+        "CurrentResearchPacketAIInsufficientV4": [
             'evidence_state:Literal["INSUFFICIENT_EVIDENCE"]',
             "market_data:None",
             "market_regime:None",
@@ -610,8 +611,8 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             'consumer_disposition:Literal["INSUFFICIENT_INFORMATION_NO_TRADE_REQUIRED"]',
             "ai_projection_identity_sha256:Sha256",
         ],
-        "CurrentSuppliedCohortResearchPacketV2": [
-            'contract_version:Literal["current-supplied-cohort-research-packet@v2"]',
+        "CurrentSuppliedCohortResearchPacketV4": [
+            'contract_version:Literal["current-supplied-cohort-research-packet@v4"]',
             "schema_identity_sha256:Sha256",
             "configuration_identity_sha256:Sha256",
             "runtime_code_identity_sha256:Sha256",
@@ -622,27 +623,27 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "decision_session:LocalDate",
             "component_known_at_max:UtcInstant or None",
             'evidence_state:Literal["OBSERVED","INSUFFICIENT_EVIDENCE"]',
-            "component_ledger:tuple[CurrentResearchPacketComponentLedgerRowV2,4]",
-            "source_attribution:tuple[CurrentResearchPacketSourceAttributionRowV2,4]",
+            "component_ledger:tuple[CurrentResearchPacketComponentLedgerRowV4,4]",
+            "source_attribution:tuple[CurrentResearchPacketSourceAttributionRowV4,4]",
             "reasons:tuple[PacketReason,0..13]",
-            "ai_projection:CurrentResearchPacketAIObservedV2 or CurrentResearchPacketAIInsufficientV2",
+            "ai_projection:CurrentResearchPacketAIObservedV4 or CurrentResearchPacketAIInsufficientV4",
             "packet_identity_sha256:Sha256",
             "packet_object_sha256:Sha256",
         ],
-        "_CurrentSuppliedCohortResearchPacketCandidateV2": [
-            "packet:CurrentSuppliedCohortResearchPacketV2",
+        "_CurrentSuppliedCohortResearchPacketCandidateV4": [
+            "packet:CurrentSuppliedCohortResearchPacketV4",
             "candidate_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketArchiveFailureV2": [
-            'contract_version:Literal["current-supplied-cohort-research-packet-archive-failure@v2"]',
+        "CurrentResearchPacketArchiveFailureV4": [
+            'contract_version:Literal["current-supplied-cohort-research-packet-archive-failure@v4"]',
             'evidence_state:Literal["ARCHIVE_FAILED"]',
             'reason:Literal["RESEARCH_PACKET_ARCHIVE_FAILED"]',
             "request_identity_sha256:Sha256",
             "packet_identity_sha256:Sha256 or None",
             "archive_failure_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketReceiptV2": [
-            'contract_version:Literal["current-supplied-cohort-research-packet-receipt@v2"]',
+        "CurrentResearchPacketReceiptV4": [
+            'contract_version:Literal["current-supplied-cohort-research-packet-receipt@v4"]',
             "packet_identity_sha256:Sha256",
             "packet_object_sha256:Sha256",
             "packet_byte_count:int[1..37_748_736]",
@@ -650,8 +651,8 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "archive_known_at:UtcInstant",
             "receipt_identity_sha256:Sha256",
         ],
-        "CurrentResearchPacketCompletionMarkerV2": [
-            'contract_version:Literal["current-supplied-cohort-research-packet-marker@v2"]',
+        "CurrentResearchPacketCompletionMarkerV4": [
+            'contract_version:Literal["current-supplied-cohort-research-packet-marker@v4"]',
             "packet_identity_sha256:Sha256",
             "packet_object_sha256:Sha256",
             "receipt_identity_sha256:Sha256",
@@ -659,9 +660,9 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "archive_known_at:UtcInstant",
             "completion_marker_identity_sha256:Sha256",
         ],
-        "RetainedCurrentSuppliedCohortResearchPacketV2": [
+        "RetainedCurrentSuppliedCohortResearchPacketV4": [
             'evidence_state:Literal["RETAINED"]',
-            "packet:CurrentSuppliedCohortResearchPacketV2",
+            "packet:CurrentSuppliedCohortResearchPacketV4",
             "receipt_identity_sha256:Sha256",
             "completion_marker_identity_sha256:Sha256",
             "archive_known_at:UtcInstant",
@@ -669,7 +670,7 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
         ],
     },
     "in_memory_only": {
-        "_CurrentSuppliedCohortResearchPacketCandidateV2": {
+        "_CurrentSuppliedCohortResearchPacketCandidateV4": {
             "fields": [
                 "market_context",
                 "industry_participation",
@@ -679,7 +680,7 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
             "serialization": "NEVER",
             "identity_preimages": "EXCLUDED",
         },
-        "RetainedCurrentSuppliedCohortResearchPacketV2": {
+        "RetainedCurrentSuppliedCohortResearchPacketV4": {
             "fields": ["_archive_seal"],
             "serialization": "NEVER",
             "identity_preimages": "EXCLUDED",
@@ -696,28 +697,28 @@ _PACKET_SCHEMA_DECLARATIONS_V2: Final = {
                 "natural_insufficiency",
                 "invalid",
             ],
-            "MARKET_REGIME_V3": [
+            "MARKET_REGIME_V4": [
                 "success",
                 "natural_insufficiency",
                 "natural_adjusted_not_attempted",
                 "invalid",
             ],
-            "INDUSTRY_PARTICIPATION_V2": ["success", "typed_failure", "invalid"],
+            "INDUSTRY_PARTICIPATION_V4": ["success", "typed_failure", "invalid"],
             "EVENT_NOTICES_V1": ["success", "typed_failure", "invalid"],
         },
     },
     "packet_components": list(_PACKET_COMPONENTS),
-    "reason_order": list(PACKET_REASON_ORDER_V2),
+    "reason_order": list(PACKET_REASON_ORDER_V4),
 }
 
 
-SCHEMA_DEFINITION_V2: Final = {
+SCHEMA_DEFINITION_V4: Final = {
     "contract_version": _CONTRACT,
-    "type_rows": _packet_schema_type_rows(_PACKET_SCHEMA_DECLARATIONS_V2["type_rows"]),
-    "state_projections": _PACKET_SCHEMA_DECLARATIONS_V2["state_projections"],
+    "type_rows": _packet_schema_type_rows(_PACKET_SCHEMA_DECLARATIONS_V4["type_rows"]),
+    "state_projections": _PACKET_SCHEMA_DECLARATIONS_V4["state_projections"],
     "unknown_key_policy": "REJECT",
 }
-CONFIGURATION_DEFINITION_V2: Final = {
+CONFIGURATION_DEFINITION_V4: Final = {
     "contract_version": _CONTRACT,
     "structural_bounds": {
         "cohort_members": [1, 50],
@@ -731,12 +732,12 @@ CONFIGURATION_DEFINITION_V2: Final = {
         "event_notice_rows": [0, 10_000],
     },
     "canonicalization": "CJ UTF-8 sorted keys compact no-NaN trailing-LF",
-    "reason_order": list(PACKET_REASON_ORDER_V2),
+    "reason_order": list(PACKET_REASON_ORDER_V4),
     "precedence": (
         "structural-before-domain; adjusted-not-attempted-propagates-without-source; "
         "any-domain-reason-suppresses-facts"
     ),
-    "raw_source_policy": "sealed-current-same-pass-market-context-v3-only",
+    "raw_source_policy": "sealed-current-same-pass-market-context-v4-only",
     "partial_policy": "auxiliary-only; no-completed-substitution",
     "retention_names_and_limits": {
         "directory": _ARCHIVE_DIRECTORY,
@@ -749,11 +750,11 @@ CONFIGURATION_DEFINITION_V2: Final = {
 }
 
 
-def current_research_packet_schema_metadata_v2() -> dict[str, object]:
-    return dict(SCHEMA_DEFINITION_V2)
+def current_research_packet_schema_metadata_v4() -> dict[str, object]:
+    return dict(SCHEMA_DEFINITION_V4)
 
 
-def current_research_packet_schema_metadata_digest_v2(metadata: object) -> str:
+def current_research_packet_schema_metadata_digest_v4(metadata: object) -> str:
     if type(metadata) is not dict or set(metadata) != {
         "contract_version",
         "type_rows",
@@ -764,21 +765,21 @@ def current_research_packet_schema_metadata_digest_v2(metadata: object) -> str:
     return _identity(metadata)
 
 
-def current_research_packet_schema_identity_from_metadata_v2(metadata: object) -> str:
-    if _canonical(metadata) != _canonical(SCHEMA_DEFINITION_V2):
+def current_research_packet_schema_identity_from_metadata_v4(metadata: object) -> str:
+    if _canonical(metadata) != _canonical(SCHEMA_DEFINITION_V4):
         raise ValueError("Packet schema metadata differs from frozen contract")
-    return current_research_packet_schema_metadata_digest_v2(metadata)
+    return current_research_packet_schema_metadata_digest_v4(metadata)
 
 
 SCHEMA_IDENTITY_SHA256: Final = (
-    current_research_packet_schema_identity_from_metadata_v2(SCHEMA_DEFINITION_V2)
+    current_research_packet_schema_identity_from_metadata_v4(SCHEMA_DEFINITION_V4)
 )
-CONFIGURATION_IDENTITY_SHA256: Final = _identity(CONFIGURATION_DEFINITION_V2)
+CONFIGURATION_IDENTITY_SHA256: Final = _identity(CONFIGURATION_DEFINITION_V4)
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
-class CurrentSuppliedCohortResearchPacketRequestV2:
-    contract_version: Literal["current-supplied-cohort-research-packet@v2"]
+class CurrentSuppliedCohortResearchPacketRequestV4:
+    contract_version: Literal["current-supplied-cohort-research-packet@v4"]
     decision_cutoff: datetime
     cohort_selected_at: datetime
     members: tuple[object, ...]
@@ -847,7 +848,7 @@ class CurrentSuppliedCohortResearchPacketRequestV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketComponentLedgerRowV2:
+class CurrentResearchPacketComponentLedgerRowV4:
     position: int
     component: str
     contract_version: str | None
@@ -870,7 +871,7 @@ class CurrentResearchPacketComponentLedgerRowV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketSourceAttributionRowV2:
+class CurrentResearchPacketSourceAttributionRowV4:
     position: int
     component: str
     source_state: Literal["BOUND", "UNAVAILABLE"]
@@ -878,7 +879,7 @@ class CurrentResearchPacketSourceAttributionRowV2:
     source_name: str | None
     source_url: str | None
     source_release: str | None
-    price_basis: Literal["RAW", "ADJUSTED"] | None
+    price_basis: Literal["RAW", "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"] | None
     publisher_published_at: datetime | None
     known_at: datetime | None
     licence_policy_identity: str | None
@@ -893,14 +894,14 @@ class CurrentResearchPacketSourceAttributionRowV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketMarketDataProjectionV2:
+class CurrentResearchPacketMarketDataProjectionV4:
     decision_session: date
     rows: tuple[object, ...]
     projection_identity_sha256: str
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketMarketRegimeProjectionV2:
+class CurrentResearchPacketMarketRegimeProjectionV4:
     decision_session: date
     comparison_session: date
     regime: Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"]
@@ -911,7 +912,7 @@ class CurrentResearchPacketMarketRegimeProjectionV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketIndustryProjectionV2:
+class CurrentResearchPacketIndustryProjectionV4:
     classification_tier: Literal["INDUSTRY"]
     industries: tuple[object, ...]
     known_at: datetime
@@ -919,40 +920,40 @@ class CurrentResearchPacketIndustryProjectionV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketRedactedEventNoticeV2:
+class CurrentResearchPacketRedactedEventNoticeV4:
     observation_identity_sha256: str
     deduplication_identity_sha256: str
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketRedactedEventMemberV2:
+class CurrentResearchPacketRedactedEventMemberV4:
     isin: str
     symbol: str
     outcome: Literal["NOTICES_ADMITTED", "NO_MATCHING_NOTICE_IN_SNAPSHOT"]
-    notices: tuple[CurrentResearchPacketRedactedEventNoticeV2, ...]
+    notices: tuple[CurrentResearchPacketRedactedEventNoticeV4, ...]
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketEventProjectionV2:
+class CurrentResearchPacketEventProjectionV4:
     known_at: datetime
-    members: tuple[CurrentResearchPacketRedactedEventMemberV2, ...]
+    members: tuple[CurrentResearchPacketRedactedEventMemberV4, ...]
     projection_identity_sha256: str
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketAIObservedV2:
+class CurrentResearchPacketAIObservedV4:
     evidence_state: Literal["OBSERVED"]
-    market_data: CurrentResearchPacketMarketDataProjectionV2
-    market_regime: CurrentResearchPacketMarketRegimeProjectionV2
-    industry_participation: CurrentResearchPacketIndustryProjectionV2
-    event_notices: CurrentResearchPacketEventProjectionV2
+    market_data: CurrentResearchPacketMarketDataProjectionV4
+    market_regime: CurrentResearchPacketMarketRegimeProjectionV4
+    industry_participation: CurrentResearchPacketIndustryProjectionV4
+    event_notices: CurrentResearchPacketEventProjectionV4
     partial_current_session: object
     consumer_disposition: None
     ai_projection_identity_sha256: str
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketAIInsufficientV2:
+class CurrentResearchPacketAIInsufficientV4:
     evidence_state: Literal["INSUFFICIENT_EVIDENCE"]
     market_data: None
     market_regime: None
@@ -964,8 +965,8 @@ class CurrentResearchPacketAIInsufficientV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentSuppliedCohortResearchPacketV2:
-    contract_version: Literal["current-supplied-cohort-research-packet@v2"]
+class CurrentSuppliedCohortResearchPacketV4:
+    contract_version: Literal["current-supplied-cohort-research-packet@v4"]
     schema_identity_sha256: str
     configuration_identity_sha256: str
     runtime_code_identity_sha256: str
@@ -976,11 +977,11 @@ class CurrentSuppliedCohortResearchPacketV2:
     decision_session: date
     component_known_at_max: datetime | None
     evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"]
-    component_ledger: tuple[CurrentResearchPacketComponentLedgerRowV2, ...]
-    source_attribution: tuple[CurrentResearchPacketSourceAttributionRowV2, ...]
+    component_ledger: tuple[CurrentResearchPacketComponentLedgerRowV4, ...]
+    source_attribution: tuple[CurrentResearchPacketSourceAttributionRowV4, ...]
     reasons: tuple[str, ...]
     ai_projection: (
-        CurrentResearchPacketAIObservedV2 | CurrentResearchPacketAIInsufficientV2
+        CurrentResearchPacketAIObservedV4 | CurrentResearchPacketAIInsufficientV4
     )
     packet_identity_sha256: str
     packet_object_sha256: str
@@ -998,12 +999,12 @@ class CurrentSuppliedCohortResearchPacketV2:
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
-class _CurrentSuppliedCohortResearchPacketCandidateV2:
-    packet: CurrentSuppliedCohortResearchPacketV2
+class _CurrentSuppliedCohortResearchPacketCandidateV4:
+    packet: CurrentSuppliedCohortResearchPacketV4
     candidate_identity_sha256: str
-    market_context: RetainedCurrentSamePassMarketContextV3
+    market_context: RetainedCurrentSamePassMarketContextV4
     industry_participation: (
-        CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2
+        CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4
     )
     event_notices: RetainedCurrentEventNoticeSnapshotV1 | CurrentEventNoticeFailureV1
     _seal: object = field(repr=False, compare=False)
@@ -1016,9 +1017,9 @@ class _CurrentSuppliedCohortResearchPacketCandidateV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketArchiveFailureV2:
+class CurrentResearchPacketArchiveFailureV4:
     contract_version: Literal[
-        "current-supplied-cohort-research-packet-archive-failure@v2"
+        "current-supplied-cohort-research-packet-archive-failure@v4"
     ]
     evidence_state: Literal["ARCHIVE_FAILED"]
     reason: Literal["RESEARCH_PACKET_ARCHIVE_FAILED"]
@@ -1031,8 +1032,8 @@ class CurrentResearchPacketArchiveFailureV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketReceiptV2:
-    contract_version: Literal["current-supplied-cohort-research-packet-receipt@v2"]
+class CurrentResearchPacketReceiptV4:
+    contract_version: Literal["current-supplied-cohort-research-packet-receipt@v4"]
     packet_identity_sha256: str
     packet_object_sha256: str
     packet_byte_count: int
@@ -1045,8 +1046,8 @@ class CurrentResearchPacketReceiptV2:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class CurrentResearchPacketCompletionMarkerV2:
-    contract_version: Literal["current-supplied-cohort-research-packet-marker@v2"]
+class CurrentResearchPacketCompletionMarkerV4:
+    contract_version: Literal["current-supplied-cohort-research-packet-marker@v4"]
     packet_identity_sha256: str
     packet_object_sha256: str
     receipt_identity_sha256: str
@@ -1059,9 +1060,9 @@ class CurrentResearchPacketCompletionMarkerV2:
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
-class RetainedCurrentSuppliedCohortResearchPacketV2:
+class RetainedCurrentSuppliedCohortResearchPacketV4:
     evidence_state: Literal["RETAINED"]
-    packet: CurrentSuppliedCohortResearchPacketV2
+    packet: CurrentSuppliedCohortResearchPacketV4
     receipt_identity_sha256: str
     completion_marker_identity_sha256: str
     archive_known_at: datetime
@@ -1095,7 +1096,7 @@ def _runtime_root() -> Path:
 def _runtime_identity() -> str:
     try:
         manifest = importlib.import_module(_MANIFEST_MODULE)
-        mapping = manifest.CURRENT_RESEARCH_PACKET_RUNTIME_SOURCE_DIGESTS_V2
+        mapping = manifest.CURRENT_RESEARCH_PACKET_RUNTIME_SOURCE_DIGESTS_V4
         if (
             type(mapping) is not dict
             or tuple(mapping) != (_RUNTIME_SOURCE,)
@@ -1128,18 +1129,18 @@ def _successor_types() -> tuple[
 ]:
     try:
         regime = importlib.import_module(
-            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
+            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4"
         )
         industry = importlib.import_module(
-            "swing_trading_ai_assistant.sector_analysis.current_industry_participation_v2"
+            "swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4"
         )
         events = importlib.import_module(
             "swing_trading_ai_assistant.market_data.current_event_notice"
         )
         return (
-            regime.RetainedCurrentSamePassMarketContextV3,
-            industry.CurrentIndustryParticipationReportV2,
-            industry.CurrentIndustryParticipationFailureV2,
+            regime.RetainedCurrentSamePassMarketContextV4,
+            industry.CurrentIndustryParticipationReportV4,
+            industry.CurrentIndustryParticipationFailureV4,
             events.RetainedCurrentEventNoticeSnapshotV1,
             events.CurrentEventNoticeFailureV1,
         )
@@ -1148,13 +1149,13 @@ def _successor_types() -> tuple[
 
 
 def _validated_context(context: object) -> bool:
-    """Require V3's closure-owned retained-context validator."""
+    """Require V4's closure-owned retained-context validator."""
     try:
         regime = importlib.import_module(
-            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
+            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4"
         )
         return bool(
-            regime.validate_retained_current_same_pass_market_context_v3(context)
+            regime.validate_retained_current_same_pass_market_context_v4(context)
         )
     except (AttributeError, ImportError, TypeError, ValueError):
         return False
@@ -1180,7 +1181,7 @@ def _ledger(
     known_at: datetime | None,
     component_reasons: tuple[str, ...],
     packet_reasons: tuple[str, ...],
-) -> CurrentResearchPacketComponentLedgerRowV2:
+) -> CurrentResearchPacketComponentLedgerRowV4:
     core = {
         "position": position,
         "component": component,
@@ -1195,7 +1196,7 @@ def _ledger(
         "component_reasons": component_reasons,
         "packet_reasons": packet_reasons,
     }
-    return CurrentResearchPacketComponentLedgerRowV2(
+    return CurrentResearchPacketComponentLedgerRowV4(
         **core, ledger_row_identity_sha256=_identity(core)
     )
 
@@ -1204,11 +1205,11 @@ def _packet_reasons(
     unavailable_reason: str, component_reasons: tuple[str, ...]
 ) -> tuple[str, ...]:
     if any(reason in _SCHEDULE_PREFLIGHT_REASONS for reason in component_reasons):
-        raise ValueError("schedule preflight reason cannot enter Packet V2")
+        raise ValueError("schedule preflight reason cannot enter Packet V4")
     mapped = {
         packet_reason
         for component_reason in component_reasons
-        for packet_reason in _UPSTREAM_PACKET_REASON_MAP_V2.get(component_reason, ())
+        for packet_reason in _UPSTREAM_PACKET_REASON_MAP_V4.get(component_reason, ())
     }
     return _ordered_reasons({unavailable_reason, *mapped})
 
@@ -1216,8 +1217,8 @@ def _packet_reasons(
 def _partial_as_complete(partial: object, market: object, regime: object) -> bool:
     """Detect an observed partial session substituted into completed facts.
 
-    Raw V3 structurally validates the partial snapshot and the raw-bar
-    provenance.  Packet V2 additionally fails closed if an observed partial
+    Raw V4 structurally validates the partial snapshot and the raw-bar
+    provenance.  Packet V4 additionally fails closed if an observed partial
     session can overlap a completed projection.
     """
     if getattr(partial, "state", None) != "OBSERVED":
@@ -1250,7 +1251,7 @@ def _partial_as_complete(partial: object, market: object, regime: object) -> boo
 
 def _unavailable_source(
     position: int, component: str, *, primary: str | None = None
-) -> CurrentResearchPacketSourceAttributionRowV2:
+) -> CurrentResearchPacketSourceAttributionRowV4:
     core = {
         "position": position,
         "component": component,
@@ -1265,7 +1266,7 @@ def _unavailable_source(
         "licence_policy_identity": None,
         "primary_identity_sha256": primary,
     }
-    return CurrentResearchPacketSourceAttributionRowV2(
+    return CurrentResearchPacketSourceAttributionRowV4(
         **core, source_row_identity_sha256=_identity(core)
     )
 
@@ -1282,7 +1283,7 @@ def _source(
     known_at: datetime,
     licence_policy_identity: str | None,
     primary: str,
-) -> CurrentResearchPacketSourceAttributionRowV2:
+) -> CurrentResearchPacketSourceAttributionRowV4:
     core = {
         "position": position,
         "component": component,
@@ -1297,13 +1298,13 @@ def _source(
         "licence_policy_identity": licence_policy_identity,
         "primary_identity_sha256": primary,
     }
-    return CurrentResearchPacketSourceAttributionRowV2(
+    return CurrentResearchPacketSourceAttributionRowV4(
         **core, source_row_identity_sha256=_identity(core)
     )
 
 
 def _context_seal_bindings(
-    context: object, request: CurrentSuppliedCohortResearchPacketRequestV2
+    context: object, request: CurrentSuppliedCohortResearchPacketRequestV4
 ) -> (
     tuple[
         str,
@@ -1320,12 +1321,12 @@ def _context_seal_bindings(
     ]
     | None
 ):
-    """Obtain only closure-validated V3 identities, states, and timestamps."""
+    """Obtain only closure-validated V4 identities, states, and timestamps."""
     try:
         regime = importlib.import_module(
-            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3"
+            "swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4"
         )
-        projection = regime._packet_projection_from_retained_context_v3(
+        projection = regime._packet_projection_from_retained_context_v4(
             context, request
         )
     except (AttributeError, ImportError, TypeError, ValueError):
@@ -1422,18 +1423,18 @@ def _propagate_adjusted_not_attempted(
 
 
 def _project_context(
-    request: CurrentSuppliedCohortResearchPacketRequestV2, context: object
+    request: CurrentSuppliedCohortResearchPacketRequestV4, context: object
 ) -> tuple[
-    CurrentResearchPacketComponentLedgerRowV2,
-    CurrentResearchPacketComponentLedgerRowV2,
-    CurrentResearchPacketSourceAttributionRowV2,
-    CurrentResearchPacketSourceAttributionRowV2,
-    CurrentResearchPacketMarketDataProjectionV2 | None,
-    CurrentResearchPacketMarketRegimeProjectionV2 | None,
+    CurrentResearchPacketComponentLedgerRowV4,
+    CurrentResearchPacketComponentLedgerRowV4,
+    CurrentResearchPacketSourceAttributionRowV4,
+    CurrentResearchPacketSourceAttributionRowV4,
+    CurrentResearchPacketMarketDataProjectionV4 | None,
+    CurrentResearchPacketMarketRegimeProjectionV4 | None,
     object | None,
     set[str],
 ]:
-    """Project the sealed V3 public reports and only seal-bound private identities."""
+    """Project the sealed V4 public reports and only seal-bound private identities."""
     reasons: set[str] = set()
     expected_context = request.market_context_identity_sha256
     if getattr(context, "context_identity_sha256", None) != expected_context:
@@ -1522,7 +1523,7 @@ def _project_context(
     context_identity = expected_context
     market_observed = (
         getattr(market, "contract_version", None)
-        == "current-same-pass-decision-market-data@v1"
+        == "current-same-pass-decision-market-data@v4"
         and getattr(market, "evidence_state", None) == "OBSERVED"
         and type(getattr(market, "rows", None)) is tuple
         and len(market.rows) == len(request.members)
@@ -1540,7 +1541,7 @@ def _project_context(
             "decision_session": market.decision_session,
             "rows": rows,
         }
-        market_projection = CurrentResearchPacketMarketDataProjectionV2(
+        market_projection = CurrentResearchPacketMarketDataProjectionV4(
             **projection_core, projection_identity_sha256=_identity(projection_core)
         )
         market_ledger = _ledger(
@@ -1548,7 +1549,7 @@ def _project_context(
             _PACKET_COMPONENTS[0],
             contract_version=market.contract_version,
             evidence_state="OBSERVED",
-            schema=current_same_pass_raw_daily_schema_identity_v1(),
+            schema=current_same_pass_raw_daily_schema_identity_v4(),
             runtime=seal_bindings[3],
             primary=market.report_identity_sha256,
             failure_size=None,
@@ -1578,7 +1579,7 @@ def _project_context(
         component_reasons = (
             tuple(getattr(market, "reasons", ()))
             if getattr(market, "contract_version", None)
-            == "current-same-pass-decision-market-data@v1"
+            == "current-same-pass-decision-market-data@v4"
             else ("PACKET_INVALID_COMPONENT",)
         )
         packet_reasons = (
@@ -1596,7 +1597,7 @@ def _project_context(
             evidence_state="INSUFFICIENT_EVIDENCE"
             if component_reasons != ("PACKET_INVALID_COMPONENT",)
             else "PACKET_INVALID_COMPONENT",
-            schema=current_same_pass_raw_daily_schema_identity_v1()
+            schema=current_same_pass_raw_daily_schema_identity_v4()
             if component_reasons != ("PACKET_INVALID_COMPONENT",)
             else None,
             runtime=seal_bindings[3]
@@ -1628,7 +1629,7 @@ def _project_context(
         market_projection = None
     regime_observed = (
         getattr(regime, "contract_version", None)
-        == "current-supplied-cohort-market-regime@v3"
+        == "current-supplied-cohort-market-regime@v4"
         and getattr(regime, "evidence_state", None) == "OBSERVED"
         and getattr(regime, "canonical_cohort_identity_sha256", None)
         == request.canonical_cohort_identity_sha256
@@ -1648,7 +1649,7 @@ def _project_context(
             "declines": regime.declines,
             "unchanged": regime.unchanged,
         }
-        regime_projection = CurrentResearchPacketMarketRegimeProjectionV2(
+        regime_projection = CurrentResearchPacketMarketRegimeProjectionV4(
             **core, projection_identity_sha256=_identity(core)
         )
         if not _digest(direction_identity):
@@ -1694,7 +1695,7 @@ def _project_context(
                 provider_id=None,
                 source_name="DETERMINISTIC_SAME_PASS_MARKET_REGIME",
                 source_url=None,
-                source_release="current-supplied-cohort-market-regime@v3",
+                source_release="current-supplied-cohort-market-regime@v4",
                 price_basis=None,
                 known_at=known_at,
                 licence_policy_identity=None,
@@ -1704,7 +1705,7 @@ def _project_context(
         component_reasons = (
             tuple(getattr(regime, "reasons", ()))
             if getattr(regime, "contract_version", None)
-            == "current-supplied-cohort-market-regime@v3"
+            == "current-supplied-cohort-market-regime@v4"
             else ("PACKET_INVALID_COMPONENT",)
         )
         regime_bindings = (
@@ -1770,13 +1771,13 @@ def _project_context(
 
 
 def _project_industry(
-    request: CurrentSuppliedCohortResearchPacketRequestV2,
+    request: CurrentSuppliedCohortResearchPacketRequestV4,
     context: object,
     value: object,
 ) -> tuple[
-    CurrentResearchPacketComponentLedgerRowV2,
-    CurrentResearchPacketSourceAttributionRowV2,
-    CurrentResearchPacketIndustryProjectionV2 | None,
+    CurrentResearchPacketComponentLedgerRowV4,
+    CurrentResearchPacketSourceAttributionRowV4,
+    CurrentResearchPacketIndustryProjectionV4 | None,
     set[str],
 ]:
     reasons: set[str] = set()
@@ -1785,10 +1786,10 @@ def _project_industry(
     try:
         industry_module = importlib.import_module(
             "swing_trading_ai_assistant.sector_analysis."
-            "current_industry_participation_v2"
+            "current_industry_participation_v4"
         )
         exact_industry = (
-            industry_module.current_industry_participation_is_exact_valid_v2(
+            industry_module.current_industry_participation_is_exact_valid_v4(
                 value, context
             )
         )
@@ -1798,7 +1799,7 @@ def _project_industry(
         type(value) is industry_report_type
         and exact_industry
         and value.contract_version
-        == "current-supplied-cohort-industry-participation@v2"
+        == "current-supplied-cohort-industry-participation@v4"
         and value.evidence_state == "OBSERVED"
         and value.schema_identity_sha256
         and value.runtime_code_identity_sha256
@@ -1866,7 +1867,7 @@ def _project_industry(
             "industries": value.industries,
             "known_at": value.known_at,
         }
-        projection = CurrentResearchPacketIndustryProjectionV2(
+        projection = CurrentResearchPacketIndustryProjectionV4(
             **core, projection_identity_sha256=_identity(core)
         )
         ledger = _ledger(
@@ -1902,7 +1903,7 @@ def _project_industry(
         known_at = value.known_at
         if (
             value.contract_version
-            != "current-supplied-cohort-industry-participation-failure@v2"
+            != "current-supplied-cohort-industry-participation-failure@v4"
             or value.evidence_state
             not in {
                 "MALFORMED_EVIDENCE",
@@ -1957,7 +1958,7 @@ def _project_industry(
 
 
 def _validated_redacted_events(  # noqa: C901 - exact delivered value revalidation.
-    request: CurrentSuppliedCohortResearchPacketRequestV2, value: object
+    request: CurrentSuppliedCohortResearchPacketRequestV4, value: object
 ) -> tuple[object, ...] | None:
     """Revalidate every identity the delivered Plan-25 retained value exposes."""
     try:
@@ -2082,9 +2083,11 @@ def _validated_redacted_events(  # noqa: C901 - exact delivered value revalidati
         or value.member_count != len(request.members)
     ):
         return None
-    projection: list[object] = []
+    projection: dict[str, object] = {}
     total_notices = 0
-    for requested, member_result in zip(request.members, members, strict=True):
+    for requested, member_result in zip(
+        sorted(request.members, key=lambda member: member.isin), members, strict=True
+    ):
         if type(member_result) is not _CurrentEventNoticeMemberResultV1:
             return None
         member = member_result.member
@@ -2109,7 +2112,7 @@ def _validated_redacted_events(  # noqa: C901 - exact delivered value revalidati
         total_notices += len(notices)
         if total_notices > 10_000:
             return None
-        redacted_notices: list[CurrentResearchPacketRedactedEventNoticeV2] = []
+        redacted_notices: list[CurrentResearchPacketRedactedEventNoticeV4] = []
         for notice in notices:
             if (
                 type(notice) is not _CurrentEventNoticeV1
@@ -2130,27 +2133,25 @@ def _validated_redacted_events(  # noqa: C901 - exact delivered value revalidati
             ):
                 return None
             redacted_notices.append(
-                CurrentResearchPacketRedactedEventNoticeV2(
+                CurrentResearchPacketRedactedEventNoticeV4(
                     observation_identity_sha256=notice.observation_identity_sha256,
                     deduplication_identity_sha256=notice.deduplication_identity_sha256,
                 )
             )
-        projection.append(
-            CurrentResearchPacketRedactedEventMemberV2(
-                isin=requested.isin,
-                symbol=requested.effective_symbol,
-                outcome=member_result.outcome,
-                notices=tuple(redacted_notices),
-            )
+        projection[requested.isin] = CurrentResearchPacketRedactedEventMemberV4(
+            isin=requested.isin,
+            symbol=requested.effective_symbol,
+            outcome=member_result.outcome,
+            notices=tuple(redacted_notices),
         )
-    return tuple(projection)
+    return tuple(projection[member.isin] for member in request.members)
 
 
 def _event_current_reason(
-    request: CurrentSuppliedCohortResearchPacketRequestV2,
+    request: CurrentSuppliedCohortResearchPacketRequestV4,
     value: _RetainedCurrentEventNoticeSnapshotV1,
 ) -> str | None:
-    """Apply Packet V2's current-request boundary to a valid Plan-25 snapshot."""
+    """Apply Packet V4's current-request boundary to a valid Plan-25 snapshot."""
     filename_date = _event_filename_date(value.source_filename)
     cutoff_date = request.decision_cutoff.astimezone(_EVENT_IST).date()
     if filename_date is None:
@@ -2190,11 +2191,11 @@ def _event_failure_projection_identity(
 
 
 def _project_events(
-    request: CurrentSuppliedCohortResearchPacketRequestV2, value: object
+    request: CurrentSuppliedCohortResearchPacketRequestV4, value: object
 ) -> tuple[
-    CurrentResearchPacketComponentLedgerRowV2,
-    CurrentResearchPacketSourceAttributionRowV2,
-    CurrentResearchPacketEventProjectionV2 | None,
+    CurrentResearchPacketComponentLedgerRowV4,
+    CurrentResearchPacketSourceAttributionRowV4,
+    CurrentResearchPacketEventProjectionV4 | None,
     set[str],
 ]:
     reasons: set[str] = set()
@@ -2246,7 +2247,7 @@ def _project_events(
             )
         )
         core = {"known_at": known_at, "members": redacted_members}
-        projection = CurrentResearchPacketEventProjectionV2(
+        projection = CurrentResearchPacketEventProjectionV4(
             **core, projection_identity_sha256=_identity(core)
         )
         ledger = _ledger(
@@ -2354,7 +2355,7 @@ def _invalid_component(position: int, component: str) -> tuple[Any, Any, Any, se
 
 
 def _packet_is_exact(
-    request: CurrentSuppliedCohortResearchPacketRequestV2,
+    request: CurrentSuppliedCohortResearchPacketRequestV4,
     packet: object,
     market_context: object,
     industry_participation: object,
@@ -2362,8 +2363,8 @@ def _packet_is_exact(
 ) -> bool:
     """Replay every packet component from the sealed candidate upstream values."""
     if (
-        type(request) is not CurrentSuppliedCohortResearchPacketRequestV2
-        or type(packet) is not CurrentSuppliedCohortResearchPacketV2
+        type(request) is not CurrentSuppliedCohortResearchPacketRequestV4
+        or type(packet) is not CurrentSuppliedCohortResearchPacketV4
         or packet.contract_version != _CONTRACT
         or packet.schema_identity_sha256 != SCHEMA_IDENTITY_SHA256
         or packet.configuration_identity_sha256 != CONFIGURATION_IDENTITY_SHA256
@@ -2396,9 +2397,9 @@ def _packet_is_exact(
 
 
 def _candidate_structure_is_exact(
-    request: CurrentSuppliedCohortResearchPacketRequestV2, candidate: object
+    request: CurrentSuppliedCohortResearchPacketRequestV4, candidate: object
 ) -> bool:
-    if type(candidate) is not _CurrentSuppliedCohortResearchPacketCandidateV2:
+    if type(candidate) is not _CurrentSuppliedCohortResearchPacketCandidateV4:
         return False
     packet = candidate.packet
     return _packet_is_exact(
@@ -2419,11 +2420,11 @@ def _candidate_structure_is_exact(
 
 
 def _project_packet(
-    request: CurrentSuppliedCohortResearchPacketRequestV2,
+    request: CurrentSuppliedCohortResearchPacketRequestV4,
     market_context: object,
     industry: object,
     events: object,
-) -> CurrentSuppliedCohortResearchPacketV2:
+) -> CurrentSuppliedCohortResearchPacketV4:
     runtime = _runtime_identity()
     (
         market_ledger,
@@ -2481,8 +2482,8 @@ def _project_packet(
             "consumer_disposition": None,
         }
         ai_projection: (
-            CurrentResearchPacketAIObservedV2 | CurrentResearchPacketAIInsufficientV2
-        ) = CurrentResearchPacketAIObservedV2(
+            CurrentResearchPacketAIObservedV4 | CurrentResearchPacketAIInsufficientV4
+        ) = CurrentResearchPacketAIObservedV4(
             **ai_core, ai_projection_identity_sha256=_identity(ai_core)
         )
         state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"] = "OBSERVED"
@@ -2496,7 +2497,7 @@ def _project_packet(
             "partial_current_session": None,
             "consumer_disposition": "INSUFFICIENT_INFORMATION_NO_TRADE_REQUIRED",
         }
-        ai_projection = CurrentResearchPacketAIInsufficientV2(
+        ai_projection = CurrentResearchPacketAIInsufficientV4(
             **ai_core, ai_projection_identity_sha256=_identity(ai_core)
         )
         state = "INSUFFICIENT_EVIDENCE"
@@ -2542,13 +2543,13 @@ def _project_packet(
             "ai_projection_identity_sha256": ai_projection.ai_projection_identity_sha256,
         }
     )
-    packet_without_digest = CurrentSuppliedCohortResearchPacketV2(
+    packet_without_digest = CurrentSuppliedCohortResearchPacketV4(
         **core, packet_identity_sha256=packet_identity, packet_object_sha256="0" * 64
     )
     packet_raw_without_digest = _canonical(
         _object_value(packet_without_digest, omit="packet_object_sha256")
     )
-    packet = CurrentSuppliedCohortResearchPacketV2(
+    packet = CurrentSuppliedCohortResearchPacketV4(
         **core,
         packet_identity_sha256=packet_identity,
         packet_object_sha256=_sha(packet_raw_without_digest),
@@ -2556,17 +2557,17 @@ def _project_packet(
     return packet
 
 
-class CurrentResearchPacketArchivePortV2(Protocol):
+class CurrentResearchPacketArchivePortV4(Protocol):
     def archive_exact(
         self,
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4,
         lease: StorageRootLease,
         *,
-        trusted_clock: _TrustedPacketClockV2 | None = None,
+        trusted_clock: _TrustedPacketClockV4 | None = None,
     ) -> (
-        RetainedCurrentSuppliedCohortResearchPacketV2
-        | CurrentResearchPacketArchiveFailureV2
+        RetainedCurrentSuppliedCohortResearchPacketV4
+        | CurrentResearchPacketArchiveFailureV4
     ): ...
 
 
@@ -2646,17 +2647,17 @@ def _parse_archive_instant(value: object) -> datetime:
 
 
 def _parse_packet_archive_records(
-    packet: CurrentSuppliedCohortResearchPacketV2,
+    packet: CurrentSuppliedCohortResearchPacketV4,
     receipt_raw: bytes,
     marker_raw: bytes,
     decision_cutoff: datetime,
-) -> tuple[CurrentResearchPacketReceiptV2, CurrentResearchPacketCompletionMarkerV2]:
+) -> tuple[CurrentResearchPacketReceiptV4, CurrentResearchPacketCompletionMarkerV4]:
     """Parse the immutable persisted commit records without normalizing bytes."""
     receipt_value = json.loads(receipt_raw)
     marker_value = json.loads(marker_raw)
-    receipt_fields = {item.name for item in fields(CurrentResearchPacketReceiptV2)}
+    receipt_fields = {item.name for item in fields(CurrentResearchPacketReceiptV4)}
     marker_fields = {
-        item.name for item in fields(CurrentResearchPacketCompletionMarkerV2)
+        item.name for item in fields(CurrentResearchPacketCompletionMarkerV4)
     }
     if (
         type(receipt_value) is not dict
@@ -2669,7 +2670,7 @@ def _parse_packet_archive_records(
         raise ValueError("noncanonical packet archive records")
     receipt_time = _parse_archive_instant(receipt_value["archive_known_at"])
     marker_time = _parse_archive_instant(marker_value["archive_known_at"])
-    receipt = CurrentResearchPacketReceiptV2(
+    receipt = CurrentResearchPacketReceiptV4(
         contract_version=receipt_value["contract_version"],
         packet_identity_sha256=receipt_value["packet_identity_sha256"],
         packet_object_sha256=receipt_value["packet_object_sha256"],
@@ -2678,7 +2679,7 @@ def _parse_packet_archive_records(
         archive_known_at=receipt_time,
         receipt_identity_sha256=receipt_value["receipt_identity_sha256"],
     )
-    marker = CurrentResearchPacketCompletionMarkerV2(
+    marker = CurrentResearchPacketCompletionMarkerV4(
         contract_version=marker_value["contract_version"],
         packet_identity_sha256=marker_value["packet_identity_sha256"],
         packet_object_sha256=marker_value["packet_object_sha256"],
@@ -2858,8 +2859,8 @@ def _packet_archive_guard_bytes(
 
 
 def _failure(
-    request: CurrentSuppliedCohortResearchPacketRequestV2, packet_identity: str | None
-) -> CurrentResearchPacketArchiveFailureV2:
+    request: CurrentSuppliedCohortResearchPacketRequestV4, packet_identity: str | None
+) -> CurrentResearchPacketArchiveFailureV4:
     core = {
         "contract_version": _FAILURE_CONTRACT,
         "evidence_state": "ARCHIVE_FAILED",
@@ -2867,48 +2868,48 @@ def _failure(
         "request_identity_sha256": request.request_identity_sha256,
         "packet_identity_sha256": packet_identity,
     }
-    return CurrentResearchPacketArchiveFailureV2(
+    return CurrentResearchPacketArchiveFailureV4(
         **core, archive_failure_identity_sha256=_identity(core)
     )
 
 
-class _TrustedPacketClockV2(Protocol):
+class _TrustedPacketClockV4(Protocol):
     def now(self) -> datetime: ...
 
 
 @dataclass(frozen=True, slots=True)
-class _SystemPacketClockV2:
+class _SystemPacketClockV4:
     def now(self) -> datetime:
         return datetime.now(UTC)
 
 
-class _FileCurrentResearchPacketArchiveV2:
+class _FileCurrentResearchPacketArchiveV4:
     def __init__(
-        self, root: object, *, clock: _TrustedPacketClockV2 | None = None
+        self, root: object, *, clock: _TrustedPacketClockV4 | None = None
     ) -> None:
         if type(root) is not type(Path()):
             raise TypeError("invalid packet archive root")
         self._root = root
-        self._clock = clock or _SystemPacketClockV2()
+        self._clock = clock or _SystemPacketClockV4()
 
     def archive_exact(  # noqa: C901 - archive commit/verification sequence is atomic.
         self,
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4,
         lease: StorageRootLease,
         *,
-        trusted_clock: _TrustedPacketClockV2 | None = None,
+        trusted_clock: _TrustedPacketClockV4 | None = None,
     ) -> (
-        RetainedCurrentSuppliedCohortResearchPacketV2
-        | CurrentResearchPacketArchiveFailureV2
+        RetainedCurrentSuppliedCohortResearchPacketV4
+        | CurrentResearchPacketArchiveFailureV4
     ):
         archive_clock = trusted_clock or self._clock
 
         def retained_packet(
-            packet: CurrentSuppliedCohortResearchPacketV2,
-            receipt: CurrentResearchPacketReceiptV2,
-            marker: CurrentResearchPacketCompletionMarkerV2,
-        ) -> RetainedCurrentSuppliedCohortResearchPacketV2:
+            packet: CurrentSuppliedCohortResearchPacketV4,
+            receipt: CurrentResearchPacketReceiptV4,
+            marker: CurrentResearchPacketCompletionMarkerV4,
+        ) -> RetainedCurrentSuppliedCohortResearchPacketV4:
             core = {
                 "evidence_state": "RETAINED",
                 "packet": packet,
@@ -2916,7 +2917,7 @@ class _FileCurrentResearchPacketArchiveV2:
                 "completion_marker_identity_sha256": marker.completion_marker_identity_sha256,
                 "archive_known_at": receipt.archive_known_at,
             }
-            result = object.__new__(RetainedCurrentSuppliedCohortResearchPacketV2)
+            result = object.__new__(RetainedCurrentSuppliedCohortResearchPacketV4)
             for name, value in {
                 **core,
                 "retained_identity_sha256": _identity(core),
@@ -2927,8 +2928,8 @@ class _FileCurrentResearchPacketArchiveV2:
             return result
 
         if (
-            type(request) is not CurrentSuppliedCohortResearchPacketRequestV2
-            or type(candidate) is not _CurrentSuppliedCohortResearchPacketCandidateV2
+            type(request) is not CurrentSuppliedCohortResearchPacketRequestV4
+            or type(candidate) is not _CurrentSuppliedCohortResearchPacketCandidateV4
             or type(lease) is not StorageRootLease
         ):
             raise TypeError("invalid packet archive invocation")
@@ -2971,7 +2972,7 @@ class _FileCurrentResearchPacketArchiveV2:
                             "packet_filename": packet_name,
                             "archive_known_at": archive_known_at,
                         }
-                        receipt = CurrentResearchPacketReceiptV2(
+                        receipt = CurrentResearchPacketReceiptV4(
                             **receipt_core,
                             receipt_identity_sha256=_identity(receipt_core),
                         )
@@ -3056,7 +3057,7 @@ class _FileCurrentResearchPacketArchiveV2:
                             "receipt_sha256": _sha(receipt_entry[0]),
                             "archive_known_at": archive_known_at,
                         }
-                        marker = CurrentResearchPacketCompletionMarkerV2(
+                        marker = CurrentResearchPacketCompletionMarkerV4(
                             **marker_core,
                             completion_marker_identity_sha256=_identity(marker_core),
                         )
@@ -3216,7 +3217,7 @@ class _FileCurrentResearchPacketArchiveV2:
                     while archive_clock.now() < archive_known_at:
                         time.sleep(0.001)
                     operation.ensure_live()
-                    receipt = CurrentResearchPacketReceiptV2(
+                    receipt = CurrentResearchPacketReceiptV4(
                         contract_version=receipt_value["contract_version"],
                         packet_identity_sha256=receipt_value["packet_identity_sha256"],
                         packet_object_sha256=receipt_value["packet_object_sha256"],
@@ -3270,20 +3271,20 @@ class _FileCurrentResearchPacketArchiveV2:
             return _failure(request, identity)
 
 
-def _build_and_retain_current_supplied_cohort_research_packet_unsealed_v2(
-    request: CurrentSuppliedCohortResearchPacketRequestV2,
-    market_context: RetainedCurrentSamePassMarketContextV3,
-    industry_participation: CurrentIndustryParticipationReportV2
-    | CurrentIndustryParticipationFailureV2,
+def _build_and_retain_current_supplied_cohort_research_packet_unsealed_v4(
+    request: CurrentSuppliedCohortResearchPacketRequestV4,
+    market_context: RetainedCurrentSamePassMarketContextV4,
+    industry_participation: CurrentIndustryParticipationReportV4
+    | CurrentIndustryParticipationFailureV4,
     event_notices: RetainedCurrentEventNoticeSnapshotV1 | CurrentEventNoticeFailureV1,
-    archive: CurrentResearchPacketArchivePortV2,
+    archive: CurrentResearchPacketArchivePortV4,
     lease: StorageRootLease,
 ) -> (
-    RetainedCurrentSuppliedCohortResearchPacketV2
-    | CurrentResearchPacketArchiveFailureV2
+    RetainedCurrentSuppliedCohortResearchPacketV4
+    | CurrentResearchPacketArchiveFailureV4
 ):
     if (
-        type(request) is not CurrentSuppliedCohortResearchPacketRequestV2
+        type(request) is not CurrentSuppliedCohortResearchPacketRequestV4
         or type(lease) is not StorageRootLease
         or not callable(getattr(archive, "archive_exact", None))
     ):
@@ -3304,23 +3305,23 @@ def _build_and_retain_current_supplied_cohort_research_packet_unsealed_v2(
         raise TypeError("invalid Plan27 packet component")
     if not _validated_context(market_context):
         raise ValueError("invalid retained same-pass market context")
-    raise AssertionError("Packet V2 candidates are minted only by the closure")
+    raise AssertionError("Packet V4 candidates are minted only by the closure")
 
 
 def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa: C901
-    """Create one closure-owned candidate and archive-seal authority for Packet V2."""
+    """Create one closure-owned candidate and archive-seal authority for Packet V4."""
     minted_seals: set[object] = set()
 
     @dataclass(frozen=True, slots=True)
     class _CandidateBinding:
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4
 
     @dataclass(frozen=True, slots=True)
     class _PacketBinding:
         candidate_seal: object
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4
         retained_object_id: int
-        trusted_clock: _TrustedPacketClockV2
+        trusted_clock: _TrustedPacketClockV4
         root: Path
         root_identity: tuple[int, int]
         archive_directory: str
@@ -3358,20 +3359,20 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         return any(item is seal for item in minted_seals)
 
     def mint_candidate(
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
-        packet: CurrentSuppliedCohortResearchPacketV2,
-        market_context: RetainedCurrentSamePassMarketContextV3,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
+        packet: CurrentSuppliedCohortResearchPacketV4,
+        market_context: RetainedCurrentSamePassMarketContextV4,
         industry_participation: (
-            CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2
+            CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4
         ),
         event_notices: RetainedCurrentEventNoticeSnapshotV1
         | CurrentEventNoticeFailureV1,
-    ) -> _CurrentSuppliedCohortResearchPacketCandidateV2:
+    ) -> _CurrentSuppliedCohortResearchPacketCandidateV4:
         if not _packet_is_exact(
             request, packet, market_context, industry_participation, event_notices
         ):
             raise ValueError("packet candidate upstream replay failed")
-        result = object.__new__(_CurrentSuppliedCohortResearchPacketCandidateV2)
+        result = object.__new__(_CurrentSuppliedCohortResearchPacketCandidateV4)
         local_seal = object.__new__(CandidateSeal)
         minted_seals.add(local_seal)
         candidate_bindings[local_seal] = _CandidateBinding(result)
@@ -3392,12 +3393,12 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         return result
 
     def candidate_is_exact(
-        request: CurrentSuppliedCohortResearchPacketRequestV2, candidate: object
+        request: CurrentSuppliedCohortResearchPacketRequestV4, candidate: object
     ) -> bool:
         seal = getattr(candidate, "_seal", None)
         binding = candidate_bindings.get(seal)
         return (
-            type(candidate) is _CurrentSuppliedCohortResearchPacketCandidateV2
+            type(candidate) is _CurrentSuppliedCohortResearchPacketCandidateV4
             and type(seal) is CandidateSeal
             and minted(seal)
             and binding is not None
@@ -3414,7 +3415,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         return True
 
     def _persisted_packet_binding(
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2,
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4,
         lease: StorageRootLease,
         root: Path,
     ) -> (
@@ -3436,7 +3437,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         packet = candidate.packet
         packet_raw = candidate.canonical_json_bytes()
         identity = packet.packet_identity_sha256
-        directory_name = ".current-research-packet-v2"
+        directory_name = ".current-research-packet-v4"
         packet_name = f"packet-{identity}.json"
         receipt_name = f"retained-{identity}.json"
         marker_name = f"completion-{identity}.json"
@@ -3488,15 +3489,15 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
             return None
 
     def mint_retained(
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
-        candidate: _CurrentSuppliedCohortResearchPacketCandidateV2,
-        value: RetainedCurrentSuppliedCohortResearchPacketV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
+        candidate: _CurrentSuppliedCohortResearchPacketCandidateV4,
+        value: RetainedCurrentSuppliedCohortResearchPacketV4,
         lease: StorageRootLease,
         root: Path,
-        trusted_clock: _TrustedPacketClockV2,
+        trusted_clock: _TrustedPacketClockV4,
     ) -> (
-        RetainedCurrentSuppliedCohortResearchPacketV2
-        | CurrentResearchPacketArchiveFailureV2
+        RetainedCurrentSuppliedCohortResearchPacketV4
+        | CurrentResearchPacketArchiveFailureV4
     ):
         persisted = _persisted_packet_binding(candidate, lease, root)
         if not candidate_is_exact(request, candidate) or persisted is None:
@@ -3539,7 +3540,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         }
         retained_identity = _identity(core)
         if (
-            type(value) is not RetainedCurrentSuppliedCohortResearchPacketV2
+            type(value) is not RetainedCurrentSuppliedCohortResearchPacketV4
             or value.evidence_state != "RETAINED"
             or value.packet != candidate.packet
             or value.packet.canonical_json_bytes()
@@ -3551,7 +3552,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
             or value.retained_identity_sha256 != retained_identity
         ):
             return _failure(request, candidate.packet.packet_identity_sha256)
-        result = object.__new__(RetainedCurrentSuppliedCohortResearchPacketV2)
+        result = object.__new__(RetainedCurrentSuppliedCohortResearchPacketV4)
         local_seal = object.__new__(PacketSeal)
         minted_seals.add(local_seal)
         packet_bindings[local_seal] = _PacketBinding(
@@ -3589,11 +3590,11 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
 
     def validate(
         value: object,
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
         current_candidate: object,
         lease: StorageRootLease,
     ) -> bool:
-        if type(value) is not RetainedCurrentSuppliedCohortResearchPacketV2:
+        if type(value) is not RetainedCurrentSuppliedCohortResearchPacketV4:
             return False
         seal = value._archive_seal
         binding = packet_bindings.get(seal)
@@ -3639,11 +3640,11 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         )
 
     def adopt(
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
         value: object,
         current_candidate: object,
         lease: StorageRootLease,
-        trusted_clock: _TrustedPacketClockV2,
+        trusted_clock: _TrustedPacketClockV4,
     ) -> bool:
         """Re-open the sealed logical commit under the caller's current lease."""
         if not validate(value, request, current_candidate, lease):
@@ -3711,7 +3712,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         except (OSError, RuntimeError, TypeError, ValueError):
             return False
 
-    file_archives: WeakKeyDictionary[object, _FileCurrentResearchPacketArchiveV2] = (
+    file_archives: WeakKeyDictionary[object, _FileCurrentResearchPacketArchiveV4] = (
         WeakKeyDictionary()
     )
 
@@ -3721,20 +3722,20 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
         __slots__ = ("__weakref__",)
 
         def __init__(
-            self, root: object, *, clock: _TrustedPacketClockV2 | None = None
+            self, root: object, *, clock: _TrustedPacketClockV4 | None = None
         ) -> None:
-            file_archives[self] = _FileCurrentResearchPacketArchiveV2(root, clock=clock)
+            file_archives[self] = _FileCurrentResearchPacketArchiveV4(root, clock=clock)
 
         def archive_exact(
             self,
-            request: CurrentSuppliedCohortResearchPacketRequestV2,
-            candidate: _CurrentSuppliedCohortResearchPacketCandidateV2,
+            request: CurrentSuppliedCohortResearchPacketRequestV4,
+            candidate: _CurrentSuppliedCohortResearchPacketCandidateV4,
             lease: StorageRootLease,
             *,
-            trusted_clock: _TrustedPacketClockV2 | None = None,
+            trusted_clock: _TrustedPacketClockV4 | None = None,
         ) -> (
-            RetainedCurrentSuppliedCohortResearchPacketV2
-            | CurrentResearchPacketArchiveFailureV2
+            RetainedCurrentSuppliedCohortResearchPacketV4
+            | CurrentResearchPacketArchiveFailureV4
         ):
             inner = file_archives.get(self) if type(self) is FileArchive else None
             if inner is None:
@@ -3746,7 +3747,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
                 lease,
                 trusted_clock=archive_clock,
             )
-            if type(value) is CurrentResearchPacketArchiveFailureV2:
+            if type(value) is CurrentResearchPacketArchiveFailureV4:
                 return value
             return mint_retained(
                 request,
@@ -3758,22 +3759,22 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
             )
 
     def build(
-        request: CurrentSuppliedCohortResearchPacketRequestV2,
-        market_context: RetainedCurrentSamePassMarketContextV3,
-        industry_participation: CurrentIndustryParticipationReportV2
-        | CurrentIndustryParticipationFailureV2,
+        request: CurrentSuppliedCohortResearchPacketRequestV4,
+        market_context: RetainedCurrentSamePassMarketContextV4,
+        industry_participation: CurrentIndustryParticipationReportV4
+        | CurrentIndustryParticipationFailureV4,
         event_notices: RetainedCurrentEventNoticeSnapshotV1
         | CurrentEventNoticeFailureV1,
-        archive: CurrentResearchPacketArchivePortV2,
+        archive: CurrentResearchPacketArchivePortV4,
         lease: StorageRootLease,
         *,
-        trusted_clock: _TrustedPacketClockV2 | None = None,
+        trusted_clock: _TrustedPacketClockV4 | None = None,
     ) -> (
-        RetainedCurrentSuppliedCohortResearchPacketV2
-        | CurrentResearchPacketArchiveFailureV2
+        RetainedCurrentSuppliedCohortResearchPacketV4
+        | CurrentResearchPacketArchiveFailureV4
     ):
         if (
-            type(request) is not CurrentSuppliedCohortResearchPacketRequestV2
+            type(request) is not CurrentSuppliedCohortResearchPacketRequestV4
             or type(lease) is not StorageRootLease
             or not callable(getattr(archive, "archive_exact", None))
         ):
@@ -3794,7 +3795,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
             raise TypeError("invalid Plan27 packet component")
         if not _validated_context(market_context):
             raise ValueError("invalid retained same-pass market context")
-        archive_clock = trusted_clock or _SystemPacketClockV2()
+        archive_clock = trusted_clock or _SystemPacketClockV4()
         with _PACKET_BUILD_LOCK:
             packet = _project_packet(
                 request, market_context, industry_participation, event_notices
@@ -3812,7 +3813,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
                 lease,
                 trusted_clock=archive_clock,
             )
-            if type(result) is CurrentResearchPacketArchiveFailureV2:
+            if type(result) is CurrentResearchPacketArchiveFailureV4:
                 if (
                     result.contract_version != _FAILURE_CONTRACT
                     or result.evidence_state != "ARCHIVE_FAILED"
@@ -3827,7 +3828,7 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
                 ):
                     raise ValueError("invalid packet archive failure")
                 return result
-            if type(result) is not RetainedCurrentSuppliedCohortResearchPacketV2:
+            if type(result) is not RetainedCurrentSuppliedCohortResearchPacketV4:
                 raise ValueError("invalid retained packet archive result")
             if not adopt(
                 request,
@@ -3843,8 +3844,8 @@ def _sealed_packet_boundary() -> tuple[object, object, object, object]:  # noqa:
 
 
 (
-    FileCurrentResearchPacketArchiveV2,
-    build_and_retain_current_supplied_cohort_research_packet_v2,
+    FileCurrentResearchPacketArchiveV4,
+    build_and_retain_current_supplied_cohort_research_packet_v4,
     _candidate_is_exact,
     _validate_retained_packet,
 ) = _sealed_packet_boundary()

@@ -1,0 +1,591 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv import main
+from swing_trading_ai_assistant.market_data import bharatstock_capture as core
+from swing_trading_ai_assistant.market_data import (
+    capture_forward_adjusted_ohlcv as held_store,
+)
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockDailyPrice,
+    BharatStockError,
+    BharatStockHistory,
+    BharatStockInstrument,
+)
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleClosure,
+    ScheduleEvidenceStore,
+    ScheduleOutcome,
+    ScheduleSession,
+    schedule_digest,
+)
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+)
+from swing_trading_ai_assistant.research_packet.bharatstock import (
+    build_bharatstock_research_packet_v1,
+)
+
+_SESSIONS = (date(2026, 8, 24), date(2026, 8, 25), date(2026, 8, 26))
+_NOW = datetime(2026, 8, 26, 12, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def capture_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(core, "_now", lambda: _NOW)
+
+
+def _instrument(index: int) -> BharatStockInstrument:
+    return BharatStockInstrument(
+        isin=f"INE{index:09d}", exchange="NSE", symbol=f"S{index:03d}"
+    )
+
+
+def _schedule() -> ExpectedSessionSchedule:
+    sessions = tuple(
+        ScheduleSession(
+            trade_date=session,
+            open_at=datetime.combine(session, datetime.min.time(), tzinfo=UTC)
+            + timedelta(hours=3, minutes=45),
+            close_at=datetime.combine(session, datetime.min.time(), tzinfo=UTC)
+            + timedelta(hours=10),
+            kind="REGULAR",
+        )
+        for session in _SESSIONS
+    )
+    return ExpectedSessionSchedule(
+        schema_version=3,
+        source="nse-upstox-composed-calendar",
+        source_release=f"composed-calendar@v1={'3' * 64}",
+        as_of=_NOW,
+        timezone="Asia/Kolkata",
+        covered_from=_SESSIONS[0],
+        covered_to=_SESSIONS[-1],
+        sessions=sessions,
+        closures=tuple(
+            ScheduleClosure(_SESSIONS[0] + timedelta(days=offset), "WEEKEND")
+            for offset in range((_SESSIONS[-1] - _SESSIONS[0]).days + 1)
+            if _SESSIONS[0] + timedelta(days=offset) not in _SESSIONS
+        ),
+    )
+
+
+def _retain_schedule(root: Path) -> ExpectedSessionSchedule:
+    root.mkdir(mode=0o700)
+    lease_result = StorageRootLease.try_acquire_private_empty(root)
+    assert (
+        lease_result.outcome is LeaseOutcome.ACQUIRED and lease_result.lease is not None
+    )
+    try:
+        result = ScheduleEvidenceStore(root, lease_result.lease).retain(_schedule())
+        assert result.outcome is ScheduleOutcome.RETAINED
+    finally:
+        lease_result.lease.close()
+    return _schedule()
+
+
+def _request(
+    *members: BharatStockInstrument, parent: str | None = None
+) -> core.CaptureRequestV2:
+    schedule = _schedule()
+    return core.CaptureRequestV2(
+        members=members or (_instrument(0),),
+        sessions=_SESSIONS,
+        decision_cutoff=_NOW + timedelta(hours=1),
+        schedule_evidence_sha256=schedule_digest(schedule),
+        schedule_source=schedule.source,
+        schedule_source_release=schedule.source_release,
+        selection_identity_sha256=core.selection_identity_v2(
+            members or (_instrument(0),)
+        ),
+        schedule_identity_sha256=core.schedule_identity_v2(schedule),
+        parent_revision_sha256=parent,
+    )
+
+
+class _Client:
+    def __init__(
+        self, *, local: set[str] | None = None, shared_after: int | None = None
+    ) -> None:
+        self.local = set() if local is None else local
+        self.shared_after = shared_after
+        self.calls: list[tuple[str, date, date]] = []
+
+    def history(
+        self, instrument: BharatStockInstrument, start: date, end: date
+    ) -> BharatStockHistory:
+        self.calls.append((instrument.isin, start, end))
+        if self.shared_after is not None and len(self.calls) > self.shared_after:
+            raise BharatStockError("RATE_LIMITED", member_local=False)
+        if instrument.isin in self.local:
+            raise BharatStockError("EMPTY_HISTORY", member_local=True)
+        rows = tuple(
+            BharatStockDailyPrice(
+                session=session,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=1000,
+                adjusted_close=Decimal("100"),
+                adjustment_factor=Decimal("1"),
+            )
+            for session in _SESSIONS
+        )
+        return BharatStockHistory(
+            instrument=instrument,
+            rows=rows,
+            retrieved_at=_NOW,
+            response_sha256s=("5" * 64, "6" * 64),
+            request_count=2,
+        )
+
+
+def test_capture_retains_original_order_and_isolates_one_member(tmp_path: Path) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    members = (_instrument(2), _instrument(0), _instrument(1))
+    client = _Client(local={members[1].isin})
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    result = core.capture_bharatstock_v2(
+        _request(*members), capture_root, schedule_root, client=client
+    )
+
+    assert result.code == "CAPTURED"
+    assert tuple(item.member for item in result.revision.members) == members
+    assert [item.evidence_state for item in result.revision.members] == [
+        "OBSERVED",
+        "INSUFFICIENT_EVIDENCE",
+        "OBSERVED",
+    ]
+    assert (
+        result.revision.actual_coverage_identity_sha256
+        != result.revision.request.selection_identity_sha256
+    )
+    assert (
+        result.revision.request.selection_identity_sha256
+        == core.selection_identity_v2(members)
+    )
+
+
+def test_shared_failure_stops_later_calls_and_records_not_attempted(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    members = (_instrument(0), _instrument(1), _instrument(2))
+    client = _Client(shared_after=1)
+
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    result = core.capture_bharatstock_v2(
+        _request(*members), capture_root, schedule_root, client=client
+    )
+
+    assert len(client.calls) == 2
+    assert result.code == "CAPTURED"
+    assert result.revision.shared_failure == "RATE_LIMITED"
+    assert [item.evidence_state for item in result.revision.members] == [
+        "OBSERVED",
+        "INSUFFICIENT_EVIDENCE",
+        "NOT_ATTEMPTED",
+    ]
+    assert [item.reason for item in result.revision.members[1:]] == [
+        "RATE_LIMITED",
+        "BLOCKED_BY_SHARED_FAILURE",
+    ]
+
+
+def test_exact_reuse_performs_no_transport_and_reader_returns_named_revision(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    request = _request(_instrument(0), _instrument(1))
+    client = _Client()
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    first = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=client
+    )
+    reused = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=client
+    )
+
+    assert first.code == "CAPTURED"
+    assert reused.code == "REUSED"
+    assert len(client.calls) == 2
+    assert (
+        core.read_bharatstock_capture_revision_v2(
+            capture_root, first.revision.revision_identity_sha256
+        )
+        == first.revision
+    )
+
+
+def test_correction_requires_admitted_parent_and_changes_immutable_revision(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    first = core.capture_bharatstock_v2(
+        _request(), root, schedule_root, client=_Client()
+    )
+    correction = core.capture_bharatstock_v2(
+        _request(parent=first.revision.revision_identity_sha256),
+        root,
+        schedule_root,
+        client=_Client(),
+    )
+
+    assert correction.code == "INSUFFICIENT_EVIDENCE"
+    assert correction.reason == "CORRECTION_CONTENT_UNCHANGED"
+    unavailable = core.capture_bharatstock_v2(
+        _request(parent="f" * 64), root, schedule_root, client=_Client()
+    )
+    assert unavailable.code == "STORE_UNAVAILABLE"
+    assert unavailable.reason == "EVIDENCE_CONFLICT"
+
+
+def test_reordered_selection_is_a_distinct_request_identity() -> None:
+    first = _request(_instrument(0), _instrument(1))
+    second = _request(_instrument(1), _instrument(0))
+
+    assert first.selection_identity_sha256 != second.selection_identity_sha256
+    assert first.request_identity_sha256 != second.request_identity_sha256
+
+
+def test_reader_rejects_forged_named_revision(tmp_path: Path) -> None:
+    with pytest.raises(core.CaptureRevisionUnavailableV2):
+        core.read_bharatstock_capture_revision_v2(tmp_path / "missing", "0" * 64)
+
+
+def test_interrupted_request_publication_recovers_prepared_revision_without_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    request = _request()
+    client = _Client()
+    original = held_store.publish_capture_bytes
+
+    def interrupt_request_pointer(
+        operation: object, directory: object, name: str, raw: bytes
+    ) -> None:
+        if name == f"{request.request_identity_sha256}.json":
+            raise OSError("interrupted before request admission")
+        original(operation, directory, name, raw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(held_store, "publish_capture_bytes", interrupt_request_pointer)
+    first = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=client
+    )
+    monkeypatch.setattr(held_store, "publish_capture_bytes", original)
+    recovered = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=client
+    )
+
+    assert first.code == "STORE_UNAVAILABLE"
+    assert recovered.code == "CAPTURED"
+    assert len(client.calls) == 1
+
+
+def test_exact_reader_rejects_unadmitted_revision(tmp_path: Path) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    captured = core.capture_bharatstock_v2(
+        _request(), capture_root, schedule_root, client=_Client()
+    )
+    pointer = (
+        capture_root
+        / "bharatstock-capture-v2"
+        / "requests"
+        / f"{captured.revision.request.request_identity_sha256}.json"
+    )
+    pointer.chmod(0o600)
+    pointer.unlink()
+
+    with pytest.raises(core.CaptureRevisionUnavailableV2):
+        core.read_bharatstock_capture_revision_v2(
+            capture_root, captured.revision.revision_identity_sha256
+        )
+
+
+def test_unexpected_client_value_error_propagates_without_becoming_storage_failure(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+
+    class BrokenClient(_Client):
+        def history(self, *args: object) -> BharatStockHistory:
+            raise ValueError("unexpected implementation defect")
+
+    with pytest.raises(ValueError, match="unexpected implementation defect"):
+        core.capture_bharatstock_v2(
+            _request(), capture_root, schedule_root, client=BrokenClient()
+        )
+
+
+def test_deadline_expiry_stops_before_another_member_call(tmp_path: Path) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    client = _Client()
+
+    def clock() -> datetime:
+        return _NOW if not client.calls else _NOW + timedelta(hours=2)
+
+    result = core.capture_bharatstock_v2(
+        _request(_instrument(0), _instrument(1)),
+        capture_root,
+        schedule_root,
+        client=client,
+        clock=clock,
+    )
+    assert result.reason == "ACQUISITION_DEADLINE_EXCEEDED"
+    assert len(client.calls) == 1
+    assert result.revision is None
+
+
+@pytest.mark.parametrize("missing", [None, 0, 49, 50, 99, "all"])
+def test_public_capture_to_research_preserves_exact_hundred_member_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    missing: int | str | None,
+) -> None:
+    sessions = tuple(
+        date(2026, 7, 29) + timedelta(days=offset)
+        for offset in range(29)
+        if (date(2026, 7, 29) + timedelta(days=offset)).weekday() < 5
+    )
+    monkeypatch.setitem(globals(), "_SESSIONS", sessions)
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    members = tuple(_instrument(index) for index in range(100))
+    local = (
+        {member.isin for member in members}
+        if missing == "all"
+        else (set() if missing is None else {members[missing].isin})
+    )
+    client = _Client(local=local)
+    monkeypatch.setattr(core, "BharatStockClient", lambda: client)
+    request = _request(*members)
+    request_file = tmp_path / "request.json"
+    request_file.write_bytes(core._line(request.canonical_value()))
+    request_file.chmod(0o600)
+    arguments = [
+        "--request-file",
+        str(request_file),
+        "--storage-root",
+        str(capture_root),
+        "--schedule-root",
+        str(schedule_root),
+        "--output",
+        "json",
+    ]
+    assert main(arguments) == 0
+    public = json.loads(capsys.readouterr().out)
+    assert all(member.isin not in json.dumps(public) for member in members)
+    assert len(client.calls) == 100
+    revision = core.read_bharatstock_capture_revision_v2(
+        capture_root,
+        public["revision_identity_sha256"],
+    )
+    packet = build_bharatstock_research_packet_v1(revision)
+    assert tuple(item.member for item in packet.members) == members
+    assert packet.coverage.requested == 100
+    assert packet.coverage.observed == 100 - len(local)
+    assert packet.coverage.insufficient == len(local)
+    assert packet.coverage.not_attempted == 0
+    assert packet.aggregate_evidence_state == (
+        "OBSERVED" if not local else "INSUFFICIENT_EVIDENCE"
+    )
+    for item in packet.members:
+        if item.member.isin in local:
+            assert item.evidence_state == "INSUFFICIENT_EVIDENCE"
+            assert item.reason == "EMPTY_HISTORY"
+            assert item.price_action is None
+        else:
+            assert item.evidence_state == "OBSERVED"
+            assert item.price_action.range_size == Decimal("2")
+            assert item.price_action.close_to_previous_close_distance == Decimal("0")
+            assert item.market_structure.calculation.trend == "INSUFFICIENT_STRUCTURE"
+            assert item.adjusted_bars[-1].session == sessions[-1]
+    if missing == 99:
+        independent = core.capture_bharatstock_v2(
+            _request(*members[:-1]),
+            capture_root,
+            schedule_root,
+            client=client,
+        )
+        baseline = build_bharatstock_research_packet_v1(independent.revision)
+        assert tuple(item.price_action for item in packet.members[:-1]) == tuple(
+            item.price_action for item in baseline.members
+        )
+        assert tuple(item.history for item in revision.members[:-1]) == tuple(
+            item.history for item in independent.revision.members
+        )
+    environment = dict(os.environ)
+    environment.pop("BHARATSTOCK_API_KEY", None)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
+    warm = subprocess.run(  # noqa: S603 - fixed interpreter/module and private fixture paths
+        [
+            sys.executable,
+            "-m",
+            "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv",
+            *arguments,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert warm.returncode == 0, warm.stderr
+    reused = json.loads(warm.stdout)
+    assert reused["code"] == "REUSED"
+    assert reused["revision_identity_sha256"] == public["revision_identity_sha256"]
+
+
+def test_partial_directory_open_failure_releases_already_open_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    original = core._open_directory
+    opened: list[int] = []
+
+    def fail_prepared(operation: object, parent: object, name: str, *, create: bool):
+        if name == "prepared":
+            raise OSError("cannot open prepared directory")
+        result = original(operation, parent, name, create=create)
+        if name in {"requests", "revisions"}:
+            opened.append(result.descriptor)
+        return result
+
+    monkeypatch.setattr(core, "_open_directory", fail_prepared)
+    result = core.capture_bharatstock_v2(
+        _request(),
+        capture_root,
+        schedule_root,
+        client=_Client(),
+    )
+    assert result.code == "STORE_UNAVAILABLE"
+    assert len(opened) == 2
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+def test_price_correction_keeps_original_immutable_evidence_readable(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    first = core.capture_bharatstock_v2(
+        _request(), root, schedule_root, client=_Client()
+    )
+
+    class CorrectedClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            original = super().history(instrument, start, end)
+            return replace(
+                original,
+                rows=tuple(
+                    replace(
+                        row, close=Decimal("100.5"), adjusted_close=Decimal("100.5")
+                    )
+                    for row in original.rows
+                ),
+                response_sha256s=("a" * 64, "b" * 64),
+            )
+
+    correction_request = _request(parent=first.revision.revision_identity_sha256)
+    client = CorrectedClient()
+    corrected = core.capture_bharatstock_v2(
+        correction_request, root, schedule_root, client=client
+    )
+    assert corrected.code == "CAPTURED"
+    assert corrected.revision.members[0].history.rows[-1].close == Decimal("100.5")
+    assert first.revision.members[0].history.rows[-1].close == Decimal("100")
+    assert (
+        corrected.revision.revision_identity_sha256
+        != first.revision.revision_identity_sha256
+    )
+    assert (
+        core.read_bharatstock_capture_revision_v2(
+            root, first.revision.revision_identity_sha256
+        )
+        == first.revision
+    )
+    assert (
+        core.read_bharatstock_capture_revision_v2(
+            root, corrected.revision.revision_identity_sha256
+        )
+        == corrected.revision
+    )
+    assert (
+        core.capture_bharatstock_v2(
+            correction_request, root, schedule_root, client=client
+        ).code
+        == "REUSED"
+    )
+    assert len(client.calls) == 1
+
+
+def test_malformed_retained_revision_is_unavailable_not_an_internal_key_error(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    first = core.capture_bharatstock_v2(
+        _request(), root, schedule_root, client=_Client()
+    )
+    identity = first.revision.revision_identity_sha256
+    path = root / "bharatstock-capture-v2" / "revisions" / f"{identity}.json"
+    path.chmod(0o600)
+    path.write_bytes(b"{}\n")
+    path.chmod(0o400)
+    with pytest.raises(core.CaptureRevisionUnavailableV2):
+        core.read_bharatstock_capture_revision_v2(root, identity)
+    client = _Client()
+    assert (
+        core.capture_bharatstock_v2(_request(), root, schedule_root, client=client).code
+        == "STORE_UNAVAILABLE"
+    )
+    assert client.calls == []

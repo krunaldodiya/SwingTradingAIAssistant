@@ -1,10 +1,23 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
-> Provider direction update (2026-09-10):
+> Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
-> This Yahoo-specific runtime contract remains the delivered version, not the
-> future direct-API design. Provider replacement alone does not complete #183.
+> owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> `current-nifty100-bharatstock-capture@v2` selects the same official list
+> through versioned current-observation evidence and composes Plan30 V2.
+> The old Yahoo-specific pool, cadence, session and acknowledgement below
+> describe historical V1 only; they are not BharatStock requirements.
+
+V2 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
+source identities and retrieval times, then bind the ordered 100-member union
+and source observation to the exact capture request. Reuse must resolve that
+retained request/selection/revision binding before any source or provider call.
+Later observations of the same membership have distinct source provenance;
+they must not overwrite prior evidence or manufacture earlier knowledge.
+An incomplete capture still accounts for all 100 members, with no claim that
+99 observations constitute complete Nifty100 research. The public surface stays
+sanitized; source/member evidence stays private. Provider replacement alone
+does not satisfy #183, and no V1 approval transfers to this successor.
 
 > Harness portability: historical named-model review choices below record the
 > original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
