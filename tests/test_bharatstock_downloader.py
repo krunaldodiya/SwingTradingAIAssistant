@@ -73,12 +73,12 @@ def test_canonical_source_download_reuses_exact_parquet_without_acquisition(
             "low": 98.0,
             "close": 102.0,
             "volume": 1000,
-            "source_open": 100.0,
-            "source_high": 104.0,
-            "source_low": 98.0,
-            "source_close": 102.0,
-            "source_adjusted_close": 51.0,
-            "source_adjustment_factor": 0.5,
+            "source_open": "100",
+            "source_high": "104",
+            "source_low": "98",
+            "source_close": "102",
+            "source_adjusted_close": "51",
+            "source_adjustment_factor": "0.5",
         }
     ]
     assert not (tmp_path / ".cache").exists()

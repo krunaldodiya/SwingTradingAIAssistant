@@ -268,12 +268,12 @@ def test_persists_source_ohlcv_and_optional_adjustment_evidence(
         "low": 98.0,
         "close": 102.0,
         "volume": 1000,
-        "source_open": 100.0,
-        "source_high": 104.0,
-        "source_low": 98.0,
-        "source_close": 102.0,
-        "source_adjusted_close": 51.0,
-        "source_adjustment_factor": 0.5,
+        "source_open": "100",
+        "source_high": "104",
+        "source_low": "98",
+        "source_close": "102",
+        "source_adjusted_close": "51",
+        "source_adjustment_factor": "0.5",
     }
     assert table.schema.metadata[b"provider"] == b"BHARATSTOCK"
     assert table.schema.metadata[b"price_basis"] == (
@@ -306,12 +306,12 @@ def test_opt_in_adjustment_projects_once_and_reuses_only_same_mode(
         "low": 49.0,
         "close": 51.0,
         "volume": 1000,
-        "source_open": 100.0,
-        "source_high": 104.0,
-        "source_low": 98.0,
-        "source_close": 102.0,
-        "source_adjusted_close": 51.0,
-        "source_adjustment_factor": 0.5,
+        "source_open": "100",
+        "source_high": "104",
+        "source_low": "98",
+        "source_close": "102",
+        "source_adjusted_close": "51",
+        "source_adjustment_factor": "0.5",
     }
 
 
@@ -335,6 +335,36 @@ def test_factor_projection_with_no_reported_adjusted_close_is_reusable(
         (52.0, 1100),
     ]
     assert all(row["source_adjusted_close"] is None for row in rows)
+    assert again.outcome == "REUSED"
+    assert client.calls == [_MEMBER]
+
+
+def test_precise_source_factor_survives_publication_and_exact_reuse(
+    tmp_path: Path,
+) -> None:
+    factor = Decimal("0.07462686567164179")
+
+    class Client(_Client):
+        def history(self, instrument, start, end):
+            history = super().history(instrument, start, end)
+            return replace(
+                history,
+                rows=tuple(
+                    replace(
+                        row, adjustment_factor=factor, adjusted_close=row.close * factor
+                    )
+                    for row in history.rows
+                ),
+            )
+
+    client = Client()
+    receipt = _download(tmp_path, client, apply_adjustment=True)
+    again = _download(tmp_path, client, apply_adjustment=True)
+    rows = pq.ParquetFile(receipt.destination).read().to_pylist()
+    assert rows[0]["open"] == 7.462686567164179
+    assert [row["close"] for row in rows] == [7.611940298507463, 7.7611940298507465]
+    assert [row["volume"] for row in rows] == [1000, 1100]
+    assert [row["source_adjustment_factor"] for row in rows] == [str(factor)] * 2
     assert again.outcome == "REUSED"
     assert client.calls == [_MEMBER]
 
@@ -488,7 +518,7 @@ def test_factor_mode_reuse_rejects_processed_source_mismatch_without_acquisition
 
     def transform(table):
         rows = table.to_pylist()
-        rows[0]["open"] = rows[0]["source_open"]
+        rows[0]["open"] = float(rows[0]["source_open"])
         return pa.Table.from_pylist(rows, schema=table.schema)
 
     _rewrite(receipt.destination, transform)
@@ -690,10 +720,10 @@ def test_source_mode_allows_absent_adjustment_evidence(tmp_path: Path) -> None:
         "low": 98.0,
         "close": 102.0,
         "volume": 1000,
-        "source_open": 100.0,
-        "source_high": 104.0,
-        "source_low": 98.0,
-        "source_close": 102.0,
+        "source_open": "100",
+        "source_high": "104",
+        "source_low": "98",
+        "source_close": "102",
         "source_adjusted_close": None,
         "source_adjustment_factor": None,
     }

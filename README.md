@@ -400,7 +400,10 @@ labels prices `BHARATSTOCK_SOURCE_REPORTED_OHLC`. The optional Python argument
 OHLC by the reported factor exactly once and labels prices
 `BHARATSTOCK_FACTOR_APPLIED_OHLC`. It requires an available factor and consistency
 with a provided adjusted close. It does not apply a second change to previously
-processed prices. Original OHLC and separate adjustment fields remain retained.
+processed prices. Original OHLC and separate adjustment fields remain retained
+as exact decimal strings in the `source_*` columns. Processed OHLC columns use
+float64, and reuse recomputes them from those exact source values rather than
+from rounded factors.
 The single volume field is never rescaled and is labelled `SOURCE_REPORTED`;
 this does not certify exchange-raw units. No total-return equivalence is claimed.
 The exact request identity binds ordered canonical instruments, dates,

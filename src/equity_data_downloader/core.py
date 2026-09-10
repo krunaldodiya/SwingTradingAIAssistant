@@ -11,7 +11,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
@@ -23,6 +23,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
+    BharatStockDailyPrice,
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
@@ -391,20 +392,16 @@ def _download_rows(
             except ValueError:
                 raise DownloadError("provider adjustment evidence is invalid") from None
             source_ohlc = tuple(
-                float(value) for value in (bar.open, bar.high, bar.low, bar.close)
+                str(value) for value in (bar.open, bar.high, bar.low, bar.close)
             )
             projected_ohlc = tuple(float(value) for value in projected)
             source_adjusted_close = (
-                None if bar.adjusted_close is None else float(bar.adjusted_close)
+                None if bar.adjusted_close is None else str(bar.adjusted_close)
             )
             source_adjustment_factor = (
-                None if bar.adjustment_factor is None else float(bar.adjustment_factor)
+                None if bar.adjustment_factor is None else str(bar.adjustment_factor)
             )
-            _validate_ohlcv_values((*source_ohlc, bar.volume), DownloadError)
             _validate_ohlcv_values((*projected_ohlc, bar.volume), DownloadError)
-            _validate_optional_adjustment_fields(
-                source_adjusted_close, source_adjustment_factor, DownloadError
-            )
             rows.append(
                 (
                     key,
@@ -456,18 +453,6 @@ def _validate_ohlcv_values(
         raise error_type("OHLCV values are invalid")
 
 
-def _validate_optional_adjustment_fields(
-    adjusted_close: object,
-    adjustment_factor: object,
-    error_type: type[DownloadError] | type[ValueError],
-) -> None:
-    for value in (adjusted_close, adjustment_factor):
-        if value is not None and (
-            type(value) is not float or not isfinite(value) or value <= 0
-        ):
-            raise error_type("BharatStock adjustment fields are invalid")
-
-
 def default_storage_root() -> Path:
     """Return the only default location for persistent downloader output."""
 
@@ -503,12 +488,12 @@ def _schema_identity(*, apply_adjustment: bool) -> str:
                     ("low", "float64", False),
                     ("close", "float64", False),
                     ("volume", "int64", False),
-                    ("source_open", "float64", False),
-                    ("source_high", "float64", False),
-                    ("source_low", "float64", False),
-                    ("source_close", "float64", False),
-                    ("source_adjusted_close", "float64", True),
-                    ("source_adjustment_factor", "float64", True),
+                    ("source_open", "string", False),
+                    ("source_high", "string", False),
+                    ("source_low", "string", False),
+                    ("source_close", "string", False),
+                    ("source_adjusted_close", "string", True),
+                    ("source_adjustment_factor", "string", True),
                 ),
                 "price_basis": price_basis_for_adjustment(apply_adjustment),
                 "volume_basis": _VOLUME_BASIS,
@@ -1193,41 +1178,42 @@ def _validate_existing_table(
 def _validate_projected_record(
     record: Mapping[str, object], *, apply_adjustment: bool
 ) -> None:
-    source_ohlc = tuple(
-        record[field]
-        for field in ("source_open", "source_high", "source_low", "source_close")
+    source = BharatStockDailyPrice(
+        session=cast(date, record["session"]),
+        open=_source_decimal(record["source_open"]),
+        high=_source_decimal(record["source_high"]),
+        low=_source_decimal(record["source_low"]),
+        close=_source_decimal(record["source_close"]),
+        volume=cast(int, record["volume"]),
+        adjusted_close=(
+            None
+            if record["source_adjusted_close"] is None
+            else _source_decimal(record["source_adjusted_close"])
+        ),
+        adjustment_factor=(
+            None
+            if record["source_adjustment_factor"] is None
+            else _source_decimal(record["source_adjustment_factor"])
+        ),
     )
     projected_ohlc = tuple(record[field] for field in ("open", "high", "low", "close"))
-    volume = record["volume"]
-    _validate_ohlcv_values((*source_ohlc, volume), ValueError)
-    _validate_ohlcv_values((*projected_ohlc, volume), ValueError)
-    source_adjusted_close = record["source_adjusted_close"]
-    source_adjustment_factor = record["source_adjustment_factor"]
-    _validate_optional_adjustment_fields(
-        source_adjusted_close, source_adjustment_factor, ValueError
-    )
-    if not apply_adjustment:
-        if projected_ohlc != source_ohlc:
-            raise ValueError
-        return
-    if source_adjustment_factor is None:
-        raise ValueError
-    factor = cast(float, source_adjustment_factor)
-    expected_adjusted_close = _factor_project(cast(float, source_ohlc[3]), factor)
-    if (
-        source_adjusted_close is not None
-        and source_adjusted_close != expected_adjusted_close
-    ):
-        raise ValueError
+    _validate_ohlcv_values((*projected_ohlc, source.volume), ValueError)
     if projected_ohlc != tuple(
-        _factor_project(cast(float, value), factor) for value in source_ohlc
+        float(value) for value in source.project_ohlc(apply_adjustment=apply_adjustment)
     ):
-        raise ValueError
+        raise ValueError("processed OHLC differs from exact source projection")
 
 
-def _factor_project(value: float, factor: float) -> float:
-    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
-        return float(Decimal(str(value)) * Decimal(str(factor)))
+def _source_decimal(value: object) -> Decimal:
+    if type(value) is not str:
+        raise ValueError("source price must retain its decimal representation")
+    try:
+        result = Decimal(value)
+    except InvalidOperation:
+        raise ValueError("source price is invalid") from None
+    if str(result) != value:
+        raise ValueError("source price representation is not canonical")
+    return result
 
 
 def _data_schema() -> Any:
@@ -1242,12 +1228,12 @@ def _data_schema() -> Any:
             pa.field("low", pa.float64(), nullable=False),
             pa.field("close", pa.float64(), nullable=False),
             pa.field("volume", pa.int64(), nullable=False),
-            pa.field("source_open", pa.float64(), nullable=False),
-            pa.field("source_high", pa.float64(), nullable=False),
-            pa.field("source_low", pa.float64(), nullable=False),
-            pa.field("source_close", pa.float64(), nullable=False),
-            pa.field("source_adjusted_close", pa.float64(), nullable=True),
-            pa.field("source_adjustment_factor", pa.float64(), nullable=True),
+            pa.field("source_open", pa.string(), nullable=False),
+            pa.field("source_high", pa.string(), nullable=False),
+            pa.field("source_low", pa.string(), nullable=False),
+            pa.field("source_close", pa.string(), nullable=False),
+            pa.field("source_adjusted_close", pa.string(), nullable=True),
+            pa.field("source_adjustment_factor", pa.string(), nullable=True),
         )
     )
 

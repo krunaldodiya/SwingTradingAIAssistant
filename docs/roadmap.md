@@ -457,10 +457,13 @@ independent-review and protected-release gates remain unchanged.
 
 ### Versioned provider behavior
 
-The unreleased candidate uses direct `bharatstock-api@v1` acquisition with the
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC` tag and carries source volume
-through without additional rescaling. These are held candidate semantics,
-not a qualified description of the provider's economic price/volume basis.
+The unreleased candidate uses direct `bharatstock-api@v1` acquisition.
+Default `apply_adjustment=False` preserves supplied OHLC with
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`; explicit `True` applies the supplied factor
+once to original OHLC with `BHARATSTOCK_FACTOR_APPLIED_OHLC`. Volume remains
+unchanged and is labelled `SOURCE_REPORTED`. These modes follow the owner's
+accepted as-provided assumption; they do not independently verify the provider's
+economic price/volume basis.
 No dividend/rights-adjusted total-return or as-published point-in-time
 equivalence is claimed. Acquisition uses one account,
 at most 2,000 HTTP attempts per client run, at most 40 price pages per member,
