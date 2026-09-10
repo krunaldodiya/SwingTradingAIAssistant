@@ -9,7 +9,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "acquisition_capability_worker.py": "65026c3d26fd266a9ae92c98cee286825b33023bfefc669753fe6261d6fc41d7",
     "adjusted_daily/__init__.py": "c738fc62d59def1d13f866efb93a5e81d79534b0ce64b035d5c1e5b94e7b9419",
     "adjusted_daily/service.py": "e2b2b892581274ec93e79faca17cb426ce2db35845510271080a005b9ec6b49b",
-    "adjusted_daily/service_v3.py": "fa706293041de3ee2f72980180dbf4cf865d8cf3c8831e28fb8194fb5cd5a9a3",
+    "adjusted_daily/service_v3.py": "8e7e91de5ebe24d5807814ee0db5f2f03c82b58c4e307fc135ad69f3eff92679",
     "bharatstock.py": "3572f13a705cf5aa9fd58eb2498d108e177375b40a57d9cfd069f1e53f12f7d7",
     "bharatstock_capture.py": "8dc9156658687572d071bc4030ce517764db80704f6b3e4791219b0bcbefe4f1",
     "bharatstock_capture_runtime_identity_manifest.py": "7cb10e1dd4f8b0d1a5f759aa8377354bfa67f240b079aa1d58e6f972c883c963",

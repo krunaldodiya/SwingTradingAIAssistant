@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Final, Literal, TypeAlias, cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
@@ -689,8 +689,7 @@ def _price_is_valid(row: object, session: date) -> bool:
         <= value.high
     ):
         return False
-    with localcontext() as context:
-        context.prec = 64
+    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
         return value.adjusted_close == value.close * value.adjustment_factor
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
 from swing_trading_ai_assistant.market_data.adjusted_daily import service_v3 as core
 from swing_trading_ai_assistant.market_data.bharatstock import (
@@ -151,6 +151,55 @@ def test_acquires_complete_factor_adjusted_handoff_from_direct_history() -> None
         handoff.handoff_identity_sha256
         == core.adjusted_daily_close_handoff_identity_v3(handoff)
     )
+
+
+def test_public_handoff_ignores_callers_decimal_context() -> None:
+    instrument = _instrument()
+    close = Decimal("3." + "0" * 62 + "9")
+    # Exact half is 1.5 + 4.5e-63; 64 significant digits round the tie to even 4.
+    adjusted = Decimal("1.5" + "0" * 61 + "4")
+    original = _history(instrument)
+    history = replace(
+        original,
+        rows=tuple(
+            replace(
+                row,
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                adjusted_close=adjusted,
+            )
+            for row in original.rows
+        ),
+    )
+
+    class _PreciseClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            return history
+
+    expected = core.acquire_adjusted_daily_close_v3(
+        _request(instrument), _PreciseClient()
+    )
+    assert expected.code == "SUCCESS"
+    with localcontext() as caller:
+        caller.prec = 2
+        caller.rounding = ROUND_UP
+        caller.Emax = 0
+        caller.Emin = 0
+        caller.traps[Inexact] = True
+        actual = core.acquire_adjusted_daily_close_v3(
+            _request(instrument), _PreciseClient()
+        )
+        assert caller.prec == 2
+        assert caller.rounding == ROUND_UP
+        assert caller.Emax == caller.Emin == 0
+        assert caller.traps[Inexact]
+    assert actual == expected
+    assert actual.handoff.members[0].s0.adjusted_close == adjusted
+    assert actual.handoff.members[0].s20.adjusted_close == adjusted
 
 
 def test_rejects_mapping_not_effective_for_complete_session_window() -> None:

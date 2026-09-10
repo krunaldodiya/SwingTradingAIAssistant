@@ -91,10 +91,9 @@ def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> 
 
 
 def test_daily_price_admission_ignores_callers_decimal_context() -> None:
-    close = Decimal("1.234567890123456789012345678901234567890123456789012345678901")
-    adjusted_close = Decimal(
-        "0.6172839450617283945061728394506172839450617283945061728394505"
-    )
+    close = Decimal("3." + "0" * 62 + "9")
+    # Exact half is 1.5 + 4.5e-63; 64 significant digits round the tie to even 4.
+    adjusted_close = Decimal("1.5" + "0" * 61 + "4")
     with localcontext() as caller:
         caller.prec = 2
         caller.rounding = ROUND_UP
