@@ -3,24 +3,27 @@
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 > and [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
-> govern the unreleased BharatStock V2 and member-isolation path below.
+> govern the unreleased BharatStock V3 and member-isolation path below.
 > The later Yahoo-specific contract and delivery evidence are historical;
 > their immutable data, labels and supported readers are not reinterpreted.
-> The [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold)
-> blocks dependent adjusted capture/research activation and release.
-> Truthful retained negative and historical reads are not positive qualification.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for new-mode implementation.
+> Historical evidence and independent review/release requirements remain intact.
 
-## BharatStock capture V2 and independent facts — unreleased
+## BharatStock capture V3 and independent facts — unreleased
 
-`bharatstock-capture@v2` accepts an ordered list of 1–100 explicit
+`bharatstock-capture@v3` accepts an ordered list of 1–100 explicit
 ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
 It verifies the exact retained official schedule, runtime source identity,
 configuration, cutoff, and selection identity before provider effects.
-The provider/basis is `bharatstock-api@v1` /
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; source volume is copied without
-further rescaling, not certified as exchange-unadjusted. This candidate
-interpretation remains on qualification hold. No hourly reconstruction,
-filling, provider fallback, total-return claim, or fabricated historical
+The provider is `bharatstock-api@v1`. By default `apply_adjustment=False`
+preserves supplied OHLCV with basis `BHARATSTOCK_SOURCE_REPORTED_OHLC`, assuming
+for now that the provider has adjusted it correctly. Opt-in `True` applies the
+factor exactly once to original OHLC with `BHARATSTOCK_FACTOR_APPLIED_OHLC`.
+Volume is always unchanged and labelled `SOURCE_REPORTED`. Original prices and
+optional adjustment fields are retained separately. Mode binds request identity,
+reuse, recovery, correction-parent matching and downstream facts. No hourly
+reconstruction, filling, fallback, total-return claim or fabricated historical
 publication time is permitted.
 
 Every requested member has exactly one result: `OBSERVED`,
@@ -31,7 +34,7 @@ another member's valid history. Authentication, authorization, quota,
 runtime/source, schedule and storage boundaries remain shared; unexpected
 software exceptions are not disguised as missing stock evidence.
 
-The immutable namespace is `bharatstock-capture-v2`, with separate prepared,
+The immutable namespace is `bharatstock-capture-v3`, with separate prepared,
 revision and exact-request admission records beneath a held private root.
 Exact reuse precedes transport. Interrupted publication recovers validated
 prepared bytes without downloading again. Corrections name an admitted parent,
@@ -40,8 +43,10 @@ material member evidence. Conflicting, unadmitted or unsafe files fail closed.
 The acquisition deadline is checked before each member and before retention.
 No automatic provider retries are introduced by recovery.
 
-`build_bharatstock_research_packet_v1` consumes the admitted V2 revision.
-Owner-private independent facts use one consistent adjusted basis: Price Action
+The bounded read-only predecessor reader preserves exact V2 bytes and labels;
+it cannot write new V2 evidence or reinterpret V2 as the new source mode.
+`build_bharatstock_research_packet_v1` consumes an admitted retained revision.
+Owner-private independent facts use its one consistent selected price basis: Price Action
 requires the latest two completed supplied sessions; Market Structure requires
 the latest 21. Missing history for one feature must not erase an independently
 valid fact for another. Each feature must expose its own evidence state/reason.

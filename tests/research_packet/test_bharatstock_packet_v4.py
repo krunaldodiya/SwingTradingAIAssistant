@@ -32,6 +32,7 @@ def test_retained_v4_packet_preserves_event_failure_and_exact_retry(tmp_path):
             cohort_selected_at=market_request.cohort_selected_at,
             members=market_request.members,
             market_context_identity_sha256=context.context_identity_sha256,
+            apply_adjustment=market_request.apply_adjustment,
         )
         event_test = _load(
             "market_data/test_current_event_notice.py", "packet_v4_event_fixture"

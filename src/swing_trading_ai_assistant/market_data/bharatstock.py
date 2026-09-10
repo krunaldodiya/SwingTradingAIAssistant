@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
-from typing import Final, NoReturn, cast
+from typing import Final, Literal, NoReturn, TypeAlias, cast
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -22,8 +22,14 @@ from .http import (
 )
 
 PROVIDER_SOURCE: Final = "bharatstock-api@v1"
-PRICE_BASIS: Final = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
-VOLUME_BASIS: Final = "SOURCE_REPORTED_UNADJUSTED"
+BharatStockPriceBasis: TypeAlias = Literal[
+    "BHARATSTOCK_SOURCE_REPORTED_OHLC", "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+]
+PRICE_BASIS: Final[BharatStockPriceBasis] = "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+FACTOR_APPLIED_PRICE_BASIS: Final[BharatStockPriceBasis] = (
+    "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+)
+VOLUME_BASIS: Final = "SOURCE_REPORTED"
 _BASE: Final = "https://bharatstockapi.com/v1/stocks/"
 _PAGE_SIZE: Final = 1000
 _MAX_PAGES: Final = 40
@@ -32,6 +38,12 @@ _ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9&._-]{0,63}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_NUMBER: Final = Decimal("1e18")
+
+
+def price_basis_for_adjustment(apply_adjustment: bool) -> BharatStockPriceBasis:
+    if type(apply_adjustment) is not bool:
+        raise ValueError("apply_adjustment must be a boolean")
+    return FACTOR_APPLIED_PRICE_BASIS if apply_adjustment else PRICE_BASIS
 
 
 class BharatStockError(RuntimeError):
@@ -63,7 +75,7 @@ class BharatStockInstrument:
 
 @dataclass(frozen=True, slots=True)
 class BharatStockDailyPrice:
-    """Raw OHLC and volume, plus the separately reported adjustment multiplier."""
+    """Provider OHLCV and separate optional adjustment evidence, never preprocessed."""
 
     session: date
     open: Decimal
@@ -71,8 +83,8 @@ class BharatStockDailyPrice:
     low: Decimal
     close: Decimal
     volume: int
-    adjusted_close: Decimal
-    adjustment_factor: Decimal
+    adjusted_close: Decimal | None
+    adjustment_factor: Decimal | None
 
     def __post_init__(self) -> None:
         values = (
@@ -80,8 +92,11 @@ class BharatStockDailyPrice:
             self.high,
             self.low,
             self.close,
-            self.adjusted_close,
-            self.adjustment_factor,
+            *(
+                value
+                for value in (self.adjusted_close, self.adjustment_factor)
+                if value is not None
+            ),
         )
         if (
             type(self.session) is not date
@@ -99,9 +114,25 @@ class BharatStockDailyPrice:
             <= self.high
         ):
             raise ValueError("invalid BharatStock daily price")
+
+    def project_ohlc(
+        self, *, apply_adjustment: bool = False
+    ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        """Select original prices or apply the reported factor once to originals."""
+        price_basis_for_adjustment(apply_adjustment)
+        if not apply_adjustment:
+            return self.open, self.high, self.low, self.close
+        factor = self.adjustment_factor
+        if factor is None:
+            raise ValueError("BharatStock adjustment factor is unavailable")
         with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
-            if self.adjusted_close != self.close * self.adjustment_factor:
+            close = self.close * factor
+            if self.adjusted_close is not None and self.adjusted_close != close:
                 raise ValueError("inconsistent BharatStock adjustment")
+            return self.open * factor, self.high * factor, self.low * factor, close
+
+    def project_close(self, *, apply_adjustment: bool = False) -> Decimal:
+        return self.project_ohlc(apply_adjustment=apply_adjustment)[3]
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +225,10 @@ def _decimal(value: object) -> Decimal:
     return result
 
 
+def _optional_decimal(value: object) -> Decimal | None:
+    return None if value is None else _decimal(value)
+
+
 def _price(value: object, start: date, end: date) -> BharatStockDailyPrice:
     if type(value) is not dict:
         raise ValueError("invalid daily price")
@@ -214,8 +249,8 @@ def _price(value: object, start: date, end: date) -> BharatStockDailyPrice:
         _decimal(row.get("low")),
         _decimal(row.get("close")),
         volume,
-        _decimal(row.get("adjusted_close")),
-        _decimal(row.get("adjustment_factor")),
+        _optional_decimal(row.get("adjusted_close")),
+        _optional_decimal(row.get("adjustment_factor")),
     )
 
 

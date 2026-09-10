@@ -8,6 +8,7 @@ import importlib
 import importlib.util
 import socket
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -267,6 +268,24 @@ def test_observed_v4_rows_are_aggregate_only_sorted_reconciled_and_identified(
         row.row_identity_sha256
         == hashlib.sha256(row.canonical_json_bytes(include_identity=False)).hexdigest()
         for row in result.industries
+    )
+
+
+def test_industry_rejects_direction_candidate_with_mismatched_price_mode(
+    tmp_path: Path,
+) -> None:
+    api = _api()
+    context, _classification = _inputs(tmp_path)
+    private_context = _PRIVATE_CONTEXTS[id(context)]
+    candidate = private_context.direction_candidate
+
+    assert candidate is not None
+    assert candidate.apply_adjustment is False
+    assert candidate.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert not api._valid_candidate(
+        replace(candidate, price_basis="BHARATSTOCK_FACTOR_APPLIED_OHLC"),
+        context,
+        context.market_regime_report,
     )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
@@ -148,7 +149,7 @@ def test_capture_structure_is_explicitly_adjusted_basis_not_raw_bar_context() ->
 
     fact = packet.members[0].market_structure
     assert fact is not None
-    assert fact.price_basis == "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+    assert fact.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert fact.adjusted_bar_identities_sha256 == tuple(
         bar.source_row_identity_sha256 for bar in packet.members[0].adjusted_bars or ()
     )
@@ -239,7 +240,7 @@ def test_feature_windows_preserve_short_exact_and_long_history(
         _revision_with_history(session_count)
     ).members[0]
 
-    assert member.price_basis == "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+    assert member.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert tuple(bar.session for bar in member.adjusted_bars or ()) == sessions
     assert member.price_action_evidence_state == "OBSERVED"
     assert member.price_action is not None
@@ -286,8 +287,49 @@ def test_admitted_facts_ignore_the_callers_decimal_context() -> None:
     assert actual.coverage.observed == 1
     fact = actual.members[0].price_action
     assert fact is not None
-    assert fact.range_size == Decimal("1.5")
-    assert fact.body_size == Decimal("0.5")
+    assert fact.range_size == Decimal("3")
+    assert fact.body_size == Decimal("1")
+
+
+def test_selected_price_mode_changes_prices_once_without_changing_volume() -> None:
+    original = _revision("OBSERVED")
+    opted_in = replace(
+        original,
+        request=replace(original.request, apply_adjustment=True),
+        price_basis=None,
+    )
+    source = build_bharatstock_research_packet_v1(original)
+    adjusted = build_bharatstock_research_packet_v1(opted_in)
+    source_bars = source.members[0].adjusted_bars
+    adjusted_bars = adjusted.members[0].adjusted_bars
+    assert source_bars is not None and adjusted_bars is not None
+    assert source.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert adjusted.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    for raw, projected in zip(source_bars, adjusted_bars, strict=True):
+        assert (projected.open, projected.high, projected.low, projected.close) == (
+            raw.open / 2,
+            raw.high / 2,
+            raw.low / 2,
+            raw.close / 2,
+        )
+        assert projected.volume == raw.volume
+    assert build_bharatstock_research_packet_v1(original) == source
+
+
+def test_three_missing_members_leave_ninety_seven_results_usable() -> None:
+    complete = build_bharatstock_research_packet_v1(_revision(*("OBSERVED",) * 97))
+    packet = build_bharatstock_research_packet_v1(
+        _revision(*(("OBSERVED",) * 97 + ("INSUFFICIENT_EVIDENCE",) * 3))
+    )
+    assert packet.members[:97] == complete.members
+    assert (
+        packet.coverage.requested,
+        packet.coverage.observed,
+        packet.coverage.insufficient,
+        packet.coverage.not_attempted,
+    ) == (100, 97, 3, 0)
+    assert packet.aggregate_evidence_state == "INSUFFICIENT_EVIDENCE"
+    assert all(member.reason == "MISSING_HISTORY" for member in packet.members[97:])
 
 
 def test_rejects_unvalidated_arbitrary_input() -> None:

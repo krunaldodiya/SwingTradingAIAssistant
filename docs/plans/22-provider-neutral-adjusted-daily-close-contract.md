@@ -6,21 +6,23 @@
 > The V3 section below governs the new source path. The following V1/V2
 > delivery records and Yahoo handoff identities remain historical, not active
 > Yahoo acquisition instructions.
-> The [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold)
-> blocks dependent adjusted-data activation and release; the candidate's
-> arithmetic and labels are not a qualified provider profile.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for the new default mode, not
+> historical failed evidence or independent review and release requirements.
 
 ## BharatStock V3 successor — unreleased
 
 `provider-neutral-adjusted-daily-close@v3` uses the direct client in
 `market_data/bharatstock.py` through `adjusted_daily/service_v3.py`.
 The provider is `BHARATSTOCK`, source `bharatstock-api@v1`, mapping
-`bharatstock-isin-exchange-mapping@v1`, and basis
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`. Volume, where retained by capture,
-is carried through without further rescaling by this project; that does not
-establish exchange-unadjusted source units. The provider interpretation remains
-on the qualification hold above. No dividend/rights or total-return
-equivalence is claimed.
+`bharatstock-isin-exchange-mapping@v1`. `apply_adjustment=False` uses the supplied
+close unchanged with basis `BHARATSTOCK_SOURCE_REPORTED_OHLC`, under the owner's
+working assumption that the provider has adjusted it correctly. Explicit
+`apply_adjustment=True` applies the supplied factor once to original prices,
+with basis `BHARATSTOCK_FACTOR_APPLIED_OHLC`. Mode and basis bind request,
+handoff and downstream consumer identities. Volume, where retained by capture,
+is unchanged and labelled `SOURCE_REPORTED`, not certified as exchange-raw.
+No dividend/rights or total-return equivalence is claimed.
 
 The request binds the exact ordered canonical ISIN/exchange/effective-symbol
 list, mapping validity across the entire fact window, cohort identity,
@@ -28,7 +30,7 @@ cutoff, and exact 21-session Plan21 schedule. Acquisition addresses ISIN plus
 exchange, validates returned symbol identity and all daily rows, and produces
 S0/S20 facts with retrieval time and response digests. A complete handoff is
 required for whole-list calculations; member isolation is represented by the
-separate Plan30 V2 envelope, not a partial handoff under the old identity.
+separate Plan30 V3 envelope, not a partial handoff under the old identity.
 
 The client uses one account, bounded serial requests/pages, no redirect or
 automatic retry, and a sticky stop on shared failures. Unexpected software

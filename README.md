@@ -309,9 +309,9 @@ completed merge. See the
 Historical Yahoo evidence retains its original labels and supported readers.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
-screening. Direct BharatStock acquisition supplies the separately labelled
-split/bonus-factor-adjusted daily basis, not a silent fallback, live broker
-feed, total-return series, or strict point-in-time authority.
+screening. Direct BharatStock acquisition supplies separately labelled daily
+prices under the accepted as-provided assumption, not a silent fallback, live
+broker feed, total-return series, or strict point-in-time authority.
 `NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
 integration. A caller-supplied canonical universe snapshot establishes
 historical Nifty 50 membership and sector provenance; it does not supply prices
@@ -324,11 +324,13 @@ execution are not implemented.
 
 ## Structured daily OHLCV downloader
 
-**Qualification HOLD — 2026-09-10.** Real corporate-action responses failed
-[independent price/volume reconciliation](docs/roadmap.md#bharatstock-price-and-volume-qualification-hold).
-The examples below describe the unmerged candidate, not an approved adjusted
-data source. Do not activate this profile for qualified capture or research
-until its provider fields and versioned basis are reconciled and accepted.
+**Accepted operating assumption — 2026-09-10.** Use supplied BharatStock OHLCV
+unchanged by default, assuming for now that the provider has adjusted it
+correctly. The [owner decision](docs/roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+supersedes waiting for field clarification before implementing this mode.
+The earlier extra-factor finding remains historical evidence, not proof that
+unchanged provider prices are wrong. These examples describe an unmerged
+candidate; independent review and release gates remain required.
 
 This unreleased source revision exposes one `equity_data_downloader`
 implementation for bounded direct BharatStock daily acquisition. Its CLI and
@@ -392,15 +394,18 @@ invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
 storage is rejected before any provider call. The complete derived dataset
 remains under that root; there is no arbitrary output-file option.
 
-The candidate multiplies source OHLC by the reported adjustment factor and
-carries source volume through unchanged. Its existing
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC` price tag and
-`SOURCE_REPORTED_UNADJUSTED` volume tag remain on qualification hold: copying
-provider volume does not establish exchange-unadjusted units, and arithmetic
-agreement does not establish correct corporate-action adjustment.
-No dividend/rights-adjusted total-return equivalence is claimed.
+The default `apply_adjustment=False` preserves supplied OHLCV unchanged and
+labels prices `BHARATSTOCK_SOURCE_REPORTED_OHLC`. The optional Python argument
+`apply_adjustment=True`, or CLI flag `--apply-adjustment`, multiplies original
+OHLC by the reported factor exactly once and labels prices
+`BHARATSTOCK_FACTOR_APPLIED_OHLC`. It requires an available factor and consistency
+with a provided adjusted close. It does not apply a second change to previously
+processed prices. Original OHLC and separate adjustment fields remain retained.
+The single volume field is never rescaled and is labelled `SOURCE_REPORTED`;
+this does not certify exchange-raw units. No total-return equivalence is claimed.
 The exact request identity binds ordered canonical instruments, dates,
-provider `bharatstock-api@v1`, configuration, and schema/contract V3.
+provider `bharatstock-api@v1`, selected processing mode, configuration, and
+schema/contract V4. Opposite modes cannot reuse the same dataset.
 An existing dataset is reused only
 after its owner, permissions, singleton identity, metadata, complete schema, and
 all OHLCV values pass validation; `REUSED` performs zero provider requests and

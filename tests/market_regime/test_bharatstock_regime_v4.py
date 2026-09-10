@@ -377,6 +377,7 @@ def _request(scenario, screen):
         "schedule_source": schedule.source,
         "schedule_source_release": schedule.source_release,
         "include_partial_current_session": False,
+        "apply_adjustment": False,
         "plan21_cohort_identity_sha256": scenario.manifest.cohort_identity_sha256,
         "canonical_cohort_identity_sha256": cohort,
         "plan22_request_identity_sha256": adjusted_daily_request_identity_v3(
@@ -384,6 +385,7 @@ def _request(scenario, screen):
             decision_cutoff=_CUTOFF,
             schedule_identity_sha256=plan22_schedule,
             members=instruments,
+            apply_adjustment=False,
         ),
     }
     return CurrentSamePassMarketRegimeRequestV4(

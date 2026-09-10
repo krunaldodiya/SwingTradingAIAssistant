@@ -14,7 +14,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
 )
 
 
-def test_canonical_adjusted_download_reuses_exact_parquet_without_acquisition(
+def test_canonical_source_download_reuses_exact_parquet_without_acquisition(
     tmp_path: Path,
 ) -> None:
     member = BharatStockInstrument("INE002A01018", "NSE", "RELIANCE")
@@ -43,12 +43,21 @@ def test_canonical_adjusted_download_reuses_exact_parquet_without_acquisition(
             )
 
     receipt = download_daily_ohlcv(
-        (member,), date(2026, 8, 27), date(2026, 8, 28), tmp_path, client=Client()
+        (member,),
+        date(2026, 8, 27),
+        date(2026, 8, 28),
+        tmp_path,
+        client=Client(),
     )
     again = download_daily_ohlcv(
-        (member,), date(2026, 8, 27), date(2026, 8, 28), tmp_path, client=Client()
+        (member,),
+        date(2026, 8, 27),
+        date(2026, 8, 28),
+        tmp_path,
+        client=Client(),
     )
     assert receipt.provider == "BHARATSTOCK"
+    assert receipt.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert again.outcome == "REUSED"
     assert len(calls) == 1
     assert receipt.destination == again.destination
@@ -59,12 +68,20 @@ def test_canonical_adjusted_download_reuses_exact_parquet_without_acquisition(
             "exchange": "NSE",
             "symbol": "RELIANCE",
             "session": date(2026, 8, 27),
-            "open": 50.0,
-            "high": 52.0,
-            "low": 49.0,
-            "close": 51.0,
+            "open": 100.0,
+            "high": 104.0,
+            "low": 98.0,
+            "close": 102.0,
             "volume": 1000,
+            "source_open": 100.0,
+            "source_high": 104.0,
+            "source_low": 98.0,
+            "source_close": 102.0,
+            "source_adjusted_close": 51.0,
+            "source_adjustment_factor": 0.5,
         }
     ]
     assert not (tmp_path / ".cache").exists()
-    assert b"BHARATSTOCK" in table.schema.metadata[b"price_basis"]
+    assert table.schema.metadata[b"price_basis"] == (
+        b"BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    )

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import stat
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 
 from equity_data_downloader import (
     DownloadError,
+    DownloadReceipt,
     PersistenceError,
     RetainedYahooDatasetReceiptV2,
     cli,
@@ -82,9 +84,19 @@ class _Client:
         return _history(instrument)
 
 
-def _download(root: Path, client: _Client | None = None):
+def _download(
+    root: Path,
+    client: _Client | None = None,
+    *,
+    apply_adjustment: bool = False,
+) -> DownloadReceipt:
     return download_daily_ohlcv(
-        (_MEMBER,), _START, _END, root, client=_Client() if client is None else client
+        (_MEMBER,),
+        _START,
+        _END,
+        root,
+        apply_adjustment=apply_adjustment,
+        client=_Client() if client is None else client,
     )
 
 
@@ -232,7 +244,7 @@ def test_retained_yahoo_v2_requires_exact_provider_version(tmp_path: Path) -> No
     assert path.read_bytes() == original
 
 
-def test_persists_factor_adjusted_parquet_under_canonical_request_namespace(
+def test_persists_source_ohlcv_and_optional_adjustment_evidence(
     tmp_path: Path,
 ) -> None:
     receipt = _download(tmp_path)
@@ -243,9 +255,48 @@ def test_persists_factor_adjusted_parquet_under_canonical_request_namespace(
     )
     assert receipt.instruments == (_MEMBER,)
     assert receipt.rows_by_instrument == (("INE002A01018:NSE:RELIANCE", 2),)
+    assert receipt.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert stat.S_IMODE(receipt.destination.stat().st_mode) == 0o400
     table = pq.ParquetFile(receipt.destination).read()
     assert table.to_pylist()[0] == {
+        "isin": _MEMBER.isin,
+        "exchange": "NSE",
+        "symbol": "RELIANCE",
+        "session": _START,
+        "open": 100.0,
+        "high": 104.0,
+        "low": 98.0,
+        "close": 102.0,
+        "volume": 1000,
+        "source_open": 100.0,
+        "source_high": 104.0,
+        "source_low": 98.0,
+        "source_close": 102.0,
+        "source_adjusted_close": 51.0,
+        "source_adjustment_factor": 0.5,
+    }
+    assert table.schema.metadata[b"provider"] == b"BHARATSTOCK"
+    assert table.schema.metadata[b"price_basis"] == (
+        b"BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    )
+    assert table.schema.metadata[b"volume_basis"] == b"SOURCE_REPORTED"
+    assert not (tmp_path / ".cache").exists()
+
+
+def test_opt_in_adjustment_projects_once_and_reuses_only_same_mode(
+    tmp_path: Path,
+) -> None:
+    client = _Client()
+    source = _download(tmp_path, client)
+    adjusted = _download(tmp_path, client, apply_adjustment=True)
+    adjusted_reused = _download(tmp_path, client, apply_adjustment=True)
+
+    assert client.calls == [_MEMBER, _MEMBER]
+    assert adjusted.request_identity_sha256 != source.request_identity_sha256
+    assert adjusted.destination != source.destination
+    assert adjusted.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    assert adjusted_reused.outcome == "REUSED"
+    assert pq.ParquetFile(adjusted.destination).read().to_pylist()[0] == {
         "isin": _MEMBER.isin,
         "exchange": "NSE",
         "symbol": "RELIANCE",
@@ -255,9 +306,37 @@ def test_persists_factor_adjusted_parquet_under_canonical_request_namespace(
         "low": 49.0,
         "close": 51.0,
         "volume": 1000,
+        "source_open": 100.0,
+        "source_high": 104.0,
+        "source_low": 98.0,
+        "source_close": 102.0,
+        "source_adjusted_close": 51.0,
+        "source_adjustment_factor": 0.5,
     }
-    assert table.schema.metadata[b"provider"] == b"BHARATSTOCK"
-    assert not (tmp_path / ".cache").exists()
+
+
+def test_factor_projection_with_no_reported_adjusted_close_is_reusable(
+    tmp_path: Path,
+) -> None:
+    class Client(_Client):
+        def history(self, instrument, start, end):
+            history = super().history(instrument, start, end)
+            return replace(
+                history,
+                rows=tuple(replace(row, adjusted_close=None) for row in history.rows),
+            )
+
+    client = Client()
+    receipt = _download(tmp_path, client, apply_adjustment=True)
+    again = _download(tmp_path, client, apply_adjustment=True)
+    rows = pq.ParquetFile(receipt.destination).read().to_pylist()
+    assert [(row["close"], row["volume"]) for row in rows] == [
+        (51.0, 1000),
+        (52.0, 1100),
+    ]
+    assert all(row["source_adjusted_close"] is None for row in rows)
+    assert again.outcome == "REUSED"
+    assert client.calls == [_MEMBER]
 
 
 def test_existing_exact_request_is_reused_without_provider_call(tmp_path: Path) -> None:
@@ -352,7 +431,15 @@ def test_invalid_existing_file_fails_without_provider_call(
 
 
 @pytest.mark.parametrize(
-    "kind", ["bad-price", "unknown-metadata", "field-metadata", "wrong-identity"]
+    "kind",
+    [
+        "bad-price",
+        "unknown-metadata",
+        "field-metadata",
+        "wrong-identity",
+        "source-vs-processed",
+        "wrong-mode-basis",
+    ],
 )
 def test_invalid_existing_parquet_semantics_fail_without_acquisition(
     tmp_path: Path, kind: str
@@ -370,15 +457,43 @@ def test_invalid_existing_parquet_semantics_fail_without_acquisition(
                 0, table.schema.field(0).with_metadata({b"unknown": b"value"})
             )
             return pa.Table.from_arrays(table.columns, schema=schema)
+        if kind == "wrong-mode-basis":
+            return table.replace_schema_metadata(
+                {
+                    **table.schema.metadata,
+                    b"apply_adjustment": b"true",
+                    b"price_basis": b"BHARATSTOCK_FACTOR_APPLIED_OHLC",
+                }
+            )
         rows = table.to_pylist()
-        rows[0]["close" if kind == "bad-price" else "isin"] = (
-            -1.0 if kind == "bad-price" else _OTHER.isin
-        )
+        if kind == "source-vs-processed":
+            rows[0]["open"] = 50.0
+        else:
+            rows[0]["close" if kind == "bad-price" else "isin"] = (
+                -1.0 if kind == "bad-price" else _OTHER.isin
+            )
         return pa.Table.from_pylist(rows, schema=table.schema)
 
     _rewrite(receipt.destination, transform)
     with pytest.raises(PersistenceError):
         _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+
+
+def test_factor_mode_reuse_rejects_processed_source_mismatch_without_acquisition(
+    tmp_path: Path,
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client, apply_adjustment=True)
+
+    def transform(table):
+        rows = table.to_pylist()
+        rows[0]["open"] = rows[0]["source_open"]
+        return pa.Table.from_pylist(rows, schema=table.schema)
+
+    _rewrite(receipt.destination, transform)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client, apply_adjustment=True)
     assert client.calls == [_MEMBER]
 
 
@@ -519,6 +634,117 @@ def test_invalid_request_has_no_provider_or_storage_effect(
     assert not (tmp_path / "adjusted_daily").exists()
 
 
+@pytest.mark.parametrize("apply_adjustment", (1, 0, "false", None))
+def test_nonboolean_adjustment_mode_has_no_provider_or_storage_effect(
+    tmp_path: Path, apply_adjustment: object
+) -> None:
+    client = _Client()
+    with pytest.raises(ValueError, match="invalid download request"):
+        download_daily_ohlcv(
+            (_MEMBER,),
+            _START,
+            _END,
+            tmp_path,
+            apply_adjustment=apply_adjustment,
+            client=client,
+        )
+    assert client.calls == []
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+def test_source_mode_allows_absent_adjustment_evidence(tmp_path: Path) -> None:
+    history = BharatStockHistory(
+        _MEMBER,
+        (
+            BharatStockDailyPrice(
+                _START,
+                Decimal(100),
+                Decimal(104),
+                Decimal(98),
+                Decimal(102),
+                1000,
+                None,
+                None,
+            ),
+        ),
+        datetime(2026, 8, 29, tzinfo=UTC),
+        ("a" * 64, "b" * 64),
+        2,
+    )
+
+    class Client:
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            assert (instrument, start, end) == (_MEMBER, _START, _END)
+            return history
+
+    receipt = download_daily_ohlcv((_MEMBER,), _START, _END, tmp_path, client=Client())
+    assert pq.ParquetFile(receipt.destination).read().to_pylist()[0] == {
+        "isin": _MEMBER.isin,
+        "exchange": "NSE",
+        "symbol": "RELIANCE",
+        "session": _START,
+        "open": 100.0,
+        "high": 104.0,
+        "low": 98.0,
+        "close": 102.0,
+        "volume": 1000,
+        "source_open": 100.0,
+        "source_high": 104.0,
+        "source_low": 98.0,
+        "source_close": 102.0,
+        "source_adjusted_close": None,
+        "source_adjustment_factor": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "adjusted_close,adjustment_factor",
+    ((None, None), (Decimal(50), None), (Decimal(52), Decimal("0.5"))),
+)
+def test_adjustment_mode_rejects_missing_or_conflicting_evidence_without_publish(
+    tmp_path: Path,
+    adjusted_close: Decimal | None,
+    adjustment_factor: Decimal | None,
+) -> None:
+    history = BharatStockHistory(
+        _MEMBER,
+        (
+            BharatStockDailyPrice(
+                _START,
+                Decimal(100),
+                Decimal(104),
+                Decimal(98),
+                Decimal(102),
+                1000,
+                adjusted_close,
+                adjustment_factor,
+            ),
+        ),
+        datetime(2026, 8, 29, tzinfo=UTC),
+        ("a" * 64, "b" * 64),
+        2,
+    )
+
+    class Client:
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            return history
+
+    with pytest.raises((DownloadError, ValueError)):
+        download_daily_ohlcv(
+            (_MEMBER,),
+            _START,
+            _END,
+            tmp_path,
+            apply_adjustment=True,
+            client=Client(),
+        )
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
 def test_one_hundred_canonical_members_are_retained(tmp_path: Path) -> None:
     members = tuple(
         BharatStockInstrument(f"INE{position:09d}", "NSE", f"STOCK{position}")
@@ -553,9 +779,39 @@ def test_cli_reports_canonical_receipt_and_reuses_without_key(
     assert status == 0
     assert result["outcome"] == "REUSED"
     assert result["request_identity_sha256"] == receipt.request_identity_sha256
+    assert result["apply_adjustment"] is False
     assert result["instruments"] == [
         {"isin": _MEMBER.isin, "exchange": "NSE", "symbol": "RELIANCE"}
     ]
+
+
+def test_cli_apply_adjustment_reuses_only_adjusted_mode_without_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _download(tmp_path)
+    adjusted = _download(tmp_path, apply_adjustment=True)
+    monkeypatch.delenv("BHARATSTOCK_API_KEY", raising=False)
+
+    status = cli.main(
+        [
+            "--instrument",
+            "INE002A01018:NSE:RELIANCE",
+            "--start",
+            str(_START),
+            "--end",
+            str(_END),
+            "--storage-root",
+            str(tmp_path),
+            "--apply-adjustment",
+        ]
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert result["apply_adjustment"] is True
+    assert result["price_basis"] == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    assert result["request_identity_sha256"] == adjusted.request_identity_sha256
+    assert result["request_identity_sha256"] != source.request_identity_sha256
 
 
 @pytest.mark.parametrize(

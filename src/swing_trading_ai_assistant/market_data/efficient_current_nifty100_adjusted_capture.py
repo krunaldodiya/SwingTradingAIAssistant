@@ -28,7 +28,7 @@ from .http import (
     UrllibHttpTransport,
 )
 
-CONTRACT_VERSION_V2 = "current-nifty100-bharatstock-capture@v2"
+CONTRACT_VERSION_V3 = "current-nifty100-bharatstock-capture@v3"
 NIFTY_50_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
 NIFTY_NEXT_50_URL = (
     "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv"
@@ -252,6 +252,7 @@ def _retain_selection_v2(
     binding = (
         _canonical(
             {
+                "apply_adjustment": request.apply_adjustment,
                 "request_identity_sha256": request.request_identity_sha256,
                 "source_identity_sha256": selection.source_identity_sha256,
             }
@@ -261,7 +262,7 @@ def _retain_selection_v2(
     try:
         with lease.root_operation(root) as operation:
             namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                operation, operation.descriptor, "nifty100-selection-v2", create=True
+                operation, operation.descriptor, "nifty100-selection-v3", create=True
             )
             try:
                 sources = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
@@ -398,7 +399,7 @@ def _read_retained_selection_v2(
     try:
         with lease.read_operation(root) as operation:
             namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                operation, operation.descriptor, "nifty100-selection-v2", create=False
+                operation, operation.descriptor, "nifty100-selection-v3", create=False
             )
             try:
                 requests = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
@@ -419,9 +420,11 @@ def _read_retained_selection_v2(
                 if (
                     set(binding)
                     != {
+                        "apply_adjustment",
                         "request_identity_sha256",
                         "source_identity_sha256",
                     }
+                    or binding.get("apply_adjustment") is not request.apply_adjustment
                     or binding.get("request_identity_sha256")
                     != request.request_identity_sha256
                     or type(binding_source_identity) is not str
@@ -586,7 +589,7 @@ def serialize_capture_result_v2(result: CurrentNifty100ResultV2) -> dict[str, ob
 
     return {
         "code": result.code,
-        "contract_version": CONTRACT_VERSION_V2,
+        "contract_version": CONTRACT_VERSION_V3,
         "insufficient_members": result.insufficient_members,
         "observed_members": result.observed_members,
         "reason": result.reason,

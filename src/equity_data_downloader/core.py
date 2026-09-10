@@ -11,7 +11,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_EVEN, Context, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from math import isfinite
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
@@ -20,13 +20,13 @@ import pyarrow as _pyarrow  # pyright: ignore[reportMissingImports]
 import pyarrow.parquet as _pyarrow_parquet  # pyright: ignore[reportMissingImports]
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
-    PRICE_BASIS,
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
+    price_basis_for_adjustment,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
@@ -43,7 +43,6 @@ _YAHOO_V2_PROVIDER_DIRECTORY: Final = "provider=yfinance"
 _YAHOO_V2_DEFAULT_PROVIDER_VERSION: Final = "1.6.0"
 _YAHOO_V2_SYMBOL = re.compile(r"[A-Za-z0-9^][A-Za-z0-9.^=&_-]{0,63}\Z")
 _PROVIDER: Final = "BHARATSTOCK"
-_PRICE_BASIS: Final = PRICE_BASIS
 _VOLUME_BASIS: Final = VOLUME_BASIS
 _MAX_SYMBOLS: Final = 100
 pa: Any = cast(Any, _pyarrow)
@@ -51,8 +50,8 @@ pq: Any = cast(Any, _pyarrow_parquet)
 _DATASET_DIRECTORY: Final = "adjusted_daily"
 _PROVIDER_DIRECTORY: Final = "provider=bharatstock"
 _PARQUET_NAME: Final = "data.parquet"
-_SCHEMA_VERSION: Final = "3"
-_CONTRACT_VERSION: Final = "equity-data-downloader@v3"
+_SCHEMA_VERSION: Final = "4"
+_CONTRACT_VERSION: Final = "equity-data-downloader@v4"
 _MAX_VOLUME: Final = (1 << 63) - 1
 _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _FILE_READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
@@ -70,7 +69,7 @@ _CALL_CONFIGURATION: Final[dict[str, object]] = {
     "timeout_seconds": 30,
     "redirects": False,
     "retries": 0,
-    "price_projection": "raw_ohlc_times_provider_split_bonus_factor",
+    "price_projection": "explicit-source-or-factor-applied-ohlc",
 }
 
 
@@ -186,22 +185,27 @@ def download_daily_ohlcv(
     end: date,
     storage_root: Path | None = None,
     *,
+    apply_adjustment: bool = False,
     client: _HistoryClient | None = None,
 ) -> DownloadReceipt:
-    """Persist directly acquired BharatStock adjusted OHLC and source volume.
+    """Persist BharatStock source OHLCV or explicit factor-applied OHLC.
 
-    Canonical ISIN/exchange/symbol identities and their supplied order bind the
-    request. Exact retained requests are read without credentials or acquisition.
-    Historical Yahoo Parquet files remain unchanged in their original namespace.
-    This transport utility does not itself admit governed capture evidence.
+    Canonical ISIN/exchange/symbol identities, supplied order, and price mode
+    bind the request. Exact retained requests are read without credentials or
+    acquisition. Historical Yahoo Parquet files remain unchanged in their
+    original namespace. This transport utility does not itself admit governed
+    capture evidence.
     """
     root = default_storage_root() if storage_root is None else storage_root
-    normalized = _validate_request(instruments, start, end, root)
+    normalized = _validate_request(
+        instruments, start, end, root, apply_adjustment=apply_adjustment
+    )
     provider_version = PROVIDER_SOURCE
     request_identity = _request_identity(
         normalized,
         start,
         end,
+        apply_adjustment=apply_adjustment,
         provider_version=provider_version,
     )
     destination = _destination(root, request_identity)
@@ -220,13 +224,16 @@ def download_daily_ohlcv(
                         start=start,
                         end=end,
                         request_identity_sha256=request_identity,
+                        apply_adjustment=apply_adjustment,
                         provider_version=provider_version,
                         outcome="REUSED",
                     )
                 finally:
                     _close_directories(existing_chain)
             provider = BharatStockClient() if client is None else client
-            rows = _download_rows(provider, instruments, start, end)
+            rows = _download_rows(
+                provider, instruments, start, end, apply_adjustment=apply_adjustment
+            )
             operation.ensure_live()
             retrieved_at = datetime.now(UTC)
             table = _parquet_table(
@@ -235,6 +242,7 @@ def download_daily_ohlcv(
                 start=start,
                 end=end,
                 request_identity_sha256=request_identity,
+                apply_adjustment=apply_adjustment,
                 retrieved_at=retrieved_at,
                 provider_version=provider_version,
             )
@@ -254,6 +262,7 @@ def download_daily_ohlcv(
                     start=start,
                     end=end,
                     request_identity_sha256=request_identity,
+                    apply_adjustment=apply_adjustment,
                     provider_version=provider_version,
                     outcome="INSERTED",
                     held_descriptor=published_descriptor,
@@ -317,6 +326,8 @@ def _validate_request(
     start: object,
     end: object,
     storage_root: object,
+    *,
+    apply_adjustment: object,
 ) -> tuple[str, ...]:
     if type(instruments) is not tuple:
         raise ValueError("invalid download request")
@@ -331,6 +342,7 @@ def _validate_request(
         or type(storage_root) is not type(Path())
         or not storage_root.is_absolute()
         or any(part in {".", ".."} for part in storage_root.parts)
+        or type(apply_adjustment) is not bool
     ):
         raise ValueError("invalid download request")
     typed = cast(tuple[BharatStockInstrument, ...], members)
@@ -355,6 +367,8 @@ def _download_rows(
     instruments: tuple[BharatStockInstrument, ...],
     start: date,
     end: date,
+    *,
+    apply_adjustment: bool,
 ) -> list[tuple[object, ...]]:
     rows: list[tuple[object, ...]] = []
     for member in instruments:
@@ -368,17 +382,40 @@ def _download_rows(
             raise DownloadError("provider history identity is invalid")
         history.__post_init__()
         key = _instrument_key(member)
-        with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
-            for bar in history.rows:
-                bar.__post_init__()
-                if not start <= bar.session <= end:
-                    raise DownloadError("provider session outside requested period")
-                values = tuple(
-                    float(value * bar.adjustment_factor)
-                    for value in (bar.open, bar.high, bar.low, bar.close)
+        for bar in history.rows:
+            bar.__post_init__()
+            if not start <= bar.session <= end:
+                raise DownloadError("provider session outside requested period")
+            try:
+                projected = bar.project_ohlc(apply_adjustment=apply_adjustment)
+            except ValueError:
+                raise DownloadError("provider adjustment evidence is invalid") from None
+            source_ohlc = tuple(
+                float(value) for value in (bar.open, bar.high, bar.low, bar.close)
+            )
+            projected_ohlc = tuple(float(value) for value in projected)
+            source_adjusted_close = (
+                None if bar.adjusted_close is None else float(bar.adjusted_close)
+            )
+            source_adjustment_factor = (
+                None if bar.adjustment_factor is None else float(bar.adjustment_factor)
+            )
+            _validate_ohlcv_values((*source_ohlc, bar.volume), DownloadError)
+            _validate_ohlcv_values((*projected_ohlc, bar.volume), DownloadError)
+            _validate_optional_adjustment_fields(
+                source_adjusted_close, source_adjustment_factor, DownloadError
+            )
+            rows.append(
+                (
+                    key,
+                    bar.session.isoformat(),
+                    *projected_ohlc,
+                    bar.volume,
+                    *source_ohlc,
+                    source_adjusted_close,
+                    source_adjustment_factor,
                 )
-                _validate_ohlcv_values((*values, bar.volume), DownloadError)
-                rows.append((key, bar.session.isoformat(), *values, bar.volume))
+            )
     if not rows:
         raise DownloadError("provider returned no valid requested member history")
     return rows
@@ -419,6 +456,18 @@ def _validate_ohlcv_values(
         raise error_type("OHLCV values are invalid")
 
 
+def _validate_optional_adjustment_fields(
+    adjusted_close: object,
+    adjustment_factor: object,
+    error_type: type[DownloadError] | type[ValueError],
+) -> None:
+    for value in (adjusted_close, adjustment_factor):
+        if value is not None and (
+            type(value) is not float or not isfinite(value) or value <= 0
+        ):
+            raise error_type("BharatStock adjustment fields are invalid")
+
+
 def default_storage_root() -> Path:
     """Return the only default location for persistent downloader output."""
 
@@ -434,24 +483,36 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _configuration_identity() -> str:
-    return hashlib.sha256(_canonical(_CALL_CONFIGURATION)).hexdigest()
+def _configuration_identity(*, apply_adjustment: bool) -> str:
+    return hashlib.sha256(
+        _canonical({**_CALL_CONFIGURATION, "apply_adjustment": apply_adjustment})
+    ).hexdigest()
 
 
-def _schema_identity() -> str:
+def _schema_identity(*, apply_adjustment: bool) -> str:
     return hashlib.sha256(
         _canonical(
-            (
-                ("isin", "string", False),
-                ("exchange", "string", False),
-                ("symbol", "string", False),
-                ("session", "date32", False),
-                ("open", "float64", False),
-                ("high", "float64", False),
-                ("low", "float64", False),
-                ("close", "float64", False),
-                ("volume", "int64", False),
-            )
+            {
+                "fields": (
+                    ("isin", "string", False),
+                    ("exchange", "string", False),
+                    ("symbol", "string", False),
+                    ("session", "date32", False),
+                    ("open", "float64", False),
+                    ("high", "float64", False),
+                    ("low", "float64", False),
+                    ("close", "float64", False),
+                    ("volume", "int64", False),
+                    ("source_open", "float64", False),
+                    ("source_high", "float64", False),
+                    ("source_low", "float64", False),
+                    ("source_close", "float64", False),
+                    ("source_adjusted_close", "float64", True),
+                    ("source_adjustment_factor", "float64", True),
+                ),
+                "price_basis": price_basis_for_adjustment(apply_adjustment),
+                "volume_basis": _VOLUME_BASIS,
+            }
         )
     ).hexdigest()
 
@@ -461,19 +522,25 @@ def _request_identity(
     start: date,
     end: date,
     *,
+    apply_adjustment: bool,
     provider_version: str,
 ) -> str:
     return hashlib.sha256(
         _canonical(
             {
-                "configuration_identity_sha256": _configuration_identity(),
+                "apply_adjustment": apply_adjustment,
+                "configuration_identity_sha256": _configuration_identity(
+                    apply_adjustment=apply_adjustment
+                ),
                 "contract_version": _CONTRACT_VERSION,
                 "end": end.isoformat(),
                 "interval": "1d",
-                "price_basis": _PRICE_BASIS,
+                "price_basis": price_basis_for_adjustment(apply_adjustment),
                 "provider": _PROVIDER,
                 "provider_version": provider_version,
-                "schema_identity_sha256": _schema_identity(),
+                "schema_identity_sha256": _schema_identity(
+                    apply_adjustment=apply_adjustment
+                ),
                 "start": start.isoformat(),
                 "instruments": list(symbols),
                 "volume_basis": _VOLUME_BASIS,
@@ -738,6 +805,7 @@ def _receipt_from_existing(
     start: date,
     end: date,
     request_identity_sha256: str,
+    apply_adjustment: bool,
     provider_version: str,
     outcome: str,
     held_descriptor: int | None = None,
@@ -776,6 +844,7 @@ def _receipt_from_existing(
             start=start,
             end=end,
             request_identity_sha256=request_identity_sha256,
+            apply_adjustment=apply_adjustment,
             provider_version=provider_version,
         )
         precommit_digest = _held_file_sha256(descriptor)
@@ -829,6 +898,7 @@ def _receipt_from_existing(
                 start=start,
                 end=end,
                 request_identity_sha256=request_identity_sha256,
+                apply_adjustment=apply_adjustment,
                 provider_version=provider_version,
             )
             _require_exact_private_file(
@@ -867,7 +937,7 @@ def _receipt_from_existing(
         retrieved_at=retrieved_at,
         provider=_PROVIDER,
         provider_version=provider_version,
-        price_basis=_PRICE_BASIS,
+        price_basis=price_basis_for_adjustment(apply_adjustment),
         volume_basis=_VOLUME_BASIS,
         row_count=table.num_rows,
         rows_by_instrument=tuple((symbol, counts[symbol]) for symbol in symbols),
@@ -1005,19 +1075,25 @@ def _parquet_metadata(
     start: date,
     end: date,
     request_identity_sha256: str,
+    apply_adjustment: bool,
     retrieved_at: datetime,
     provider_version: str,
 ) -> dict[bytes, bytes]:
     return {
-        b"configuration_identity_sha256": _configuration_identity().encode("ascii"),
+        b"apply_adjustment": str(apply_adjustment).lower().encode("ascii"),
+        b"configuration_identity_sha256": _configuration_identity(
+            apply_adjustment=apply_adjustment
+        ).encode("ascii"),
         b"contract_version": _CONTRACT_VERSION.encode("ascii"),
         b"end": end.isoformat().encode("ascii"),
-        b"price_basis": _PRICE_BASIS.encode("ascii"),
+        b"price_basis": price_basis_for_adjustment(apply_adjustment).encode("ascii"),
         b"provider": _PROVIDER.encode("ascii"),
         b"provider_version": provider_version.encode("ascii"),
         b"request_identity_sha256": request_identity_sha256.encode("ascii"),
         b"retrieved_at": retrieved_at.isoformat().encode("ascii"),
-        b"schema_identity_sha256": _schema_identity().encode("ascii"),
+        b"schema_identity_sha256": _schema_identity(
+            apply_adjustment=apply_adjustment
+        ).encode("ascii"),
         b"schema_version": _SCHEMA_VERSION.encode("ascii"),
         b"start": start.isoformat().encode("ascii"),
         b"instrument_keys": json.dumps(
@@ -1036,6 +1112,7 @@ def _validate_existing_table(
     start: date,
     end: date,
     request_identity_sha256: str,
+    apply_adjustment: bool,
     provider_version: str,
 ) -> tuple[datetime, dict[str, int]]:
     raw_metadata: object = table.schema.metadata
@@ -1054,6 +1131,7 @@ def _validate_existing_table(
         start=start,
         end=end,
         request_identity_sha256=request_identity_sha256,
+        apply_adjustment=apply_adjustment,
         retrieved_at=retrieved_at,
         provider_version=provider_version,
     ):
@@ -1078,6 +1156,12 @@ def _validate_existing_table(
             "low",
             "close",
             "volume",
+            "source_open",
+            "source_high",
+            "source_low",
+            "source_close",
+            "source_adjusted_close",
+            "source_adjustment_factor",
         }:
             raise ValueError
         identity = BharatStockInstrument(
@@ -1095,16 +1179,7 @@ def _validate_existing_table(
             or session > end
         ):
             raise ValueError
-        _validate_ohlcv_values(
-            (
-                record["open"],
-                record["high"],
-                record["low"],
-                record["close"],
-                record["volume"],
-            ),
-            ValueError,
-        )
+        _validate_projected_record(record, apply_adjustment=apply_adjustment)
         keys.append((symbol, session))
         counts[symbol] += 1
     positions = {symbol: position for position, symbol in enumerate(symbols)}
@@ -1113,6 +1188,46 @@ def _validate_existing_table(
     ):
         raise ValueError
     return retrieved_at, counts
+
+
+def _validate_projected_record(
+    record: Mapping[str, object], *, apply_adjustment: bool
+) -> None:
+    source_ohlc = tuple(
+        record[field]
+        for field in ("source_open", "source_high", "source_low", "source_close")
+    )
+    projected_ohlc = tuple(record[field] for field in ("open", "high", "low", "close"))
+    volume = record["volume"]
+    _validate_ohlcv_values((*source_ohlc, volume), ValueError)
+    _validate_ohlcv_values((*projected_ohlc, volume), ValueError)
+    source_adjusted_close = record["source_adjusted_close"]
+    source_adjustment_factor = record["source_adjustment_factor"]
+    _validate_optional_adjustment_fields(
+        source_adjusted_close, source_adjustment_factor, ValueError
+    )
+    if not apply_adjustment:
+        if projected_ohlc != source_ohlc:
+            raise ValueError
+        return
+    if source_adjustment_factor is None:
+        raise ValueError
+    factor = cast(float, source_adjustment_factor)
+    expected_adjusted_close = _factor_project(cast(float, source_ohlc[3]), factor)
+    if (
+        source_adjusted_close is not None
+        and source_adjusted_close != expected_adjusted_close
+    ):
+        raise ValueError
+    if projected_ohlc != tuple(
+        _factor_project(cast(float, value), factor) for value in source_ohlc
+    ):
+        raise ValueError
+
+
+def _factor_project(value: float, factor: float) -> float:
+    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
+        return float(Decimal(str(value)) * Decimal(str(factor)))
 
 
 def _data_schema() -> Any:
@@ -1127,6 +1242,12 @@ def _data_schema() -> Any:
             pa.field("low", pa.float64(), nullable=False),
             pa.field("close", pa.float64(), nullable=False),
             pa.field("volume", pa.int64(), nullable=False),
+            pa.field("source_open", pa.float64(), nullable=False),
+            pa.field("source_high", pa.float64(), nullable=False),
+            pa.field("source_low", pa.float64(), nullable=False),
+            pa.field("source_close", pa.float64(), nullable=False),
+            pa.field("source_adjusted_close", pa.float64(), nullable=True),
+            pa.field("source_adjustment_factor", pa.float64(), nullable=True),
         )
     )
 
@@ -1263,6 +1384,7 @@ def _parquet_table(
     start: date,
     end: date,
     request_identity_sha256: str,
+    apply_adjustment: bool,
     retrieved_at: datetime,
     provider_version: str,
 ) -> Any:
@@ -1272,6 +1394,7 @@ def _parquet_table(
             start=start,
             end=end,
             request_identity_sha256=request_identity_sha256,
+            apply_adjustment=apply_adjustment,
             retrieved_at=retrieved_at,
             provider_version=provider_version,
         )
@@ -1288,6 +1411,12 @@ def _parquet_table(
             "low": row[4],
             "close": row[5],
             "volume": row[6],
+            "source_open": row[7],
+            "source_high": row[8],
+            "source_low": row[9],
+            "source_close": row[10],
+            "source_adjusted_close": row[11],
+            "source_adjustment_factor": row[12],
         }
         for row in rows
     )

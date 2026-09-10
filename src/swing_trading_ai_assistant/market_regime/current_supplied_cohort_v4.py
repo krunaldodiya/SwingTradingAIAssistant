@@ -38,7 +38,11 @@ from swing_trading_ai_assistant.market_data.adjusted_daily.service_v3 import (
     adjusted_daily_request_identity_v3,
     adjusted_daily_schedule_identity_v3,
 )
-from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockClient,
+    BharatStockPriceBasis,
+    price_basis_for_adjustment,
+)
 from swing_trading_ai_assistant.market_data.current_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortManifestV1,
@@ -441,6 +445,8 @@ class _CurrentSamePassMemberDirectionCandidateV4:
     market_regime_report_identity_sha256: str
     canonical_cohort_identity_sha256: str
     schedule_identity_sha256: str
+    apply_adjustment: bool
+    price_basis: BharatStockPriceBasis
     decision_cutoff: datetime
     rows: tuple[_CurrentSamePassMemberDirectionRowV4, ...]
     direction_candidate_identity_sha256: str
@@ -716,6 +722,8 @@ _V4_TYPE_FIELDS_V1: Final = (
             "market_regime_report_identity_sha256",
             "canonical_cohort_identity_sha256",
             "schedule_identity_sha256",
+            "apply_adjustment",
+            "price_basis",
             "decision_cutoff",
             "rows",
             "direction_candidate_identity_sha256",
@@ -1228,6 +1236,20 @@ _V4_SCHEMA_FIELD_ROWS_V1: Final = (
                 "NOT_APPLICABLE",
                 "REQUIRED",
                 "LOWERCASE_64_HEX",
+            ),
+            (
+                "apply_adjustment",
+                "BOOLEAN",
+                "BOOLEAN",
+                "REQUIRED",
+                "EXACT_BOOLEAN",
+            ),
+            (
+                "price_basis",
+                "LITERAL",
+                "NOT_APPLICABLE",
+                "REQUIRED",
+                'Literal["BHARATSTOCK_SOURCE_REPORTED_OHLC","BHARATSTOCK_FACTOR_APPLIED_OHLC"]',
             ),
             (
                 "decision_cutoff",
@@ -2063,7 +2085,8 @@ def _adjusted_handoff_is_exact(
     if (
         handoff.contract_version != "provider-neutral-adjusted-daily-close@v3"
         or handoff.provider_id != "BHARATSTOCK"
-        or handoff.price_basis != "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+        or handoff.apply_adjustment is not request.apply_adjustment
+        or handoff.price_basis != price_basis_for_adjustment(request.apply_adjustment)
         or handoff.provider_source != "bharatstock-api@v1"
         or handoff.cohort_identity_sha256 != request.canonical_cohort_identity_sha256
         or handoff.request_identity_sha256 != request.plan22_request_identity_sha256
@@ -2097,6 +2120,8 @@ def _adjusted_handoff_is_exact(
             fact.mapping_valid_from,
             fact.mapping_valid_through,
             fact.mapping_identity,
+            fact.apply_adjustment,
+            fact.price_basis,
             fact.s0.session,
             fact.s20.session,
         )
@@ -2113,6 +2138,8 @@ def _adjusted_handoff_is_exact(
             member.mapping_valid_from,
             member.mapping_valid_through,
             member.mapping_identity,
+            request.apply_adjustment,
+            price_basis_for_adjustment(request.apply_adjustment),
             sessions[0].session,
             sessions[-1].session,
         )
@@ -2126,6 +2153,7 @@ _ADJUSTED_FAILURE_PAIRS: Final = {
             "REQUEST_SHAPE_INVALID",
             "PROVIDER_SELECTION_INVALID",
             "PRICE_BASIS_INVALID",
+            "ADJUSTMENT_MODE_INVALID",
             "DECISION_CUTOFF_INVALID",
             "SCHEDULE_INVALID",
             "SCHEDULE_IDENTITY_INVALID",
@@ -2425,8 +2453,8 @@ def _report_and_candidate(
                 break
             direction = _raw_direction(start.close, end.close)
             if direction != _raw_direction(
-                str(adjusted_member.s0.adjusted_close),
-                str(adjusted_member.s20.adjusted_close),
+                str(adjusted_member.s0.close),
+                str(adjusted_member.s20.close),
             ):
                 reasons.add("RAW_ADJUSTED_DIRECTION_CONFLICT")
                 break
@@ -2510,6 +2538,8 @@ def _report_and_candidate(
         "market_regime_report_identity_sha256": report.report_identity_sha256,
         "canonical_cohort_identity_sha256": request.canonical_cohort_identity_sha256,
         "schedule_identity_sha256": raw_grid.schedule_identity_sha256,
+        "apply_adjustment": request.apply_adjustment,
+        "price_basis": price_basis_for_adjustment(request.apply_adjustment),
         "decision_cutoff": request.decision_cutoff,
         "rows": tuple(rows),
     }
@@ -3674,12 +3704,14 @@ def _plan22_bridge(
         decision_cutoff=request.decision_cutoff,
         schedule_identity_sha256=request.plan22_schedule_identity_sha256,
         members=members,
+        apply_adjustment=request.apply_adjustment,
     )
     if request_identity != request.plan22_request_identity_sha256:
         raise ValueError("Plan22 request bridge mismatch")
     return {
         "provider_id": "BHARATSTOCK",
-        "price_basis": "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+        "price_basis": price_basis_for_adjustment(request.apply_adjustment),
+        "apply_adjustment": request.apply_adjustment,
         "decision_cutoff": request.decision_cutoff,
         "plan21_schedule": {
             "sessions": tuple(item.session for item in sessions),
@@ -4146,6 +4178,8 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             and getattr(request, "plan21_cohort_identity_sha256", None)
             == context.request.plan21_cohort_identity_sha256
             and getattr(request, "members", None) == context.request.members
+            and getattr(request, "apply_adjustment", None)
+            is context.request.apply_adjustment
         )
         ledger = context.component_ledger
         return {
@@ -4175,6 +4209,8 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             "adjusted_component_state": ledger[2].evidence_state,
             "adjusted_component_identity_sha256": ledger[2].primary_identity_sha256,
             "adjusted_component_reasons": ledger[2].reasons,
+            "apply_adjustment": context.request.apply_adjustment,
+            "price_basis": price_basis_for_adjustment(context.request.apply_adjustment),
             "request_matches": request_matches,
         }
 

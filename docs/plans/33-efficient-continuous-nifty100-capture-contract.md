@@ -3,18 +3,20 @@
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 > owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
-> `current-nifty100-bharatstock-capture@v2` selects the same official list
-> through versioned current-observation evidence and composes Plan30 V2.
+> `current-nifty100-bharatstock-capture@v3` selects the same official list
+> through versioned current-observation evidence and composes Plan30 V3.
 > The old Yahoo-specific pool, cadence, session and acknowledgement below
 > describe historical V1 only; they are not BharatStock requirements.
-> Dependent adjusted capture and release remain under the
-> [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold);
-> an incomplete retained revision is not successful price qualification.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for the new default mode.
+> Independent review and release requirements remain unchanged.
 
-V2 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
-source identities and retrieval times, then bind the ordered 100-member union
-and source observation to the exact capture request. Reuse must resolve that
-retained request/selection/revision binding before any source or provider call.
+V3 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
+source identities and retrieval times, then bind the ordered 100-member union,
+source observation and explicit price mode to the exact capture request.
+Opposite processing modes must not reuse the same selection/capture binding.
+Reuse must resolve the retained request/selection/revision binding before any
+source or provider call.
 Later observations of the same membership have distinct source provenance;
 they must not overwrite prior evidence or manufacture earlier knowledge.
 An incomplete capture still accounts for all 100 members, with no claim that

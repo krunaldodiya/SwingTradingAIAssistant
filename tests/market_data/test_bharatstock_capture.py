@@ -97,7 +97,9 @@ def _retain_schedule(root: Path) -> ExpectedSessionSchedule:
 
 
 def _request(
-    *members: BharatStockInstrument, parent: str | None = None
+    *members: BharatStockInstrument,
+    parent: str | None = None,
+    apply_adjustment: bool = False,
 ) -> core.CaptureRequestV2:
     schedule = _schedule()
     return core.CaptureRequestV2(
@@ -112,6 +114,7 @@ def _request(
         ),
         schedule_identity_sha256=core.schedule_identity_v2(schedule),
         parent_revision_sha256=parent,
+        apply_adjustment=apply_adjustment,
     )
 
 
@@ -317,7 +320,7 @@ def test_exact_reader_rejects_unadmitted_revision(tmp_path: Path) -> None:
     )
     pointer = (
         capture_root
-        / "bharatstock-capture-v2"
+        / "bharatstock-capture-v3"
         / "requests"
         / f"{captured.revision.request.request_identity_sha256}.json"
     )
@@ -577,7 +580,7 @@ def test_malformed_retained_revision_is_unavailable_not_an_internal_key_error(
         _request(), root, schedule_root, client=_Client()
     )
     identity = first.revision.revision_identity_sha256
-    path = root / "bharatstock-capture-v2" / "revisions" / f"{identity}.json"
+    path = root / "bharatstock-capture-v3" / "revisions" / f"{identity}.json"
     path.chmod(0o600)
     path.write_bytes(b"{}\n")
     path.chmod(0o400)
@@ -589,3 +592,90 @@ def test_malformed_retained_revision_is_unavailable_not_an_internal_key_error(
         == "STORE_UNAVAILABLE"
     )
     assert client.calls == []
+
+
+def test_price_mode_is_bound_to_current_request_and_revision_identities(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    source_request = _request()
+    adjusted_request = _request(apply_adjustment=True)
+    client = _Client()
+
+    source = core.capture_bharatstock_v2(
+        source_request, capture_root, schedule_root, client=client
+    )
+    adjusted = core.capture_bharatstock_v2(
+        adjusted_request, capture_root, schedule_root, client=client
+    )
+    source_reused = core.capture_bharatstock_v2(
+        source_request, capture_root, schedule_root, client=client
+    )
+
+    assert (
+        source_request.request_identity_sha256
+        != adjusted_request.request_identity_sha256
+    )
+    assert source_request.canonical_value()["apply_adjustment"] is False
+    assert adjusted_request.canonical_value()["apply_adjustment"] is True
+    assert source.revision.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert adjusted.revision.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    assert source.revision.volume_basis == "SOURCE_REPORTED"
+    assert adjusted.revision.volume_basis == "SOURCE_REPORTED"
+    assert (
+        source.revision.revision_identity_sha256
+        != adjusted.revision.revision_identity_sha256
+    )
+    assert source_reused.code == "REUSED"
+    assert len(client.calls) == 2
+
+
+def test_price_mode_cannot_use_other_mode_as_correction_parent(tmp_path: Path) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    source = core.capture_bharatstock_v2(
+        _request(), capture_root, schedule_root, client=_Client()
+    )
+    client = _Client()
+
+    result = core.capture_bharatstock_v2(
+        _request(
+            parent=source.revision.revision_identity_sha256,
+            apply_adjustment=True,
+        ),
+        capture_root,
+        schedule_root,
+        client=client,
+    )
+
+    assert result.code == "INSUFFICIENT_EVIDENCE"
+    assert result.reason == "PARENT_REVISION_MISMATCH"
+    assert client.calls == []
+
+
+def test_new_request_parser_rejects_predecessor_identity_without_writing() -> None:
+    request = _request()
+    predecessor = request.canonical_value()
+    predecessor.pop("apply_adjustment")
+    predecessor["contract_version"] = "bharatstock-capture@v2"
+    predecessor["schema_identity_sha256"] = (
+        "16a032ed40ed922c9d5d9a16c6abc3dff2297e12554ffce9b75f770b55136990"
+    )
+    predecessor["runtime_code_identity_sha256"] = (
+        "fcd99dbbfbf8b969d34d11d72bbcfd089f4dbaaf2ba883d7cadc47ba34e99f43"
+    )
+    predecessor["configuration_identity_sha256"] = (
+        "21cc3f28838938411836094184a77ad0d39b24fd0f110b30854978c4549f2ced"
+    )
+    predecessor.pop("request_identity_sha256")
+    predecessor["request_identity_sha256"] = core._digest(  # pyright: ignore[reportPrivateUsage]
+        core._canonical(predecessor)  # pyright: ignore[reportPrivateUsage]
+    )
+
+    with pytest.raises(ValueError, match="request JSON is invalid"):
+        core.parse_bharatstock_capture_request_v2(core._line(predecessor))  # pyright: ignore[reportPrivateUsage]

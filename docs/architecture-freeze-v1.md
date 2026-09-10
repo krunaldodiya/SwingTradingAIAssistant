@@ -51,10 +51,12 @@ and observation times; versioned successors do not reinterpret it.
 Upstox raw/current behavior remains separate. Neither the provider decision nor
 the 100-stock input-data check closes
 [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
-The [price/volume qualification hold](roadmap.md#bharatstock-price-and-volume-qualification-hold)
-blocks dependent BharatStock adjusted-data activation and release: real
-exchange reconciliation contradicted the candidate's basis assumptions.
-Passing arithmetic or repository checks does not resolve that source contract.
+The later [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+selects unchanged provider OHLCV by default, assuming for now that its adjustment
+is correct, with explicit one-time factor application only when requested.
+Volume is always source-reported and unchanged. This supersedes waiting for
+provider clarification before implementing the new mode; it neither relabels
+earlier failed extra-factor evidence nor waives independent review or release.
 
 ## Delivery priority overlay
 

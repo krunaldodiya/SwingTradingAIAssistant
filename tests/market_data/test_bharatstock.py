@@ -90,6 +90,89 @@ def test_preserves_raw_prices_and_non_unit_adjustment_with_inclusive_dates() -> 
     )
 
 
+def test_as_provided_projection_does_not_apply_non_unit_factor() -> None:
+    price = BharatStockDailyPrice(
+        _START,
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+        Decimal(102),
+        1000,
+        Decimal(51),
+        Decimal("0.5"),
+    )
+    assert price.project_ohlc() == (
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+        Decimal(102),
+    )
+    assert price.project_close() == Decimal(102)
+    assert price.project_ohlc(apply_adjustment=True) == (
+        Decimal(50),
+        Decimal(52),
+        Decimal(49),
+        Decimal(51),
+    )
+    assert price.project_close(apply_adjustment=True) == Decimal(51)
+    assert price.project_ohlc() == (
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+        Decimal(102),
+    )
+    assert price.volume == 1000
+
+
+def test_optional_adjustment_fields_do_not_block_as_provided_history() -> None:
+    row = {**_row("2026-08-27"), "adjusted_close": None, "adjustment_factor": None}
+    client = BharatStockClient(
+        api_key="test-key", transport=_Transport(_identity(), _page([row]))
+    )
+    price = client.history(_MEMBER, _START, _END).rows[0]
+    assert price.project_ohlc() == (
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+        Decimal(102),
+    )
+    with pytest.raises(ValueError):
+        price.project_ohlc(apply_adjustment=True)
+    with pytest.raises(ValueError):
+        price.project_close(apply_adjustment=True)
+
+
+def test_conflicting_adjustment_fields_only_block_factor_projection() -> None:
+    row = {**_row("2026-08-27"), "adjusted_close": 52}
+    client = BharatStockClient(
+        api_key="test-key", transport=_Transport(_identity(), _page([row]))
+    )
+    price = client.history(_MEMBER, _START, _END).rows[0]
+    assert price.project_close() == Decimal(102)
+    with pytest.raises(ValueError):
+        price.project_ohlc(apply_adjustment=True)
+    with pytest.raises(ValueError):
+        price.project_close(apply_adjustment=True)
+
+
+@pytest.mark.parametrize("mode", [1, None, "false"])
+def test_projection_rejects_non_boolean_mode(mode: object) -> None:
+    price = BharatStockDailyPrice(
+        _START,
+        Decimal(100),
+        Decimal(104),
+        Decimal(98),
+        Decimal(102),
+        1000,
+        Decimal(51),
+        Decimal("0.5"),
+    )
+    with pytest.raises(ValueError):
+        price.project_ohlc(apply_adjustment=mode)
+    with pytest.raises(ValueError):
+        price.project_close(apply_adjustment=mode)
+
+
 def test_daily_price_admission_ignores_callers_decimal_context() -> None:
     close = Decimal("3." + "0" * 62 + "9")
     # Exact half is 1.5 + 4.5e-63; 64 significant digits round the tie to even 4.
@@ -151,7 +234,6 @@ def test_rate_limit_is_sticky_and_never_retried() -> None:
     [
         [_row("2026-08-27"), _row("2026-08-27")],
         [_row("2026-08-26")],
-        [{**_row("2026-08-27"), "adjusted_close": 52}],
         [{**_row("2026-08-27"), "volume": True}],
     ],
 )

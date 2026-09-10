@@ -119,6 +119,7 @@ def _request(
     *,
     members: tuple[CurrentSamePassEquityMemberV4, ...] | None = None,
     cutoff: datetime = _CUTOFF,
+    apply_adjustment: bool = False,
 ) -> CurrentSamePassMarketRegimeRequestV4:
     cohort = (
         members
@@ -192,6 +193,7 @@ def _request(
             )
             for item in cohort
         ),
+        apply_adjustment=apply_adjustment,
     )
     request_identity = raw_daily._hash(
         {
@@ -208,6 +210,7 @@ def _request(
             "plan21_cohort_identity_sha256": plan21_identity,
             "canonical_cohort_identity_sha256": canonical_identity,
             "plan22_request_identity_sha256": plan22_identity,
+            "apply_adjustment": apply_adjustment,
         }
     )
     return CurrentSamePassMarketRegimeRequestV4(
@@ -225,6 +228,7 @@ def _request(
         canonical_identity,
         plan22_identity,
         request_identity,
+        apply_adjustment,
     )
 
 
@@ -294,6 +298,20 @@ def test_request_preserves_supplied_member_order_and_canonical_identity() -> Non
         != permuted.plan22_request_identity_sha256
     )
     assert canonical.request_identity_sha256 != permuted.request_identity_sha256
+
+
+def test_request_identity_binds_required_adjustment_mode() -> None:
+    source_reported = _request(1, apply_adjustment=False)
+    factor_applied = _request(1, apply_adjustment=True)
+
+    assert (
+        source_reported.request_identity_sha256
+        != factor_applied.request_identity_sha256
+    )
+    assert (
+        source_reported.plan22_request_identity_sha256
+        != factor_applied.plan22_request_identity_sha256
+    )
 
 
 def test_plan27_schedule_identity_binds_full_resolved_schedule_evidence() -> None:

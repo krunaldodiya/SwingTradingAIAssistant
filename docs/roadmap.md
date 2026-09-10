@@ -318,7 +318,7 @@ silently omitted or a partial list represented as complete.
 
 ### BharatStock price and volume qualification hold
 
-**2026-09-10 — FAILED qualification; dependent activation and release held.**
+**2026-09-10 historical finding — the extra-factor profile failed qualification.**
 After the initial unit-factor check, 20 bounded direct-provider requests
 covered 1,442 distinct instrument/session rows, including 953 non-unit rows.
 A real 1,410-row history traversed two price pages. The 691 overlapping row
@@ -340,16 +340,120 @@ proof of exchange-unadjusted volume.
 The owner-private assessment digest is
 `03fbbbd87e56b50593e069eab71187d3c980f76b5d1e83d062c3ea2d41c65ed1`.
 Raw/member observations, credentials and private paths are not published.
-Provider field/basis clarification or correction and an independently
-reconciled, accepted versioned profile are required before dependent
-BharatStock adjusted capture/research activation or release. Do not simply
-drop the factor, relabel data, repair prices by inference, or use a fallback.
-This hold does not invalidate truthful historical/negative reads or unrelated
-authorized Upstox raw work; the separate security/release controls remain.
+This finding led to a hold requiring provider field/basis clarification or
+correction and an independently reconciled profile before dependent activation.
+The owner subsequently selected the explicit as-provided operating assumption
+below instead of waiting for that clarification. This does not turn the earlier
+qualification or exact-candidate review failures into passes, establish that
+unchanged provider OHLCV is wrong, or authorize relabelling old evidence.
 
-The separately requested September 10 capture still retained 100
-`EMPTY_HISTORY` outcomes and zero prices. The historical-window qualification
-above was not a retry of that capture and does not make it successful.
+The September 10 governed capture at 17:14:51 IST retained 100
+`EMPTY_HISTORY` outcomes and zero prices. That immutable negative revision
+remains unchanged. Neither historical-window qualification nor later source
+availability retroactively makes that earlier capture successful.
+
+### Accepted as-provided OHLCV decision and member isolation
+
+**2026-09-10 — ACCEPTED owner direction; locally implemented, not reviewed or released.**
+The repository owner prioritized finishing the existing BharatStock daily-OHLCV
+replacement for owner-private current research, assuming for now that the
+provider supplies correctly adjusted OHLCV. The owner explicitly chose not to
+wait for further methodology clarification and to revisit the interpretation
+if later concrete evidence shows it is incorrect. This is an accepted working
+assumption, not independent verification of the provider's adjustment method.
+
+The chosen processing contract is:
+
+- Default `apply_adjustment=False`: use the supplied `open`, `high`, `low`,
+  `close` and `volume` unchanged. Do not silently substitute `adjusted_close`
+  for `close` while leaving open/high/low on another basis.
+- Explicit `apply_adjustment=True`: apply the reported factor once to the
+  original supplied OHLC. Never multiply already-processed output again.
+  Enabling this mode does not establish that the reported factor is correct.
+- Preserve the original adjustment fields separately from processed prices.
+  The API has one `volume` field, not a separate adjusted-volume field; this
+  price option does not perform volume adjustment or certify exchange-raw units.
+- Bind the processing mode to request/dataset identities and consumer metadata.
+  Changing mode produces a distinct result; existing immutable evidence keeps
+  its original values, labels, timestamps and interpretation.
+- Keep identity, session/date, required-value, storage, shared-failure and
+  provenance checks. The accepted assumption does not permit fabricated values,
+  source fallback, raw/adjusted mixing or false historical-availability claims.
+
+This decision supersedes waiting for clarification as an implementation
+prerequisite for the new as-provided mode. It does not approve the old
+extra-factor transformation or erase its retained comparison evidence.
+Revisit the selected mode when an actual discrepancy, authoritative field
+definition or provider correction invalidates the working assumption; document
+the correction and reprocess affected results under a new identity rather than
+silently changing earlier results. No new API calls, recurring schedule,
+mailbox checks or support outreach are authorized by this decision.
+
+The original Yahoo-era
+[Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+goal remains mandatory: for 100 requested stocks with sufficient evidence for
+97 and insufficient evidence for 3, expose usable independent research for
+the 97 plus explicit outcomes/reasons for the 3, with exact 97/100 coverage.
+Apply sufficiency per feature; do not erase an independently supported fact
+because another calculation lacks history. Withhold only conclusions whose
+actual prerequisites are missing, and preserve whole-list aggregate
+denominators and coverage limits. A successful 100-stock download alone does
+not prove this end-to-end behavior.
+
+The source assumption is not a security verdict, review waiver or completed
+merge. Required independent review and protected release controls remain;
+issue closure must describe actual delivered behavior. The separate historical
+qualification status remains truthful rather than being changed to “passed”.
+
+Local implementation now preserves supplied prices by default, offers explicit
+one-time factor application, leaves volume unchanged, and binds that choice
+through downloader, capture and research consumers. The 97/100 independent-fact
+case is exercised with three explicit missing-member outcomes. A clean installed
+wheel exercised both price modes, credential-free CLI reuse, the original
+26-row Yahoo dataset reader, and the retained 100-member negative BharatStock V2
+revision without changing historical bytes or labels. No live provider call was
+made for these checks.
+
+The first full covered run recorded 4,509 passes and five failures at 87.49%
+coverage. One missed packet-test mode argument was corrected and its scenario
+passed. The other four checks require the absent owner-private
+`~/SwingTradingAIAssistantData/catalog.duckdb`; no replacement catalog was found
+under that data root. This is a separate historical-data prerequisite, not a
+return of the provider-adjustment wait. A full local green, independent current
+approval, hosted checks, merge and issue closure are not claimed.
+
+### September 10 source preservation and evening check guidance
+
+**2026-09-10 — source preservation complete; qualified admission still held.**
+The separate 19:02 IST observation also returned no September 10 rows.
+After the owner reported a publication email, the authorized replacement
+observation ran at **19:46:24–19:49:04 IST** and retained all 100 exact-day
+history rows plus 100 matching latest-price snapshots. There were no missing,
+late or unattempted members. The
+[published observation receipt](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5620351912)
+records the verified scope, accounting and immutable evidence digest:
+`cd9f2d62eb493aadb584f26b14dbbea3d9a5e9ece504f4ebf496dca416512e6f`.
+
+This resolves missing September 10 source data, not the price/volume basis
+defect above. The retained observations are unqualified source evidence, not
+a Plan-30/33 production revision or approved adjusted research input. Earlier
+negative evidence remains intact; no provider first-publication time is inferred.
+The waiting 20:00 IST one-shot was cancelled before acquisition and replaced,
+not duplicated. No further acquisition remains scheduled or authorized.
+
+**Accepted operational guidance — repository owner, 2026-09-10:** around
+**20:00 IST on trading days** is a practical time to check that day's data,
+not a guaranteed publication deadline. This follows the observed availability
+above and the provider reply supplied by the owner: publication follows
+exchange end-of-day reporting, without a promised fixed hour. Verify each
+returned record's trading date against the requested session; “latest” alone
+does not establish current-day availability. Missing current-day rows remain
+explicitly unavailable rather than being replaced with older prices.
+
+This is guidance, not an implemented recurring schedule, a new capture cutoff,
+or permission for automatic polling/retries. Any later acquisition requires
+its own authorized bounds and truthful observation times. The qualification,
+independent-review and protected-release gates remain unchanged.
 
 ### Versioned provider behavior
 

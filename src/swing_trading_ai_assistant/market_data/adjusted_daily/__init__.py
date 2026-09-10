@@ -1,5 +1,6 @@
 """Adjusted daily close contracts: active BharatStock V3 and archived Yahoo readers."""
 
+from ..bharatstock import PRICE_BASIS
 from .service import (
     AdjustedCloseFact,
     AdjustedDailyCloseFailure,
@@ -20,7 +21,6 @@ from .service import (
 )
 from .service_v3 import (
     MAPPING_VERSION_V3,
-    PRICE_BASIS,
     PROVIDER_ID,
     V3_CONTRACT_VERSION,
     AdjustedDailyCloseHandoffV3,

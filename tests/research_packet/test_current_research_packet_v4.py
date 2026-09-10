@@ -85,13 +85,14 @@ def _member(symbol: str = "TCS", isin: str = "INE467B01029") -> Any:
     )
 
 
-def _request(*members: Any) -> Any:
+def _request(*members: Any, apply_adjustment: bool = False) -> Any:
     api = _api()
     return api.CurrentSuppliedCohortResearchPacketRequestV4(
         decision_cutoff=_CUTOFF,
         cohort_selected_at=_SELECTED_AT,
         members=tuple(members),
         market_context_identity_sha256="b" * 64,
+        apply_adjustment=apply_adjustment,
     )
 
 
@@ -160,6 +161,7 @@ def _packet_builder_inputs(tmp_path: Path) -> tuple[Any, Any, Any, Any, Any]:
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=v3_request.apply_adjustment,
     )
     event_test = _event_test_module()
     event_failure = event_test._parse(event_test._api(), b"")
@@ -212,6 +214,7 @@ def test_packet_industry_ledger_and_source_preserve_schema_bound_url(
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=v3_request.apply_adjustment,
     )
 
     ledger, source, projection, reasons = packet_module._project_industry(
@@ -268,6 +271,20 @@ def test_request_rejects_plan27_nse_symbol_above_maximum() -> None:
         _request(invalid_member)
 
 
+def test_packet_request_identity_binds_adjustment_mode() -> None:
+    member = _member()
+
+    source_reported = _request(member, apply_adjustment=False)
+    factor_applied = _request(member, apply_adjustment=True)
+
+    assert (
+        source_reported.request_identity_sha256
+        != factor_applied.request_identity_sha256
+    )
+    assert source_reported.apply_adjustment is False
+    assert factor_applied.apply_adjustment is True
+
+
 @pytest.mark.parametrize("cohort_case", ("empty", "duplicate_isin", "duplicate_symbol"))
 def test_request_rejects_empty_duplicate_and_noncanonical_cohorts(
     cohort_case: str,
@@ -299,6 +316,7 @@ def test_request_rejects_non_utc_cutoff_and_invalid_member_interval() -> None:
             cohort_selected_at=_SELECTED_AT,
             members=(member,),
             market_context_identity_sha256="b" * 64,
+            apply_adjustment=False,
         )
     with pytest.raises((TypeError, ValueError)):
         _request(invalid_member)
@@ -981,6 +999,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         cohort_selected_at=event_test._KNOWN_AT,
         members=request_members,
         market_context_identity_sha256="b" * 64,
+        apply_adjustment=False,
     )
     projection = packet_module._validated_redacted_events(request, retained)
     assert projection is not None
@@ -992,6 +1011,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         cohort_selected_at=request.cohort_selected_at,
         members=tuple(reversed(request.members)),
         market_context_identity_sha256=request.market_context_identity_sha256,
+        apply_adjustment=request.apply_adjustment,
     )
     reordered_projection = packet_module._validated_redacted_events(
         reordered_request, retained
@@ -1009,6 +1029,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         cohort_selected_at=event_test._KNOWN_AT,
         members=request_members,
         market_context_identity_sha256="b" * 64,
+        apply_adjustment=False,
     )
     ledger, source, stale_projection, stale_reasons = packet_module._project_events(
         stale_request, retained
@@ -1098,6 +1119,7 @@ def test_plan25_retained_archive_is_revalidated_current_and_stale_by_packet(
         cohort_selected_at=event_test._KNOWN_AT - timedelta(days=1),
         members=request_members,
         market_context_identity_sha256="b" * 64,
+        apply_adjustment=False,
     )
     future_ledger, future_source, future_projection, future_reasons = (
         packet_module._project_events(future_request, retained)
@@ -1273,6 +1295,7 @@ def test_packet_revalidates_both_current_event_bom_states_and_rejects_cross_pair
         cohort_selected_at=event_test._CURRENT_KNOWN_AT,
         members=request_members,
         market_context_identity_sha256="b" * 64,
+        apply_adjustment=False,
     )
     projection = packet_module._validated_redacted_events(request, retained)
     assert projection is not None
@@ -1326,6 +1349,7 @@ def test_representative_maximum_packet_archives_50_members_10000_events_and_36mi
         cohort_selected_at=private_context.request.cohort_selected_at,
         members=private_context.request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=private_context.request.apply_adjustment,
     )
 
     event_test = _event_test_module()
@@ -1537,6 +1561,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=v3_request.apply_adjustment,
     )
     event_test = _event_test_module()
     event_api = event_test._api()
@@ -1913,6 +1938,7 @@ def test_public_packet_builder_archives_no_trade_event_failure_and_rejects_forge
             cohort_selected_at=raw_private_context.request.cohort_selected_at,
             members=raw_private_context.request.members,
             market_context_identity_sha256=raw_context.context_identity_sha256,
+            apply_adjustment=raw_private_context.request.apply_adjustment,
         )
         raw_industry_failure = (
             industry_test._api().reduce_current_industry_participation_v4(
@@ -2029,6 +2055,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=v3_request.apply_adjustment,
     )
     event_test = _event_test_module()
     event_api = event_test._api()
@@ -2211,7 +2238,7 @@ def test_public_packet_builder_archives_prior_date_event_as_no_trade(
                 "BOUND",
                 None,
                 "DETERMINISTIC_SAME_PASS_MARKET_REGIME",
-                None,
+                "BHARATSTOCK_SOURCE_REPORTED_OHLC",
             ),
             (
                 2,
@@ -2411,6 +2438,7 @@ def test_packet_rejects_plan25_failure_with_multiple_reasons(tmp_path: Path) -> 
         cohort_selected_at=v3_request.cohort_selected_at,
         members=v3_request.members,
         market_context_identity_sha256=context.context_identity_sha256,
+        apply_adjustment=v3_request.apply_adjustment,
     )
     event_api = _event_test_module()._api()
     multi_reason = event_api.CurrentEventNoticeFailureV1(

@@ -1,7 +1,8 @@
 """Direct BharatStock adjusted-daily-close handoff for the active live path.
 
-This boundary consumes only BharatStock's canonical ISIN/exchange history.  It
-keeps factor-adjusted facts separate from Plan-27's Upstox raw OHLCV evidence.
+This boundary consumes only BharatStock's canonical ISIN/exchange history. It
+binds the request-selected source-reported or factor-applied close projection,
+separately from Plan-27's Upstox raw OHLCV evidence.
 """
 
 from __future__ import annotations
@@ -12,23 +13,24 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import Decimal
 from typing import Final, Literal, TypeAlias, cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
-    PRICE_BASIS,
     PROVIDER_SOURCE,
     BharatStockClient,
     BharatStockDailyPrice,
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
+    BharatStockPriceBasis,
+    price_basis_for_adjustment,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     exact_nse_schedule_source_release_pair_v1,
 )
 
-from .service import AdjustedCloseFact, AdjustedDailyCloseFailure
+from .service import AdjustedDailyCloseFailure
 
 V3_CONTRACT_VERSION: Final = "provider-neutral-adjusted-daily-close@v3"
 PROVIDER_ID: Final = "BHARATSTOCK"
@@ -70,8 +72,16 @@ class AdjustedDailyInstrumentV3:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectedCloseFactV3:
+    """One close projected under the request's explicit BharatStock price mode."""
+
+    session: date
+    close: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class AdjustedDailyMemberFactsV3:
-    """Two adjusted-close facts plus the exact BharatStock response provenance."""
+    """Two selected-mode close facts with exact BharatStock response provenance."""
 
     isin: str
     exchange: Literal["NSE", "BSE"]
@@ -85,8 +95,10 @@ class AdjustedDailyMemberFactsV3:
     mapping_valid_from: date
     mapping_valid_through: date | None
     mapping_identity: str
-    s0: AdjustedCloseFact
-    s20: AdjustedCloseFact
+    apply_adjustment: bool
+    price_basis: BharatStockPriceBasis
+    s0: ProjectedCloseFactV3
+    s20: ProjectedCloseFactV3
     source_retrieved_at: datetime
     response_sha256s: tuple[str, ...]
     provider_request_count: int
@@ -94,11 +106,12 @@ class AdjustedDailyMemberFactsV3:
 
 @dataclass(frozen=True, slots=True)
 class AdjustedDailyCloseHandoffV3:
-    """Complete, factor-adjusted direct-provider handoff for an admitted cohort."""
+    """Complete direct-provider handoff in one explicit price-projection mode."""
 
     contract_version: Literal["provider-neutral-adjusted-daily-close@v3"]
     provider_id: Literal["BHARATSTOCK"]
-    price_basis: Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
+    apply_adjustment: bool
+    price_basis: BharatStockPriceBasis
     provider_source: Literal["bharatstock-api@v1"]
     retrieved_at: datetime
     temporal_label: Literal["CURRENT_OBSERVATION", "REVISED_NON_PIT"]
@@ -133,6 +146,8 @@ class _RequestV3:
     decision_cutoff: datetime
     cohort_identity_sha256: str
     request_identity_sha256: str
+    apply_adjustment: bool
+    price_basis: BharatStockPriceBasis
     schedule_evidence_sha256: str
     schedule_source: ScheduleSourceV3
     schedule_source_release: str
@@ -164,7 +179,7 @@ def acquire_adjusted_daily_close_v3(
                 return AdjustedDailyCloseFailure("INSUFFICIENT_DATA", error.category)
             return AdjustedDailyCloseFailure("PROVIDER_FAILURE", error.category)
 
-        fact = _member_facts(member, history, parsed.sessions)
+        fact = _member_facts(member, history, parsed.sessions, parsed.apply_adjustment)
         if isinstance(fact, AdjustedDailyCloseFailure):
             return fact
         facts.append(fact)
@@ -173,7 +188,8 @@ def acquire_adjusted_daily_close_v3(
     without_identity = AdjustedDailyCloseHandoffV3(
         contract_version=V3_CONTRACT_VERSION,
         provider_id=PROVIDER_ID,
-        price_basis=PRICE_BASIS,
+        apply_adjustment=parsed.apply_adjustment,
+        price_basis=parsed.price_basis,
         provider_source=PROVIDER_SOURCE,
         retrieved_at=retrieved_at,
         temporal_label=(
@@ -272,15 +288,19 @@ def adjusted_daily_request_identity_v3(
     decision_cutoff: datetime,
     schedule_identity_sha256: str,
     members: Sequence[AdjustedDailyInstrumentV3 | AdjustedDailyMemberFactsV3],
+    apply_adjustment: bool,
 ) -> str:
-    """Bind the original supplied member order and direct mapping semantics."""
+    """Bind direct mapping semantics and the explicit close-projection mode."""
+    if type(apply_adjustment) is not bool:
+        raise ValueError("apply_adjustment must be bool")
     return _identity(
         {
+            "apply_adjustment": apply_adjustment,
             "cohort_identity_sha256": cohort_identity_sha256,
             "contract_version": V3_CONTRACT_VERSION,
             "decision_cutoff": _instant(decision_cutoff),
             "instruments": [_member_identity_value(member) for member in members],
-            "price_basis": PRICE_BASIS,
+            "price_basis": price_basis_for_adjustment(apply_adjustment),
             "provider_id": PROVIDER_ID,
             "schedule_identity_sha256": schedule_identity_sha256,
         }
@@ -293,6 +313,7 @@ def adjusted_daily_close_handoff_identity_v3(
     """Bind fact values, actual response hashes, and provider observation times."""
     return _identity(
         {
+            "apply_adjustment": handoff.apply_adjustment,
             "cohort_identity_sha256": handoff.cohort_identity_sha256,
             "comparison_session": handoff.comparison_session.isoformat(),
             "contract_version": handoff.contract_version,
@@ -304,6 +325,8 @@ def adjusted_daily_close_handoff_identity_v3(
             "members": [
                 {
                     **_member_identity_value(member),
+                    "apply_adjustment": member.apply_adjustment,
+                    "price_basis": member.price_basis,
                     "provider_request_count": member.provider_request_count,
                     "response_sha256s": list(member.response_sha256s),
                     "s0": _fact_value(member.s0),
@@ -337,7 +360,8 @@ def adjusted_daily_close_handoff_is_valid_v3(handoff: object) -> bool:
     if (
         value.contract_version != V3_CONTRACT_VERSION
         or value.provider_id != PROVIDER_ID
-        or value.price_basis != PRICE_BASIS
+        or type(value.apply_adjustment) is not bool
+        or value.price_basis != price_basis_for_adjustment(value.apply_adjustment)
         or value.provider_source != PROVIDER_SOURCE
         or not _utc(value.retrieved_at)
         or not _utc(value.decision_cutoff)
@@ -376,6 +400,8 @@ def adjusted_daily_close_handoff_is_valid_v3(handoff: object) -> bool:
         return False
     if any(
         not _member_fact_is_valid(member, value.schedule_sessions)
+        or member.apply_adjustment is not value.apply_adjustment
+        or member.price_basis != value.price_basis
         for member in value.members
     ) or not _members_non_overlapping(value.members):
         return False
@@ -384,6 +410,7 @@ def adjusted_daily_close_handoff_is_valid_v3(handoff: object) -> bool:
         decision_cutoff=value.decision_cutoff,
         schedule_identity_sha256=value.schedule_identity_sha256,
         members=value.members,
+        apply_adjustment=value.apply_adjustment,
     ):
         return False
     return value.handoff_identity_sha256 == adjusted_daily_close_handoff_identity_v3(
@@ -432,7 +459,10 @@ def _parse_request(request: object) -> _RequestV3 | AdjustedDailyCloseFailure:
         return _invalid("REQUEST_SHAPE_INVALID")
     if mapping.get("provider_id") != PROVIDER_ID:
         return _invalid("PROVIDER_SELECTION_INVALID")
-    if mapping.get("price_basis") != PRICE_BASIS:
+    apply_adjustment = mapping.get("apply_adjustment")
+    if type(apply_adjustment) is not bool:
+        return _invalid("ADJUSTMENT_MODE_INVALID")
+    if mapping.get("price_basis") != price_basis_for_adjustment(apply_adjustment):
         return _invalid("PRICE_BASIS_INVALID")
     cutoff = mapping.get("decision_cutoff")
     if not _utc(cutoff):
@@ -453,6 +483,7 @@ def _parse_request(request: object) -> _RequestV3 | AdjustedDailyCloseFailure:
         decision_cutoff=cast(datetime, cutoff),
         schedule_identity_sha256=schedule_identity,
         members=members_tuple,
+        apply_adjustment=apply_adjustment,
     )
     if request_identity != expected:
         return _invalid("REQUEST_IDENTITY_INVALID")
@@ -460,6 +491,8 @@ def _parse_request(request: object) -> _RequestV3 | AdjustedDailyCloseFailure:
         cast(datetime, cutoff),
         cast(str, cohort_identity),
         cast(str, request_identity),
+        apply_adjustment,
+        price_basis_for_adjustment(apply_adjustment),
         evidence,
         source,
         release,
@@ -613,7 +646,10 @@ def _member_from_mapping(
 
 
 def _member_facts(
-    member: AdjustedDailyInstrumentV3, history: object, sessions: tuple[date, ...]
+    member: AdjustedDailyInstrumentV3,
+    history: object,
+    sessions: tuple[date, ...],
+    apply_adjustment: bool,
 ) -> AdjustedDailyMemberFactsV3 | AdjustedDailyCloseFailure:
     if type(history) is not BharatStockHistory:
         return AdjustedDailyCloseFailure(
@@ -638,7 +674,7 @@ def _member_facts(
             "INSUFFICIENT_DATA", "PROVIDER_HISTORY_INVALID"
         )
     for row, session in zip(value.rows, sessions, strict=True):
-        if not _price_is_valid(row, session):
+        if not _price_is_valid(row, session, apply_adjustment):
             return AdjustedDailyCloseFailure(
                 "INSUFFICIENT_DATA", "PROVIDER_FACTOR_INVALID"
             )
@@ -655,31 +691,37 @@ def _member_facts(
         mapping_valid_from=member.mapping_valid_from,
         mapping_valid_through=member.mapping_valid_through,
         mapping_identity=member.mapping_identity,
-        s0=AdjustedCloseFact(sessions[0], value.rows[0].adjusted_close),
-        s20=AdjustedCloseFact(sessions[-1], value.rows[-1].adjusted_close),
+        apply_adjustment=apply_adjustment,
+        price_basis=price_basis_for_adjustment(apply_adjustment),
+        s0=ProjectedCloseFactV3(
+            sessions[0], value.rows[0].project_close(apply_adjustment=apply_adjustment)
+        ),
+        s20=ProjectedCloseFactV3(
+            sessions[-1],
+            value.rows[-1].project_close(apply_adjustment=apply_adjustment),
+        ),
         source_retrieved_at=value.retrieved_at,
         response_sha256s=value.response_sha256s,
         provider_request_count=value.request_count,
     )
 
 
-def _price_is_valid(row: object, session: date) -> bool:
-    if type(row) is not BharatStockDailyPrice:
+def _price_is_valid(row: object, session: date, apply_adjustment: bool) -> bool:
+    if type(row) is not BharatStockDailyPrice or type(apply_adjustment) is not bool:
         return False
     value = row
-    prices = (
-        value.open,
-        value.high,
-        value.low,
-        value.close,
-        value.adjusted_close,
-        value.adjustment_factor,
-    )
+    prices = (value.open, value.high, value.low, value.close)
+    adjustment_fields = (value.adjusted_close, value.adjustment_factor)
     if (
         value.session != session
         or any(
             type(price) is not Decimal or not price.is_finite() or price <= 0
             for price in prices
+        )
+        or any(
+            price is not None
+            and (type(price) is not Decimal or not price.is_finite() or price <= 0)
+            for price in adjustment_fields
         )
         or type(value.volume) is not int
         or value.volume < 0
@@ -689,8 +731,11 @@ def _price_is_valid(row: object, session: date) -> bool:
         <= value.high
     ):
         return False
-    with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
-        return value.adjusted_close == value.close * value.adjustment_factor
+    try:
+        value.project_close(apply_adjustment=apply_adjustment)
+    except ValueError:
+        return False
+    return True
 
 
 def _member_fact_is_valid(member: object, sessions: tuple[date, ...]) -> bool:
@@ -709,14 +754,16 @@ def _member_fact_is_valid(member: object, sessions: tuple[date, ...]) -> bool:
         or value.mapping_valid_from > sessions[0]
         or value.mapping_valid_through is not None
         and value.mapping_valid_through < sessions[-1]
-        or type(value.s0) is not AdjustedCloseFact
-        or type(value.s20) is not AdjustedCloseFact
+        or type(value.apply_adjustment) is not bool
+        or value.price_basis != price_basis_for_adjustment(value.apply_adjustment)
+        or type(value.s0) is not ProjectedCloseFactV3
+        or type(value.s20) is not ProjectedCloseFactV3
         or value.s0.session != sessions[0]
         or value.s20.session != sessions[-1]
         or any(
-            type(fact.adjusted_close) is not Decimal
-            or not fact.adjusted_close.is_finite()
-            or fact.adjusted_close <= 0
+            type(fact.close) is not Decimal
+            or not fact.close.is_finite()
+            or fact.close <= 0
             for fact in (value.s0, value.s20)
         )
         or not _utc(value.source_retrieved_at)
@@ -812,9 +859,9 @@ def _member_identity_value(
     }
 
 
-def _fact_value(fact: AdjustedCloseFact) -> dict[str, str]:
+def _fact_value(fact: ProjectedCloseFactV3) -> dict[str, str]:
     return {
-        "adjusted_close": str(fact.adjusted_close),
+        "close": str(fact.close),
         "session": fact.session.isoformat(),
     }
 

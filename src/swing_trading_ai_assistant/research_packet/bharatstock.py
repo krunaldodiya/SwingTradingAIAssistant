@@ -7,20 +7,25 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
+    FACTOR_APPLIED_PRICE_BASIS,
     PRICE_BASIS,
     BharatStockHistory,
     BharatStockInstrument,
+    BharatStockPriceBasis,
 )
 from swing_trading_ai_assistant.market_data.bharatstock_capture import (
-    CaptureRevisionV2,
+    RetainedCaptureRevisionV2,
     validate_capture_revision_v2,
 )
 from swing_trading_ai_assistant.market_structure import current_live as structure
 
 _CONTRACT = "bharatstock-retained-research-packet@v1"
+_RetainedPriceBasis: TypeAlias = (
+    BharatStockPriceBasis | Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
+)
 
 
 def _wire(value: object) -> object:
@@ -51,13 +56,9 @@ def _identity(value: object) -> str:
     ).hexdigest()
 
 
-def _positive(value: Decimal) -> bool:
-    return value.is_finite() and value > 0
-
-
 @dataclass(frozen=True, slots=True)
 class BharatStockAdjustedBarV1:
-    """One factor-adjusted BharatStock daily OHLC bar, never an Upstox raw bar."""
+    """One selected-basis BharatStock bar, never an Upstox raw bar."""
 
     session: date
     open: Decimal
@@ -86,15 +87,20 @@ class BharatStockPriceActionFactV1:
 
 @dataclass(frozen=True, slots=True)
 class BharatStockAdjustedMarketStructureFactV1:
-    """Structure calculation explicitly sourced from adjusted BharatStock bars."""
+    """Structure calculation bound to the selected BharatStock price mode."""
 
-    price_basis: Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
+    price_basis: _RetainedPriceBasis
     adjusted_bar_identities_sha256: tuple[str, ...]
     calculation: structure.CurrentMarketStructureMemberV1
 
     def __post_init__(self) -> None:
         if (
-            self.price_basis != PRICE_BASIS
+            self.price_basis
+            not in {
+                PRICE_BASIS,
+                FACTOR_APPLIED_PRICE_BASIS,
+                "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+            }
             or len(self.adjusted_bar_identities_sha256) != 21
             or any(
                 type(item) is not str
@@ -110,7 +116,7 @@ class BharatStockAdjustedMarketStructureFactV1:
 @dataclass(frozen=True, slots=True)
 class BharatStockResearchMemberV1:
     member: BharatStockInstrument
-    price_basis: Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
+    price_basis: _RetainedPriceBasis
     evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE", "NOT_ATTEMPTED"]
     reason: str | None
     adjusted_bars: tuple[BharatStockAdjustedBarV1, ...] | None
@@ -139,7 +145,7 @@ class BharatStockResearchPacketV1:
     contract_version: Literal["bharatstock-retained-research-packet@v1"]
     revision_identity_sha256: str
     selection_identity_sha256: str
-    price_basis: Literal["BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"]
+    price_basis: _RetainedPriceBasis
     shared_failure: str | None
     coverage: BharatStockResearchCoverageV1
     aggregate_evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"]
@@ -158,7 +164,7 @@ def _adjusted_bars(
     member: BharatStockInstrument,
     history: BharatStockHistory,
     sessions: tuple[date, ...],
-    revision: CaptureRevisionV2,
+    revision: RetainedCaptureRevisionV2,
 ) -> tuple[BharatStockAdjustedBarV1, ...] | None:
     if (
         not sessions
@@ -168,30 +174,22 @@ def _adjusted_bars(
         return None
     bars: list[BharatStockAdjustedBarV1] = []
     for session, row in zip(sessions, history.rows, strict=True):
-        factor = row.adjustment_factor
-        values = (row.open, row.high, row.low, row.close, row.adjusted_close)
-        if (
-            row.session != session
-            or not _positive(factor)
-            or not all(_positive(value) for value in values)
-        ):
+        if row.session != session:
             return None
-        raw_open, raw_high, raw_low, raw_close, adjusted_close = values
-        if (
-            raw_high < max(raw_open, raw_close)
-            or raw_low > min(raw_open, raw_close)
-            or adjusted_close != raw_close * factor
-            or type(row.volume) is not int
-            or row.volume < 0
-        ):
+        try:
+            row.__post_init__()
+            open_, high, low, close = row.project_ohlc(
+                apply_adjustment=revision.request.apply_adjustment
+            )
+        except ValueError:
             return None
         bars.append(
             BharatStockAdjustedBarV1(
                 session,
-                raw_open * factor,
-                raw_high * factor,
-                raw_low * factor,
-                adjusted_close,
+                open_,
+                high,
+                low,
+                close,
                 row.volume,
                 _identity(
                     {
@@ -222,8 +220,9 @@ def _adjusted_bars(
 def _market_structure(
     member: BharatStockInstrument,
     bars: tuple[BharatStockAdjustedBarV1, ...],
+    price_basis: _RetainedPriceBasis,
 ) -> BharatStockAdjustedMarketStructureFactV1:
-    """Calculate structure over explicitly adjusted, provider-neutral math bars."""
+    """Calculate structure over the selected provider-neutral math bars."""
     adjusted_bars = tuple(
         structure.MarketStructureMathBarV1(
             session=bar.session,
@@ -245,7 +244,7 @@ def _market_structure(
         )
     )
     return BharatStockAdjustedMarketStructureFactV1(
-        price_basis=PRICE_BASIS,
+        price_basis=price_basis,
         adjusted_bar_identities_sha256=tuple(
             bar.source_row_identity_sha256 for bar in bars
         ),
@@ -276,18 +275,19 @@ def _price_action(
 
 
 def build_bharatstock_research_packet_v1(
-    revision: CaptureRevisionV2,
+    revision: RetainedCaptureRevisionV2,
 ) -> BharatStockResearchPacketV1:
-    """Build independent adjusted-basis facts from an exact retained capture only."""
+    """Build independent selected-basis facts from an exact retained capture."""
     with localcontext(Context(prec=64, rounding=ROUND_HALF_EVEN)):
         return _build_bharatstock_research_packet_v1(revision)
 
 
 def _build_bharatstock_research_packet_v1(
-    revision: CaptureRevisionV2,
+    revision: RetainedCaptureRevisionV2,
 ) -> BharatStockResearchPacketV1:
     validate_capture_revision_v2(revision)
     request = revision.request
+    price_basis = cast(_RetainedPriceBasis, revision.price_basis)
     members: list[BharatStockResearchMemberV1] = []
     for result in revision.members:
         if result.evidence_state != "OBSERVED":
@@ -299,7 +299,7 @@ def _build_bharatstock_research_packet_v1(
             members.append(
                 BharatStockResearchMemberV1(
                     result.member,
-                    PRICE_BASIS,
+                    price_basis,
                     result.evidence_state,
                     reason,
                     None,
@@ -320,15 +320,15 @@ def _build_bharatstock_research_packet_v1(
             members.append(
                 BharatStockResearchMemberV1(
                     result.member,
-                    PRICE_BASIS,
+                    price_basis,
                     "INSUFFICIENT_EVIDENCE",
-                    "INVALID_ADJUSTED_HISTORY",
+                    "INVALID_PRICE_HISTORY",
                     None,
                     "INSUFFICIENT_EVIDENCE",
-                    "INVALID_ADJUSTED_HISTORY",
+                    "INVALID_PRICE_HISTORY",
                     None,
                     "INSUFFICIENT_EVIDENCE",
-                    "INVALID_ADJUSTED_HISTORY",
+                    "INVALID_PRICE_HISTORY",
                     None,
                 )
             )
@@ -341,13 +341,13 @@ def _build_bharatstock_research_packet_v1(
         members.append(
             BharatStockResearchMemberV1(
                 result.member,
-                PRICE_BASIS,
+                price_basis,
                 "OBSERVED" if complete else "INSUFFICIENT_EVIDENCE",
                 None if complete else "INSUFFICIENT_HISTORY",
                 bars,
                 "OBSERVED" if structure_observed else "INSUFFICIENT_EVIDENCE",
                 structure_reason,
-                _market_structure(result.member, bars[-21:])
+                _market_structure(result.member, bars[-21:], price_basis)
                 if structure_observed
                 else None,
                 "OBSERVED" if price_action_observed else "INSUFFICIENT_EVIDENCE",
@@ -373,7 +373,7 @@ def _build_bharatstock_research_packet_v1(
         _CONTRACT,
         revision.revision_identity_sha256,
         request.selection_identity_sha256,
-        PRICE_BASIS,
+        price_basis,
         revision.shared_failure,
         coverage,
         "OBSERVED" if observed == coverage.requested else "INSUFFICIENT_EVIDENCE",

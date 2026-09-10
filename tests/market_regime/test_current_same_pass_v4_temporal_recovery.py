@@ -155,6 +155,7 @@ def test_v4_resolves_latest_completed_official_session_by_close_time(
                 }
             ),
         ),
+        apply_adjustment=False,
     )
     request_core = {
         "contract_version": _V4_CONTRACT,
@@ -167,6 +168,7 @@ def test_v4_resolves_latest_completed_official_session_by_close_time(
         "schedule_source": schedule.source,
         "schedule_source_release": schedule.source_release,
         "include_partial_current_session": False,
+        "apply_adjustment": False,
         "plan21_cohort_identity_sha256": plan21_identity,
         "canonical_cohort_identity_sha256": canonical_identity,
         "plan22_request_identity_sha256": plan22_request_identity,
@@ -336,6 +338,7 @@ def test_public_composition_returns_preflight_no_trade_before_all_effects(
                     }
                 ),
             ),
+            apply_adjustment=False,
         )
         request_core = {
             "contract_version": _V4_CONTRACT,
@@ -348,6 +351,7 @@ def test_public_composition_returns_preflight_no_trade_before_all_effects(
             "schedule_source": "nse-upstox-composed-calendar",
             "schedule_source_release": request_release,
             "include_partial_current_session": False,
+            "apply_adjustment": False,
             "plan21_cohort_identity_sha256": plan21_identity,
             "canonical_cohort_identity_sha256": canonical_identity,
             "plan22_request_identity_sha256": plan22_identity,

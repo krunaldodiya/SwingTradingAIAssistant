@@ -54,7 +54,9 @@ def _member(instrument: BharatStockInstrument) -> dict[str, object]:
     }
 
 
-def _request(*instruments: BharatStockInstrument) -> dict[str, object]:
+def _request(
+    *instruments: BharatStockInstrument, apply_adjustment: bool = False
+) -> dict[str, object]:
     members = tuple(
         _member(instrument) for instrument in instruments or (_instrument(),)
     )
@@ -70,7 +72,8 @@ def _request(*instruments: BharatStockInstrument) -> dict[str, object]:
     )
     return {
         "provider_id": core.PROVIDER_ID,
-        "price_basis": core.PRICE_BASIS,
+        "price_basis": core.price_basis_for_adjustment(apply_adjustment),
+        "apply_adjustment": apply_adjustment,
         "decision_cutoff": _CUTOFF,
         "cohort_identity_sha256": _COHORT,
         "plan21_schedule": {
@@ -87,6 +90,7 @@ def _request(*instruments: BharatStockInstrument) -> dict[str, object]:
             decision_cutoff=_CUTOFF,
             schedule_identity_sha256=schedule_identity,
             members=parsed,
+            apply_adjustment=apply_adjustment,
         ),
     }
 
@@ -134,22 +138,44 @@ class _Client:
         return _history(instrument)
 
 
-def test_acquires_complete_factor_adjusted_handoff_from_direct_history() -> None:
+def test_acquires_complete_as_provided_handoff_from_direct_history() -> None:
     instrument = _instrument()
     result = core.acquire_adjusted_daily_close_v3(_request(instrument), _Client())
 
     assert result.code == "SUCCESS"
     handoff = result.handoff
     assert handoff.provider_id == "BHARATSTOCK"
-    assert handoff.price_basis == "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+    assert handoff.apply_adjustment is False
+    assert handoff.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
     assert handoff.provider_source == "bharatstock-api@v1"
     assert handoff.temporal_label == "REVISED_NON_PIT"
-    assert handoff.members[0].s0.adjusted_close == Decimal("50")
-    assert handoff.members[0].s20.adjusted_close == Decimal("50")
+    assert handoff.members[0].s0.close == Decimal("100")
+    assert handoff.members[0].s20.close == Decimal("100")
     assert handoff.members[0].response_sha256s == ("d" * 64, "e" * 64)
     assert (
         handoff.handoff_identity_sha256
         == core.adjusted_daily_close_handoff_identity_v3(handoff)
+    )
+
+
+def test_explicit_adjustment_projects_factor_once_with_distinct_identity() -> None:
+    instrument = _instrument()
+    as_provided = core.acquire_adjusted_daily_close_v3(_request(instrument), _Client())
+    adjusted = core.acquire_adjusted_daily_close_v3(
+        _request(instrument, apply_adjustment=True), _Client()
+    )
+
+    assert as_provided.code == adjusted.code == "SUCCESS"
+    assert adjusted.handoff.apply_adjustment is True
+    assert adjusted.handoff.price_basis == "BHARATSTOCK_FACTOR_APPLIED_OHLC"
+    assert adjusted.handoff.members[0].s0.close == Decimal("50")
+    assert (
+        adjusted.handoff.request_identity_sha256
+        != as_provided.handoff.request_identity_sha256
+    )
+    assert (
+        adjusted.handoff.handoff_identity_sha256
+        != as_provided.handoff.handoff_identity_sha256
     )
 
 
@@ -181,7 +207,7 @@ def test_public_handoff_ignores_callers_decimal_context() -> None:
             return history
 
     expected = core.acquire_adjusted_daily_close_v3(
-        _request(instrument), _PreciseClient()
+        _request(instrument, apply_adjustment=True), _PreciseClient()
     )
     assert expected.code == "SUCCESS"
     with localcontext() as caller:
@@ -191,15 +217,97 @@ def test_public_handoff_ignores_callers_decimal_context() -> None:
         caller.Emin = 0
         caller.traps[Inexact] = True
         actual = core.acquire_adjusted_daily_close_v3(
-            _request(instrument), _PreciseClient()
+            _request(instrument, apply_adjustment=True), _PreciseClient()
         )
         assert caller.prec == 2
         assert caller.rounding == ROUND_UP
         assert caller.Emax == caller.Emin == 0
         assert caller.traps[Inexact]
     assert actual == expected
-    assert actual.handoff.members[0].s0.adjusted_close == adjusted
-    assert actual.handoff.members[0].s20.adjusted_close == adjusted
+    assert actual.handoff.members[0].s0.close == adjusted
+    assert actual.handoff.members[0].s20.close == adjusted
+
+
+def test_as_provided_mode_accepts_missing_adjustment_only_fields() -> None:
+    instrument = _instrument()
+    history = _history(instrument)
+    without_adjustment = replace(
+        history,
+        rows=tuple(
+            replace(row, adjusted_close=None, adjustment_factor=None)
+            for row in history.rows
+        ),
+    )
+
+    class _AsProvidedClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            return without_adjustment
+
+    result = core.acquire_adjusted_daily_close_v3(
+        _request(instrument), _AsProvidedClient()
+    )
+
+    assert result.code == "SUCCESS"
+    assert result.handoff.members[0].s0.close == Decimal("100")
+
+
+def test_as_provided_mode_rejects_invalid_present_adjustment_fields() -> None:
+    instrument = _instrument()
+    history = _history(instrument)
+    source = history.rows[0]
+    invalid_row = object.__new__(BharatStockDailyPrice)
+    for name, value in (
+        ("session", source.session),
+        ("open", source.open),
+        ("high", source.high),
+        ("low", source.low),
+        ("close", source.close),
+        ("volume", source.volume),
+        ("adjusted_close", source.adjusted_close),
+        ("adjustment_factor", Decimal("0")),
+    ):
+        object.__setattr__(invalid_row, name, value)
+    invalid_adjustment = replace(history, rows=(invalid_row, *history.rows[1:]))
+
+    class _InvalidAdjustmentClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            return invalid_adjustment
+
+    result = core.acquire_adjusted_daily_close_v3(
+        _request(instrument), _InvalidAdjustmentClient()
+    )
+
+    assert result.code == "INSUFFICIENT_DATA"
+    assert result.reason == "PROVIDER_FACTOR_INVALID"
+
+
+def test_factor_mode_rejects_missing_adjustment_only_fields() -> None:
+    instrument = _instrument()
+    history = _history(instrument)
+    without_adjustment = replace(
+        history,
+        rows=tuple(
+            replace(row, adjusted_close=None, adjustment_factor=None)
+            for row in history.rows
+        ),
+    )
+
+    class _FactorClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            return without_adjustment
+
+    result = core.acquire_adjusted_daily_close_v3(
+        _request(instrument, apply_adjustment=True), _FactorClient()
+    )
+
+    assert result.code == "INSUFFICIENT_DATA"
+    assert result.reason == "PROVIDER_FACTOR_INVALID"
 
 
 def test_rejects_mapping_not_effective_for_complete_session_window() -> None:
@@ -249,7 +357,9 @@ def test_rejects_incoherent_provider_factor_even_when_history_object_is_forged()
         ) -> BharatStockHistory:
             return forged
 
-    result = core.acquire_adjusted_daily_close_v3(_request(instrument), _ForgedClient())
+    result = core.acquire_adjusted_daily_close_v3(
+        _request(instrument, apply_adjustment=True), _ForgedClient()
+    )
 
     assert result.code == "INSUFFICIENT_DATA"
     assert result.reason == "PROVIDER_FACTOR_INVALID"

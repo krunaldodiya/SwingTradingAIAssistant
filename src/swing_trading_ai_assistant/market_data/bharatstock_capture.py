@@ -10,11 +10,10 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import Final, Literal, TypeAlias, cast
 
 from . import capture_forward_adjusted_ohlcv as _legacy_store
 from .bharatstock import (
-    PRICE_BASIS,
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
@@ -22,6 +21,7 @@ from .bharatstock import (
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
+    price_basis_for_adjustment,
 )
 from .bharatstock_capture_runtime_identity_manifest import (
     BHARATSTOCK_CAPTURE_RUNTIME_SOURCE_SHA256_V2,
@@ -44,8 +44,22 @@ from .storage_root_lease import (
     StorageRootLeaseOperation,
 )
 
-CONTRACT_VERSION_V2: Final = "bharatstock-capture@v2"
-SOURCE_PROFILE_V2: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2"
+CONTRACT_VERSION_V3: Final = "bharatstock-capture@v3"
+SOURCE_PROFILE_V3: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3"
+_PROCESSING_REVISION_V3: Final = "source-or-factor-projected-ohlc@v1"
+_PREDECESSOR_CONTRACT_VERSION_V2: Final = "bharatstock-capture@v2"
+_PREDECESSOR_SOURCE_PROFILE_V2: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2"
+_PREDECESSOR_PRICE_BASIS_V2: Final = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+_PREDECESSOR_VOLUME_BASIS_V2: Final = "SOURCE_REPORTED_UNADJUSTED"
+_PREDECESSOR_RUNTIME_IDENTITY_V2: Final = (
+    "fcd99dbbfbf8b969d34d11d72bbcfd089f4dbaaf2ba883d7cadc47ba34e99f43"
+)
+_PREDECESSOR_SCHEMA_IDENTITY_V2: Final = (
+    "16a032ed40ed922c9d5d9a16c6abc3dff2297e12554ffce9b75f770b55136990"
+)
+_PREDECESSOR_CONFIGURATION_IDENTITY_V2: Final = (
+    "21cc3f28838938411836094184a77ad0d39b24fd0f110b30854978c4549f2ced"
+)
 _MAX_MEMBERS: Final = 100
 _MAX_SESSIONS: Final = 366
 _MAX_REVISION_BYTES: Final = 8 * 1024 * 1024
@@ -113,9 +127,10 @@ def _configuration_identity() -> str:
             {
                 "max_members": _MAX_MEMBERS,
                 "max_sessions": _MAX_SESSIONS,
-                "persistence": "held-descriptor-immutable-v2",
+                "persistence": "held-descriptor-immutable-v3",
+                "processing_revision": _PROCESSING_REVISION_V3,
                 "provider_source": PROVIDER_SOURCE,
-                "source_profile": SOURCE_PROFILE_V2,
+                "source_profile": SOURCE_PROFILE_V3,
             }
         )
     )
@@ -125,16 +140,22 @@ def _schema_identity() -> str:
     return _digest(
         _canonical(
             {
-                "contract": CONTRACT_VERSION_V2,
+                "contract": CONTRACT_VERSION_V3,
                 "request": [
                     "members-in-original-order",
                     "sessions-exact-approved-completed",
                     "selection-identity",
                     "schedule-reference",
                     "parent-revision",
+                    "apply-adjustment-strict-bool",
                 ],
                 "member_result": ["observed", "insufficient", "not-attempted"],
-                "revision": ["one-result-per-request-member", "coverage-identity"],
+                "revision": [
+                    "one-result-per-request-member",
+                    "coverage-identity",
+                    "price-basis-derived-from-request-mode",
+                    "source-reported-volume",
+                ],
             }
         )
     )
@@ -181,8 +202,14 @@ def _history_value(history: BharatStockHistory) -> dict[str, object]:
         "retrieved_at": _timestamp(history.retrieved_at),
         "rows": [
             {
-                "adjusted_close": str(row.adjusted_close),
-                "adjustment_factor": str(row.adjustment_factor),
+                "adjusted_close": (
+                    None if row.adjusted_close is None else str(row.adjusted_close)
+                ),
+                "adjustment_factor": (
+                    None
+                    if row.adjustment_factor is None
+                    else str(row.adjustment_factor)
+                ),
                 "close": str(row.close),
                 "high": str(row.high),
                 "low": str(row.low),
@@ -214,8 +241,16 @@ def _history_from_value(value: object) -> BharatStockHistory:
             low=Decimal(cast(str, item["low"])),
             close=Decimal(cast(str, item["close"])),
             volume=cast(int, item["volume"]),
-            adjusted_close=Decimal(cast(str, item["adjusted_close"])),
-            adjustment_factor=Decimal(cast(str, item["adjustment_factor"])),
+            adjusted_close=(
+                None
+                if item["adjusted_close"] is None
+                else Decimal(cast(str, item["adjusted_close"]))
+            ),
+            adjustment_factor=(
+                None
+                if item["adjustment_factor"] is None
+                else Decimal(cast(str, item["adjustment_factor"]))
+            ),
         )
         for item in cast(list[dict[str, object]], row["rows"])
     )
@@ -230,7 +265,7 @@ def _history_from_value(value: object) -> BharatStockHistory:
 
 @dataclass(frozen=True, slots=True)
 class CaptureRequestV2:
-    """An exact ordered V2 capture request, independent of transport batches."""
+    """An exact ordered current V3 capture request, independent of batching."""
 
     members: tuple[BharatStockInstrument, ...]
     sessions: tuple[date, ...]
@@ -241,16 +276,17 @@ class CaptureRequestV2:
     schedule_identity_sha256: str
     selection_identity_sha256: str
     parent_revision_sha256: str | None = None
+    apply_adjustment: bool = False
     schema_identity_sha256: str = field(default_factory=_schema_identity)
     runtime_code_identity_sha256: str = field(default_factory=_runtime_identity)
     configuration_identity_sha256: str = field(default_factory=_configuration_identity)
-    contract_version: str = CONTRACT_VERSION_V2
+    contract_version: str = CONTRACT_VERSION_V3
     request_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         cutoff = _instant(self.decision_cutoff)
         if (
-            self.contract_version != CONTRACT_VERSION_V2
+            self.contract_version != CONTRACT_VERSION_V3
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= _MAX_MEMBERS
             or any(type(member) is not BharatStockInstrument for member in self.members)
@@ -281,6 +317,7 @@ class CaptureRequestV2:
                 self.parent_revision_sha256 is not None
                 and not _valid_digest(self.parent_revision_sha256)
             )
+            or type(self.apply_adjustment) is not bool
             or self.selection_identity_sha256 != selection_identity_v2(self.members)
             or self.schema_identity_sha256 != _schema_identity()
             or self.runtime_code_identity_sha256 != _runtime_identity()
@@ -301,6 +338,7 @@ class CaptureRequestV2:
             "configuration_identity_sha256": self.configuration_identity_sha256,
             "contract_version": self.contract_version,
             "decision_cutoff": _timestamp(self.decision_cutoff),
+            "apply_adjustment": self.apply_adjustment,
             "members": [_instrument_value(member) for member in self.members],
             "parent_revision_sha256": self.parent_revision_sha256,
             "runtime_code_identity_sha256": self.runtime_code_identity_sha256,
@@ -353,13 +391,17 @@ class CaptureRevisionV2:
     shared_failure: str | None
     observed_at: datetime
     provider_source: str = PROVIDER_SOURCE
-    source_profile: str = SOURCE_PROFILE_V2
-    price_basis: str = PRICE_BASIS
+    source_profile: str = SOURCE_PROFILE_V3
+    price_basis: str | None = None
     volume_basis: str = VOLUME_BASIS
     revision_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         observed_at = _instant(self.observed_at)
+        expected_price_basis = price_basis_for_adjustment(self.request.apply_adjustment)
+        price_basis = (
+            expected_price_basis if self.price_basis is None else self.price_basis
+        )
         if (
             type(self.request) is not CaptureRequestV2
             or type(self.members) is not tuple
@@ -371,8 +413,8 @@ class CaptureRevisionV2:
                 and (type(self.shared_failure) is not str or not self.shared_failure)
             )
             or self.provider_source != PROVIDER_SOURCE
-            or self.source_profile != SOURCE_PROFILE_V2
-            or self.price_basis != PRICE_BASIS
+            or self.source_profile != SOURCE_PROFILE_V3
+            or price_basis != expected_price_basis
             or self.volume_basis != VOLUME_BASIS
             or observed_at > self.request.decision_cutoff
         ):
@@ -387,6 +429,7 @@ class CaptureRevisionV2:
             for item in self.members
         ):
             raise ValueError("BharatStock capture revision is invalid")
+        object.__setattr__(self, "price_basis", price_basis)
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(
             self,
@@ -417,6 +460,169 @@ class CaptureRevisionV2:
 
 
 @dataclass(frozen=True, slots=True)
+class _PredecessorCaptureRequestV2:
+    """The sole read-only shape admitted for frozen pre-price-mode V2 evidence."""
+
+    members: tuple[BharatStockInstrument, ...]
+    sessions: tuple[date, ...]
+    decision_cutoff: datetime
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
+    schedule_identity_sha256: str
+    selection_identity_sha256: str
+    parent_revision_sha256: str | None
+    schema_identity_sha256: str
+    runtime_code_identity_sha256: str
+    configuration_identity_sha256: str
+    contract_version: str
+    request_identity_sha256: str
+    apply_adjustment: Literal[True] = field(default=True, init=False)
+
+    def __post_init__(self) -> None:
+        cutoff = _instant(self.decision_cutoff)
+        if (
+            self.contract_version != _PREDECESSOR_CONTRACT_VERSION_V2
+            or self.apply_adjustment is not True
+            or type(self.members) is not tuple
+            or not 1 <= len(self.members) <= _MAX_MEMBERS
+            or any(type(member) is not BharatStockInstrument for member in self.members)
+            or any(member.exchange != "NSE" for member in self.members)
+            or len({(member.isin, member.exchange) for member in self.members})
+            != len(self.members)
+            or type(self.sessions) is not tuple
+            or not 1 <= len(self.sessions) <= _MAX_SESSIONS
+            or any(type(session) is not date for session in self.sessions)
+            or self.sessions != tuple(sorted(self.sessions))
+            or len(set(self.sessions)) != len(self.sessions)
+            or not all(
+                _valid_digest(value)
+                for value in (
+                    self.schedule_evidence_sha256,
+                    self.schedule_identity_sha256,
+                    self.selection_identity_sha256,
+                    self.request_identity_sha256,
+                )
+            )
+            or not exact_nse_schedule_source_release_pair_v1(
+                self.schedule_source,
+                self.schedule_source_release,
+            )
+            or (
+                self.parent_revision_sha256 is not None
+                and not _valid_digest(self.parent_revision_sha256)
+            )
+            or self.selection_identity_sha256 != selection_identity_v2(self.members)
+            or self.schema_identity_sha256 != _PREDECESSOR_SCHEMA_IDENTITY_V2
+            or self.runtime_code_identity_sha256 != _PREDECESSOR_RUNTIME_IDENTITY_V2
+            or self.configuration_identity_sha256
+            != _PREDECESSOR_CONFIGURATION_IDENTITY_V2
+        ):
+            raise ValueError("BharatStock predecessor request is invalid")
+        object.__setattr__(self, "decision_cutoff", cutoff)
+        if self.request_identity_sha256 != _digest(
+            _canonical(self.canonical_value(include_request_identity=False))
+        ):
+            raise ValueError("BharatStock predecessor request is invalid")
+
+    def canonical_value(
+        self, *, include_request_identity: bool = True
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "configuration_identity_sha256": self.configuration_identity_sha256,
+            "contract_version": self.contract_version,
+            "decision_cutoff": _timestamp(self.decision_cutoff),
+            "members": [_instrument_value(member) for member in self.members],
+            "parent_revision_sha256": self.parent_revision_sha256,
+            "runtime_code_identity_sha256": self.runtime_code_identity_sha256,
+            "schedule_evidence_sha256": self.schedule_evidence_sha256,
+            "schedule_identity_sha256": self.schedule_identity_sha256,
+            "schedule_source": self.schedule_source,
+            "schedule_source_release": self.schedule_source_release,
+            "schema_identity_sha256": self.schema_identity_sha256,
+            "selection_identity_sha256": self.selection_identity_sha256,
+            "sessions": [session.isoformat() for session in self.sessions],
+        }
+        if include_request_identity:
+            value["request_identity_sha256"] = self.request_identity_sha256
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class _PredecessorCaptureRevisionV2:
+    request: _PredecessorCaptureRequestV2
+    members: tuple[CaptureMemberResultV2, ...]
+    actual_coverage_identity_sha256: str
+    shared_failure: str | None
+    observed_at: datetime
+    provider_source: str
+    source_profile: str
+    price_basis: str
+    volume_basis: str
+    revision_identity_sha256: str
+
+    def __post_init__(self) -> None:
+        observed_at = _instant(self.observed_at)
+        if (
+            type(self.request) is not _PredecessorCaptureRequestV2
+            or type(self.members) is not tuple
+            or any(type(item) is not CaptureMemberResultV2 for item in self.members)
+            or tuple(item.member for item in self.members) != self.request.members
+            or not _valid_digest(self.actual_coverage_identity_sha256)
+            or not _valid_digest(self.revision_identity_sha256)
+            or (
+                self.shared_failure is not None
+                and (type(self.shared_failure) is not str or not self.shared_failure)
+            )
+            or self.provider_source != PROVIDER_SOURCE
+            or self.source_profile != _PREDECESSOR_SOURCE_PROFILE_V2
+            or self.price_basis != _PREDECESSOR_PRICE_BASIS_V2
+            or self.volume_basis != _PREDECESSOR_VOLUME_BASIS_V2
+            or observed_at > self.request.decision_cutoff
+        ):
+            raise ValueError("BharatStock predecessor revision is invalid")
+        if self.shared_failure is None and any(
+            item.evidence_state == "NOT_ATTEMPTED" for item in self.members
+        ):
+            raise ValueError("BharatStock predecessor revision is invalid")
+        if self.shared_failure is not None and any(
+            item.evidence_state == "NOT_ATTEMPTED"
+            and item.reason != "BLOCKED_BY_SHARED_FAILURE"
+            for item in self.members
+        ):
+            raise ValueError("BharatStock predecessor revision is invalid")
+        object.__setattr__(self, "observed_at", observed_at)
+        if self.revision_identity_sha256 != _digest(
+            _line(self.canonical_value(include_revision_identity=False))
+        ):
+            raise ValueError("BharatStock predecessor revision is invalid")
+
+    def canonical_value(
+        self, *, include_revision_identity: bool = True
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "actual_coverage_identity_sha256": self.actual_coverage_identity_sha256,
+            "members": [item.canonical_value() for item in self.members],
+            "observed_at": _timestamp(self.observed_at),
+            "price_basis": self.price_basis,
+            "provider_source": self.provider_source,
+            "request": self.request.canonical_value(),
+            "shared_failure": self.shared_failure,
+            "source_profile": self.source_profile,
+            "volume_basis": self.volume_basis,
+        }
+        if include_revision_identity:
+            value["revision_identity_sha256"] = self.revision_identity_sha256
+        return value
+
+    def canonical_json_bytes(self) -> bytes:
+        return _line(self.canonical_value())
+
+
+RetainedCaptureRevisionV2: TypeAlias = CaptureRevisionV2 | _PredecessorCaptureRevisionV2
+
+
+@dataclass(frozen=True, slots=True)
 class CaptureResultV2:
     code: Literal["CAPTURED", "REUSED", "INSUFFICIENT_EVIDENCE", "STORE_UNAVAILABLE"]
     revision: CaptureRevisionV2 | None
@@ -432,7 +638,9 @@ class CaptureResultV2:
             raise ValueError("BharatStock capture result is invalid")
 
 
-def _validate_capture_members(revision: CaptureRevisionV2) -> None:
+def _validate_capture_members(
+    revision: CaptureRevisionV2 | _PredecessorCaptureRevisionV2,
+) -> None:
     for item in revision.members:
         item.__post_init__()
         item.member.__post_init__()
@@ -442,6 +650,7 @@ def _validate_capture_members(revision: CaptureRevisionV2) -> None:
             item.history.__post_init__()
             for row in item.history.rows:
                 row.__post_init__()
+                row.project_ohlc(apply_adjustment=revision.request.apply_adjustment)
         if item.history is not None and (
             item.history.instrument != item.member
             or tuple(row.session for row in item.history.rows)
@@ -451,7 +660,9 @@ def _validate_capture_members(revision: CaptureRevisionV2) -> None:
             raise ValueError("BharatStock capture revision is invalid")
 
 
-def _validate_shared_failure(revision: CaptureRevisionV2) -> None:
+def _validate_shared_failure(
+    revision: CaptureRevisionV2 | _PredecessorCaptureRevisionV2,
+) -> None:
     if revision.shared_failure is not None:
         stopped = False
         for item in revision.members:
@@ -466,9 +677,14 @@ def _validate_shared_failure(revision: CaptureRevisionV2) -> None:
             raise ValueError("capture lacks its shared failure trigger")
 
 
-def validate_capture_revision_v2(revision: CaptureRevisionV2) -> None:
-    """Reject forged, mixed-basis, incomplete, or incoherent V2 evidence."""
+def validate_capture_revision_v2(
+    revision: CaptureRevisionV2 | _PredecessorCaptureRevisionV2,
+) -> None:
+    """Reject forged current evidence and verify the bounded predecessor reader."""
 
+    if type(revision) is _PredecessorCaptureRevisionV2:
+        _validate_predecessor_revision(revision)
+        return
     if type(revision) is not CaptureRevisionV2:
         raise ValueError("BharatStock capture revision is invalid")
     if type(revision.request) is not CaptureRequestV2:
@@ -501,6 +717,18 @@ def validate_capture_revision_v2(revision: CaptureRevisionV2) -> None:
     _validate_shared_failure(revision)
 
 
+def _validate_predecessor_revision(revision: _PredecessorCaptureRevisionV2) -> None:
+    revision.request.__post_init__()
+    for member in revision.request.members:
+        member.__post_init__()
+    _validate_capture_members(revision)
+    if revision.actual_coverage_identity_sha256 != _coverage_identity(revision.members):
+        raise ValueError("BharatStock predecessor coverage identity is invalid")
+    if replace(revision) != revision:
+        raise ValueError("BharatStock predecessor revision is invalid")
+    _validate_shared_failure(revision)
+
+
 def _request_from_value(value: object) -> CaptureRequestV2:
     if type(value) is not dict:
         raise ValueError
@@ -525,6 +753,7 @@ def _request_from_value(value: object) -> CaptureRequestV2:
         schedule_identity_sha256=cast(str, row["schedule_identity_sha256"]),
         selection_identity_sha256=cast(str, row["selection_identity_sha256"]),
         parent_revision_sha256=cast(str | None, row["parent_revision_sha256"]),
+        apply_adjustment=cast(bool, row["apply_adjustment"]),
         schema_identity_sha256=cast(str, row["schema_identity_sha256"]),
         runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
         configuration_identity_sha256=cast(str, row["configuration_identity_sha256"]),
@@ -593,6 +822,78 @@ def _revision_from_bytes(raw: bytes) -> CaptureRevisionV2:
         ):
             raise ValueError("capture revision binding invalid")
         validate_capture_revision_v2(revision)
+        return revision
+    except (KeyError, TypeError, ValueError, RecursionError) as error:
+        raise CaptureRevisionUnavailableV2(
+            "BharatStock capture revision unavailable"
+        ) from error
+
+
+def _predecessor_request_from_value(value: object) -> _PredecessorCaptureRequestV2:
+    if type(value) is not dict:
+        raise ValueError
+    row = cast(dict[str, object], value)
+    members = tuple(
+        BharatStockInstrument(
+            isin=cast(str, item["isin"]),
+            exchange=cast(str, item["exchange"]),
+            symbol=cast(str, item["symbol"]),
+        )
+        for item in cast(list[dict[str, object]], row["members"])
+    )
+    return _PredecessorCaptureRequestV2(
+        members=members,
+        sessions=tuple(
+            date.fromisoformat(item) for item in cast(list[str], row["sessions"])
+        ),
+        decision_cutoff=_parse_timestamp(row["decision_cutoff"]),
+        schedule_evidence_sha256=cast(str, row["schedule_evidence_sha256"]),
+        schedule_source=cast(str, row["schedule_source"]),
+        schedule_source_release=cast(str, row["schedule_source_release"]),
+        schedule_identity_sha256=cast(str, row["schedule_identity_sha256"]),
+        selection_identity_sha256=cast(str, row["selection_identity_sha256"]),
+        parent_revision_sha256=cast(str | None, row["parent_revision_sha256"]),
+        schema_identity_sha256=cast(str, row["schema_identity_sha256"]),
+        runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
+        configuration_identity_sha256=cast(str, row["configuration_identity_sha256"]),
+        contract_version=cast(str, row["contract_version"]),
+        request_identity_sha256=cast(str, row["request_identity_sha256"]),
+    )
+
+
+def _predecessor_revision_from_bytes(raw: bytes) -> _PredecessorCaptureRevisionV2:
+    try:
+        value = json.loads(raw)
+        if type(value) is not dict:
+            raise ValueError("predecessor revision invalid")
+        row = cast(dict[str, object], value)
+        request = _predecessor_request_from_value(row["request"])
+        members_value = row["members"]
+        if (
+            type(members_value) is not list
+            or not 1 <= len(cast(list[object], members_value)) <= _MAX_MEMBERS
+        ):
+            raise ValueError("predecessor members invalid")
+        members = tuple(
+            _member_from_value(item) for item in cast(list[object], members_value)
+        )
+        revision = _PredecessorCaptureRevisionV2(
+            request=request,
+            members=members,
+            actual_coverage_identity_sha256=cast(
+                str, row["actual_coverage_identity_sha256"]
+            ),
+            shared_failure=cast(str | None, row["shared_failure"]),
+            observed_at=_parse_timestamp(row["observed_at"]),
+            provider_source=cast(str, row["provider_source"]),
+            source_profile=cast(str, row["source_profile"]),
+            price_basis=cast(str, row["price_basis"]),
+            volume_basis=cast(str, row["volume_basis"]),
+            revision_identity_sha256=cast(str, row["revision_identity_sha256"]),
+        )
+        validate_capture_revision_v2(revision)
+        if raw != revision.canonical_json_bytes():
+            raise ValueError("predecessor revision binding invalid")
         return revision
     except (KeyError, TypeError, ValueError, RecursionError) as error:
         raise CaptureRevisionUnavailableV2(
@@ -729,6 +1030,73 @@ def _read_pointer(
     return revision
 
 
+def _read_predecessor_named(
+    revisions: _PrivateDirectory, identity: str
+) -> _PredecessorCaptureRevisionV2:
+    revision = _predecessor_revision_from_bytes(
+        _read_exact(revisions, f"{identity}.json", _MAX_REVISION_BYTES)
+    )
+    if revision.revision_identity_sha256 != identity:
+        raise ValueError("predecessor capture revision invalid")
+    return revision
+
+
+def _read_predecessor_pointer(
+    requests: _PrivateDirectory,
+    revisions: _PrivateDirectory,
+    request: _PredecessorCaptureRequestV2,
+) -> _PredecessorCaptureRevisionV2:
+    value = json.loads(
+        _read_exact(requests, f"{request.request_identity_sha256}.json", 256)
+    )
+    if type(value) is not dict:
+        raise ValueError("predecessor capture pointer invalid")
+    pointer = cast(dict[str, object], value)
+    revision_identity = pointer.get("revision_identity_sha256")
+    if (
+        set(pointer) != {"request_identity_sha256", "revision_identity_sha256"}
+        or pointer.get("request_identity_sha256") != request.request_identity_sha256
+        or not _valid_digest(revision_identity)
+    ):
+        raise ValueError("predecessor capture pointer invalid")
+    revision = _read_predecessor_named(revisions, cast(str, revision_identity))
+    if revision.request != request:
+        raise ValueError("predecessor capture pointer invalid")
+    return revision
+
+
+def _require_predecessor_admitted_chain(
+    requests: _PrivateDirectory,
+    revisions: _PrivateDirectory,
+    revision: _PredecessorCaptureRevisionV2,
+) -> None:
+    seen: set[str] = set()
+    current = revision
+    while True:
+        if current.revision_identity_sha256 in seen or len(seen) >= 64:
+            raise ValueError("predecessor correction lineage is invalid")
+        seen.add(current.revision_identity_sha256)
+        if _read_predecessor_pointer(requests, revisions, current.request) != current:
+            raise ValueError("predecessor capture revision is not admitted")
+        parent_identity = current.request.parent_revision_sha256
+        if parent_identity is None:
+            return
+        parent = _read_predecessor_named(revisions, parent_identity)
+        previous = parent.request
+        request = current.request
+        if (
+            previous.members != request.members
+            or previous.sessions != request.sessions
+            or previous.decision_cutoff > request.decision_cutoff
+            or previous.schedule_evidence_sha256 != request.schedule_evidence_sha256
+            or previous.schedule_identity_sha256 != request.schedule_identity_sha256
+            or previous.selection_identity_sha256 != request.selection_identity_sha256
+            or parent.observed_at > current.observed_at
+        ):
+            raise ValueError("predecessor correction lineage is invalid")
+        current = parent
+
+
 def _read_named(revisions: _PrivateDirectory, identity: str) -> CaptureRevisionV2:
     revision = _revision_from_bytes(
         _read_exact(revisions, f"{identity}.json", _MAX_REVISION_BYTES)
@@ -769,6 +1137,7 @@ def _is_matching_correction_parent(
         and previous.schema_identity_sha256 == request.schema_identity_sha256
         and previous.configuration_identity_sha256
         == request.configuration_identity_sha256
+        and previous.apply_adjustment == request.apply_adjustment
         and parent.revision_identity_sha256 == request.parent_revision_sha256
     )
 
@@ -829,6 +1198,7 @@ def _member_result(
         history.__post_init__()
         for row in history.rows:
             row.__post_init__()
+            row.project_ohlc(apply_adjustment=request.apply_adjustment)
     except ValueError:
         return CaptureMemberResultV2(
             member, "INSUFFICIENT_EVIDENCE", "HISTORY_INVALID", None
@@ -982,7 +1352,7 @@ def capture_bharatstock_v2(
                 _open_directory(
                     operation,
                     operation.descriptor,
-                    "bharatstock-capture-v2",
+                    "bharatstock-capture-v3",
                     create=True,
                 )
             ) as namespace,
@@ -1057,8 +1427,8 @@ def capture_bharatstock_v2(
 
 def read_bharatstock_capture_revision_v2(
     store_root: Path, revision_sha256: str
-) -> CaptureRevisionV2:
-    """Read one named admitted V2 revision without transport or credentials."""
+) -> CaptureRevisionV2 | _PredecessorCaptureRevisionV2:
+    """Read admitted current V3 or exact frozen predecessor V2 evidence."""
 
     if not store_root.is_absolute() or not _valid_digest(revision_sha256):
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
@@ -1066,27 +1436,49 @@ def read_bharatstock_capture_revision_v2(
     if lease is None:
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
     try:
-        with (
-            lease.read_operation(store_root) as operation,
-            closing(
-                _open_directory(
-                    operation,
-                    operation.descriptor,
-                    "bharatstock-capture-v2",
-                    create=False,
-                )
-            ) as namespace,
-            closing(
-                _open_directory(operation, namespace, "requests", create=False)
-            ) as requests,
-            closing(
-                _open_directory(operation, namespace, "revisions", create=False)
-            ) as revisions,
-        ):
-            revision = _read_named(revisions, revision_sha256)
-            _require_admitted_chain(requests, revisions, revision)
-            validate_capture_revision_v2(revision)
-            return revision
+        with lease.read_operation(store_root) as operation:
+            try:
+                with (
+                    closing(
+                        _open_directory(
+                            operation,
+                            operation.descriptor,
+                            "bharatstock-capture-v3",
+                            create=False,
+                        )
+                    ) as namespace,
+                    closing(
+                        _open_directory(operation, namespace, "requests", create=False)
+                    ) as requests,
+                    closing(
+                        _open_directory(operation, namespace, "revisions", create=False)
+                    ) as revisions,
+                ):
+                    revision = _read_named(revisions, revision_sha256)
+                    _require_admitted_chain(requests, revisions, revision)
+                    validate_capture_revision_v2(revision)
+                    return revision
+            except FileNotFoundError:
+                with (
+                    closing(
+                        _open_directory(
+                            operation,
+                            operation.descriptor,
+                            "bharatstock-capture-v2",
+                            create=False,
+                        )
+                    ) as namespace,
+                    closing(
+                        _open_directory(operation, namespace, "requests", create=False)
+                    ) as requests,
+                    closing(
+                        _open_directory(operation, namespace, "revisions", create=False)
+                    ) as revisions,
+                ):
+                    revision = _read_predecessor_named(revisions, revision_sha256)
+                    _require_predecessor_admitted_chain(requests, revisions, revision)
+                    validate_capture_revision_v2(revision)
+                    return revision
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
@@ -1096,7 +1488,7 @@ def read_bharatstock_capture_revision_v2(
 
 
 def parse_bharatstock_capture_request_v2(raw: bytes) -> CaptureRequestV2:
-    """Parse only a canonical request whose identities match this V2 writer."""
+    """Parse only a canonical current V3 request accepted for acquisition."""
 
     try:
         if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_REVISION_BYTES:
@@ -1116,7 +1508,7 @@ def serialize_bharatstock_capture_result_v2(
 
     return {
         "code": result.code,
-        "contract_version": CONTRACT_VERSION_V2,
+        "contract_version": CONTRACT_VERSION_V3,
         "reason": result.reason,
         "revision_identity_sha256": (
             None
