@@ -316,12 +316,49 @@ evidence. Its real public-consumer, aggregate-coverage, recovery, review and
 release criteria must pass before closure. A missing member must never be
 silently omitted or a partial list represented as complete.
 
+### BharatStock price and volume qualification hold
+
+**2026-09-10 — FAILED qualification; dependent activation and release held.**
+After the initial unit-factor check, 20 bounded direct-provider requests
+covered 1,442 distinct instrument/session rows, including 953 non-unit rows.
+A real 1,410-row history traversed two price pages. The 691 overlapping row
+observations agreed, but no actual provider correction was observed; this is
+not correction qualification, an atomic snapshot, or historical availability
+proof.
+
+Ten official NSE boundary rows were independently reconciled across bonus,
+combined split/bonus, rights and dividend cases. At the three split/bonus
+boundaries, reported OHLC was already scaled relative to exchange-raw prices
+and reported volume inversely scaled. Applying the additional declared factor
+introduced artificial roughly twofold or fivefold adjusted-price jumps.
+The rights case also contained pre-event price/volume scaling despite a
+declared factor of one; the dividend control matched the exchange-raw rows.
+Passing `adjusted_close == close * adjustment_factor` therefore does not
+establish the claimed economic basis, and unchanged provider volume is not
+proof of exchange-unadjusted volume.
+
+The owner-private assessment digest is
+`03fbbbd87e56b50593e069eab71187d3c980f76b5d1e83d062c3ea2d41c65ed1`.
+Raw/member observations, credentials and private paths are not published.
+Provider field/basis clarification or correction and an independently
+reconciled, accepted versioned profile are required before dependent
+BharatStock adjusted capture/research activation or release. Do not simply
+drop the factor, relabel data, repair prices by inference, or use a fallback.
+This hold does not invalidate truthful historical/negative reads or unrelated
+authorized Upstox raw work; the separate security/release controls remain.
+
+The separately requested September 10 capture still retained 100
+`EMPTY_HISTORY` outcomes and zero prices. The historical-window qualification
+above was not a retry of that capture and does not make it successful.
+
 ### Versioned provider behavior
 
-The unreleased successor uses direct `bharatstock-api@v1` acquisition with
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; source volume is unadjusted.
-It does not claim dividend/rights adjustment, total-return continuity, or
-as-published point-in-time availability. Acquisition uses one account,
+The unreleased candidate uses direct `bharatstock-api@v1` acquisition with the
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC` tag and carries source volume
+through without additional rescaling. These are held candidate semantics,
+not a qualified description of the provider's economic price/volume basis.
+No dividend/rights-adjusted total-return or as-published point-in-time
+equivalence is claimed. Acquisition uses one account,
 at most 2,000 HTTP attempts per client run, at most 40 price pages per member,
 no automatic retries, and a sticky stop for shared failures. This per-run
 bound does not claim knowledge of the account's remaining daily quota.

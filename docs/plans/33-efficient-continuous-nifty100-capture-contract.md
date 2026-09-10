@@ -7,6 +7,9 @@
 > through versioned current-observation evidence and composes Plan30 V2.
 > The old Yahoo-specific pool, cadence, session and acknowledgement below
 > describe historical V1 only; they are not BharatStock requirements.
+> Dependent adjusted capture and release remain under the
+> [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold);
+> an incomplete retained revision is not successful price qualification.
 
 V2 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
 source identities and retrieval times, then bind the ordered 100-member union

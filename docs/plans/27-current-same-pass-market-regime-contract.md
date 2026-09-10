@@ -9,6 +9,9 @@
 > Only the adjusted provider/mapping bridge changes to Plan22 V3.
 > Historical V3 contexts/readers keep their original Yahoo identities.
 > The delivered counts, smokes and approvals below do not transfer to V4.
+> The BharatStock adjusted leg and dependent activation/release remain under
+> the [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold);
+> unrelated authorized Upstox raw work and truthful retained reads stay separate.
 
 The V4 request binds the original ordered selection separately from canonical
 cohort identity. The adjusted request is derived from that exact admitted raw

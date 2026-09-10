@@ -110,10 +110,14 @@ Issue #183 remains open for its separate member-isolation behavior.
 
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
-The unreleased Plan22 V3 successor uses direct BharatStock split/bonus-factor
-adjusted daily prices; source volume is unadjusted. Every fact records provider,
-basis and retrieval provenance. This is not dividend/rights-adjusted total
-return or historical point-in-time authority. No provider is a silent fallback.
+The unreleased Plan22 V3 candidate multiplies BharatStock OHLC by the declared
+factor and copies source volume without further rescaling. Its
+[price/volume qualification hold](roadmap.md#bharatstock-price-and-volume-qualification-hold)
+blocks dependent adjusted-data activation and release; unchanged provider
+volume is not proof of exchange-unadjusted units. Every fact records provider,
+basis and retrieval provenance, but those records alone do not establish a
+correct corporate-action basis, total return or historical availability.
+No provider is a silent fallback.
 Historical Yahoo records remain readable under their original identities;
 their acquisition path is retired by #184. Angel One remains deferred.
 

@@ -6,6 +6,9 @@
 > govern the unreleased BharatStock V2 and member-isolation path below.
 > The later Yahoo-specific contract and delivery evidence are historical;
 > their immutable data, labels and supported readers are not reinterpreted.
+> The [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold)
+> blocks dependent adjusted capture/research activation and release.
+> Truthful retained negative and historical reads are not positive qualification.
 
 ## BharatStock capture V2 and independent facts — unreleased
 
@@ -14,9 +17,11 @@ ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
 It verifies the exact retained official schedule, runtime source identity,
 configuration, cutoff, and selection identity before provider effects.
 The provider/basis is `bharatstock-api@v1` /
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; volume is source-reported,
-unadjusted. No hourly reconstruction, filling, provider fallback, total-return
-claim, or fabricated historical publication time is permitted.
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`; source volume is copied without
+further rescaling, not certified as exchange-unadjusted. This candidate
+interpretation remains on qualification hold. No hourly reconstruction,
+filling, provider fallback, total-return claim, or fabricated historical
+publication time is permitted.
 
 Every requested member has exactly one result: `OBSERVED`,
 `INSUFFICIENT_EVIDENCE` with its local reason, or `NOT_ATTEMPTED` after the

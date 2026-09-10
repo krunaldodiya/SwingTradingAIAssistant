@@ -51,6 +51,10 @@ and observation times; versioned successors do not reinterpret it.
 Upstox raw/current behavior remains separate. Neither the provider decision nor
 the 100-stock input-data check closes
 [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
+The [price/volume qualification hold](roadmap.md#bharatstock-price-and-volume-qualification-hold)
+blocks dependent BharatStock adjusted-data activation and release: real
+exchange reconciliation contradicted the candidate's basis assumptions.
+Passing arithmetic or repository checks does not resolve that source contract.
 
 ## Delivery priority overlay
 

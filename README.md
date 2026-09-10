@@ -324,6 +324,12 @@ execution are not implemented.
 
 ## Structured daily OHLCV downloader
 
+**Qualification HOLD — 2026-09-10.** Real corporate-action responses failed
+[independent price/volume reconciliation](docs/roadmap.md#bharatstock-price-and-volume-qualification-hold).
+The examples below describe the unmerged candidate, not an approved adjusted
+data source. Do not activate this profile for qualified capture or research
+until its provider fields and versioned basis are reconciled and accepted.
+
 This unreleased source revision exposes one `equity_data_downloader`
 implementation for bounded direct BharatStock daily acquisition. Its CLI and
 Python API use the same core. Parquet is the sole
@@ -386,11 +392,15 @@ invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
 storage is rejected before any provider call. The complete derived dataset
 remains under that root; there is no arbitrary output-file option.
 
-All OHLC values use the provider's explicit split/bonus adjustment factor;
-volume stays source-reported and unadjusted. The basis is
-`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`, not dividend/rights-adjusted
-total return. The exact request identity binds ordered canonical instruments,
-dates, provider `bharatstock-api@v1`, configuration, and schema/contract V3.
+The candidate multiplies source OHLC by the reported adjustment factor and
+carries source volume through unchanged. Its existing
+`BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC` price tag and
+`SOURCE_REPORTED_UNADJUSTED` volume tag remain on qualification hold: copying
+provider volume does not establish exchange-unadjusted units, and arithmetic
+agreement does not establish correct corporate-action adjustment.
+No dividend/rights-adjusted total-return equivalence is claimed.
+The exact request identity binds ordered canonical instruments, dates,
+provider `bharatstock-api@v1`, configuration, and schema/contract V3.
 An existing dataset is reused only
 after its owner, permissions, singleton identity, metadata, complete schema, and
 all OHLCV values pass validation; `REUSED` performs zero provider requests and

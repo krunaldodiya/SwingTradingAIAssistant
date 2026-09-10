@@ -6,6 +6,9 @@
 > The V3 section below governs the new source path. The following V1/V2
 > delivery records and Yahoo handoff identities remain historical, not active
 > Yahoo acquisition instructions.
+> The [price/volume qualification hold](../roadmap.md#bharatstock-price-and-volume-qualification-hold)
+> blocks dependent adjusted-data activation and release; the candidate's
+> arithmetic and labels are not a qualified provider profile.
 
 ## BharatStock V3 successor — unreleased
 
@@ -14,7 +17,9 @@
 The provider is `BHARATSTOCK`, source `bharatstock-api@v1`, mapping
 `bharatstock-isin-exchange-mapping@v1`, and basis
 `BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC`. Volume, where retained by capture,
-is source-reported and unadjusted. No dividend/rights or total-return
+is carried through without further rescaling by this project; that does not
+establish exchange-unadjusted source units. The provider interpretation remains
+on the qualification hold above. No dividend/rights or total-return
 equivalence is claimed.
 
 The request binds the exact ordered canonical ISIN/exchange/effective-symbol
