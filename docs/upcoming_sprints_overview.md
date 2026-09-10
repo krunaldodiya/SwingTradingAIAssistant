@@ -99,10 +99,18 @@ not expand either issue. The architecture sequence, historical validation
 controls, forward/paper path, costs/slippage requirements, and Plan 18
 fixed-cohort limitation remain intact.
 
+**Provider direction update — 2026-09-10:** the owner approved
+[#184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+to replace active yfinance daily acquisition with direct BharatStock access.
+The [migration record](roadmap.md#bharatstock-migration-direction) distinguishes
+the successful 100-stock data check from the blocked, undelivered cutover.
+Issue #183 remains open for its separate member-isolation behavior.
+The provider descriptions below record the still-delivered runtime.
+
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
-yfinance is first only for the separate Plan-22 adjusted daily close; every fact
-records provider and price basis, and no provider is a generic silent fallback.
+The delivered Plan-22 adjusted-close path still uses yfinance; every fact records
+provider and price basis, and no provider is a generic silent fallback.
 Angel One is deferred as a future qualified adapter and is not implemented now.
 yfinance offers long daily history but only the latest 60 days of intraday data;
 it is an unofficial personal/research-use Yahoo client whose retrospective

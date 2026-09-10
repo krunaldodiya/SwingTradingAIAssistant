@@ -1,5 +1,11 @@
 # Capture-forward adjusted OHLCV evidence contract
 
+> Provider direction update (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> The Yahoo-specific profile and immutable revisions below remain unchanged.
+> A new provider requires a qualified successor, not relabelled historical data.
+
 **Status:** ACCEPTED — Sprint 17 / Issue #147
 **Parent:** Issue #139
 **Prerequisites:** Issues #120 and #122 closed/completed

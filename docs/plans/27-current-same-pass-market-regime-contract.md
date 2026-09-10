@@ -1,5 +1,11 @@
 # Current same-pass Market Regime contract
 
+> Provider direction update (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> The delivered adjusted-provider bridge below needs an explicit versioned
+> successor; this note changes neither the raw-grid contract nor #183 behavior.
+
 Status: **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED; ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE, ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**
 Issue: [#119 — Sprint 14: integrated current research packet](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
 Risk: **R3 / High — financial, temporal, and evidence impact**

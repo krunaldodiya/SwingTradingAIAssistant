@@ -1,5 +1,11 @@
 # Provider-neutral adjusted daily close contract
 
+> Provider direction update (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> The delivered Yahoo-specific versions below remain frozen; this note does
+> not implement a successor, relabel evidence, or satisfy #183.
+
 Status: **DELIVERED BOUNDARIES IMPLEMENTED AND MERGED — Issue #127 / PR #129
 delivered the narrow `@v1-mvp`; Issue #132 / PR #133 delivered the lightweight
 canonical explicit-stock `@v2` input/handoff surface. The larger hardening

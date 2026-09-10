@@ -261,11 +261,66 @@ Upstox raw OHLCV and does not make yfinance strict point-in-time authority.
 
 ## Provider and price-basis overlay
 
+### BharatStock migration direction
+
+**2026-09-10 owner decision — approved direction, not a completed cutover.**
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+owns replacement of every active yfinance daily-acquisition path with the
+direct BharatStock API. Use one authorized paid account, no Next.js service,
+and no Yahoo/BharatStock missing-row fallback. Upstox's separate raw/current
+OHLCV and Plan-21 screen remain unchanged.
+
+The owner-authorized direct API check covered the exact 100 canonical members
+and nine-session August 27–September 8 window from the failed capture request.
+All 100 identities and 900 rows passed the scoped identity, session-grid,
+numeric, volume, OHLC-order and close-times-factor checks. The two observations
+occurred on September 10: 23 stocks first, then 77 after the reported paid
+upgrade. They are not an atomic snapshot, historical availability proof,
+independent exchange-price verification, or production capture acceptance.
+All returned factors were `1`; corporate-action adjustment methodology and
+the supplementary datasets remain unqualified. The aggregate evidence digest
+is `829e534bf0fe3db97c101694078c6836a73ede04d7dc0a679252b76760da6a21`;
+private row details and credentials are not published here.
+
+The planned single-account operating budget is 2,000 requests/day. One
+identity lookup plus one history page per stock required 200 successful
+requests across the two batches; pages, other endpoints and attempts add to
+that count. This is a capacity forecast, not a remaining-quota observation or
+confirmation that the previously reported 10,000/day subscription was changed.
+
+The governed cutover must address all of these surfaces:
+
+| Surface | Required successor or preservation |
+| --- | --- |
+| Generic `equity_data_downloader` API/CLI | New provider/request/schema identity and namespace; not automatic capture-evidence admission. |
+| Plans 22 and 27, Industry and Packet consumers | Versioned adjusted-close, mapping and sealed-handoff migration; no downstream provider calls. |
+| Plans 30 and 33 | Qualified price/volume basis, bounded direct acquisition, immutable revisions, exact reuse and truthful coverage. |
+| Packaging and runtime identities | Remove retired active Yahoo adapters/imports/loaders/dependency bindings only after every caller migrates. |
+| Historical evidence | Preserve original Yahoo labels, hashes, known-at times and supported readers; never rewrite old data as BharatStock. |
+| Documentation, skills, tracker and memory | Update active instructions with the exact delivered revision/date; supersede rather than rewrite historical decisions or conversations. |
+
+Implementation remains blocked by the applicable
+[#156 security follow-up](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/156#issuecomment-5612764820),
+which is **INVALID / NO VERDICT**, and by the missing provider
+adjustment/correction and permitted retention/use qualification. The data
+check does not waive these requirements or authorize a new review that
+bypasses the recorded refusal. No production source or capture revision has
+changed as part of this decision record.
+
+[Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+remains separate and open: provider replacement cannot prove that 99 valid
+stocks retain usable independent research when one stock lacks required
+evidence. Its real public-consumer, aggregate-coverage, recovery, review and
+release criteria must pass before closure. A missing member must never be
+silently omitted or a partial list represented as complete.
+
+### Delivered provider behavior pending cutover
+
 Provider routing is by narrow capability, selected explicitly before use, and
 bound into fact provenance. Upstox is primary for live/current raw OHLCV and its
-retained corporate-action screen. yfinance is accepted only for adjusted daily
-research, with explicit provider and adjusted price basis; it is never a silent
-fallback or a live broker feed. Angel One is not implemented now and remains a
+retained corporate-action screen. The delivered runtime still uses yfinance
+only for adjusted daily research with explicit provider and price basis,
+never as a silent fallback or live broker feed. Angel One is not implemented now and remains a
 future adapter candidate requiring separate qualification.
 
 yfinance supplies long daily history, but its intraday history is limited to the

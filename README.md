@@ -297,9 +297,17 @@ positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
 other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
+**Provider migration approved, not yet implemented (2026-09-10):**
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+will replace active yfinance daily acquisition with direct BharatStock API
+access. See the [migration scope and prerequisites](docs/roadmap.md#bharatstock-migration-direction).
+The descriptions and commands below still describe the delivered runtime,
+not a completed BharatStock cutover. Existing Yahoo evidence is preserved;
+Upstox raw/current behavior and #183's separate isolation acceptance remain.
+
 Upstox remains primary for live/raw OHLCV and retained corporate-action
-screening. yfinance is a separate adjusted-daily research provider, not a
-silent fallback, live broker feed, or strict point-in-time authority.
+screening. The delivered runtime still uses yfinance for separate adjusted-daily
+research, not as a silent fallback, live broker feed, or strict point-in-time authority.
 `NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
 integration. A caller-supplied canonical universe snapshot establishes
 historical Nifty 50 membership and sector provenance; it does not supply prices

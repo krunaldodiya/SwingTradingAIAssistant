@@ -1,5 +1,11 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
+> Provider direction update (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [planned BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> This Yahoo-specific runtime contract remains the delivered version, not the
+> future direct-API design. Provider replacement alone does not complete #183.
+
 > Harness portability: historical named-model review choices below record the
 > original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
 > and [portable review procedure](../agent-workflow.md); independent exact-byte

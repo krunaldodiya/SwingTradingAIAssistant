@@ -37,6 +37,21 @@ this boundary. Migration is incremental and versioned under
 [Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md);
 there is no big-bang rename or reinterpretation of frozen evidence.
 
+## Owner decision: BharatStock migration
+
+On 2026-09-10 the owner approved
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184):
+replace active yfinance daily acquisition with direct BharatStock access,
+without a separate service or mixed-provider fallback. The
+[provider migration record](roadmap.md#bharatstock-migration-direction)
+owns the scope, measured data-check limits and unresolved prerequisites.
+This is approved direction, not a delivered runtime change. Existing
+Yahoo-specific contracts/evidence remain truthful until their versioned
+successors are delivered; Upstox raw/current behavior is unchanged.
+Neither this decision nor the 100-stock data check closes
+[#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+or the security-follow-up prerequisite below.
+
 ## Delivery priority overlay
 
 The architecture, locked modules, pipeline, exclusions, and historical plan
