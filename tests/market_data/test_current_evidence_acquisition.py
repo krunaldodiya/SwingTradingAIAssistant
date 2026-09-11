@@ -939,11 +939,13 @@ def test_public_bounds_reject_wrong_types_coverage_urls_and_timestamp_overflow()
         )
 
 
-def test_clock_recursion_and_json_node_or_integer_overflow_are_sanitized() -> None:
-    def recursive_clock() -> datetime:
-        raise RecursionError
+def test_clock_callback_recursion_propagates() -> None:
+    fault = RecursionError("unexpected clock fault")
 
-    with pytest.raises(api.CurrentEvidenceAcquisitionError, match="^SOURCE_MALFORMED$"):
+    def recursive_clock() -> datetime:
+        raise fault
+
+    with pytest.raises(RecursionError) as caught:
         api.acquire_current_sprint14_evidence_v1(
             transport=_Transport(_bodies()),
             clock=recursive_clock,
@@ -951,6 +953,10 @@ def test_clock_recursion_and_json_node_or_integer_overflow_are_sanitized() -> No
             as_of=_NOW,
         )
 
+    assert caught.value is fault
+
+
+def test_json_node_or_integer_overflow_are_sanitized() -> None:
     for raw in (
         json.dumps({"status": "success", "data": [None] * 5_001}).encode(),
         (

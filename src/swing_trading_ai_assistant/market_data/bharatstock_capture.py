@@ -75,6 +75,28 @@ class CaptureRevisionUnavailableV2(ValueError):
     """The requested immutable capture evidence cannot be read safely."""
 
 
+class _CaptureDeadlineExceeded(RuntimeError):
+    """The capture cutoff elapsed before a subsequent provider effect."""
+
+
+def _borrowed_lease_authorizes(
+    lease: StorageRootLease, root: Path, *, write: bool
+) -> bool:
+    """Validate caller-owned private-root authority without taking ownership."""
+
+    if lease._root_private is not True:  # pyright: ignore[reportPrivateUsage]
+        return False
+    try:
+        with lease.read_operation(root):
+            pass
+        if write:
+            with lease.root_operation(root):
+                pass
+    except StorageRootLeaseError:
+        return False
+    return True
+
+
 def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=True, allow_nan=False, separators=(",", ":"), sort_keys=True
@@ -1261,17 +1283,46 @@ def _revision_bytes_for_admission(
     return raw
 
 
+def _capture_effect_guard(
+    request: CaptureRequestV2,
+    operation: StorageRootLeaseOperation,
+    clock: Callable[[], datetime] | None,
+) -> Callable[[], None]:
+    current_time = _now if clock is None else clock
+
+    def guard() -> None:
+        if _instant(current_time()) > request.decision_cutoff:
+            raise _CaptureDeadlineExceeded
+        operation.ensure_live()
+
+    return guard
+
+
 def _member_result(
-    request: CaptureRequestV2, member: BharatStockInstrument, client: BharatStockClient
+    request: CaptureRequestV2,
+    member: BharatStockInstrument,
+    client: BharatStockClient,
+    effect_guard: Callable[[], None] | None,
 ) -> CaptureMemberResultV2:
+    if effect_guard is not None:
+        effect_guard()
     try:
-        history = client.history(member, request.sessions[0], request.sessions[-1])
+        history = client.history(
+            member,
+            request.sessions[0],
+            request.sessions[-1],
+            effect_guard=effect_guard,
+        )
     except BharatStockError as error:
+        if effect_guard is not None:
+            effect_guard()
         if error.member_local:
             return CaptureMemberResultV2(
                 member, "INSUFFICIENT_EVIDENCE", error.category, None
             )
         raise
+    if effect_guard is not None:
+        effect_guard()
     if type(history) is not BharatStockHistory:
         return CaptureMemberResultV2(
             member, "INSUFFICIENT_EVIDENCE", "HISTORY_INVALID", None
@@ -1299,6 +1350,8 @@ def _acquire_revision(
     request: CaptureRequestV2,
     client: BharatStockClient | None,
     clock: Callable[[], datetime] | None,
+    *,
+    effect_guard: Callable[[], None] | None = None,
 ) -> CaptureRevisionV2 | CaptureResultV2:
     current_time = _now if clock is None else clock
     if (failure := _publication_failure(request, clock)) is not None:
@@ -1324,7 +1377,15 @@ def _acquire_revision(
                 "ACQUISITION_DEADLINE_EXCEEDED",
             )
         try:
-            results.append(_member_result(request, member, active_client))
+            results.append(_member_result(request, member, active_client, effect_guard))
+        except _CaptureDeadlineExceeded:
+            return CaptureResultV2(
+                "INSUFFICIENT_EVIDENCE",
+                None,
+                "ACQUISITION_DEADLINE_EXCEEDED",
+            )
+        except StorageRootLeaseError:
+            return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
         except BharatStockError as error:
             shared_failure = error.category
             results.append(
@@ -1448,12 +1509,10 @@ def _capture_preflight(
         type(lease) is not StorageRootLease or store_root != schedule_root
     ):
         raise ValueError("BharatStock borrowed lease is invalid")
-    if lease is not None:
-        try:
-            with lease.read_operation(store_root):
-                pass
-        except StorageRootLeaseError:
-            return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
+    if lease is not None and not _borrowed_lease_authorizes(
+        lease, store_root, write=True
+    ):
+        return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
     if not _schedule_matches(request, schedule_root, lease=lease):
         return CaptureResultV2(
             "INSUFFICIENT_EVIDENCE", None, "SCHEDULE_EVIDENCE_MISMATCH"
@@ -1519,7 +1578,10 @@ def capture_bharatstock_v2(
             if recovered is not None:
                 return recovered
             acquiring_evidence = True
-            revision = _acquire_revision(request, client, clock)
+            effect_guard = _capture_effect_guard(request, operation, clock)
+            revision = _acquire_revision(
+                request, client, clock, effect_guard=effect_guard
+            )
             acquiring_evidence = False
             if isinstance(revision, CaptureResultV2):
                 return revision
@@ -1546,6 +1608,10 @@ def read_bharatstock_capture_revision_v2(
     if not store_root.is_absolute() or not _valid_digest(revision_sha256):
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
     if lease is not None and type(lease) is not StorageRootLease:
+        raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
+    if lease is not None and not _borrowed_lease_authorizes(
+        lease, store_root, write=False
+    ):
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
     active_lease = _acquire_root(store_root) if lease is None else lease
     if active_lease is None:

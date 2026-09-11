@@ -37,6 +37,7 @@ from swing_trading_ai_assistant.market_data.instrument_snapshot import (
     InstrumentSnapshotNotFoundError,
     InstrumentSnapshotStoreV1,
     InstrumentSnapshotUnavailableError,
+    SnapshotInstrumentUnsupportedError,
 )
 from swing_trading_ai_assistant.market_data.preview_admission import (
     PreviewAdmissionPolicyV1,
@@ -806,6 +807,15 @@ def test_snapshot_store_retains_repeated_observations_and_resolves_offline(
         assert resolved.metadata == second
         assert resolved.instrument.security_id == "INE002A01018"
         assert len(catalog.list_instrument_snapshots("upstox-bod-nse")) == 2
+
+
+def test_snapshot_resolution_distinguishes_known_non_equity_symbol() -> None:
+    payload = json.dumps(
+        [{**RELIANCE, "instrument_type": "ETF"}], separators=(",", ":")
+    ).encode()
+
+    with pytest.raises(SnapshotInstrumentUnsupportedError):
+        snapshot_module._resolve_equity_in_payload(payload, "NSE_EQ", "RELIANCE")
 
 
 def test_snapshot_catalog_rejects_divergent_existing_row(tmp_path: Path) -> None:

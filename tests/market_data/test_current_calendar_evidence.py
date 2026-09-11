@@ -219,6 +219,20 @@ def test_calendar_expiry_after_response_stops_later_sources() -> None:
     assert transport.requests == [api.UPSTOX_HOLIDAYS_URL]
 
 
+def test_calendar_clock_callback_oserror_propagates_before_provider_effect() -> None:
+    transport = _CalendarTransport(_bodies(date(2026, 8, 1), _NOW))
+    fault = OSError("unexpected clock fault")
+
+    def clock() -> datetime:
+        raise fault
+
+    with pytest.raises(OSError) as caught:
+        _acquire(transport, clock=clock)
+
+    assert caught.value is fault
+    assert transport.requests == []
+
+
 def test_calendar_only_rejects_malformed_source_without_unrelated_requests() -> None:
     coverage_from = date(2026, 8, 1)
     bodies = _bodies(coverage_from, _NOW)

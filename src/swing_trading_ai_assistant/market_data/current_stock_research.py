@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -59,6 +59,7 @@ from .instrument_snapshot import (
     ResolvedInstrumentSnapshotV1,
     SnapshotInstrumentAmbiguousError,
     SnapshotInstrumentNotFoundError,
+    SnapshotInstrumentUnsupportedError,
 )
 from .instruments import DEFAULT_MAX_CATALOG_COMPRESSED_BYTES
 from .runtime_source_verifier import runtime_source_sha256
@@ -98,6 +99,14 @@ class CurrentStockResearchFailure(RuntimeError):
         self.stage = stage
         self.code = code
         super().__init__(f"{stage}:{code}")
+
+
+class _ClockCallbackFailure(Exception):
+    """Keep callback faults distinct from typed source and storage failures."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        super().__init__("current research clock callback failed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,15 +155,21 @@ class _Window:
     clock: CurrentStockResearchClockV1
     selection: datetime
     deadline: datetime
+    effect_guard: Callable[[], None] | None = None
 
     def now(self) -> datetime:
-        now = _now(self.clock)
+        try:
+            now = _now(self.clock)
+        except Exception as error:
+            raise _ClockCallbackFailure(error) from error
         if now < self.selection:
             raise CurrentStockResearchFailure("deadline", "CLOCK_PRECEDES_SELECTION")
         if now > self.deadline:
             raise CurrentStockResearchFailure(
                 "deadline", "ACQUISITION_DEADLINE_EXPIRED"
             )
+        if self.effect_guard is not None:
+            self.effect_guard()
         return now
 
     def ensure_live(self) -> None:
@@ -166,6 +181,12 @@ class _Evidence:
     calendar: CurrentCalendarEvidenceBundleV1
     mapping: ResolvedInstrumentSnapshotV1
     revision: CaptureRevisionV2
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedEvidence:
+    evidence: _Evidence
+    receipt: dict[str, object]
 
 
 class _SystemClock:
@@ -300,21 +321,56 @@ def research_current_stock_v1(
     price_client: BharatStockClient | None = None,
 ) -> CurrentStockResearchResultV1:
     """Prepare and project one stock; injected ports never select alternate providers."""
+    try:
+        return _research_current_stock(
+            symbol,
+            storage_root,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=calendar_transport,
+            snapshot_transport=snapshot_transport,
+            price_client=price_client,
+        )
+    except _ClockCallbackFailure as error:
+        raise error.error from None
+
+
+def _research_current_stock(
+    symbol: str,
+    storage_root: Path,
+    *,
+    refresh: bool,
+    clock: CurrentStockResearchClockV1 | None,
+    calendar_transport: HttpTransport | None,
+    snapshot_transport: HttpTransport | None,
+    price_client: BharatStockClient | None,
+) -> CurrentStockResearchResultV1:
     symbol, root = _admit_input(symbol, storage_root, refresh)
     active_clock = _SystemClock() if clock is None else clock
     selection = _now(active_clock)
     window = _Window(active_clock, selection, _deadline(selection))
     runtime = _runtime_identity()
+    try:
+        window.ensure_live()
+    except CurrentStockResearchFailure as error:
+        return _terminal(symbol, window, runtime, error.stage, error.code)
     lease = _acquire_root(root)
     if lease is None:
         return _terminal(symbol, window, runtime, "storage", "STORAGE_UNSAFE_OR_HELD")
-    acquiring_prices = False
     try:
-        with lease:
+        with lease, lease.read_operation(root) as authority:
+            window = replace(window, effect_guard=authority.ensure_live)
             window.ensure_live()
             previous = _resolve_locator(root, lease, symbol, window)
-            if previous is not None and not refresh:
-                warm = _warm_evidence(root, lease, symbol, previous, window, runtime)
+            admitted = (
+                None
+                if previous is None
+                else _admit_retained_evidence(
+                    root, lease, symbol, previous, window, observed_by=window.selection
+                )
+            )
+            if admitted is not None and not refresh:
+                warm = _warm_evidence(root, lease, symbol, admitted, window, runtime)
                 if warm is not None:
                     result = _project(symbol, window, runtime, warm, "REUSED")
                     window.ensure_live()
@@ -336,8 +392,10 @@ def research_current_stock_v1(
                 )
             calendar_raw = calendar.canonical_json_bytes()
             calendar_sha = _digest(calendar_raw)
+            window.ensure_live()
             _retain_immutable(root, lease, "calendars", calendar_sha, calendar_raw)
             sessions = _sessions(calendar, selection)
+            window.ensure_live()
             if len(sessions) != 2:
                 return replace(
                     _terminal(
@@ -366,7 +424,6 @@ def research_current_stock_v1(
                 selection_identity_sha256=selection_identity_v2((member,)),
             )
             window.ensure_live()
-            acquiring_prices = True
             capture = capture_bharatstock_v2(
                 request,
                 root,
@@ -387,7 +444,6 @@ def research_current_stock_v1(
                     clock=window.now,
                     lease=lease,
                 )
-            acquiring_prices = False
             window.ensure_live()
             if capture.revision is None:
                 return replace(
@@ -410,7 +466,7 @@ def research_current_stock_v1(
             evidence = _Evidence(calendar, mapping, capture.revision)
             reuse: _Reuse = (
                 "REFRESHED"
-                if refresh
+                if refresh and admitted is not None
                 else "REUSED"
                 if capture.code == "REUSED"
                 else "CAPTURED"
@@ -427,6 +483,7 @@ def research_current_stock_v1(
             )
             raw = _canonical(receipt)
             identity = _digest(raw)
+            window.ensure_live()
             _retain_immutable(root, lease, "receipts", identity, raw)
             window.ensure_live()
             _publish_locator(root, lease, symbol, previous, identity, window)
@@ -435,6 +492,7 @@ def research_current_stock_v1(
     except (
         CurrentStockResearchFailure,
         CurrentEvidenceAcquisitionError,
+        SnapshotInstrumentUnsupportedError,
         SnapshotInstrumentNotFoundError,
         SnapshotInstrumentAmbiguousError,
         InstrumentSnapshotCorruptError,
@@ -442,11 +500,8 @@ def research_current_stock_v1(
         HttpTransportError,
         StorageRootLeaseError,
         CatalogError,
-        OSError,
         private_store._ImmutableEvidenceConflict,  # pyright: ignore[reportPrivateUsage]
     ) as error:
-        if acquiring_prices and not isinstance(error, CurrentStockResearchFailure):
-            raise
         return _terminal(symbol, window, runtime, *_failure_details(error))
 
 
@@ -455,6 +510,8 @@ def _failure_details(error: Exception) -> tuple[str, str]:
         return error.stage, error.code
     if isinstance(error, CurrentEvidenceAcquisitionError):
         return "calendar", error.code.value
+    if isinstance(error, SnapshotInstrumentUnsupportedError):
+        return "mapping", "UNSUPPORTED_NSE_EQ_IDENTITY"
     if isinstance(error, SnapshotInstrumentNotFoundError):
         return "mapping", "MAPPING_MISSING"
     if isinstance(error, SnapshotInstrumentAmbiguousError):
@@ -497,7 +554,7 @@ def _prepare_mapping(
     window.ensure_live()
     with DuckDBCatalog(root, lease=lease) as catalog:
         store = InstrumentSnapshotStoreV1(root, lease, catalog)
-        store.recover_pending()
+        store.recover_pending(deadline=window)
         rows = catalog.list_instrument_snapshots(
             SNAPSHOT_SOURCE_V1, retrieved_at_lte=window.selection
         )
@@ -519,7 +576,7 @@ def _prepare_mapping(
             )
             fetched = source.fetch()
             window.ensure_live()
-            store.retain(fetched)
+            store.retain(fetched, deadline=window)
             as_of = fetched.retrieved_at
         resolved = store.resolve_equity(
             source=SNAPSHOT_SOURCE_V1,
@@ -665,10 +722,15 @@ def _directory(
 def _retain_immutable(
     root: Path, lease: StorageRootLease, kind: str, identity: str, raw: bytes
 ) -> None:
-    with _directory(root, lease, kind, create=True) as directory:
-        private_store.publish_capture_bytes(
-            directory.operation, directory, f"{identity}.json", raw
-        )
+    try:
+        with _directory(root, lease, kind, create=True) as directory:
+            private_store.publish_capture_bytes(
+                directory.operation, directory, f"{identity}.json", raw
+            )
+    except OSError as error:
+        raise CurrentStockResearchFailure(
+            "storage", "EVIDENCE_STORAGE_UNAVAILABLE"
+        ) from error
 
 
 def _read_immutable(
@@ -684,6 +746,10 @@ def _read_immutable(
     except FileNotFoundError as error:
         raise CurrentStockResearchFailure(
             "storage", "EVIDENCE_REFERENCE_MISSING"
+        ) from error
+    except OSError as error:
+        raise CurrentStockResearchFailure(
+            "storage", "EVIDENCE_STORAGE_UNAVAILABLE"
         ) from error
     if _digest(raw) != identity:
         raise CurrentStockResearchFailure("storage", "EVIDENCE_REFERENCE_CONFLICT")
@@ -804,41 +870,35 @@ def _load_receipt(
     return value
 
 
-def _warm_evidence(
+def _admit_retained_evidence(
     root: Path,
     lease: StorageRootLease,
     symbol: str,
     identity: str,
     window: _Window,
-    runtime: str,
-) -> _Evidence | None:
+    *,
+    observed_by: datetime,
+) -> _AdmittedEvidence:
     receipt = _load_receipt(root, lease, symbol, identity)
     selected = _instant(receipt["data_selection_time"])
     calculated = _instant(receipt["calculated_at"])
-    if calculated > window.selection:
+    if calculated > observed_by:
         raise CurrentStockResearchFailure("storage", "RECEIPT_PRECEDES_CURRENT_CLOCK")
-    day = window.selection.astimezone(_IST).date()
-    if (
-        selected.astimezone(_IST).date() != day
-        or receipt["runtime_code_identity_sha256"] != runtime
-        or receipt["configuration_identity_sha256"] != _configuration_identity()
-    ):
-        return None
-    calendar = _read_warm_calendar(root, lease, receipt, day, selected, calculated)
+    calendar = _read_admitted_calendar(root, lease, receipt, selected, calculated)
     window.ensure_live()
+    mapped_at = _instant(receipt["mapping_retrieved_at"])
     with DuckDBCatalog(root, read_only=True, lease=lease) as catalog:
         mapping = InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
             source=SNAPSHOT_SOURCE_V1,
             segment="NSE_EQ",
             symbol=symbol,
-            as_of=window.selection,
+            as_of=mapped_at,
             deadline=window,
         )
-    if mapping.metadata.observation_sha256 != receipt["mapping_observation_sha256"]:
-        return None
     if (
-        mapping.metadata.retrieved_at != _instant(receipt["mapping_retrieved_at"])
-        or mapping.metadata.observation_date != day
+        mapping.metadata.observation_sha256 != receipt["mapping_observation_sha256"]
+        or mapping.metadata.retrieved_at != mapped_at
+        or mapping.metadata.observation_date != selected.astimezone(_IST).date()
     ):
         raise CurrentStockResearchFailure("storage", "MAPPING_TIME_CONFLICT")
     try:
@@ -868,26 +928,58 @@ def _warm_evidence(
         or revision.provider_source != PROVIDER_SOURCE
     ):
         raise CurrentStockResearchFailure("storage", "CAPTURE_BINDING_CONFLICT")
-    if revision.request.sessions != _sessions(calendar, window.selection):
-        return None
+    window.ensure_live()
+    return _AdmittedEvidence(_Evidence(calendar, mapping, revision), receipt)
+
+
+def _warm_evidence(
+    root: Path,
+    lease: StorageRootLease,
+    symbol: str,
+    admitted: _AdmittedEvidence,
+    window: _Window,
+    runtime: str,
+) -> _Evidence | None:
+    receipt, evidence = admitted.receipt, admitted.evidence
+    selected = _instant(receipt["data_selection_time"])
     if (
-        revision.shared_failure is not None
-        or revision.members[0].evidence_state != "OBSERVED"
+        selected.astimezone(_IST).date() != window.selection.astimezone(_IST).date()
+        or receipt["runtime_code_identity_sha256"] != runtime
+        or receipt["configuration_identity_sha256"] != _configuration_identity()
     ):
         return None
     window.ensure_live()
-    return _Evidence(calendar, mapping, revision)
+    with DuckDBCatalog(root, read_only=True, lease=lease) as catalog:
+        current = InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
+            source=SNAPSHOT_SOURCE_V1,
+            segment="NSE_EQ",
+            symbol=symbol,
+            as_of=window.selection,
+            deadline=window,
+        )
+    if current.metadata != evidence.mapping.metadata:
+        return None
+    if evidence.revision.request.sessions != _sessions(
+        evidence.calendar, window.selection
+    ):
+        return None
+    if (
+        evidence.revision.shared_failure is not None
+        or evidence.revision.members[0].evidence_state != "OBSERVED"
+    ):
+        return None
+    window.ensure_live()
+    return evidence
 
 
-def _read_warm_calendar(
+def _read_admitted_calendar(
     root: Path,
     lease: StorageRootLease,
     receipt: dict[str, object],
-    day: date,
     selected: datetime,
     calculated: datetime,
 ) -> CurrentCalendarEvidenceBundleV1:
-
+    day = selected.astimezone(_IST).date()
     raw = _read_immutable(
         root, lease, "calendars", receipt["calendar_bundle_sha256"], _MAX_CALENDAR_BYTES
     )
@@ -911,7 +1003,6 @@ def _read_warm_calendar(
         or retained.schedule != calendar.schedule
     ):
         raise CurrentStockResearchFailure("storage", "SCHEDULE_EVIDENCE_CONFLICT")
-
     return calendar
 
 
@@ -955,14 +1046,20 @@ def _recover_locator(
     lease: StorageRootLease,
     symbol: str,
     window: _Window,
+    *,
+    observed_by: datetime,
 ) -> str | None:
     key = _locator_name(symbol)
     name, pending = f"{key}.json", f"{key}.pending"
     links = _locator_link_count(directory.descriptor, name, pending)
     current = _read_locator_file(directory, name, links=links)
     staged = _read_locator_file(directory, pending, links=links)
-    _validate_locator_receipt(root, lease, symbol, current)
-    _validate_locator_receipt(root, lease, symbol, staged)
+    _validate_locator_target(
+        root, lease, symbol, current, window, observed_by=observed_by
+    )
+    _validate_locator_target(
+        root, lease, symbol, staged, window, observed_by=observed_by
+    )
     if staged is None:
         return None if current is None else cast(str, current["receipt_sha256"])
     window.ensure_live()
@@ -998,16 +1095,29 @@ def _recover_locator(
     return cast(str, final["receipt_sha256"])
 
 
-def _validate_locator_receipt(
+def _validate_locator_target(
     root: Path,
     lease: StorageRootLease,
     symbol: str,
     locator: dict[str, object] | None,
+    window: _Window,
+    *,
+    observed_by: datetime,
 ) -> None:
     if locator is None:
         return
-    receipt = _load_receipt(root, lease, symbol, cast(str, locator["receipt_sha256"]))
-    if receipt["previous_receipt_sha256"] != locator["previous_receipt_sha256"]:
+    admitted = _admit_retained_evidence(
+        root,
+        lease,
+        symbol,
+        cast(str, locator["receipt_sha256"]),
+        window,
+        observed_by=observed_by,
+    )
+    if (
+        admitted.receipt["previous_receipt_sha256"]
+        != locator["previous_receipt_sha256"]
+    ):
         raise CurrentStockResearchFailure("storage", "LOCATOR_RECEIPT_CONFLICT")
 
 
@@ -1051,9 +1161,15 @@ def _resolve_locator(
 ) -> str | None:
     try:
         with _directory(root, lease, "locators", create=False) as directory:
-            return _recover_locator(directory, root, lease, symbol, window)
+            return _recover_locator(
+                directory, root, lease, symbol, window, observed_by=window.selection
+            )
     except FileNotFoundError:
         return None
+    except OSError as error:
+        raise CurrentStockResearchFailure(
+            "storage", "LOCATOR_STORAGE_UNAVAILABLE"
+        ) from error
 
 
 def _publish_locator(
@@ -1064,16 +1180,33 @@ def _publish_locator(
     identity: str,
     window: _Window,
 ) -> None:
-    with _directory(root, lease, "locators", create=True) as directory:
-        if _recover_locator(directory, root, lease, symbol, window) != previous:
-            raise CurrentStockResearchFailure("storage", "LOCATOR_CHANGED")
-        raw = _canonical(
-            {"previous_receipt_sha256": previous, "receipt_sha256": identity}
-        )
-        window.ensure_live()
-        private_store.publish_capture_bytes(
-            directory.operation, directory, f"{_locator_name(symbol)}.pending", raw
-        )
-        window.ensure_live()
-        if _recover_locator(directory, root, lease, symbol, window) != identity:
-            raise CurrentStockResearchFailure("storage", "LOCATOR_PUBLICATION_CONFLICT")
+    try:
+        with _directory(root, lease, "locators", create=True) as directory:
+            if (
+                _recover_locator(
+                    directory, root, lease, symbol, window, observed_by=window.selection
+                )
+                != previous
+            ):
+                raise CurrentStockResearchFailure("storage", "LOCATOR_CHANGED")
+            raw = _canonical(
+                {"previous_receipt_sha256": previous, "receipt_sha256": identity}
+            )
+            window.ensure_live()
+            private_store.publish_capture_bytes(
+                directory.operation, directory, f"{_locator_name(symbol)}.pending", raw
+            )
+            window.ensure_live()
+            if (
+                _recover_locator(
+                    directory, root, lease, symbol, window, observed_by=window.now()
+                )
+                != identity
+            ):
+                raise CurrentStockResearchFailure(
+                    "storage", "LOCATOR_PUBLICATION_CONFLICT"
+                )
+    except OSError as error:
+        raise CurrentStockResearchFailure(
+            "storage", "LOCATOR_STORAGE_UNAVAILABLE"
+        ) from error

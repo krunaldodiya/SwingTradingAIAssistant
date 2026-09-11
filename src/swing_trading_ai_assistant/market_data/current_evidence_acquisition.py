@@ -1699,8 +1699,8 @@ def _fetch_exact(  # noqa: C901
 
 
 def _trusted_clock_instant(clock: TrustedClockV1) -> datetime:
+    value = clock()
     try:
-        value = clock()
         if not _is_utc(value) or not 2000 <= value.year <= 2100:
             raise ValueError
         return value

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -14,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .http import (
+    HttpResponse,
     HttpResponseBodyTooLarge,
     HttpResponseHeadersInvalid,
     HttpTransport,
@@ -313,17 +315,32 @@ class BharatStockClient:
             self._stop("AUTHENTICATION")
         return {"X-API-Key": key, "Accept": "application/json"}
 
-    def _get(self, url: str) -> tuple[dict[str, object], str]:
+    def _request(
+        self, url: str, *, effect_guard: Callable[[], None] | None = None
+    ) -> HttpResponse:
+        if effect_guard is not None:
+            effect_guard()
         headers = self._request_headers()
-        self._requests_used += 1
         try:
-            response = self._transport.get(url, headers)
-        except HttpTransportError:
-            self._stop("TRANSPORT_FAILED")
-        except (HttpResponseBodyTooLarge, HttpResponseHeadersInvalid):
-            self._stop("RESPONSE_LIMIT_EXCEEDED")
+            if effect_guard is not None:
+                effect_guard()
+            self._requests_used += 1
+            try:
+                response = self._transport.get(url, headers)
+            except HttpTransportError:
+                self._stop("TRANSPORT_FAILED")
+            except (HttpResponseBodyTooLarge, HttpResponseHeadersInvalid):
+                self._stop("RESPONSE_LIMIT_EXCEEDED")
         finally:
             headers.clear()
+        if effect_guard is not None:
+            effect_guard()
+        return response
+
+    def _get(
+        self, url: str, *, effect_guard: Callable[[], None] | None = None
+    ) -> tuple[dict[str, object], str]:
+        response = self._request(url, effect_guard=effect_guard)
         if len(response.body) > _MAX_BODY:
             self._stop("RESPONSE_LIMIT_EXCEEDED")
         status = response.status_code
@@ -346,11 +363,14 @@ class BharatStockClient:
         instrument: BharatStockInstrument,
         start: date,
         end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
     ) -> BharatStockHistory:
         _validate_history_request(instrument, start, end)
         base = _BASE + instrument.isin
         identity, identity_digest = self._get(
-            base + "?" + urlencode({"exchange": instrument.exchange})
+            base + "?" + urlencode({"exchange": instrument.exchange}),
+            effect_guard=effect_guard,
         )
         if any(
             identity.get(name) != getattr(instrument, name)
@@ -374,7 +394,7 @@ class BharatStockClient:
                     }
                 )
             )
-            payload, digest = self._get(url)
+            payload, digest = self._get(url, effect_guard=effect_guard)
             data, total_items, total_pages = _page_metadata(payload, page)
             if expected is not None and expected != (total_items, total_pages):
                 raise BharatStockError("PAGINATION_INVALID", member_local=True)

@@ -17,6 +17,7 @@ from swing_trading_ai_assistant.market_data import (
     capture_forward_adjusted_ohlcv as private_store,
 )
 from swing_trading_ai_assistant.market_data import catalog as catalog_api
+from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockDailyPrice,
@@ -28,6 +29,7 @@ from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_evidence_acquisition import (
     UPSTOX_HOLIDAYS_URL,
+    CurrentCalendarEvidenceBundleV1,
     nse_holiday_master_url_v1,
 )
 from swing_trading_ai_assistant.market_data.current_stock_research import (
@@ -44,6 +46,9 @@ from swing_trading_ai_assistant.market_data.instrument_snapshot import (
 )
 from swing_trading_ai_assistant.market_data.instruments import (
     UPSTOX_NSE_INSTRUMENTS_URL,
+)
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    ScheduleEvidenceStore,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
@@ -167,8 +172,15 @@ class _Prices:
         self.missing_last = False
 
     def history(
-        self, instrument: BharatStockInstrument, start: date, end: date
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
     ) -> BharatStockHistory:
+        if effect_guard is not None:
+            effect_guard()
         self.calls.append((instrument, start, end))
         if self.failure is not None:
             raise self.failure
@@ -194,6 +206,8 @@ class _Prices:
         )
         if self.after_history is not None:
             self.after_history()
+        if effect_guard is not None:
+            effect_guard()
         return result
 
 
@@ -487,8 +501,13 @@ def test_mapping_failure_prevents_price_effects(tmp_path: Path, mapping: str) ->
     prices = _Prices(clock)
     result = _research(tmp_path, clock, sources, prices)
     assert result.status == "UNAVAILABLE" and result.stage == "mapping"
-    assert result.code == (
-        "MAPPING_AMBIGUOUS" if mapping == "ambiguous" else "MAPPING_MISSING"
+    assert (
+        result.code
+        == {
+            "absent": "MAPPING_MISSING",
+            "unsupported": "UNSUPPORTED_NSE_EQ_IDENTITY",
+            "ambiguous": "MAPPING_AMBIGUOUS",
+        }[mapping]
     )
     assert prices.calls == []
 
@@ -631,6 +650,56 @@ def test_interrupted_locator_publication_recovers_without_price_transport(
     assert recovered.price_action.close_to_previous_close_distance == (
         Decimal(5) if initial else Decimal(6)
     )
+
+
+def test_interrupted_staged_locator_corruption_stops_recovery_before_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    link = os.link
+
+    def interrupt_after_link(source, target, **kwargs):
+        link(source, target, **kwargs)
+        if str(source).endswith(".pending"):
+            raise OSError("interrupted locator link")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", interrupt_after_link)
+        failed = _research(tmp_path, clock, sources, prices)
+    assert failed.status == "UNAVAILABLE" and failed.stage == "storage"
+
+    pending = next(
+        (tmp_path / "current-stock-research-v1" / "locators").glob("*.pending")
+    )
+    receipt = (
+        tmp_path
+        / "current-stock-research-v1"
+        / "receipts"
+        / (f"{json.loads(pending.read_bytes())['receipt_sha256']}.json")
+    )
+    retained_receipt = json.loads(receipt.read_bytes())
+    capture = (
+        tmp_path
+        / "bharatstock-capture-v3"
+        / "revisions"
+        / f"{retained_receipt['capture_revision_sha256']}.json"
+    )
+    capture.chmod(0o600)
+    capture.write_bytes(b"corrupt retained capture\n")
+    capture.chmod(0o400)
+    pending_before = pending.read_bytes()
+    current = pending.with_suffix(".json")
+    current_before = current.read_bytes()
+    sources.forbid_requests = True
+    prices.failure = AssertionError("corrupt staged target must not reacquire")
+
+    result = _research(tmp_path, clock, sources, prices)
+
+    assert result.status == "UNAVAILABLE" and result.stage == "storage"
+    assert len(prices.calls) == 1
+    assert pending.read_bytes() == pending_before
+    assert current.read_bytes() == current_before
 
 
 @pytest.mark.parametrize("kind", ["locator", "receipt", "calendar", "capture"])
@@ -835,3 +904,204 @@ def test_locator_parent_must_match_its_exact_receipt(tmp_path: Path) -> None:
     sources.forbid_requests = True
     result = _research(tmp_path, clock, sources, prices)
     assert result.status == "UNAVAILABLE" and result.stage == "storage"
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+@pytest.mark.parametrize("kind", ["calendar", "capture"])
+def test_stale_or_refresh_cannot_bypass_retained_integrity(
+    tmp_path: Path, refresh: bool, kind: str
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    first = _research(tmp_path, clock, sources, prices)
+    namespace = tmp_path / "current-stock-research-v1"
+    locator = next((namespace / "locators").glob("*.json"))
+    receipt = json.loads(
+        (
+            namespace
+            / "receipts"
+            / f"{json.loads(locator.read_bytes())['receipt_sha256']}.json"
+        ).read_bytes()
+    )
+    target = (
+        namespace / "calendars" / f"{receipt['calendar_bundle_sha256']}.json"
+        if kind == "calendar"
+        else tmp_path
+        / "bharatstock-capture-v3"
+        / "revisions"
+        / f"{first.capture_revision_sha256}.json"
+    )
+    target.chmod(0o600)
+    target.write_bytes(b"corrupt retained evidence\n")
+    target.chmod(0o400)
+    clock.value += timedelta(minutes=1) if refresh else timedelta(days=1)
+    sources.forbid_requests = True
+    prices.failure = AssertionError("corrupt evidence must prevent price access")
+    result = _research(tmp_path, clock, sources, prices, refresh=refresh)
+    assert result.status == "UNAVAILABLE" and result.stage == "storage"
+
+
+def test_calendar_root_loss_stops_the_next_official_request(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+
+    def replace_root(url: str) -> None:
+        if url == UPSTOX_HOLIDAYS_URL:
+            root.rename(tmp_path / "displaced")
+            root.mkdir(mode=0o700)
+
+    sources.after_get = replace_root
+    result = _research(root, clock, sources, prices)
+    assert result.status == "UNAVAILABLE" and result.stage == "storage"
+    assert sources.requests == [UPSTOX_HOLIDAYS_URL]
+    assert prices.calls == []
+
+
+@pytest.mark.parametrize("boundary", ["retention", "serialization"])
+def test_calendar_deadline_prevents_the_next_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    retained = False
+    retain = ScheduleEvidenceStore.retain
+    serialize = CurrentCalendarEvidenceBundleV1.canonical_json_bytes
+
+    def retain_then_advance(self, schedule):
+        nonlocal retained
+        result = retain(self, schedule)
+        retained = True
+        if boundary == "retention":
+            clock.value += timedelta(minutes=31)
+        return result
+
+    def serialize_then_advance(self):
+        result = serialize(self)
+        if retained and boundary == "serialization":
+            clock.value += timedelta(minutes=31)
+        return result
+
+    monkeypatch.setattr(ScheduleEvidenceStore, "retain", retain_then_advance)
+    monkeypatch.setattr(
+        CurrentCalendarEvidenceBundleV1, "canonical_json_bytes", serialize_then_advance
+    )
+    result = _research(tmp_path, clock, sources, prices)
+    assert result.stage == "deadline" and result.status == "UNAVAILABLE"
+    assert not list(
+        (tmp_path / "current-stock-research-v1" / "calendars").glob("*.json")
+    )
+    assert UPSTOX_NSE_INSTRUMENTS_URL not in sources.requests and prices.calls == []
+
+
+def test_mapping_deadline_stops_after_journal_before_snapshot_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    publish = snapshots._publish_exact
+
+    def publish_then_expire(operation, parent_fd, temporary, final, value):
+        publish(operation, parent_fd, temporary, final, value)
+        if final == "pending-observation-v1.json":
+            clock.value += timedelta(minutes=31)
+
+    monkeypatch.setattr(snapshots, "_publish_exact", publish_then_expire)
+    result = _research(tmp_path, clock, sources, prices)
+
+    assert result.stage == "deadline" and result.status == "UNAVAILABLE"
+    assert prices.calls == []
+    assert not list(
+        (tmp_path / "instrument_snapshots").glob("sha256=*/snapshot.json.gz")
+    )
+
+
+@pytest.mark.parametrize("boundary", ["calendar", "mapping", "clock"])
+def test_unexpected_nonstorage_oserror_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    original_get = sources.get
+    fault = OSError("unexpected non-storage port failure")
+
+    def get(url: str, headers: dict[str, str]) -> HttpResponse:
+        if (boundary == "calendar" and url == UPSTOX_HOLIDAYS_URL) or (
+            boundary == "mapping" and url == UPSTOX_NSE_INSTRUMENTS_URL
+        ):
+            raise fault
+        return original_get(url, headers)
+
+    def now() -> datetime:
+        if sources.requests:
+            raise fault
+        return clock.value
+
+    monkeypatch.setattr(sources, "get", get)
+    if boundary == "clock":
+        monkeypatch.setattr(clock, "now", now)
+    with pytest.raises(OSError) as caught:
+        _research(tmp_path, clock, sources, prices)
+    assert caught.value is fault
+
+
+def test_first_invocation_with_refresh_reports_a_capture(tmp_path: Path) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    result = _research(tmp_path, clock, sources, _Prices(clock), refresh=True)
+    assert result.status == "OBSERVED" and result.reuse_state == "CAPTURED"
+
+
+def test_advancing_acquisition_clock_allows_current_receipt_publication(
+    tmp_path: Path,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+
+    def advance_after_response(url: str) -> None:
+        clock.value += timedelta(seconds=1)
+
+    sources.after_get = advance_after_response
+    result = _research(tmp_path, clock, sources, prices)
+    assert result.status == "OBSERVED"
+    assert result.calculation_known_at > result.data_selection_time
+    sources.forbid_requests = True
+    prices.failure = AssertionError("valid advancing-clock capture must be reusable")
+    clock.value += timedelta(minutes=1)
+    reused = _research(tmp_path, clock, sources, prices)
+    assert reused.reuse_state == "REUSED"
+    assert reused.capture_revision_sha256 == result.capture_revision_sha256
+
+
+@pytest.mark.parametrize(
+    "failure_type", [OSError, snapshots.SnapshotInstrumentNotFoundError]
+)
+def test_clock_error_during_retained_admission_keeps_its_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_type: type[Exception]
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    assert _research(tmp_path, clock, sources, prices).status == "OBSERVED"
+    clock.value += timedelta(minutes=1)
+    sources.forbid_requests = True
+    resolve = InstrumentSnapshotStoreV1.resolve_equity
+    reading_mapping = False
+    fault = failure_type("clock callback failed during retained admission")
+
+    def now() -> datetime:
+        if reading_mapping:
+            raise fault
+        return clock.value
+
+    def resolve_with_clock_failure(self, **kwargs):
+        nonlocal reading_mapping
+        reading_mapping = True
+        return resolve(self, **kwargs)
+
+    monkeypatch.setattr(clock, "now", now)
+    monkeypatch.setattr(
+        InstrumentSnapshotStoreV1, "resolve_equity", resolve_with_clock_failure
+    )
+    with pytest.raises(failure_type) as caught:
+        _research(tmp_path, clock, sources, prices)
+    assert caught.value is fault
