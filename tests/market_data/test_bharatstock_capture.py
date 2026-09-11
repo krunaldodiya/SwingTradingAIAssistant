@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -1103,3 +1104,433 @@ def test_new_request_parser_rejects_predecessor_identity_without_writing() -> No
 
     with pytest.raises(ValueError, match="request JSON is invalid"):
         core.parse_bharatstock_capture_request_v2(core._line(predecessor))  # pyright: ignore[reportPrivateUsage]
+
+
+def test_prepared_publication_primary_survives_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    primary = AssertionError("prepared readback failure")
+    secondary = OSError("prepared close failure")
+    open_file, read, close = os.open, os.read, os.close
+    owned: set[int] = set()
+    descriptors: list[int] = []
+    close_attempts: list[int] = []
+
+    def track_open(path, flags, *args, **kwargs):
+        descriptor = open_file(path, flags, *args, **kwargs)
+        if (
+            path == request_name
+            and flags & os.O_RDWR
+            and kwargs.get("dir_fd") is not None
+        ):
+            owned.add(descriptor)
+            descriptors.append(descriptor)
+        return descriptor
+
+    def fail_read(descriptor, size):
+        if descriptor in owned:
+            raise primary
+        return read(descriptor, size)
+
+    def fail_after_close(descriptor):
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close_attempts.append(descriptor)
+            close(descriptor)
+            raise secondary
+        close(descriptor)
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "read", fail_read)
+    monkeypatch.setattr(os, "close", fail_after_close)
+
+    with pytest.raises(AssertionError) as raised:
+        core.capture_bharatstock_v2(request, root, schedule_root, client=_Client())
+
+    assert raised.value is primary
+    assert close_attempts == descriptors
+    assert owned == set()
+
+
+def test_publication_commit_primary_survives_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    primary = AssertionError("commit readback failure")
+    secondary = OSError("publication close failure")
+    open_file, read, close = os.open, os.read, os.close
+    owned: set[int] = set()
+    descriptors: list[int] = []
+    close_attempts: list[int] = []
+
+    def track_open(path, flags, *args, **kwargs):
+        descriptor = open_file(path, flags, *args, **kwargs)
+        if (
+            path != request_name
+            and flags & os.O_RDWR
+            and isinstance(path, str)
+            and path.endswith(".json")
+            and kwargs.get("dir_fd") is not None
+        ):
+            owned.add(descriptor)
+            descriptors.append(descriptor)
+        return descriptor
+
+    def fail_read(descriptor, size):
+        if descriptor in owned:
+            raise primary
+        return read(descriptor, size)
+
+    def fail_after_close(descriptor):
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close_attempts.append(descriptor)
+            close(descriptor)
+            raise secondary
+        close(descriptor)
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "read", fail_read)
+    monkeypatch.setattr(os, "close", fail_after_close)
+
+    with pytest.raises(AssertionError) as raised:
+        core.capture_bharatstock_v2(request, root, schedule_root, client=_Client())
+
+    assert raised.value is primary
+    assert close_attempts == descriptors
+    assert owned == set()
+
+
+@pytest.mark.parametrize("stage", ["open", "recover"])
+def test_interrupted_publication_recovery_primary_survives_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    client = _Client()
+    publish = held_store.publish_capture_bytes
+
+    def interrupt_request_pointer(operation, directory, name, raw):
+        if name == request_name:
+            raise OSError("interrupted before request admission")
+        publish(operation, directory, name, raw)
+
+    monkeypatch.setattr(held_store, "publish_capture_bytes", interrupt_request_pointer)
+    interrupted = core.capture_bharatstock_v2(
+        request, root, schedule_root, client=client
+    )
+    assert interrupted.code == "STORE_UNAVAILABLE"
+    monkeypatch.setattr(held_store, "publish_capture_bytes", publish)
+    revision_paths = tuple(
+        (root / "bharatstock-capture-v3" / "revisions").glob("*.json")
+    )
+    assert len(revision_paths) == 1
+    target_name = revision_paths[0].name
+    primary = AssertionError(f"recovery {stage} failure")
+    secondary = OSError("recovery close failure")
+    open_file, close = os.open, os.close
+    operation_name = "fstat" if stage == "open" else "fsync"
+    operation = getattr(os, operation_name)
+    owned: set[int] = set()
+    descriptors: list[int] = []
+    close_attempts: list[int] = []
+
+    def track_open(path, flags, *args, **kwargs):
+        descriptor = open_file(path, flags, *args, **kwargs)
+        if path == target_name and kwargs.get("dir_fd") is not None:
+            owned.add(descriptor)
+            descriptors.append(descriptor)
+        return descriptor
+
+    def fail_operation(descriptor):
+        if descriptor in owned:
+            raise primary
+        return operation(descriptor)
+
+    def fail_after_close(descriptor):
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close_attempts.append(descriptor)
+            close(descriptor)
+            raise secondary
+        close(descriptor)
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, operation_name, fail_operation)
+    monkeypatch.setattr(os, "close", fail_after_close)
+
+    with pytest.raises(AssertionError) as raised:
+        core.capture_bharatstock_v2(request, root, schedule_root, client=client)
+
+    assert raised.value is primary
+    assert len(client.calls) == 1
+    assert close_attempts == descriptors
+    assert owned == set()
+
+
+@pytest.mark.parametrize("access", ["prepared", "publication", "exact_file"])
+def test_standalone_publication_close_failure_surfaces_cleanup_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    secondary = OSError("standalone publication close failure")
+    close_attempts: list[int] = []
+    revision_id: str | None = None
+
+    if access == "prepared":
+        close = held_store._HeldRecoverablePublication.close  # pyright: ignore[reportPrivateUsage]
+
+        def fail_after_close(publication):
+            descriptor = publication.descriptor
+            close(publication)
+            close_attempts.append(descriptor)
+            raise secondary
+
+        monkeypatch.setattr(
+            held_store._HeldRecoverablePublication,  # pyright: ignore[reportPrivateUsage]
+            "close",
+            fail_after_close,
+        )
+    else:
+        if access == "exact_file":
+            captured = core.capture_bharatstock_v2(
+                request, root, schedule_root, client=_Client()
+            )
+            assert captured.revision is not None
+            revision_id = captured.revision.revision_identity_sha256
+        target_name = f"{revision_id}.json"
+        open_file, close = os.open, os.close
+        owned: set[int] = set()
+
+        def track_open(path, flags, *args, **kwargs):
+            descriptor = open_file(path, flags, *args, **kwargs)
+            if kwargs.get("dir_fd") is not None and (
+                (access == "exact_file" and path == target_name)
+                or (
+                    access == "publication"
+                    and flags & os.O_RDWR
+                    and isinstance(path, str)
+                    and path.endswith(".json")
+                    and path != request_name
+                )
+            ):
+                owned.add(descriptor)
+            return descriptor
+
+        def fail_after_close(descriptor):
+            if descriptor in owned:
+                owned.remove(descriptor)
+                close_attempts.append(descriptor)
+                close(descriptor)
+                raise secondary
+            close(descriptor)
+
+        monkeypatch.setattr(os, "open", track_open)
+        monkeypatch.setattr(os, "close", fail_after_close)
+
+    with pytest.raises(RuntimeError) as raised:
+        try:
+            raise FileNotFoundError("already handled lookup miss")
+        except FileNotFoundError:
+            if access != "exact_file":
+                core.capture_bharatstock_v2(
+                    request, root, schedule_root, client=_Client()
+                )
+            else:
+                assert revision_id is not None
+                core.read_bharatstock_capture_revision_v2(root, revision_id)
+
+    assert raised.value.__cause__ is secondary
+    assert len(close_attempts) == 1
+
+
+def test_prepared_publication_cancellation_closes_its_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    cancellation = asyncio.CancelledError("capture cancelled")
+    open_file, write, fstat, close = os.open, os.write, os.fstat, os.close
+    owned: set[int] = set()
+    descriptors: list[int] = []
+    close_attempts: list[int] = []
+
+    def track_open(path, flags, *args, **kwargs):
+        descriptor = open_file(path, flags, *args, **kwargs)
+        if (
+            path == request_name
+            and flags & os.O_RDWR
+            and kwargs.get("dir_fd") is not None
+        ):
+            owned.add(descriptor)
+            descriptors.append(descriptor)
+        return descriptor
+
+    def cancel_write(descriptor, data):
+        if descriptor in owned:
+            raise cancellation
+        return write(descriptor, data)
+
+    def track_close(descriptor):
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close_attempts.append(descriptor)
+        close(descriptor)
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "write", cancel_write)
+    monkeypatch.setattr(os, "close", track_close)
+
+    try:
+        with pytest.raises(asyncio.CancelledError) as raised:
+            core.capture_bharatstock_v2(request, root, schedule_root, client=_Client())
+
+        assert raised.value is cancellation
+        assert close_attempts == descriptors
+        assert owned == set()
+        with pytest.raises(OSError):
+            fstat(descriptors[0])
+    finally:
+        for descriptor in tuple(owned):
+            close(descriptor)
+            owned.remove(descriptor)
+
+
+def test_recoverable_publication_constructor_failure_closes_open_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    lease = core._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+    assert lease is not None
+    name = "prepared.json"
+    content = b'{"publication":"prepared"}\n'
+
+    with (
+        lease,
+        lease.root_operation(root) as operation,
+        held_store._open_private_directory(  # pyright: ignore[reportPrivateUsage]
+            operation, operation.descriptor, "prepared", create=True
+        ) as prepared,
+    ):
+        held = held_store.prepare_capture_publication(
+            operation, prepared, name, content
+        )
+        held.close()
+        primary = MemoryError("recoverable publication construction failed")
+        open_file, fstat, close = os.open, os.fstat, os.close
+        owned: set[int] = set()
+        descriptors: list[int] = []
+        close_attempts: list[int] = []
+
+        def track_open(path, flags, *args, **kwargs):
+            descriptor = open_file(path, flags, *args, **kwargs)
+            if path == name and kwargs.get("dir_fd") is not None:
+                owned.add(descriptor)
+                descriptors.append(descriptor)
+            return descriptor
+
+        def track_close(descriptor):
+            if descriptor in owned:
+                owned.remove(descriptor)
+                close_attempts.append(descriptor)
+            close(descriptor)
+
+        class FailingHeldPublication:
+            def __init__(self, *args) -> None:
+                raise primary
+
+        monkeypatch.setattr(os, "open", track_open)
+        monkeypatch.setattr(os, "close", track_close)
+        monkeypatch.setattr(
+            held_store,
+            "_HeldRecoverablePublication",
+            FailingHeldPublication,
+        )
+
+        try:
+            with pytest.raises(MemoryError) as raised:
+                held_store.prepare_capture_publication(
+                    operation, prepared, name, content
+                )
+
+            assert raised.value is primary
+            assert close_attempts == descriptors
+            assert owned == set()
+            with pytest.raises(OSError):
+                fstat(descriptors[0])
+        finally:
+            for descriptor in tuple(owned):
+                close(descriptor)
+                owned.remove(descriptor)
+
+
+def test_recovery_name_disappearance_never_republishes_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    request_name = f"{request.request_identity_sha256}.json"
+    client = _Client()
+    publish = held_store.publish_capture_bytes
+
+    def interrupt_request_pointer(operation, directory, name, raw):
+        if name == request_name:
+            raise OSError("interrupted before request admission")
+        publish(operation, directory, name, raw)
+
+    monkeypatch.setattr(held_store, "publish_capture_bytes", interrupt_request_pointer)
+    assert (
+        core.capture_bharatstock_v2(request, root, schedule_root, client=client).code
+        == "STORE_UNAVAILABLE"
+    )
+    monkeypatch.setattr(held_store, "publish_capture_bytes", publish)
+    (target,) = (root / "bharatstock-capture-v3" / "revisions").glob("*.json")
+    original = target.read_bytes()
+    detached = tmp_path / "detached-revision.json"
+    stat = os.stat
+    disappeared = False
+
+    def disappear_after_open(path, *args, **kwargs):
+        nonlocal disappeared
+        if not disappeared and path == target.name and kwargs.get("dir_fd") is not None:
+            disappeared = True
+            target.rename(detached)
+        return stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", disappear_after_open)
+    result = core.capture_bharatstock_v2(request, root, schedule_root, client=client)
+    assert disappeared
+    assert result.code == "STORE_UNAVAILABLE"
+    assert result.revision is None
+    assert len(client.calls) == 1
+    assert not target.exists()
+    assert detached.read_bytes() == original
+    assert not (root / "bharatstock-capture-v3" / "requests" / request_name).exists()

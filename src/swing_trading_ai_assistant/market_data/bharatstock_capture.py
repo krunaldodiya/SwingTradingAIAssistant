@@ -981,7 +981,9 @@ def _publish(
             prepared = _legacy_store.prepare_capture_publication(
                 directory.operation, directory, name, raw
             )
-            prepared.close()
+            _legacy_store._close_capture_resources_v1(  # pyright: ignore[reportPrivateUsage]
+                (prepared,), active_failure=None
+            )
             return
         _legacy_store.publish_capture_bytes(directory.operation, directory, name, raw)
     except _legacy_store._ImmutableEvidenceConflict:  # pyright: ignore[reportPrivateUsage]

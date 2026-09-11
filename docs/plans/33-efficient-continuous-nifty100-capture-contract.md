@@ -19,6 +19,8 @@ identities cannot be silently accepted as the new contract.
 Reuse must resolve the retained request/selection/revision binding before any
 source or provider call.
 Only a genuinely absent request binding permits cold source acquisition.
+An initial target-open miss is genuine only after the held parent/root authority
+is revalidated; disappearance after a successful open is an evidence conflict.
 Malformed bindings, missing bound source evidence, unsafe retained objects and
 lost root authority return `SELECTION_EVIDENCE_UNAVAILABLE` with no official
 source/provider call, implicit refetch or repair. A replacement root is not an

@@ -694,6 +694,79 @@ def test_retained_selection_conflicts_never_refetch_or_repair(
     assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == before
 
 
+@pytest.mark.parametrize("lookup", ["namespace", "requests", "binding"])
+def test_selection_disappearance_before_initial_open_never_refetches_or_repairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lookup: str
+) -> None:
+    monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
+    request = _request(_members())
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    arguments = {
+        "selection_root": selection_root,
+        "capture_root": capture_root,
+        "schedule_root": schedule_root,
+    }
+    assert (
+        capture_current_nifty100_v2(
+            request, **arguments, fetcher=_CliFetcher(), client=_CliClient()
+        ).code
+        == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+    )
+    namespace = selection_root / "nifty100-selection-v3"
+    target = {
+        "namespace": namespace,
+        "requests": namespace / "requests",
+        "binding": namespace / "requests" / f"{request.request_identity_sha256}.json",
+    }[lookup]
+    parent = target.parent
+    target_bytes = (
+        {Path("."): target.read_bytes()}
+        if target.is_file()
+        else {
+            path.relative_to(target): path.read_bytes()
+            for path in target.rglob("*.json")
+        }
+    )
+    detached = tmp_path / f"detached-selection-{lookup}"
+    removed = tmp_path / f"removed-selection-{lookup}"
+    capture_before = {path: path.read_bytes() for path in capture_root.rglob("*.json")}
+    open_file = os.open
+    disappeared = False
+
+    def disappear_before_initial_open(path, flags, *args, **kwargs):
+        nonlocal disappeared
+        if not disappeared and path == target.name and kwargs.get("dir_fd") is not None:
+            disappeared = True
+            parent.rename(detached)
+            (detached / target.name).rename(removed)
+        return open_file(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", disappear_before_initial_open)
+    fetcher = _CliFetcher()
+    client = _CliClient()
+    result = capture_current_nifty100_v2(
+        request, **arguments, fetcher=fetcher, client=client
+    )
+
+    assert disappeared
+    assert result.reason == "SELECTION_EVIDENCE_UNAVAILABLE"
+    assert result.revision_identity_sha256 is None
+    assert fetcher.calls == client.calls == []
+    for relative, raw in target_bytes.items():
+        preserved = removed if relative == Path(".") else removed / relative
+        assert preserved.read_bytes() == raw
+    assert not parent.exists()
+    assert not (detached / target.name).exists()
+    assert {
+        path: path.read_bytes() for path in capture_root.rglob("*.json")
+    } == capture_before
+
+
 @pytest.mark.parametrize("boundary", ["directory", "parent", "binding"])
 def test_selection_disappearance_after_open_never_refetches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str

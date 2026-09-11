@@ -266,3 +266,35 @@ def test_historical_request_reader_rejects_tampered_typed_identity(
         legacy.read_capture_forward_request_revision_v1(
             tmp_path / "absent-store", request
         )
+
+
+@pytest.mark.parametrize("lookup", ["request", "revision"])
+def test_historical_standalone_cleanup_is_not_hidden_by_handled_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lookup: str
+) -> None:
+    request = _historical_request()
+    revision = _historical_revision(request)
+    root = _seed_admitted_historical_revision(tmp_path, request, revision)
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    close = legacy._HeldRecoverablePublication.close  # pyright: ignore[reportPrivateUsage]
+    secondary = OSError("historical standalone cleanup failure")
+
+    def fail_after_close(publication):
+        close(publication)
+        raise secondary
+
+    monkeypatch.setattr(
+        legacy._HeldRecoverablePublication,  # pyright: ignore[reportPrivateUsage]
+        "close",
+        fail_after_close,
+    )
+    with pytest.raises(RuntimeError) as raised:
+        try:
+            raise FileNotFoundError("already handled unrelated lookup")
+        except FileNotFoundError:
+            if lookup == "request":
+                legacy.read_capture_forward_request_revision_v1(root, request)
+            else:
+                legacy.read_capture_forward_revision_v1(root, revision.revision_sha256)
+    assert raised.value.__cause__ is secondary
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before

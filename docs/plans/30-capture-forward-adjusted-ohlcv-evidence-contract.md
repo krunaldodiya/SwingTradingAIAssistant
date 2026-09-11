@@ -55,8 +55,13 @@ capture, exact reads and official-selection retention/reuse. Malformed retained
 decimal values are unavailable evidence rather than internal decimal errors.
 Unexpected provider/software defects still propagate without being masked by
 cleanup failures.
-Directory scopes use the existing primary-preserving cleanup policy, relinquish
-descriptor ownership before close and never retry a possibly reused descriptor.
+Directory and publication scopes share one primary-preserving cleanup policy.
+The active scope's exception, including cancellation, remains primary; an
+already-handled outer exception is not an active failure. Unexpected standalone
+file or directory cleanup failures remain observable execution failures rather
+than unavailable-evidence claims. Ownership is relinquished before close, and
+released descriptors are never retried. Disappearance of an already-open
+publication is a conflict, not permission to recreate it.
 
 The canonical revision budget is 8 MiB, including serialization and its final
 newline. Fresh capture checks the same limit as read/recovery before any

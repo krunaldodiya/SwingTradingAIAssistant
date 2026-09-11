@@ -8,12 +8,12 @@ import json
 import os
 import re
 import stat
-import sys
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import chain
 from pathlib import Path
 from typing import Final, NoReturn, Protocol, cast
 
@@ -883,7 +883,8 @@ class _CaptureCloseableV1(Protocol):
 
 
 def _close_capture_resources_v1(
-    *resources: _CaptureCloseableV1 | None,
+    resources: Iterable[_CaptureCloseableV1 | int | None],
+    *,
     active_failure: BaseException | None,
 ) -> None:
     failure: BaseException | None = None
@@ -891,11 +892,28 @@ def _close_capture_resources_v1(
         if resource is None:
             continue
         try:
-            resource.close()
+            if isinstance(resource, int):
+                os.close(resource)
+            else:
+                resource.close()
         except BaseException as error:
-            failure = failure or error
+            if failure is None:
+                failure = error
     if failure is not None and active_failure is None:
         raise _CaptureCleanupFailureV1("capture cleanup failed") from failure
+
+
+@contextmanager
+def _capture_resource_scope_v1(
+    resources: Iterable[_CaptureCloseableV1 | int | None],
+) -> Generator[None, None, None]:
+    try:
+        yield
+    except BaseException as error:
+        _close_capture_resources_v1(resources, active_failure=error)
+        raise
+    else:
+        _close_capture_resources_v1(resources, active_failure=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1067,7 +1085,7 @@ class _PrivateDirectory:
     def __exit__(
         self, _exc_type: object, _exc: BaseException | None, _traceback: object
     ) -> None:
-        _close_capture_resources_v1(self, active_failure=_exc)
+        _close_capture_resources_v1((self,), active_failure=_exc)
 
 
 def _open_private_directory(
@@ -1094,11 +1112,18 @@ def _open_private_directory(
             os.fsync(parent_descriptor)
         except FileExistsError:
             pass
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=parent_descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        if isinstance(parent, _PrivateDirectory):
+            parent.ensure_live()
+        else:
+            operation.ensure_live()
+        raise
     try:
         metadata = os.fstat(descriptor)
         directory = _PrivateDirectory(
@@ -1116,9 +1141,8 @@ def _open_private_directory(
         )
         directory.ensure_live()
         return directory
-    except BaseException:
-        with suppress(BaseException):
-            os.close(descriptor)
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
         raise
 
 
@@ -1131,11 +1155,15 @@ def _open_exact_file(
     expected_nlink: int = 1,
 ) -> tuple[int, bytes]:
     directory.ensure_live()
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-        dir_fd=directory.descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory.descriptor,
+        )
+    except FileNotFoundError:
+        directory.ensure_live()
+        raise
     try:
         metadata = os.fstat(descriptor)
         path_metadata = os.stat(
@@ -1176,8 +1204,7 @@ def _open_exact_file(
         directory.ensure_live()
         return descriptor, b"".join(chunks)
     except BaseException as error:
-        with suppress(BaseException):
-            os.close(descriptor)
+        _close_capture_resources_v1((descriptor,), active_failure=error)
         if isinstance(error, FileNotFoundError):
             raise _ImmutableEvidenceConflict("immutable file changed") from None
         raise
@@ -1206,7 +1233,10 @@ def _require_publication_name(
 ) -> None:
     directory.ensure_live()
     held = os.fstat(descriptor)
-    named = os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    try:
+        named = os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        raise _ImmutableEvidenceConflict("publication identity changed") from None
     if (
         _publication_identity(held) != _publication_identity(named)
         or not stat.S_ISREG(held.st_mode)
@@ -1259,11 +1289,15 @@ def _open_recoverable_publication(
     maximum: int,
 ) -> tuple[int, bytes, int]:
     directory.ensure_live()
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-        dir_fd=directory.descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory.descriptor,
+        )
+    except FileNotFoundError:
+        directory.ensure_live()
+        raise
     try:
         held = os.fstat(descriptor)
         mode = stat.S_IMODE(held.st_mode)
@@ -1283,8 +1317,8 @@ def _open_recoverable_publication(
             expected_mode=mode,
         )
         return descriptor, raw, mode
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
         raise
 
 
@@ -1324,7 +1358,10 @@ class _HeldRecoverablePublication:
             self.ensure_exact()
 
     def close(self) -> None:
-        os.close(self.descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _hold_recoverable_publication(
@@ -1337,13 +1374,17 @@ def _hold_recoverable_publication(
         name,
         maximum,
     )
-    return _HeldRecoverablePublication(
-        directory,
-        name,
-        descriptor,
-        content,
-        mode,
-    )
+    try:
+        return _HeldRecoverablePublication(
+            directory,
+            name,
+            descriptor,
+            content,
+            mode,
+        )
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
+        raise
 
 
 def _commit_held_publication(
@@ -1392,7 +1433,7 @@ def _recover_publication(
         )
     except FileNotFoundError:
         return False
-    try:
+    with _capture_resource_scope_v1((descriptor,)):
         if existing != content:
             raise _ImmutableEvidenceConflict("immutable content conflict")
         if mode == 0o600:
@@ -1411,8 +1452,6 @@ def _recover_publication(
             if exact != content:
                 raise _ImmutableEvidenceConflict("publication recovery readback failed")
         return True
-    finally:
-        os.close(descriptor)
 
 
 def prepare_capture_publication(
@@ -1450,12 +1489,12 @@ def prepare_capture_publication(
             )
             held.ensure_exact()
             return held
-        except Exception:
-            os.close(descriptor)
+        except BaseException as error:
+            _close_capture_resources_v1((descriptor,), active_failure=error)
             raise
     if held.content != content:
-        _close_capture_resources_v1(held, active_failure=sys.exception())
-        raise _ImmutableEvidenceConflict("immutable content conflict")
+        with _capture_resource_scope_v1((held,)):
+            raise _ImmutableEvidenceConflict("immutable content conflict")
     return held
 
 
@@ -1475,7 +1514,7 @@ def publish_capture_bytes(
         0o600,
         dir_fd=directory.descriptor,
     )
-    try:
+    with _capture_resource_scope_v1((descriptor,)):
         view = memoryview(content)
         written = 0
         while written < len(view):
@@ -1485,8 +1524,6 @@ def publish_capture_bytes(
                 raise OSError(errno.EIO, "short write")
             written += count
         _commit_held_publication(directory, name, descriptor, content)
-    finally:
-        os.close(descriptor)
 
 
 def read_exact_capture_file(
@@ -1506,7 +1543,7 @@ def read_exact_capture_file(
         expected_mode=expected_mode,
         expected_nlink=expected_nlink,
     )
-    os.close(descriptor)
+    _close_capture_resources_v1((descriptor,), active_failure=None)
     return raw
 
 
@@ -1548,11 +1585,11 @@ def _open_pointer_revision(
         ):
             raise ValueError
         return cast(str, revision_sha256), held
-    except (json.JSONDecodeError, TypeError, ValueError):
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise _ImmutableEvidenceConflict("request pointer invalid") from None
-    except Exception:
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
 
 
@@ -1672,9 +1709,9 @@ def _validated_admission_chain(
             held_revisions.append(held_revision)
             _ensure_valid_revision_parent(child, parent)
             current = parent
-    except Exception:
+    except BaseException as error:
         _close_capture_resources_v1(
-            *held_pointers, *held_revisions, active_failure=sys.exception()
+            chain(held_pointers, held_revisions), active_failure=error
         )
         raise
 
@@ -1711,7 +1748,7 @@ def _read_request_revision(  # noqa: C901 - bounded immutable-admission transact
         revision_sha256,
         requested_pointer=requested_pointer,
     )
-    try:
+    with _capture_resource_scope_v1(chain(held_pointers, held_revisions)):
         matches = (
             _revision_matches_request(request, revision)
             if writer_identity is None
@@ -1734,10 +1771,6 @@ def _read_request_revision(  # noqa: C901 - bounded immutable-admission transact
         for pointer in held_pointers:
             pointer.ensure_exact()
         return revision
-    finally:
-        _close_capture_resources_v1(
-            *held_pointers, *held_revisions, active_failure=sys.exception()
-        )
 
 
 def _read_compatible_request_revision_v1(
@@ -1784,11 +1817,17 @@ def _read_prepared_revision(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise _ImmutableEvidenceConflict("prepared revision invalid") from None
-    except Exception:
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
 
 
@@ -1804,12 +1843,8 @@ def _read_admitted_revision(
         revisions,
         revision_sha256,
     )
-    try:
+    with _capture_resource_scope_v1(chain(held_pointers, held_revisions)):
         return requested
-    finally:
-        _close_capture_resources_v1(
-            *held_pointers, *held_revisions, active_failure=sys.exception()
-        )
 
 
 def _ensure_historical_read_state(
@@ -1882,6 +1917,7 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
 
     if not _valid_absolute_path(store_root):
         raise ValueError("request revision read is invalid")
+    directories: list[_PrivateDirectory | None] = [None, None, None]
     lease = _acquire_existing_private_lease(
         store_root, _expected_root_identity=_expected_root_identity
     )
@@ -1889,17 +1925,16 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
         if _admit_existing_private_empty_store_v1(store_root):
             return None
         raise OSError(errno.EBUSY, "capture store unavailable")
-    directories: list[_PrivateDirectory | None] = []
     try:
-        with lease.read_operation(store_root) as operation:
-            for name in ("revisions", "requests", "prepared"):
-                try:
-                    directory = _open_private_directory(
+        with (
+            _capture_resource_scope_v1(chain(directories, (lease,))),
+            lease.read_operation(store_root) as operation,
+        ):
+            for index, name in enumerate(("revisions", "requests", "prepared")):
+                with suppress(FileNotFoundError):
+                    directories[index] = _open_private_directory(
                         operation, operation.descriptor, name, create=False
                     )
-                except FileNotFoundError:
-                    directory = None
-                directories.append(directory)
             if all(directory is None for directory in directories):
                 return None
             if any(directory is None for directory in directories):
@@ -1939,18 +1974,12 @@ def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
             if prepared_recovery is None:
                 return None
             recovered, held_prepared = prepared_recovery
-            try:
+            with _capture_resource_scope_v1((held_prepared,)):
                 if not _revision_matches_request(request, recovered):
                     raise _ImmutableEvidenceConflict("prepared revision invalid")
                 return None
-            finally:
-                _close_capture_resources_v1(
-                    held_prepared, active_failure=sys.exception()
-                )
     except _ImmutableEvidenceConflict:
         raise ValueError("request revision evidence conflict") from None
-    finally:
-        _close_capture_resources_v1(*directories, lease, active_failure=sys.exception())
 
 
 def read_capture_forward_revision_v1(
@@ -1964,30 +1993,25 @@ def read_capture_forward_revision_v1(
     if lease is None:
         raise ValueError("capture revision unavailable")
     try:
-        with lease.read_operation(store_root) as operation:
-            revisions = _open_private_directory(
+        with (
+            _capture_resource_scope_v1((lease,)),
+            lease.read_operation(store_root) as operation,
+            _open_private_directory(
                 operation, operation.descriptor, "revisions", create=False
+            ) as revisions,
+            _open_private_directory(
+                operation, operation.descriptor, "requests", create=False
+            ) as requests,
+        ):
+            revision = _read_admitted_revision(
+                operation, requests, revisions, revision_sha256
             )
-            requests: _PrivateDirectory | None = None
-            try:
-                requests = _open_private_directory(
-                    operation, operation.descriptor, "requests", create=False
-                )
-                revision = _read_admitted_revision(
-                    operation, requests, revisions, revision_sha256
-                )
-                operation.ensure_live()
-                requests.ensure_live()
-                revisions.ensure_live()
-                return revision
-            finally:
-                _close_capture_resources_v1(
-                    requests, revisions, active_failure=sys.exception()
-                )
+            operation.ensure_live()
+            requests.ensure_live()
+            revisions.ensure_live()
+            return revision
     except (OSError, _ImmutableEvidenceConflict):
         raise ValueError("capture revision unavailable") from None
-    finally:
-        _close_capture_resources_v1(lease, active_failure=sys.exception())
 
 
 def _hold_revision_descriptor(
@@ -2011,11 +2035,17 @@ def _hold_revision_descriptor(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise _ImmutableEvidenceConflict("capture revision invalid") from None
-    except Exception:
-        _close_capture_resources_v1(held, active_failure=sys.exception())
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
 
 
@@ -2137,34 +2167,27 @@ def compose_capture_forward_plan29_v1(
     if lease is None:
         raise ValueError("capture-forward composition is invalid")
     try:
-        with lease.read_operation(store_root) as operation:
-            revisions = _open_private_directory(
+        with (
+            _capture_resource_scope_v1((lease,)),
+            lease.read_operation(store_root) as operation,
+            _open_private_directory(
                 operation, operation.descriptor, "revisions", create=False
+            ) as revisions,
+            _open_private_directory(
+                operation, operation.descriptor, "requests", create=False
+            ) as requests,
+        ):
+            captures = tuple(
+                _read_admitted_revision(operation, requests, revisions, revision_sha256)
+                for revision_sha256 in revision_sha256s
             )
-            requests: _PrivateDirectory | None = None
-            try:
-                requests = _open_private_directory(
-                    operation, operation.descriptor, "requests", create=False
-                )
-                captures = tuple(
-                    _read_admitted_revision(
-                        operation, requests, revisions, revision_sha256
-                    )
-                    for revision_sha256 in revision_sha256s
-                )
-                operation.ensure_live()
-                requests.ensure_live()
-                revisions.ensure_live()
-            finally:
-                _close_capture_resources_v1(
-                    requests, revisions, active_failure=sys.exception()
-                )
+            operation.ensure_live()
+            requests.ensure_live()
+            revisions.ensure_live()
     except _CaptureCleanupFailureV1:
         raise
     except (OSError, RuntimeError, _ImmutableEvidenceConflict):
         raise ValueError("capture-forward composition is invalid") from None
-    finally:
-        _close_capture_resources_v1(lease, active_failure=sys.exception())
     return _compose_capture_forward_plan29_from_revisions_v1(
         captures, regions=regions, evaluated_at=evaluated_at
     )
