@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, DecimalException, localcontext
@@ -1419,23 +1418,17 @@ def capture_bharatstock_v2(
         with (
             lease,
             lease.root_operation(store_root) as operation,
-            closing(
-                _open_directory(
-                    operation,
-                    operation.descriptor,
-                    "bharatstock-capture-v3",
-                    create=True,
-                )
+            _open_directory(
+                operation,
+                operation.descriptor,
+                "bharatstock-capture-v3",
+                create=True,
             ) as namespace,
-            closing(
-                _open_directory(operation, namespace, "revisions", create=True)
+            _open_directory(
+                operation, namespace, "revisions", create=True
             ) as revisions,
-            closing(
-                _open_directory(operation, namespace, "requests", create=True)
-            ) as requests,
-            closing(
-                _open_directory(operation, namespace, "prepared", create=True)
-            ) as prepared,
+            _open_directory(operation, namespace, "requests", create=True) as requests,
+            _open_directory(operation, namespace, "prepared", create=True) as prepared,
         ):
             existing = _read_pointer(requests, revisions, request)
             if existing is not None:
@@ -1496,19 +1489,17 @@ def read_bharatstock_capture_revision_v2(
         with lease, lease.read_operation(store_root) as operation:
             try:
                 with (
-                    closing(
-                        _open_directory(
-                            operation,
-                            operation.descriptor,
-                            "bharatstock-capture-v3",
-                            create=False,
-                        )
+                    _open_directory(
+                        operation,
+                        operation.descriptor,
+                        "bharatstock-capture-v3",
+                        create=False,
                     ) as namespace,
-                    closing(
-                        _open_directory(operation, namespace, "requests", create=False)
+                    _open_directory(
+                        operation, namespace, "requests", create=False
                     ) as requests,
-                    closing(
-                        _open_directory(operation, namespace, "revisions", create=False)
+                    _open_directory(
+                        operation, namespace, "revisions", create=False
                     ) as revisions,
                 ):
                     revision = _read_named(revisions, revision_sha256)
@@ -1517,19 +1508,17 @@ def read_bharatstock_capture_revision_v2(
                     return revision
             except FileNotFoundError:
                 with (
-                    closing(
-                        _open_directory(
-                            operation,
-                            operation.descriptor,
-                            "bharatstock-capture-v2",
-                            create=False,
-                        )
+                    _open_directory(
+                        operation,
+                        operation.descriptor,
+                        "bharatstock-capture-v2",
+                        create=False,
                     ) as namespace,
-                    closing(
-                        _open_directory(operation, namespace, "requests", create=False)
+                    _open_directory(
+                        operation, namespace, "requests", create=False
                     ) as requests,
-                    closing(
-                        _open_directory(operation, namespace, "revisions", create=False)
+                    _open_directory(
+                        operation, namespace, "revisions", create=False
                     ) as revisions,
                 ):
                     revision = _read_predecessor_named(revisions, revision_sha256)

@@ -1052,7 +1052,16 @@ class _PrivateDirectory:
             raise OSError(errno.EBUSY, "private directory authority changed")
 
     def close(self) -> None:
-        os.close(self.descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    def __enter__(self) -> _PrivateDirectory:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        _close_capture_resources_v1(self)
 
 
 def _open_private_directory(

@@ -55,6 +55,8 @@ capture, exact reads and official-selection retention/reuse. Malformed retained
 decimal values are unavailable evidence rather than internal decimal errors.
 Unexpected provider/software defects still propagate without being masked by
 cleanup failures.
+Directory scopes use the existing primary-preserving cleanup policy, relinquish
+descriptor ownership before close and never retry a possibly reused descriptor.
 
 The canonical revision budget is 8 MiB, including serialization and its final
 newline. Fresh capture checks the same limit as read/recovery before any
@@ -70,6 +72,11 @@ evidence. A child of a 64-revision parent chain is rejected before transport or 
 returns `CORRECTION_OBSERVATION_ORDER`; unchanged evidence retains
 `CORRECTION_CONTENT_UNCHANGED` precedence. Prepared recovery applies these same
 checks before admission and does not consume provider calls.
+
+Research identities serialize exact Decimal values compactly, including
+scientific notation where appropriate. A compact optional adjustment exponent
+must not expand into an unbounded fixed-point string during research; no source
+value is rounded, clipped or applied to OHLC to enforce this resource boundary.
 
 The bounded read-only predecessor reader preserves exact V2 bytes and labels;
 it cannot write new V2 evidence or reinterpret V2 as the new source mode.

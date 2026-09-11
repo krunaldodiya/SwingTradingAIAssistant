@@ -584,7 +584,8 @@ def test_retained_observation_time_tampering_blocks_capture_reuse(
     client = _CliClient()
     assert run_capture_cli(arguments, _fetcher=fetcher, _client=client) == 1
     rejected = json.loads(capsys.readouterr().out)
-    assert rejected["reason"] == "SELECTION_RETENTION_FAILED"
+    assert rejected["reason"] == "SELECTION_EVIDENCE_UNAVAILABLE"
+    assert fetcher.calls == []
     assert client.calls == []
     assert source.read_bytes() == tampered
 
@@ -627,15 +628,58 @@ def test_selection_root_authority_loss_returns_governed_outcome(
 
     monkeypatch.setattr(capture, "_open_directory", detach_root)
     fetcher = _CliFetcher()
-    if warm:
-        fetcher.bodies[NIFTY_100_URL] = b"invalid\n"
     client = _CliClient()
     result = capture_current_nifty100_v2(
         request, **arguments, fetcher=fetcher, client=client
     )
     assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
     assert result.reason == (
-        "CONSTITUENT_SOURCE_INVALID" if warm else "SELECTION_RETENTION_FAILED"
+        "SELECTION_EVIDENCE_UNAVAILABLE" if warm else "SELECTION_RETENTION_FAILED"
     )
     assert result.revision_identity_sha256 is None
     assert client.calls == []
+    assert len(fetcher.calls) == (0 if warm else 3)
+
+
+@pytest.mark.parametrize("damage", ["missing_source", "malformed_binding"])
+def test_retained_selection_conflicts_never_refetch_or_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
+    request = _request(_members())
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    arguments = {
+        "selection_root": selection_root,
+        "capture_root": capture_root,
+        "schedule_root": schedule_root,
+    }
+    assert (
+        capture_current_nifty100_v2(
+            request, **arguments, fetcher=_CliFetcher(), client=_CliClient()
+        ).code
+        == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+    )
+    namespace = selection_root / "nifty100-selection-v3"
+    binding = namespace / "requests" / f"{request.request_identity_sha256}.json"
+    if damage == "missing_source":
+        source_identity = json.loads(binding.read_bytes())["source_identity_sha256"]
+        (namespace / "sources" / f"{source_identity}.json").unlink()
+    else:
+        binding.chmod(0o600)
+        binding.write_bytes(b"{}\n")
+        binding.chmod(0o400)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    fetcher = _CliFetcher()
+    client = _CliClient()
+    result = capture_current_nifty100_v2(
+        request, **arguments, fetcher=fetcher, client=client
+    )
+    assert result.reason == "SELECTION_EVIDENCE_UNAVAILABLE"
+    assert result.revision_identity_sha256 is None
+    assert fetcher.calls == client.calls == []
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == before

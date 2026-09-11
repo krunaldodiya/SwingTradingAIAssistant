@@ -18,6 +18,11 @@ request. The optional factor mode is retired; earlier mode-bearing request
 identities cannot be silently accepted as the new contract.
 Reuse must resolve the retained request/selection/revision binding before any
 source or provider call.
+Only a genuinely absent request binding permits cold source acquisition.
+Malformed bindings, missing bound source evidence, unsafe retained objects and
+lost root authority return `SELECTION_EVIDENCE_UNAVAILABLE` with no official
+source/provider call, implicit refetch or repair. A replacement root is not an
+automatic recovery authority.
 Later observations of the same membership have distinct source provenance;
 they must not overwrite prior evidence or manufacture earlier knowledge.
 The source-observation identity commits to all three exact URL/body digests

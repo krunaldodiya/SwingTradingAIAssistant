@@ -531,6 +531,45 @@ def test_unexpected_client_value_error_propagates_without_becoming_storage_failu
         )
 
 
+def test_provider_primary_survives_directory_cleanup_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    primary = ValueError("unexpected provider defect")
+    open_directory = core._open_directory  # pyright: ignore[reportPrivateUsage]
+    close = os.close
+    owned: set[int] = set()
+
+    def track_directory(*args, **kwargs):
+        directory = open_directory(*args, **kwargs)
+        owned.add(directory.descriptor)
+        return directory
+
+    def fail_after_close(descriptor: int) -> None:
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close(descriptor)
+            raise OSError("secondary cleanup failure")
+        close(descriptor)
+
+    class BrokenClient(_Client):
+        def history(self, *args: object) -> BharatStockHistory:
+            raise primary
+
+    monkeypatch.setattr(core, "_open_directory", track_directory)
+    monkeypatch.setattr(held_store.os, "close", fail_after_close)
+    with pytest.raises(ValueError) as raised:
+        core.capture_bharatstock_v2(
+            _request(), root, schedule_root, client=BrokenClient()
+        )
+    assert raised.value is primary
+    assert owned == set()
+    assert not tuple(root.rglob("*.json"))
+
+
 def test_deadline_expiry_stops_before_another_member_call(tmp_path: Path) -> None:
     schedule_root = tmp_path / "schedule"
     _retain_schedule(schedule_root)

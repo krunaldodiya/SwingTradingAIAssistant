@@ -7,7 +7,6 @@ import csv
 import hashlib
 import io
 import json
-from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -276,23 +275,17 @@ def _retain_selection_v2(
         with (
             lease,
             lease.root_operation(root) as operation,
-            closing(
-                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                    operation,
-                    operation.descriptor,
-                    "nifty100-selection-v3",
-                    create=True,
-                )
+            capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                operation,
+                operation.descriptor,
+                "nifty100-selection-v3",
+                create=True,
             ) as namespace,
-            closing(
-                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                    operation, namespace, "sources", create=True
-                )
+            capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                operation, namespace, "sources", create=True
             ) as sources,
-            closing(
-                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                    operation, namespace, "requests", create=True
-                )
+            capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                operation, namespace, "requests", create=True
             ) as requests,
         ):
             capture_store._publish(  # pyright: ignore[reportPrivateUsage]
@@ -396,31 +389,44 @@ def _parse_retained_selection(
     )
 
 
+class _RetainedSelectionUnavailable(ValueError):
+    """Retained selection cannot authorize acquisition or exact reuse."""
+
+
 def _read_retained_selection_v2(
     root: Path, request: CaptureRequestV2
 ) -> OfficialSelectionV2 | None:
     lease = capture_store._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
     if lease is None:
-        return None
+        raise _RetainedSelectionUnavailable
     try:
         with lease, lease.read_operation(root) as operation:
-            namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                operation, operation.descriptor, "nifty100-selection-v3", create=False
-            )
             try:
-                requests = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                    operation, namespace, "requests", create=False
+                namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                    operation,
+                    operation.descriptor,
+                    "nifty100-selection-v3",
+                    create=False,
                 )
+            except FileNotFoundError:
+                return None
+            with namespace:
                 try:
-                    binding_value = json.loads(
-                        capture_store._read_exact(  # pyright: ignore[reportPrivateUsage]
+                    requests = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                        operation, namespace, "requests", create=False
+                    )
+                except FileNotFoundError:
+                    return None
+                with requests:
+                    try:
+                        binding_raw = capture_store._read_exact(  # pyright: ignore[reportPrivateUsage]
                             requests, f"{request.request_identity_sha256}.json", 512
                         )
-                    )
-                finally:
-                    requests.close()
+                    except FileNotFoundError:
+                        return None
+                    binding_value = json.loads(binding_raw)
                 if type(binding_value) is not dict:
-                    return None
+                    raise ValueError
                 binding = cast(dict[str, object], binding_value)
                 binding_source_identity = binding.get("source_identity_sha256")
                 if (
@@ -435,21 +441,19 @@ def _read_retained_selection_v2(
                         for character in binding_source_identity
                     )
                 ):
-                    return None
-                sources = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                    raise ValueError
+                with capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
                     operation, namespace, "sources", create=False
-                )
-                try:
+                ) as sources:
                     raw = capture_store._read_exact(  # pyright: ignore[reportPrivateUsage]
                         sources,
                         f"{binding_source_identity}.json",
                         _MAX_RETAINED_SELECTION_BYTES,
                     )
-                finally:
-                    sources.close()
-            finally:
-                namespace.close()
-        return _parse_retained_selection(raw, binding_source_identity, request)
+        selection = _parse_retained_selection(raw, binding_source_identity, request)
+        if selection is None:
+            raise ValueError
+        return selection
     except (
         OSError,
         KeyError,
@@ -458,7 +462,7 @@ def _read_retained_selection_v2(
         StorageRootLeaseError,
         json.JSONDecodeError,
     ):
-        return None
+        raise _RetainedSelectionUnavailable from None
 
 
 def project_current_nifty100_capture_v2(
@@ -542,7 +546,19 @@ def capture_current_nifty100_v2(
 ) -> CurrentNifty100ResultV2:
     """Validate official selection before the serial, provider-neutral V2 capture."""
 
-    selection = _read_retained_selection_v2(selection_root, request)
+    try:
+        selection = _read_retained_selection_v2(selection_root, request)
+    except _RetainedSelectionUnavailable:
+        return CurrentNifty100ResultV2(
+            "INCOMPLETE_CURRENT_NIFTY100_CAPTURE",
+            None,
+            100,
+            0,
+            0,
+            100,
+            None,
+            "SELECTION_EVIDENCE_UNAVAILABLE",
+        )
     if selection is None:
         selection = admit_current_nifty100_selection_v2(
             fetcher or OfficialSourceFetcherV2()

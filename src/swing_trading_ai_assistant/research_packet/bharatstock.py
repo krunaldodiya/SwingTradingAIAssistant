@@ -31,7 +31,7 @@ _RetainedPriceBasis: TypeAlias = (
 
 def _wire(value: object) -> object:
     if type(value) is Decimal:
-        return format(value, "f")
+        return str(value)
     if type(value) is datetime:
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
     if type(value) is date:

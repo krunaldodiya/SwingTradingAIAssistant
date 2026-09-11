@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tracemalloc
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
@@ -324,3 +326,46 @@ def test_three_missing_members_leave_ninety_seven_results_usable() -> None:
 def test_rejects_unvalidated_arbitrary_input() -> None:
     with pytest.raises(ValueError):
         build_bharatstock_research_packet_v1(object())
+
+
+def test_compact_optional_decimal_exponents_do_not_expand_research_memory() -> None:
+    original = _revision_with_history(2)
+
+    def with_factor(factor: Decimal) -> CaptureRevisionV2:
+        member = original.members[0]
+        history = replace(
+            member.history,
+            rows=tuple(
+                replace(
+                    row, adjustment_factor=factor, adjusted_close=row.close * factor
+                )
+                for row in member.history.rows
+            ),
+        )
+        members = (replace(member, history=history),)
+        return replace(
+            original,
+            members=members,
+            actual_coverage_identity_sha256=capture._coverage_identity(members),
+        )
+
+    ordinary = with_factor(Decimal("1e-10"))
+    tiny = with_factor(Decimal("1e-100000"))
+    assert len(tiny.canonical_json_bytes()) < 4096
+    build_bharatstock_research_packet_v1(ordinary)
+
+    def measured(revision):
+        tracemalloc.start()
+        try:
+            packet = build_bharatstock_research_packet_v1(revision)
+            return packet, tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    ordinary_packet, ordinary_peak = measured(ordinary)
+    tiny_packet, tiny_peak = measured(tiny)
+    assert tiny_peak < ordinary_peak + 128 * 1024
+    assert (
+        tiny_packet.members[0].price_action.body_size
+        == ordinary_packet.members[0].price_action.body_size
+    )
