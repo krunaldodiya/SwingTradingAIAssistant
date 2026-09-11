@@ -7,8 +7,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from typing import cast
+from urllib.request import HTTPSHandler
+from urllib.response import addinfourl
 
 import pytest
 
@@ -45,6 +49,7 @@ from swing_trading_ai_assistant.market_data.instrument_snapshot import (
     InstrumentSnapshotStoreV1,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
+    DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
     UPSTOX_NSE_INSTRUMENTS_URL,
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
@@ -329,6 +334,47 @@ def test_refresh_advances_cached_observation_without_replacing_earlier_evidence(
     assert warm.capture_revision_sha256 == refreshed.capture_revision_sha256
     assert warm.price_action == refreshed.price_action
     assert len(prices.calls) == 2
+
+
+@pytest.mark.parametrize("close", [Decimal(105), Decimal(106)])
+def test_exact_refresh_preserves_or_corrects_observed_content(
+    tmp_path: Path, close: Decimal
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    first = _research(tmp_path, clock, sources, prices)
+    revision_path = (
+        tmp_path
+        / "bharatstock-capture-v3"
+        / "revisions"
+        / f"{first.capture_revision_sha256}.json"
+    )
+    original = revision_path.read_bytes()
+    prices.close = close
+    refreshed = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert refreshed.status == "OBSERVED" and refreshed.reuse_state == "REFRESHED"
+    assert refreshed.price_action is not None
+    assert refreshed.price_action.body_size == close - Decimal(100)
+    assert (refreshed.capture_revision_sha256 == first.capture_revision_sha256) == (
+        close == Decimal(105)
+    )
+    assert revision_path.read_bytes() == original
+    assert len(prices.calls) == 2
+    sources.forbid_requests = True
+    prices.failure = AssertionError("refreshed evidence must be reusable")
+    reused = _research(tmp_path, clock, sources, prices)
+    assert reused.capture_revision_sha256 == refreshed.capture_revision_sha256
+    assert reused.price_action == refreshed.price_action
+    assert len(prices.calls) == 2
+    sources.forbid_requests = False
+    prices.failure = None
+    prices.close = Decimal(107)
+    corrected_again = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert corrected_again.status == "OBSERVED"
+    assert corrected_again.price_action is not None
+    assert corrected_again.price_action.body_size == Decimal(7)
+    assert len(prices.calls) == 3
+    assert revision_path.read_bytes() == original
 
 
 def test_new_completed_session_requires_new_bounded_window(tmp_path: Path) -> None:
@@ -1105,3 +1151,97 @@ def test_clock_error_during_retained_admission_keeps_its_origin(
     with pytest.raises(failure_type) as caught:
         _research(tmp_path, clock, sources, prices)
     assert caught.value is fault
+
+
+@pytest.mark.parametrize(
+    "mode", ["valid", "deadline", "root-replaced", "private-mode-lost"]
+)
+def test_default_mapping_redirect_rechecks_authority_before_next_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    body = sources.get(UPSTOX_NSE_INSTRUMENTS_URL, {}).body
+    requests: list[str] = []
+    redirected_url = "https://assets.upstox.com/redirected-nse.json.gz"
+
+    class RedirectBody(BytesIO):
+        invalidated = False
+
+        def read(self, size: int = -1) -> bytes:
+            if not self.invalidated:
+                self.invalidated = True
+                if mode == "deadline":
+                    clock.value += timedelta(minutes=31)
+                elif mode == "root-replaced":
+                    tmp_path.rename(tmp_path.with_name(tmp_path.name + "-detached"))
+                    tmp_path.mkdir(mode=0o700)
+                elif mode == "private-mode-lost":
+                    tmp_path.chmod(0o755)
+            return super().read(size)
+
+    def https_open(self, request):
+        requests.append(request.full_url)
+        headers = Message()
+        if request.full_url == UPSTOX_NSE_INSTRUMENTS_URL:
+            headers["Location"] = redirected_url
+            response = addinfourl(
+                RedirectBody(b"redirect"), headers, request.full_url, 302
+            )
+            response.msg = "Found"
+        else:
+            assert request.full_url == redirected_url
+            headers["Content-Type"] = "application/json"
+            response = addinfourl(BytesIO(body), headers, request.full_url, 200)
+            response.msg = "OK"
+        return response
+
+    monkeypatch.setattr(HTTPSHandler, "https_open", https_open)
+    result = research_current_stock_v1(
+        "PNB", tmp_path, clock=clock, calendar_transport=sources, price_client=prices
+    )
+    if mode == "valid":
+        assert result.status == "OBSERVED"
+        assert requests == [UPSTOX_NSE_INSTRUMENTS_URL, redirected_url]
+        assert len(prices.calls) == 1
+    else:
+        assert result.status == "UNAVAILABLE"
+        assert result.stage == ("deadline" if mode == "deadline" else "storage")
+        assert requests == [UPSTOX_NSE_INSTRUMENTS_URL]
+        assert prices.calls == []
+
+
+@pytest.mark.parametrize("failure", ["body-limit", "invalid-headers"])
+def test_default_mapping_response_failures_are_scoped_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    body = sources.get(UPSTOX_NSE_INSTRUMENTS_URL, {}).body
+    requests: list[str] = []
+
+    def https_open(self, request):
+        requests.append(request.full_url)
+        headers = Message()
+        headers["Content-Type"] = (
+            "application/json\nprivate-header-value"
+            if failure == "invalid-headers"
+            else "application/json"
+        )
+        payload = (
+            b"x" * (DEFAULT_MAX_CATALOG_COMPRESSED_BYTES + 1)
+            if failure == "body-limit"
+            else body
+        )
+        response = addinfourl(BytesIO(payload), headers, request.full_url, 200)
+        response.msg = "OK"
+        return response
+
+    monkeypatch.setattr(HTTPSHandler, "https_open", https_open)
+    result = research_current_stock_v1(
+        "PNB", tmp_path, clock=clock, calendar_transport=sources, price_client=prices
+    )
+    assert result.status == "UNAVAILABLE"
+    assert result.stage == "mapping" and result.code == "MAPPING_UNAVAILABLE"
+    assert requests == [UPSTOX_NSE_INSTRUMENTS_URL]
+    assert prices.calls == []

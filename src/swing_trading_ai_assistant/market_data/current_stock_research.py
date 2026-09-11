@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, Protocol, cast
+from urllib.request import BaseHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.research_packet.bharatstock import (
@@ -30,6 +31,7 @@ from .bharatstock import (
 )
 from .bharatstock_capture import (
     CaptureRequestV2,
+    CaptureResultV2,
     CaptureRevisionUnavailableV2,
     CaptureRevisionV2,
     capture_bharatstock_v2,
@@ -49,7 +51,14 @@ from .current_evidence_acquisition import (
 from .current_stock_research_runtime_identity_manifest import (
     CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
 )
-from .http import HttpTransport, HttpTransportError, UrllibHttpTransport
+from .http import (
+    HttpResponseBodyTooLarge,
+    HttpResponseHeadersInvalid,
+    HttpTransport,
+    HttpTransportError,
+    SameOriginAuthorizationRedirectHandler,
+    UrllibHttpTransport,
+)
 from .instrument_snapshot import (
     SNAPSHOT_SOURCE_V1,
     InstrumentSnapshotClientV1,
@@ -174,6 +183,16 @@ class _Window:
 
     def ensure_live(self) -> None:
         self.now()
+
+
+class _MappingGuardHandler(BaseHandler):
+    """Recheck the shared operation before each initial or redirected open."""
+
+    def __init__(self, window: _Window) -> None:
+        self._window = window
+
+    def default_open(self, _request: Request) -> None:
+        self._window.ensure_live()
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,26 +443,15 @@ def _research_current_stock(
                 selection_identity_sha256=selection_identity_v2((member,)),
             )
             window.ensure_live()
-            capture = capture_bharatstock_v2(
+            capture = _prepare_capture(
                 request,
                 root,
-                root,
-                client=price_client,
-                clock=window.now,
-                lease=lease,
+                lease,
+                window,
+                price_client,
+                refresh=refresh,
+                prior=admitted.evidence.revision if admitted is not None else None,
             )
-            if refresh and capture.code == "REUSED" and capture.revision is not None:
-                capture = capture_bharatstock_v2(
-                    replace(
-                        request,
-                        parent_revision_sha256=capture.revision.revision_identity_sha256,
-                    ),
-                    root,
-                    root,
-                    client=price_client,
-                    clock=window.now,
-                    lease=lease,
-                )
             window.ensure_live()
             if capture.revision is None:
                 return replace(
@@ -569,12 +577,21 @@ def _prepare_mapping(
                 UrllibHttpTransport(
                     timeout_seconds=15,
                     max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
+                    opener=build_opener(
+                        SameOriginAuthorizationRedirectHandler(),
+                        _MappingGuardHandler(window),
+                    ).open,
                 )
                 if transport is None
                 else transport,
                 clock=window.now,
             )
-            fetched = source.fetch()
+            try:
+                fetched = source.fetch()
+            except (HttpResponseBodyTooLarge, HttpResponseHeadersInvalid):
+                raise InstrumentSnapshotUnavailableError(
+                    "instrument snapshot unavailable"
+                ) from None
             window.ensure_live()
             store.retain(fetched, deadline=window)
             as_of = fetched.retrieved_at
@@ -587,6 +604,46 @@ def _prepare_mapping(
         )
         window.ensure_live()
         return resolved
+
+
+def _prepare_capture(
+    request: CaptureRequestV2,
+    root: Path,
+    lease: StorageRootLease,
+    window: _Window,
+    client: BharatStockClient | None,
+    *,
+    refresh: bool,
+    prior: CaptureRevisionV2 | None,
+) -> CaptureResultV2:
+    if (
+        refresh
+        and prior is not None
+        and replace(prior.request, parent_revision_sha256=None) == request
+    ):
+        parent = prior
+    else:
+        captured = capture_bharatstock_v2(
+            request, root, root, client=client, clock=window.now, lease=lease
+        )
+        if not refresh or captured.code != "REUSED" or captured.revision is None:
+            return captured
+        parent = captured.revision
+    corrected = capture_bharatstock_v2(
+        replace(request, parent_revision_sha256=parent.revision_identity_sha256),
+        root,
+        root,
+        client=client,
+        clock=window.now,
+        lease=lease,
+    )
+    if (
+        corrected.code == "INSUFFICIENT_EVIDENCE"
+        and corrected.reason == "CORRECTION_CONTENT_UNCHANGED"
+    ):
+        # Revalidation succeeded without material to publish as a new revision.
+        return CaptureResultV2("REUSED", parent)
+    return corrected
 
 
 def _project(
