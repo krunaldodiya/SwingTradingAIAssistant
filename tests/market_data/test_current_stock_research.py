@@ -4,7 +4,7 @@ import gzip
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.message import Message
@@ -383,8 +383,12 @@ def test_exact_refresh_preserves_or_corrects_observed_content(
 
 
 @pytest.mark.parametrize("initial_receipt", [False, True])
+@pytest.mark.parametrize("last_close", [Decimal(107), Decimal(108)])
 def test_refresh_revalidates_after_repeated_receipt_publication_interruptions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial_receipt: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_receipt: bool,
+    last_close: Decimal,
 ) -> None:
     clock, sources = _Clock(), _OfficialSources()
     prices = _Prices(clock)
@@ -407,17 +411,96 @@ def test_refresh_revalidates_after_repeated_receipt_publication_interruptions(
         path: path.read_bytes()
         for path in (tmp_path / "bharatstock-capture-v3" / "revisions").glob("*.json")
     }
-    prices.close = Decimal(108)
+    prices.close = last_close
     refreshed = _research(tmp_path, clock, sources, prices, refresh=True)
     assert refreshed.status == "OBSERVED"
+    assert refreshed.reuse_state == ("REFRESHED" if initial_receipt else "CAPTURED")
     assert refreshed.price_action is not None
-    assert refreshed.price_action.body_size == Decimal(8)
+    assert refreshed.price_action.body_size == last_close - Decimal(100)
     assert len(prices.calls) == 3 + int(initial_receipt)
     assert all(path.read_bytes() == raw for path, raw in retained.items())
     prices.failure = AssertionError("published refresh must be reusable")
     reused = _research(tmp_path, clock, sources, prices)
     assert reused.capture_revision_sha256 == refreshed.capture_revision_sha256
     assert reused.price_action == refreshed.price_action
+
+
+@pytest.mark.parametrize("boundary", ["revision", "request"])
+@pytest.mark.parametrize("initial_receipt", [False, True])
+def test_refresh_revalidates_prepared_capture_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    initial_receipt: bool,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    if initial_receipt:
+        assert _research(tmp_path, clock, sources, prices).status == "OBSERVED"
+    publish = capture_api._publish
+
+    def interrupt_publication(directory, name, raw, *, held=False):
+        pointer = set(json.loads(raw)) == {
+            "request_identity_sha256",
+            "revision_identity_sha256",
+        }
+        if not held and pointer == (boundary == "request"):
+            raise OSError("synthetic capture publication interruption")
+        return publish(directory, name, raw, held=held)
+
+    prices.close = Decimal(106)
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(capture_api, "_publish", interrupt_publication)
+        failed = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert failed.status == "UNAVAILABLE" and failed.stage == "storage"
+    retained = {
+        path: path.read_bytes()
+        for path in (tmp_path / "bharatstock-capture-v3" / "revisions").glob("*.json")
+    }
+    prices.close = Decimal(107)
+    refreshed = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert refreshed.status == "OBSERVED"
+    assert refreshed.reuse_state == ("REFRESHED" if initial_receipt else "CAPTURED")
+    assert refreshed.price_action is not None
+    assert refreshed.price_action.body_size == Decimal(7)
+    assert len(prices.calls) == 2 + int(initial_receipt)
+    assert all(path.read_bytes() == raw for path, raw in retained.items())
+    prices.failure = AssertionError("recovered refresh must be reusable")
+    reused = _research(tmp_path, clock, sources, prices)
+    assert reused.capture_revision_sha256 == refreshed.capture_revision_sha256
+    assert reused.price_action == refreshed.price_action
+
+
+def test_prepared_noop_is_not_current_acquisition(
+    tmp_path: Path,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    first = _research(tmp_path, clock, sources, prices)
+    assert first.capture_revision_sha256 is not None
+    parent = capture_api.read_bharatstock_capture_revision_v2(
+        tmp_path, first.capture_revision_sha256
+    )
+    request = replace(
+        parent.request, parent_revision_sha256=parent.revision_identity_sha256
+    )
+    prepared = replace(parent, request=request)
+    path = (
+        tmp_path
+        / "bharatstock-capture-v3"
+        / "prepared"
+        / f"{request.request_identity_sha256}.json"
+    )
+    raw = prepared.canonical_json_bytes()
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    prices.close = Decimal(107)
+    result = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert result.status == "INSUFFICIENT_EVIDENCE"
+    assert result.code == "CORRECTION_CONTENT_UNCHANGED"
+    assert result.price_action is None
+    assert len(prices.calls) == 1
+    assert path.read_bytes() == raw
 
 
 def test_new_completed_session_requires_new_bounded_window(tmp_path: Path) -> None:

@@ -262,6 +262,8 @@ def test_exact_reuse_performs_no_transport_and_reader_returns_named_revision(
 
     assert first.code == "CAPTURED"
     assert reused.code == "REUSED"
+    assert first.from_acquisition is True
+    assert reused.from_acquisition is False
     assert len(client.calls) == 2
     assert (
         core.read_bharatstock_capture_revision_v2(
@@ -467,6 +469,7 @@ def test_correction_requires_admitted_parent_and_changes_immutable_revision(
 
     assert correction.code == "INSUFFICIENT_EVIDENCE"
     assert correction.reason == "CORRECTION_CONTENT_UNCHANGED"
+    assert correction.from_acquisition is True
     unavailable = core.capture_bharatstock_v2(
         _request(parent="f" * 64), root, schedule_root, client=_Client()
     )
@@ -516,6 +519,7 @@ def test_interrupted_request_publication_recovers_prepared_revision_without_tran
 
     assert first.code == "STORE_UNAVAILABLE"
     assert recovered.code == "CAPTURED"
+    assert recovered.from_acquisition is False
     assert len(client.calls) == 1
 
 

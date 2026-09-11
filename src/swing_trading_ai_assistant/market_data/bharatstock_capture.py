@@ -674,9 +674,16 @@ RetainedCaptureRevisionV2: TypeAlias = CaptureRevisionV2 | _PredecessorCaptureRe
 
 @dataclass(frozen=True, slots=True)
 class CaptureResultV2:
+    """Outcome origin covers an admitted revision or unchanged acknowledgement.
+
+    ``from_acquisition`` is not a request counter; failures may follow requests
+    without producing either an admitted revision or an unchanged acknowledgement.
+    """
+
     code: Literal["CAPTURED", "REUSED", "INSUFFICIENT_EVIDENCE", "STORE_UNAVAILABLE"]
     revision: CaptureRevisionV2 | None
     reason: str | None = None
+    from_acquisition: bool = False
 
     def __post_init__(self) -> None:
         success = self.code in {"CAPTURED", "REUSED"}
@@ -686,6 +693,17 @@ class CaptureResultV2:
             raise ValueError("BharatStock capture result is invalid")
         if not success and (self.revision is not None or not self.reason):
             raise ValueError("BharatStock capture result is invalid")
+        if type(self.from_acquisition) is not bool or (
+            self.from_acquisition
+            and not (
+                self.code == "CAPTURED"
+                or (
+                    self.code == "INSUFFICIENT_EVIDENCE"
+                    and self.reason == "CORRECTION_CONTENT_UNCHANGED"
+                )
+            )
+        ):
+            raise ValueError("BharatStock capture result origin is invalid")
 
 
 def _validate_capture_members(
@@ -1264,14 +1282,20 @@ def _material_member_values(revision: CaptureRevisionV2) -> tuple[object, ...]:
 
 
 def _revision_bytes_for_admission(
-    revision: CaptureRevisionV2, parent: CaptureRevisionV2 | None
+    revision: CaptureRevisionV2,
+    parent: CaptureRevisionV2 | None,
+    *,
+    from_acquisition: bool,
 ) -> bytes | CaptureResultV2:
     if parent is not None and (
         _material_member_values(parent) == _material_member_values(revision)
         and parent.shared_failure == revision.shared_failure
     ):
         return CaptureResultV2(
-            "INSUFFICIENT_EVIDENCE", None, "CORRECTION_CONTENT_UNCHANGED"
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            "CORRECTION_CONTENT_UNCHANGED",
+            from_acquisition=from_acquisition,
         )
     if parent is not None and parent.observed_at > revision.observed_at:
         return CaptureResultV2(
@@ -1432,6 +1456,8 @@ def _publish_revision(
     revisions: _PrivateDirectory,
     requests: _PrivateDirectory,
     clock: Callable[[], datetime] | None,
+    *,
+    from_acquisition: bool,
 ) -> CaptureResultV2:
     request = revision.request
     if (failure := _publication_failure(request, clock)) is not None:
@@ -1455,7 +1481,7 @@ def _publish_revision(
     )
     if (failure := _publication_failure(request, clock)) is not None:
         return failure
-    return CaptureResultV2("CAPTURED", revision)
+    return CaptureResultV2("CAPTURED", revision, from_acquisition=from_acquisition)
 
 
 def _recover_prepared(
@@ -1479,10 +1505,12 @@ def _recover_prepared(
         return None
     if revision.request != request:
         return CaptureResultV2("STORE_UNAVAILABLE", None, "PREPARED_REVISION_MISMATCH")
-    raw = _revision_bytes_for_admission(revision, parent)
+    raw = _revision_bytes_for_admission(revision, parent, from_acquisition=False)
     if isinstance(raw, CaptureResultV2):
         return raw
-    return _publish_revision(revision, raw, None, revisions, requests, clock)
+    return _publish_revision(
+        revision, raw, None, revisions, requests, clock, from_acquisition=False
+    )
 
 
 def validate_current_capture_request_v2(request: object) -> None:
@@ -1585,11 +1613,17 @@ def capture_bharatstock_v2(
             acquiring_evidence = False
             if isinstance(revision, CaptureResultV2):
                 return revision
-            raw = _revision_bytes_for_admission(revision, parent)
+            raw = _revision_bytes_for_admission(revision, parent, from_acquisition=True)
             if isinstance(raw, CaptureResultV2):
                 return raw
             return _publish_revision(
-                revision, raw, prepared, revisions, requests, clock
+                revision,
+                raw,
+                prepared,
+                revisions,
+                requests,
+                clock,
+                from_acquisition=True,
             )
     except (OSError, ValueError, StorageRootLeaseError, json.JSONDecodeError):
         if acquiring_evidence:

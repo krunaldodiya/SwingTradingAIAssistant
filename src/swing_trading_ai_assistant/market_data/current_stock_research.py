@@ -496,7 +496,7 @@ def _research_current_stock(
                 "REFRESHED"
                 if refresh and admitted is not None
                 else "REUSED"
-                if capture.code == "REUSED"
+                if not refresh and capture.code == "REUSED"
                 else "CAPTURED"
             )
             result = _project(symbol, window, runtime, evidence, reuse)
@@ -646,7 +646,7 @@ def _prepare_capture(
         captured = capture_bharatstock_v2(
             request, root, root, client=client, clock=window.now, lease=lease
         )
-        if not refresh or captured.code != "REUSED" or captured.revision is None:
+        if not refresh or captured.from_acquisition or captured.revision is None:
             return captured
         parent = captured.revision
     while True:
@@ -658,12 +658,13 @@ def _prepare_capture(
             clock=window.now,
             lease=lease,
         )
-        if corrected.code != "REUSED" or corrected.revision is None:
+        if corrected.from_acquisition or corrected.revision is None:
             break
         # Interrupted receipts can lag capture's validated, bounded correction chain.
         parent = corrected.revision
     if (
-        corrected.code == "INSUFFICIENT_EVIDENCE"
+        corrected.from_acquisition
+        and corrected.code == "INSUFFICIENT_EVIDENCE"
         and corrected.reason == "CORRECTION_CONTENT_UNCHANGED"
     ):
         # Revalidation succeeded without material to publish as a new revision.
