@@ -2,7 +2,7 @@
 
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> owns the [BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
 > The V3 section below governs the new source path. The following V1/V2
 > delivery records and Yahoo handoff identities remain historical, not active
 > Yahoo acquisition instructions.
@@ -10,7 +10,7 @@
 > replaces the provider-clarification wait for source-preserving implementation, not
 > historical failed evidence or independent review and release requirements.
 
-## BharatStock V3 successor — unreleased
+## BharatStock V3 successor
 
 `provider-neutral-adjusted-daily-close@v3` uses the direct client in
 `market_data/bharatstock.py` through `adjusted_daily/service_v3.py`.

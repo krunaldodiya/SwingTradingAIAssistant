@@ -120,6 +120,24 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def _source_identity(
+    source_bytes: tuple[bytes, bytes, bytes], retrieved_at: datetime
+) -> str:
+    return _digest(
+        {
+            "retrieved_at": retrieved_at.astimezone(UTC).isoformat(),
+            "sources": [
+                {"url": url, "sha256": hashlib.sha256(body).hexdigest()}
+                for url, body in zip(
+                    (NIFTY_50_URL, NIFTY_NEXT_50_URL, NIFTY_100_URL),
+                    source_bytes,
+                    strict=True,
+                )
+            ],
+        }
+    )
+
+
 def _parse_source(body: bytes, count: int) -> tuple[BharatStockInstrument, ...] | None:
     if not body or len(body) > _MAX_SOURCE_BYTES:
         return None
@@ -198,22 +216,16 @@ def admit_current_nifty100_selection_v2(
         (member.isin, member.symbol) for member in witness
     }:
         return None
-    source_identity = _digest(
-        [
-            {
-                "url": response.request_url,
-                "sha256": hashlib.sha256(response.body).hexdigest(),
-            }
-            for response in responses
-        ]
-    )
+    source_bytes = (responses[0].body, responses[1].body, responses[2].body)
+    retrieved_at = max(response.retrieved_at for response in responses).astimezone(UTC)
+    source_identity = _source_identity(source_bytes, retrieved_at)
     selection_identity = capture_store.selection_identity_v2(joined)
     return OfficialSelectionV2(
         members=joined,
         selection_identity_sha256=selection_identity,
         source_identity_sha256=source_identity,
-        retrieved_at=max(response.retrieved_at for response in responses),
-        source_bytes=(responses[0].body, responses[1].body, responses[2].body),
+        retrieved_at=retrieved_at,
+        source_bytes=source_bytes,
         source_urls=(NIFTY_50_URL, NIFTY_NEXT_50_URL, NIFTY_100_URL),
     )
 
@@ -366,17 +378,7 @@ def _parse_retained_selection(
         or selection_identity_value != request.selection_identity_sha256
         or source_identity_value != binding_source_identity
         or retrieved_at > request.decision_cutoff
-        or source_identity_value
-        != _digest(
-            [
-                {"url": url, "sha256": hashlib.sha256(body).hexdigest()}
-                for url, body in zip(
-                    (NIFTY_50_URL, NIFTY_NEXT_50_URL, NIFTY_100_URL),
-                    source_bytes,
-                    strict=True,
-                )
-            ]
-        )
+        or source_identity_value != _source_identity(source_bytes, retrieved_at)
     ):
         return None
     return OfficialSelectionV2(

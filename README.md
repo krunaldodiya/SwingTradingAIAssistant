@@ -297,15 +297,15 @@ positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
 other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
-**BharatStock migration — unreleased, unmerged source revision (2026-09-10):**
+**BharatStock source path — #184 / #183:**
 [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 governs the complete daily-provider cutover;
 [Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
-governs independent member outcomes. Both Issues remain open. Required exact-byte
-reviews and release gates are not complete.
-The commands below describe this source revision, not a claimed PyPI release or
-completed merge. See the
-[migration scope and evidence limits](docs/roadmap.md#bharatstock-migration-direction).
+governs independent member outcomes.
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+records exact-byte review, verification and delivery evidence.
+The commands below describe source behavior, not a claimed PyPI publication.
+See the [migration scope and evidence limits](docs/roadmap.md#bharatstock-migration-direction).
 Historical Yahoo evidence retains its original labels and supported readers.
 
 Upstox remains primary for live/raw OHLCV and retained corporate-action
@@ -329,10 +329,10 @@ unchanged by default, assuming for now that the provider has adjusted it
 correctly. The [owner decision](docs/roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
 supersedes waiting for field clarification before implementing this mode.
 The earlier extra-factor finding remains historical evidence, not proof that
-unchanged provider prices are wrong. These examples describe an unmerged
-candidate; independent review and release gates remain required.
+unchanged provider prices are wrong. Current review and delivery status belongs
+to PR #185; independent review and release gates remain required.
 
-This unreleased source revision exposes one `equity_data_downloader`
+This source revision exposes one `equity_data_downloader`
 implementation for bounded direct BharatStock daily acquisition. Its CLI and
 Python API use the same core. Parquet is the sole
 persisted OHLCV source of truth. Persistent output never uses `Downloads` or an

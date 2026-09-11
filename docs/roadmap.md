@@ -420,8 +420,11 @@ changed bytes or the vendor's newly reported correction.
 The earlier unrestricted run recorded 4,509 passes and five failures. One
 packet-test mode argument was corrected; four historical checks still require
 the absent owner-private `~/SwingTradingAIAssistantData/catalog.duckdb`.
-No full-private-suite pass or independent security/privacy/provenance approval
-is claimed. The preserved safety refusal is not retried or bypassed.
+No full-private-suite pass is claimed. That pre-retirement candidate had no
+independent security/privacy/provenance approval. The recorded #156 refusal
+remains historical `INVALID / NO VERDICT`; it is not retried or bypassed.
+Current-candidate reviews are recorded separately in PR #185, not treated as
+resumption or completion of that stopped request.
 
 #### Provider reply and accepted optional-mode retirement
 
@@ -488,7 +491,7 @@ independent-review and protected-release gates remain unchanged.
 
 ### Versioned provider behavior
 
-The unreleased candidate uses direct `bharatstock-api@v1` acquisition.
+The current source path uses direct `bharatstock-api@v1` acquisition.
 It preserves supplied OHLC with `BHARATSTOCK_SOURCE_REPORTED_OHLC` and never
 applies the reported factor to current OHLC or volume. Separate adjustment
 fields remain evidence, not an instruction to transform the original bars.

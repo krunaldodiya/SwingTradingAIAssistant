@@ -3,14 +3,14 @@
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 > and [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
-> govern the unreleased BharatStock V3 and member-isolation path below.
+> govern the BharatStock V3 and member-isolation path below.
 > The later Yahoo-specific contract and delivery evidence are historical;
 > their immutable data, labels and supported readers are not reinterpreted.
 > The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
 > replaces the provider-clarification wait for source-preserving implementation.
 > Historical evidence and independent review/release requirements remain intact.
 
-## BharatStock capture V3 and independent facts — unreleased
+## BharatStock capture V3 and independent facts
 
 `bharatstock-capture@v3` accepts an ordered list of 1–100 explicit
 ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
@@ -44,6 +44,19 @@ preserve the old revision, and produce a new immutable identity only for changed
 material member evidence. Conflicting, unadmitted or unsafe files fail closed.
 The acquisition deadline is checked before each member and before retention.
 No automatic provider retries are introduced by recovery.
+
+Request-pointer resolution binds both the exact request and the named
+revision's self-identity. Each held child directory revalidates its complete
+canonical ancestry to the leased root; an intermediate namespace replacement
+invalidates the operation. Known immutable read, prepare and publication
+conflicts produce governed storage failures, not unclassified exceptions.
+Unexpected provider/software defects still propagate.
+
+The canonical revision budget is 8 MiB, including serialization and its final
+newline. Fresh capture checks the same limit as read/recovery before any
+prepared or admission publication. Oversized evidence returns
+`INSUFFICIENT_EVIDENCE / REVISION_TOO_LARGE`; prices are not rounded and members
+are not silently dropped to fit the budget.
 
 The bounded read-only predecessor reader preserves exact V2 bytes and labels;
 it cannot write new V2 evidence or reinterpret V2 as the new source mode.

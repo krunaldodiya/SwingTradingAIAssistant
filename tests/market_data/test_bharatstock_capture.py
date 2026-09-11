@@ -237,6 +237,157 @@ def test_exact_reuse_performs_no_transport_and_reader_returns_named_revision(
     )
 
 
+@pytest.mark.parametrize("access", ["capture", "reader"])
+def test_capture_admission_rejects_revision_pointer_digest_alias(
+    tmp_path: Path, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    request = _request()
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    captured = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=_Client()
+    )
+    assert captured.code == "CAPTURED" and captured.revision is not None
+    namespace = capture_root / "bharatstock-capture-v3"
+    alias_identity = "0" * 64
+    alias = namespace / "revisions" / f"{alias_identity}.json"
+    alias.write_bytes(captured.revision.canonical_json_bytes())
+    alias.chmod(0o400)
+    pointer = namespace / "requests" / f"{request.request_identity_sha256}.json"
+    pointer_value = json.loads(pointer.read_bytes())
+    pointer_value["revision_identity_sha256"] = alias_identity
+    pointer.chmod(0o600)
+    pointer.write_text(json.dumps(pointer_value) + "\n")
+    pointer.chmod(0o400)
+
+    if access == "reader":
+        with pytest.raises(core.CaptureRevisionUnavailableV2):
+            core.read_bharatstock_capture_revision_v2(
+                capture_root, captured.revision.revision_identity_sha256
+            )
+    else:
+        client = _Client()
+        rejected = core.capture_bharatstock_v2(
+            request, capture_root, schedule_root, client=client
+        )
+        assert (rejected.code, rejected.reason) == (
+            "STORE_UNAVAILABLE",
+            "EVIDENCE_CONFLICT",
+        )
+        assert client.calls == []
+
+
+@pytest.mark.parametrize("access", ["capture", "reader"])
+def test_unsafe_immutable_revision_returns_governed_storage_failure(
+    tmp_path: Path, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    request = _request()
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    captured = core.capture_bharatstock_v2(
+        request, capture_root, schedule_root, client=_Client()
+    )
+    assert captured.code == "CAPTURED" and captured.revision is not None
+    revision_path = (
+        capture_root
+        / "bharatstock-capture-v3"
+        / "revisions"
+        / f"{captured.revision.revision_identity_sha256}.json"
+    )
+    revision_path.chmod(0o600)
+
+    if access == "reader":
+        with pytest.raises(core.CaptureRevisionUnavailableV2):
+            core.read_bharatstock_capture_revision_v2(
+                capture_root, captured.revision.revision_identity_sha256
+            )
+    else:
+        client = _Client()
+        rejected = core.capture_bharatstock_v2(
+            request, capture_root, schedule_root, client=client
+        )
+        assert (rejected.code, rejected.reason) == (
+            "STORE_UNAVAILABLE",
+            "EVIDENCE_CONFLICT",
+        )
+        assert client.calls == []
+
+
+def test_detached_capture_namespace_cannot_admit_a_revision(tmp_path: Path) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    namespace = capture_root / "bharatstock-capture-v3"
+    detached = capture_root / "detached"
+
+    class RenamingClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            history = super().history(instrument, start, end)
+            namespace.rename(detached)
+            namespace.mkdir(mode=0o700)
+            return history
+
+    result = core.capture_bharatstock_v2(
+        _request(), capture_root, schedule_root, client=RenamingClient()
+    )
+    assert (result.code, result.reason) == ("STORE_UNAVAILABLE", "EVIDENCE_CONFLICT")
+    assert result.revision is None
+    assert not any(path.is_file() for path in detached.rglob("*"))
+
+
+def test_oversized_revision_is_rejected_before_immutable_admission(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    precise_price = Decimal("100." + "1" * 80_000)
+
+    class PreciseClient(_Client):
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            history = super().history(instrument, start, end)
+            return replace(
+                history,
+                rows=tuple(
+                    replace(
+                        row,
+                        open=precise_price,
+                        high=precise_price,
+                        low=precise_price,
+                        close=precise_price,
+                        adjusted_close=None,
+                        adjustment_factor=None,
+                    )
+                    for row in history.rows
+                ),
+            )
+
+    result = core.capture_bharatstock_v2(
+        _request(*(_instrument(index) for index in range(10))),
+        capture_root,
+        schedule_root,
+        client=PreciseClient(),
+    )
+    assert (result.code, result.reason) == (
+        "INSUFFICIENT_EVIDENCE",
+        "REVISION_TOO_LARGE",
+    )
+    assert result.revision is None
+    assert not any(
+        path.is_file() for path in (capture_root / "bharatstock-capture-v3").rglob("*")
+    )
+
+
 def test_correction_requires_admitted_parent_and_changes_immutable_revision(
     tmp_path: Path,
 ) -> None:

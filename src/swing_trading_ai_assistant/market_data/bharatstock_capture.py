@@ -941,10 +941,9 @@ def _open_directory(
     *,
     create: bool,
 ) -> _PrivateDirectory:
-    parent_descriptor = parent if isinstance(parent, int) else parent.descriptor
     return _legacy_store._open_private_directory(  # pyright: ignore[reportPrivateUsage]
         cast(StorageRootLeaseOperation, operation),
-        parent_descriptor,
+        parent,
         name,
         create=create,
     )
@@ -957,13 +956,16 @@ def _read_exact(
     *,
     mode: int = 0o400,
 ) -> bytes:
-    return _legacy_store.read_exact_capture_file(
-        directory.operation,
-        directory,
-        name,
-        maximum,
-        expected_mode=mode,
-    )
+    try:
+        return _legacy_store.read_exact_capture_file(
+            directory.operation,
+            directory,
+            name,
+            maximum,
+            expected_mode=mode,
+        )
+    except _legacy_store._ImmutableEvidenceConflict:  # pyright: ignore[reportPrivateUsage]
+        raise ValueError("capture evidence conflict") from None
 
 
 def _publish(
@@ -973,13 +975,16 @@ def _publish(
     *,
     held: bool = False,
 ) -> None:
-    if held:
-        prepared = _legacy_store.prepare_capture_publication(
-            directory.operation, directory, name, raw
-        )
-        prepared.close()
-        return
-    _legacy_store.publish_capture_bytes(directory.operation, directory, name, raw)
+    try:
+        if held:
+            prepared = _legacy_store.prepare_capture_publication(
+                directory.operation, directory, name, raw
+            )
+            prepared.close()
+            return
+        _legacy_store.publish_capture_bytes(directory.operation, directory, name, raw)
+    except _legacy_store._ImmutableEvidenceConflict:  # pyright: ignore[reportPrivateUsage]
+        raise ValueError("capture evidence conflict") from None
 
 
 def _schedule_matches(request: CaptureRequestV2, root: Path) -> bool:
@@ -1041,9 +1046,7 @@ def _read_pointer(
     revision_identity = value.get("revision_identity_sha256")
     if not _valid_digest(revision_identity):
         raise ValueError("capture pointer invalid")
-    revision = _revision_from_bytes(
-        _read_exact(revisions, f"{revision_identity}.json", _MAX_REVISION_BYTES)
-    )
+    revision = _read_named(revisions, cast(str, revision_identity))
     if revision.request != request:
         raise ValueError("capture pointer invalid")
     return revision
@@ -1195,6 +1198,22 @@ def _material_member_values(revision: CaptureRevisionV2) -> tuple[object, ...]:
         )
         for item in revision.members
     )
+
+
+def _revision_bytes_for_admission(
+    revision: CaptureRevisionV2, parent: CaptureRevisionV2 | None
+) -> bytes | CaptureResultV2:
+    if parent is not None and (
+        _material_member_values(parent) == _material_member_values(revision)
+        and parent.shared_failure == revision.shared_failure
+    ):
+        return CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "CORRECTION_CONTENT_UNCHANGED"
+        )
+    raw = revision.canonical_json_bytes()
+    if len(raw) > _MAX_REVISION_BYTES:
+        return CaptureResultV2("INSUFFICIENT_EVIDENCE", None, "REVISION_TOO_LARGE")
+    return raw
 
 
 def _member_result(
@@ -1406,16 +1425,9 @@ def capture_bharatstock_v2(
             if isinstance(revision, CaptureResultV2):
                 return revision
             acquiring_evidence = False
-            if parent is not None and (
-                _material_member_values(parent) == _material_member_values(revision)
-                and parent.shared_failure == revision.shared_failure
-            ):
-                return CaptureResultV2(
-                    "INSUFFICIENT_EVIDENCE",
-                    None,
-                    "CORRECTION_CONTENT_UNCHANGED",
-                )
-            raw = revision.canonical_json_bytes()
+            raw = _revision_bytes_for_admission(revision, parent)
+            if isinstance(raw, CaptureResultV2):
+                return raw
             _publish(
                 prepared,
                 f"{request.request_identity_sha256}.json",

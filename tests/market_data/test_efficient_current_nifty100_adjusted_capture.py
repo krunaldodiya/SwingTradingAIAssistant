@@ -60,6 +60,7 @@ def _csv(rows: list[tuple[str, str, str, str, str]]) -> bytes:
 class _Fetcher:
     def __init__(self, *, inconsistent: bool = False) -> None:
         witness = _rows(0 if not inconsistent else 1, 100)
+        self.retrieved_at = datetime(2026, 8, 27, tzinfo=UTC)
         self.bodies = {
             NIFTY_50_URL: _csv(_rows(0, 50)),
             NIFTY_NEXT_50_URL: _csv(_rows(50, 50)),
@@ -67,9 +68,7 @@ class _Fetcher:
         }
 
     def get(self, url: str) -> SourceResponseV2:
-        return SourceResponseV2(
-            url, url, 200, self.bodies[url], datetime(2026, 8, 27, tzinfo=UTC)
-        )
+        return SourceResponseV2(url, url, 200, self.bodies[url], self.retrieved_at)
 
 
 def test_selector_rejects_future_known_witnesses() -> None:
@@ -380,6 +379,7 @@ def test_public_cli_cold_warm_reuse_and_distinct_corrections_and_order(
     correction = _request(members, cold["revision_identity_sha256"])
     assert correction.request_identity_sha256 != request.request_identity_sha256
     correction_fetcher = _CliFetcher()
+    correction_fetcher.retrieved_at = datetime(2026, 8, 27, 9, tzinfo=UTC)
     correction_client = _CliClient(close=Decimal("101"))
     assert (
         run_capture_cli(
@@ -398,6 +398,16 @@ def test_public_cli_cold_warm_reuse_and_distinct_corrections_and_order(
     assert corrected["revision_identity_sha256"] != cold["revision_identity_sha256"]
     assert len(correction_fetcher.calls) == 3
     assert len(correction_client.calls) == 100
+
+    original_fetcher = _CliFetcher()
+    original_client = _CliClient()
+    assert (
+        run_capture_cli(arguments, _fetcher=original_fetcher, _client=original_client)
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == cold
+    assert original_fetcher.calls == []
+    assert original_client.calls == []
 
     reordered = _request(tuple(reversed(members)))
     assert reordered.selection_identity_sha256 != request.selection_identity_sha256
@@ -534,52 +544,45 @@ def test_official_fetcher_rejects_nonexact_sources_before_transport(url, monkeyp
         OfficialSourceFetcherV2().get(url)
 
 
-def test_selection_and_capture_reuse_bind_one_current_request(
+def test_retained_observation_time_tampering_blocks_capture_reuse(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
-    members = _members()
-    request = _request(members)
+    request = _request(_members())
     selection_root = tmp_path / "selection"
     selection_root.mkdir(mode=0o700)
     capture_root = tmp_path / "capture"
     capture_root.mkdir(mode=0o700)
     schedule_root = tmp_path / "schedule"
     _retain_schedule(schedule_root)
+    arguments = _arguments(
+        _write_request(tmp_path, request),
+        selection_root,
+        capture_root,
+        schedule_root,
+    )
+    assert run_capture_cli(arguments, _fetcher=_CliFetcher(), _client=_CliClient()) == 0
+    capsys.readouterr()
+    namespace = selection_root / "nifty100-selection-v3"
+    binding = json.loads(
+        (
+            namespace / "requests" / f"{request.request_identity_sha256}.json"
+        ).read_bytes()
+    )
+    source = namespace / "sources" / f"{binding['source_identity_sha256']}.json"
+    source_value = json.loads(source.read_bytes())
+    source_value["retrieved_at"] = datetime(2026, 8, 26, 23, tzinfo=UTC).isoformat()
+    tampered = (
+        json.dumps(source_value, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    source.chmod(0o600)
+    source.write_bytes(tampered)
+    source.chmod(0o400)
 
-    source_client = _CliClient()
-    assert (
-        run_capture_cli(
-            _arguments(
-                _write_request(tmp_path / "source", request),
-                selection_root,
-                capture_root,
-                schedule_root,
-            ),
-            _fetcher=_CliFetcher(),
-            _client=source_client,
-        )
-        == 0
-    )
-    captured = json.loads(capsys.readouterr().out)
-    warm_client = _CliClient()
-    assert (
-        run_capture_cli(
-            _arguments(
-                _write_request(tmp_path / "warm", request),
-                selection_root,
-                capture_root,
-                schedule_root,
-            ),
-            _fetcher=_CliFetcher(),
-            _client=warm_client,
-        )
-        == 0
-    )
-
-    assert source_client.calls == [member.isin for member in members]
-    assert warm_client.calls == []
-    revision = capture.read_bharatstock_capture_revision_v2(
-        capture_root, captured["revision_identity_sha256"]
-    )
-    assert revision.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    fetcher = _CliFetcher()
+    client = _CliClient()
+    assert run_capture_cli(arguments, _fetcher=fetcher, _client=client) == 1
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected["reason"] == "SELECTION_RETENTION_FAILED"
+    assert client.calls == []
+    assert source.read_bytes() == tampered

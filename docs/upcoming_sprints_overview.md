@@ -106,11 +106,13 @@ The [migration record](roadmap.md#bharatstock-migration-direction) distinguishes
 the scoped 100-stock input-data check from implementation and release evidence.
 The owner withdrew only the old pre-implementation scheduling dependency;
 review limitations and protected release gates remain explicit.
-Issue #183 remains open for its separate member-isolation behavior.
+Issue #183 tracks separate member-isolation acceptance; current review and
+delivery evidence is recorded in
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185).
 
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
-The unreleased Plan22 V3 candidate follows the
+The Plan22 V3 source path follows the
 [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation):
 keep supplied BharatStock OHLCV unchanged. Following the provider's reply, the
 owner retired optional factor application; adjustment fields remain separate

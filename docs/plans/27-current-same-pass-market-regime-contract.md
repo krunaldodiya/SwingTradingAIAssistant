@@ -2,7 +2,7 @@
 
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> owns the [BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
 > Its V4 path must preserve this plan's complete raw → Plan21 → adjusted
 > ordering, immutable current-context retention/reuse, cutoff and identity
 > checks, declared failure precedence, Industry and Packet behavior.

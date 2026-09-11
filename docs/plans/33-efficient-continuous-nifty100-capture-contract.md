@@ -2,7 +2,7 @@
 
 > Successor work (2026-09-10):
 > [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-> owns the [unreleased BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> owns the [BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
 > `current-nifty100-bharatstock-capture@v3` selects the same official list
 > through versioned current-observation evidence and composes Plan30 V3.
 > The old Yahoo-specific pool, cadence, session and acknowledgement below
@@ -20,6 +20,11 @@ Reuse must resolve the retained request/selection/revision binding before any
 source or provider call.
 Later observations of the same membership have distinct source provenance;
 they must not overwrite prior evidence or manufacture earlier knowledge.
+The source-observation identity commits to all three exact URL/body digests
+and the normalized UTC time at which the union was observed (the latest
+witness retrieval). Ordered membership identity remains independent of that
+observation time. Changing a retained timestamp cannot satisfy its old
+observation identity merely because the new timestamp precedes the cutoff.
 An incomplete capture still accounts for all 100 members, with no claim that
 99 observations constitute complete Nifty100 research. The public surface stays
 sanitized; source/member evidence stays private. Provider replacement alone

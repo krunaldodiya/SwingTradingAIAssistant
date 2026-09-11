@@ -1019,9 +1019,13 @@ class _PrivateDirectory:
     name: str
     descriptor: int
     identity: tuple[int, int, int, int]
+    parent: _PrivateDirectory | None = None
 
     def ensure_live(self) -> None:
-        self.operation.ensure_live()
+        if self.parent is None:
+            self.operation.ensure_live()
+        else:
+            self.parent.ensure_live()
         descriptor_metadata = os.fstat(self.descriptor)
         path_metadata = os.stat(
             self.name, dir_fd=self.parent_descriptor, follow_symlinks=False
@@ -1053,12 +1057,21 @@ class _PrivateDirectory:
 
 def _open_private_directory(
     operation: StorageRootLeaseOperation,
-    parent_descriptor: int,
+    parent: int | _PrivateDirectory,
     name: str,
     *,
     create: bool,
 ) -> _PrivateDirectory:
     operation.ensure_live()
+    if isinstance(parent, _PrivateDirectory):
+        if parent.operation is not operation:
+            raise OSError(errno.EBUSY, "private directory authority changed")
+        parent.ensure_live()
+        parent_descriptor = parent.descriptor
+    else:
+        if parent != operation.descriptor:
+            raise OSError(errno.EBUSY, "private directory authority changed")
+        parent_descriptor = parent
     if create:
         try:
             os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
@@ -1084,6 +1097,7 @@ def _open_private_directory(
                 metadata.st_mode,
                 metadata.st_uid,
             ),
+            parent=parent if isinstance(parent, _PrivateDirectory) else None,
         )
         directory.ensure_live()
         return directory
