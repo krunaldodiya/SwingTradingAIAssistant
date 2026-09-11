@@ -7,6 +7,7 @@ import csv
 import hashlib
 import io
 import json
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from .http import (
     HttpTransportError,
     UrllibHttpTransport,
 )
+from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V3 = "current-nifty100-bharatstock-capture@v3"
 NIFTY_50_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
@@ -271,34 +273,37 @@ def _retain_selection_v2(
         + b"\n"
     )
     try:
-        with lease.root_operation(root) as operation:
-            namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
-                operation, operation.descriptor, "nifty100-selection-v3", create=True
-            )
-            try:
-                sources = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+        with (
+            lease,
+            lease.root_operation(root) as operation,
+            closing(
+                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+                    operation,
+                    operation.descriptor,
+                    "nifty100-selection-v3",
+                    create=True,
+                )
+            ) as namespace,
+            closing(
+                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
                     operation, namespace, "sources", create=True
                 )
-                requests = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
+            ) as sources,
+            closing(
+                capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
                     operation, namespace, "requests", create=True
                 )
-                try:
-                    capture_store._publish(  # pyright: ignore[reportPrivateUsage]
-                        sources, f"{selection.source_identity_sha256}.json", evidence
-                    )
-                    capture_store._publish(  # pyright: ignore[reportPrivateUsage]
-                        requests, f"{request.request_identity_sha256}.json", binding
-                    )
-                    return True
-                finally:
-                    requests.close()
-                    sources.close()
-            finally:
-                namespace.close()
-    except (OSError, UnicodeDecodeError, ValueError):
+            ) as requests,
+        ):
+            capture_store._publish(  # pyright: ignore[reportPrivateUsage]
+                sources, f"{selection.source_identity_sha256}.json", evidence
+            )
+            capture_store._publish(  # pyright: ignore[reportPrivateUsage]
+                requests, f"{request.request_identity_sha256}.json", binding
+            )
+            return True
+    except (OSError, UnicodeDecodeError, ValueError, StorageRootLeaseError):
         return False
-    finally:
-        lease.close()
 
 
 def _parse_retained_selection(
@@ -398,7 +403,7 @@ def _read_retained_selection_v2(
     if lease is None:
         return None
     try:
-        with lease.read_operation(root) as operation:
+        with lease, lease.read_operation(root) as operation:
             namespace = capture_store._open_directory(  # pyright: ignore[reportPrivateUsage]
                 operation, operation.descriptor, "nifty100-selection-v3", create=False
             )
@@ -445,10 +450,15 @@ def _read_retained_selection_v2(
             finally:
                 namespace.close()
         return _parse_retained_selection(raw, binding_source_identity, request)
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        StorageRootLeaseError,
+        json.JSONDecodeError,
+    ):
         return None
-    finally:
-        lease.close()
 
 
 def project_current_nifty100_capture_v2(

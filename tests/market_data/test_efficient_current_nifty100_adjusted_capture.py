@@ -23,6 +23,7 @@ from swing_trading_ai_assistant.market_data.efficient_current_nifty100_adjusted_
     OfficialSourceFetcherV2,
     SourceResponseV2,
     admit_current_nifty100_selection_v2,
+    capture_current_nifty100_v2,
     project_current_nifty100_capture_v2,
 )
 from swing_trading_ai_assistant.market_data.efficient_current_nifty100_adjusted_capture_cli import (
@@ -586,3 +587,55 @@ def test_retained_observation_time_tampering_blocks_capture_reuse(
     assert rejected["reason"] == "SELECTION_RETENTION_FAILED"
     assert client.calls == []
     assert source.read_bytes() == tampered
+
+
+@pytest.mark.parametrize("warm", [False, True])
+def test_selection_root_authority_loss_returns_governed_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm: bool
+) -> None:
+    monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
+    request = _request(_members())
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    arguments = {
+        "selection_root": selection_root,
+        "capture_root": capture_root,
+        "schedule_root": schedule_root,
+    }
+    if warm:
+        assert (
+            capture_current_nifty100_v2(
+                request, **arguments, fetcher=_CliFetcher(), client=_CliClient()
+            ).code
+            == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+        )
+    open_directory = capture._open_directory  # pyright: ignore[reportPrivateUsage]
+    renamed = False
+
+    def detach_root(operation, parent, name, *, create):
+        nonlocal renamed
+        directory = open_directory(operation, parent, name, create=create)
+        if name == "nifty100-selection-v3" and not renamed:
+            selection_root.rename(tmp_path / "detached-selection")
+            selection_root.mkdir(mode=0o700)
+            renamed = True
+        return directory
+
+    monkeypatch.setattr(capture, "_open_directory", detach_root)
+    fetcher = _CliFetcher()
+    if warm:
+        fetcher.bodies[NIFTY_100_URL] = b"invalid\n"
+    client = _CliClient()
+    result = capture_current_nifty100_v2(
+        request, **arguments, fetcher=fetcher, client=client
+    )
+    assert result.code == "INCOMPLETE_CURRENT_NIFTY100_CAPTURE"
+    assert result.reason == (
+        "CONSTITUENT_SOURCE_INVALID" if warm else "SELECTION_RETENTION_FAILED"
+    )
+    assert result.revision_identity_sha256 is None
+    assert client.calls == []

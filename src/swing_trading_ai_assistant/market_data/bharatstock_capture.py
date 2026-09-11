@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, DecimalException, localcontext
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
@@ -41,6 +41,7 @@ from .schedule_evidence import (
 from .storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
     StorageRootLeaseOperation,
 )
 
@@ -62,6 +63,7 @@ _PREDECESSOR_CONFIGURATION_IDENTITY_V2: Final = (
 _MAX_MEMBERS: Final = 100
 _MAX_SESSIONS: Final = 366
 _MAX_REVISION_BYTES: Final = 8 * 1024 * 1024
+_MAX_REVISION_CHAIN_LENGTH: Final = 64
 _DIGEST_HEX: Final = frozenset("0123456789abcdef")
 
 
@@ -842,7 +844,7 @@ def _revision_from_bytes(raw: bytes) -> CaptureRevisionV2:
             raise ValueError("capture revision binding invalid")
         validate_capture_revision_v2(revision)
         return revision
-    except (KeyError, TypeError, ValueError, RecursionError) as error:
+    except (KeyError, TypeError, ValueError, DecimalException, RecursionError) as error:
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
         ) from error
@@ -914,7 +916,7 @@ def _predecessor_revision_from_bytes(raw: bytes) -> _PredecessorCaptureRevisionV
         if raw != revision.canonical_json_bytes():
             raise ValueError("predecessor revision binding invalid")
         return revision
-    except (KeyError, TypeError, ValueError, RecursionError) as error:
+    except (KeyError, TypeError, ValueError, DecimalException, RecursionError) as error:
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
         ) from error
@@ -992,35 +994,36 @@ def _schedule_matches(request: CaptureRequestV2, root: Path) -> bool:
     if lease is None:
         return False
     try:
-        result = ScheduleEvidenceStore(root, lease).resolve(
-            request.schedule_evidence_sha256
-        )
-        if result.outcome is ScheduleOutcome.FAILED or result.schedule is None:
-            return False
-        schedule = result.schedule
-        return (
-            schedule_digest(schedule) == request.schedule_evidence_sha256
-            and schedule_identity_v2(schedule) == request.schedule_identity_sha256
-            and schedule.source == request.schedule_source
-            and schedule.source_release == request.schedule_source_release
-            and schedule.as_of <= request.decision_cutoff
-            and schedule_covers_full_calendar_range(
-                schedule, request.sessions[0], request.sessions[-1]
+        with lease:
+            result = ScheduleEvidenceStore(root, lease).resolve(
+                request.schedule_evidence_sha256
             )
-            and tuple(
-                item.trade_date
-                for item in schedule.sessions
-                if request.sessions[0] <= item.trade_date <= request.sessions[-1]
+            if result.outcome is ScheduleOutcome.FAILED or result.schedule is None:
+                return False
+            schedule = result.schedule
+            return (
+                schedule_digest(schedule) == request.schedule_evidence_sha256
+                and schedule_identity_v2(schedule) == request.schedule_identity_sha256
+                and schedule.source == request.schedule_source
+                and schedule.source_release == request.schedule_source_release
+                and schedule.as_of <= request.decision_cutoff
+                and schedule_covers_full_calendar_range(
+                    schedule, request.sessions[0], request.sessions[-1]
+                )
+                and tuple(
+                    item.trade_date
+                    for item in schedule.sessions
+                    if request.sessions[0] <= item.trade_date <= request.sessions[-1]
+                )
+                == request.sessions
+                and all(
+                    item.close_at <= request.decision_cutoff
+                    for item in schedule.sessions
+                    if request.sessions[0] <= item.trade_date <= request.sessions[-1]
+                )
             )
-            == request.sessions
-            and all(
-                item.close_at <= request.decision_cutoff
-                for item in schedule.sessions
-                if request.sessions[0] <= item.trade_date <= request.sessions[-1]
-            )
-        )
-    finally:
-        lease.close()
+    except StorageRootLeaseError:
+        return False
 
 
 def _read_pointer(
@@ -1167,18 +1170,21 @@ def _require_admitted_chain(
     requests: _PrivateDirectory,
     revisions: _PrivateDirectory,
     revision: CaptureRevisionV2,
-) -> None:
+) -> int:
     seen: set[str] = set()
     current = revision
     while True:
-        if current.revision_identity_sha256 in seen or len(seen) >= 64:
+        if (
+            current.revision_identity_sha256 in seen
+            or len(seen) >= _MAX_REVISION_CHAIN_LENGTH
+        ):
             raise ValueError("capture correction lineage is invalid")
         seen.add(current.revision_identity_sha256)
         if _read_pointer(requests, revisions, current.request) != current:
             raise ValueError("capture revision is not admitted")
         parent_identity = current.request.parent_revision_sha256
         if parent_identity is None:
-            return
+            return len(seen)
         parent = _read_named(revisions, parent_identity)
         if (
             not _is_matching_correction_parent(current.request, parent)
@@ -1186,6 +1192,26 @@ def _require_admitted_chain(
         ):
             raise ValueError("capture correction lineage is invalid")
         current = parent
+
+
+def _correction_parent(
+    request: CaptureRequestV2,
+    requests: _PrivateDirectory,
+    revisions: _PrivateDirectory,
+) -> CaptureRevisionV2 | CaptureResultV2 | None:
+    if request.parent_revision_sha256 is None:
+        return None
+    parent = _read_named(revisions, request.parent_revision_sha256)
+    depth = _require_admitted_chain(requests, revisions, parent)
+    if not _is_matching_correction_parent(request, parent):
+        return CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "PARENT_REVISION_MISMATCH"
+        )
+    if depth >= _MAX_REVISION_CHAIN_LENGTH:
+        return CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "CORRECTION_LINEAGE_LIMIT"
+        )
+    return parent
 
 
 def _material_member_values(revision: CaptureRevisionV2) -> tuple[object, ...]:
@@ -1209,6 +1235,10 @@ def _revision_bytes_for_admission(
     ):
         return CaptureResultV2(
             "INSUFFICIENT_EVIDENCE", None, "CORRECTION_CONTENT_UNCHANGED"
+        )
+    if parent is not None and parent.observed_at > revision.observed_at:
+        return CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "CORRECTION_OBSERVATION_ORDER"
         )
     raw = revision.canonical_json_bytes()
     if len(raw) > _MAX_REVISION_BYTES:
@@ -1312,6 +1342,7 @@ def _recover_prepared(
     prepared: _PrivateDirectory,
     revisions: _PrivateDirectory,
     requests: _PrivateDirectory,
+    parent: CaptureRevisionV2 | None,
 ) -> CaptureResultV2 | None:
     try:
         revision = _revision_from_bytes(
@@ -1326,10 +1357,13 @@ def _recover_prepared(
         return None
     if revision.request != request:
         return CaptureResultV2("STORE_UNAVAILABLE", None, "PREPARED_REVISION_MISMATCH")
+    raw = _revision_bytes_for_admission(revision, parent)
+    if isinstance(raw, CaptureResultV2):
+        return raw
     _publish(
         revisions,
         f"{revision.revision_identity_sha256}.json",
-        revision.canonical_json_bytes(),
+        raw,
     )
     _publish(
         requests,
@@ -1383,6 +1417,7 @@ def capture_bharatstock_v2(
     acquiring_evidence = False
     try:
         with (
+            lease,
             lease.root_operation(store_root) as operation,
             closing(
                 _open_directory(
@@ -1406,25 +1441,20 @@ def capture_bharatstock_v2(
             if existing is not None:
                 _require_admitted_chain(requests, revisions, existing)
                 return CaptureResultV2("REUSED", existing)
-            parent: CaptureRevisionV2 | None = None
-            if request.parent_revision_sha256 is not None:
-                parent = _read_named(revisions, request.parent_revision_sha256)
-                _require_admitted_chain(requests, revisions, parent)
-                if not _is_matching_correction_parent(request, parent):
-                    return CaptureResultV2(
-                        "INSUFFICIENT_EVIDENCE",
-                        None,
-                        "PARENT_REVISION_MISMATCH",
-                    )
-            recovered = _recover_prepared(request, prepared, revisions, requests)
+            parent = _correction_parent(request, requests, revisions)
+            if isinstance(parent, CaptureResultV2):
+                return parent
+            recovered = _recover_prepared(
+                request, prepared, revisions, requests, parent
+            )
             if recovered is not None:
                 return recovered
             # Expected storage failures must not hide provider/code defects.
             acquiring_evidence = True
             revision = _acquire_revision(request, client, clock)
+            acquiring_evidence = False
             if isinstance(revision, CaptureResultV2):
                 return revision
-            acquiring_evidence = False
             raw = _revision_bytes_for_admission(revision, parent)
             if isinstance(raw, CaptureResultV2):
                 return raw
@@ -1446,12 +1476,10 @@ def capture_bharatstock_v2(
                 ),
             )
             return CaptureResultV2("CAPTURED", revision)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, StorageRootLeaseError, json.JSONDecodeError):
         if acquiring_evidence:
             raise
         return CaptureResultV2("STORE_UNAVAILABLE", None, "EVIDENCE_CONFLICT")
-    finally:
-        lease.close()
 
 
 def read_bharatstock_capture_revision_v2(
@@ -1465,7 +1493,7 @@ def read_bharatstock_capture_revision_v2(
     if lease is None:
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
     try:
-        with lease.read_operation(store_root) as operation:
+        with lease, lease.read_operation(store_root) as operation:
             try:
                 with (
                     closing(
@@ -1508,12 +1536,10 @@ def read_bharatstock_capture_revision_v2(
                     _require_predecessor_admitted_chain(requests, revisions, revision)
                     validate_capture_revision_v2(revision)
                     return revision
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, StorageRootLeaseError, json.JSONDecodeError) as error:
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
         ) from error
-    finally:
-        lease.close()
 
 
 def parse_bharatstock_capture_request_v2(raw: bytes) -> CaptureRequestV2:

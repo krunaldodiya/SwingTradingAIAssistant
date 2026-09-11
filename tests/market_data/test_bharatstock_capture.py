@@ -33,6 +33,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
@@ -151,6 +152,20 @@ class _Client:
             retrieved_at=_NOW,
             response_sha256s=("5" * 64, "6" * 64),
             request_count=2,
+        )
+
+
+class _ChangingClient(_Client):
+    def history(
+        self, instrument: BharatStockInstrument, start: date, end: date
+    ) -> BharatStockHistory:
+        original = super().history(instrument, start, end)
+        close = Decimal("100") + Decimal(len(self.calls)) / 100
+        return replace(
+            original,
+            rows=tuple(
+                replace(row, close=close, adjusted_close=close) for row in original.rows
+            ),
         )
 
 
@@ -317,19 +332,31 @@ def test_unsafe_immutable_revision_returns_governed_storage_failure(
         assert client.calls == []
 
 
-def test_detached_capture_namespace_cannot_admit_a_revision(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory", ["namespace", "root"])
+def test_detached_capture_namespace_cannot_admit_a_revision(
+    tmp_path: Path, directory: str
+) -> None:
     schedule_root = tmp_path / "schedule"
     _retain_schedule(schedule_root)
     capture_root = tmp_path / "capture"
     capture_root.mkdir(mode=0o700)
-    namespace = capture_root / "bharatstock-capture-v3"
-    detached = capture_root / "detached"
+    namespace = (
+        capture_root if directory == "root" else capture_root / "bharatstock-capture-v3"
+    )
+    detached = tmp_path / "detached"
+    before: dict[Path, bytes] = {}
 
     class RenamingClient(_Client):
         def history(
             self, instrument: BharatStockInstrument, start: date, end: date
         ) -> BharatStockHistory:
+            nonlocal before
             history = super().history(instrument, start, end)
+            before = {
+                path.relative_to(namespace): path.read_bytes()
+                for path in namespace.rglob("*")
+                if path.is_file()
+            }
             namespace.rename(detached)
             namespace.mkdir(mode=0o700)
             return history
@@ -339,7 +366,11 @@ def test_detached_capture_namespace_cannot_admit_a_revision(tmp_path: Path) -> N
     )
     assert (result.code, result.reason) == ("STORE_UNAVAILABLE", "EVIDENCE_CONFLICT")
     assert result.revision is None
-    assert not any(path.is_file() for path in detached.rglob("*"))
+    assert {
+        path.relative_to(detached): path.read_bytes()
+        for path in detached.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_oversized_revision_is_rejected_before_immutable_admission(
@@ -716,6 +747,185 @@ def test_price_correction_keeps_original_immutable_evidence_readable(
         == "REUSED"
     )
     assert len(client.calls) == 1
+
+
+def test_correction_admission_preserves_the_readable_lineage_limit(
+    tmp_path: Path,
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    client = _ChangingClient()
+    parent = None
+    for _ in range(64):
+        request = _request(parent=parent)
+        result = core.capture_bharatstock_v2(
+            request, root, schedule_root, client=client
+        )
+        assert result.code == "CAPTURED"
+        parent = result.revision.revision_identity_sha256
+    assert core.read_bharatstock_capture_revision_v2(root, parent) == result.revision
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    rejected = core.capture_bharatstock_v2(
+        _request(parent=parent), root, schedule_root, client=client
+    )
+    assert (rejected.code, rejected.reason) == (
+        "INSUFFICIENT_EVIDENCE",
+        "CORRECTION_LINEAGE_LIMIT",
+    )
+    assert rejected.revision is None
+    assert len(client.calls) == 64
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    assert (
+        core.capture_bharatstock_v2(request, root, schedule_root, client=client).code
+        == "REUSED"
+    )
+    assert len(client.calls) == 64
+
+
+@pytest.mark.parametrize(
+    ("prepared", "unchanged"), [(False, False), (True, False), (True, True)]
+)
+def test_fresh_and_prepared_corrections_enforce_parent_evidence(
+    tmp_path: Path, prepared: bool, unchanged: bool
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    parent = core.capture_bharatstock_v2(
+        _request(),
+        root,
+        schedule_root,
+        client=_Client(),
+        clock=lambda: _NOW + timedelta(seconds=1),
+    ).revision
+    request = _request(parent=parent.revision_identity_sha256)
+    client = _Client() if unchanged else _ChangingClient()
+    observed_at = parent.observed_at if unchanged else _NOW
+    if prepared:
+        revision = core._acquire_revision(  # pyright: ignore[reportPrivateUsage]
+            request, client, lambda: observed_at
+        )
+        path = (
+            root
+            / "bharatstock-capture-v3"
+            / "prepared"
+            / f"{request.request_identity_sha256}.json"
+        )
+        path.write_bytes(revision.canonical_json_bytes())
+        path.chmod(0o600)
+        client = _Client()
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    result = core.capture_bharatstock_v2(
+        request, root, schedule_root, client=client, clock=lambda: observed_at
+    )
+    assert (result.code, result.reason) == (
+        "INSUFFICIENT_EVIDENCE",
+        "CORRECTION_CONTENT_UNCHANGED" if unchanged else "CORRECTION_OBSERVATION_ORDER",
+    )
+    assert result.revision is None
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    assert (
+        core.read_bharatstock_capture_revision_v2(root, parent.revision_identity_sha256)
+        == parent
+    )
+    assert len(client.calls) == (0 if prepared else 1)
+
+
+@pytest.mark.parametrize("access", ["reader", "reuse", "recovery"])
+def test_invalid_retained_decimal_returns_governed_failure(
+    tmp_path: Path, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    first = core.capture_bharatstock_v2(
+        request, root, schedule_root, client=_Client()
+    ).revision
+    namespace = root / "bharatstock-capture-v3"
+    path = namespace / "revisions" / f"{first.revision_identity_sha256}.json"
+    value = json.loads(path.read_bytes())
+    value["members"][0]["history"]["rows"][0]["open"] = "not-a-decimal"
+    if access == "recovery":
+        path.unlink()
+        (namespace / "requests" / f"{request.request_identity_sha256}.json").unlink()
+        path = namespace / "prepared" / f"{request.request_identity_sha256}.json"
+    path.chmod(0o600)
+    path.write_bytes(
+        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    path.chmod(0o600 if access == "recovery" else 0o400)
+    if access == "reader":
+        with pytest.raises(core.CaptureRevisionUnavailableV2):
+            core.read_bharatstock_capture_revision_v2(
+                root, first.revision_identity_sha256
+            )
+    else:
+        client = _Client()
+        result = core.capture_bharatstock_v2(
+            request, root, schedule_root, client=client
+        )
+        assert result.code == "STORE_UNAVAILABLE"
+        assert result.revision is None
+        assert client.calls == []
+
+
+@pytest.mark.parametrize("access", ["capture", "reader", "schedule", "deadline"])
+def test_root_lease_cleanup_failure_returns_governed_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    first = core.capture_bharatstock_v2(
+        request, root, schedule_root, client=_Client()
+    ).revision
+    acquire = core._acquire_root  # pyright: ignore[reportPrivateUsage]
+    close = StorageRootLease.close
+    target = None
+    target_root = schedule_root if access == "schedule" else root
+
+    def acquire_target(path):
+        nonlocal target
+        lease = acquire(path)
+        if path == target_root:
+            target = lease
+        return lease
+
+    def failing_close(lease):
+        close(lease)
+        if lease is target:
+            raise StorageRootLeaseError("descriptor cleanup failed")
+
+    monkeypatch.setattr(core, "_acquire_root", acquire_target)
+    monkeypatch.setattr(StorageRootLease, "close", failing_close)
+    if access == "reader":
+        with pytest.raises(core.CaptureRevisionUnavailableV2):
+            core.read_bharatstock_capture_revision_v2(
+                root, first.revision_identity_sha256
+            )
+    else:
+        client = _Client()
+        if access == "deadline":
+            request = _request(_instrument(1))
+        result = core.capture_bharatstock_v2(
+            request,
+            root,
+            schedule_root,
+            client=client,
+            clock=(lambda: _NOW + timedelta(hours=2)) if access == "deadline" else None,
+        )
+        assert result.code == (
+            "INSUFFICIENT_EVIDENCE" if access == "schedule" else "STORE_UNAVAILABLE"
+        )
+        assert result.revision is None
+        assert client.calls == []
 
 
 def test_malformed_retained_revision_is_unavailable_not_an_internal_key_error(

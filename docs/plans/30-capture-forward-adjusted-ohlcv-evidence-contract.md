@@ -49,14 +49,27 @@ Request-pointer resolution binds both the exact request and the named
 revision's self-identity. Each held child directory revalidates its complete
 canonical ancestry to the leased root; an intermediate namespace replacement
 invalidates the operation. Known immutable read, prepare and publication
-conflicts produce governed storage failures, not unclassified exceptions.
-Unexpected provider/software defects still propagate.
+conflicts, root-authority loss and lease-cleanup failures produce governed
+storage or schedule failures, not unclassified exceptions. This applies to
+capture, exact reads and official-selection retention/reuse. Malformed retained
+decimal values are unavailable evidence rather than internal decimal errors.
+Unexpected provider/software defects still propagate without being masked by
+cleanup failures.
 
 The canonical revision budget is 8 MiB, including serialization and its final
 newline. Fresh capture checks the same limit as read/recovery before any
 prepared or admission publication. Oversized evidence returns
 `INSUFFICIENT_EVIDENCE / REVISION_TOO_LARGE`; prices are not rounded and members
 are not silently dropped to fit the budget.
+
+Fresh and prepared corrections enforce the exact reader's resulting-chain
+limits: at most 64 revisions, an admitted matching parent and nondecreasing
+observation time. Both admission paths also require materially changed
+evidence. A child of a 64-revision parent chain is rejected before transport or publication with
+`INSUFFICIENT_EVIDENCE / CORRECTION_LINEAGE_LIMIT`. An earlier child observation
+returns `CORRECTION_OBSERVATION_ORDER`; unchanged evidence retains
+`CORRECTION_CONTENT_UNCHANGED` precedence. Prepared recovery applies these same
+checks before admission and does not consume provider calls.
 
 The bounded read-only predecessor reader preserves exact V2 bytes and labels;
 it cannot write new V2 evidence or reinterpret V2 as the new source mode.
