@@ -38,7 +38,7 @@ supplied listed stocks outside the Nifty 100 may use a capability only when
 their canonical identity and that capability's required evidence are supported;
 they are not the primary roadmap, qualification, or default-workflow focus.
 
-## Locked research pipeline
+## Research responsibilities and dependencies
 
 ```text
 Higher-level universe policy
@@ -62,6 +62,13 @@ Structured research facts
   -> Explainable recommendation or no-trade decision
 ```
 
+The diagram describes product responsibilities, not a requirement that every
+module succeed before any fact is visible.
+[Issue #172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172)
+governs the versioned migration to question-specific dependencies. Each fact
+still requires its own identity, data, time, authority and integrity evidence;
+unrelated missing context must not suppress an independently admitted result.
+
 Universe selection and point-in-time index membership are higher-level policy.
 Reusable feature cores consume explicit bounded canonical equity identities and
 declare their required data capabilities; they return unsupported or
@@ -71,10 +78,25 @@ The planned product includes reproducible market-data ingestion, deterministic
 research modules, bias-aware backtesting, risk validation, structured facts,
 and read-only monitoring of supported listed-equity holdings. Default discovery,
 research qualification, and validation concentrate on the point-in-time Nifty
-100. Each module is specified, implemented, and validated separately in
-pipeline order.
+100. Each module is specified, implemented, and validated separately; its
+actual evidence dependencies govern execution rather than a universal chain.
 
 ## Current implementation status
+
+**Current delivery baseline:** [PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+merged on September 11, 2026; #183 and #184 are closed/completed. It delivered
+source-preserving BharatStock acquisition, exact capture reuse and independently
+available member/feature facts. Historical Yahoo records below remain historical
+delivery evidence, not an active Yahoo acquisition path.
+
+**Next working slice, not yet released:**
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+adds one single-stock current-research command under #172. It reuses the
+delivered two-session Price Action calculation while automating calendar,
+mapping, capture and retained-result preparation. Integrated results (#187),
+independent price context (#188), bounded refresh (#189) and measured efficiency
+(#190) remain separately ordered. This does not claim a live PNB result,
+completed #172, new analytical modules or better trading returns.
 
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:
@@ -317,10 +339,48 @@ integration. A caller-supplied canonical universe snapshot establishes
 historical Nifty 50 membership and sector provenance; it does not supply prices
 or make network requests.
 
-The package has no built-in exchange-calendar feed. Persistent market-data
-workflows require provenance-complete supplied NSE schedule evidence and fail
-closed when it is unavailable. Strategy rules, recommendations, and broker
+Legacy persistent market-data commands require provenance-complete supplied NSE
+schedule evidence and fail closed when it is unavailable. Current evidence
+acquisition uses the explicitly approved NSE/Upstox composition policy, not a
+generic exchange-calendar fallback. Strategy rules, recommendations, and broker
 execution are not implemented.
+
+## Single-stock current research candidate
+
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186) adds
+`current-stock-research@v1`; this candidate is not yet released or live-qualified.
+Use an existing empty owner-private directory (`0700`), or an admitted private
+storage root. The command does not create the root or repair permissions:
+
+```bash
+market-data research-current \
+  --symbol PNB \
+  --storage-root /absolute/private/research-root \
+  --output json
+```
+
+A cold invocation acquires the approved official calendar and Upstox BOD
+mapping, then verifies the canonical stock through BharatStock. PNB is an
+example, not a claim that its current evidence or trade eligibility is admitted.
+The command selects the latest two officially completed sessions at invocation
+time within a 32-calendar-day lookback. Its acquisition/publication ceiling is
+30 minutes, capped before the next IST date; that future deadline never selects
+a future close and is not a latency promise or forcible-cancellation guarantee.
+
+Warm reuse validates exact retained evidence, current source/configuration
+identities, same-day mapping/calendar freshness and the unchanged session
+window before price access. `--refresh` forces the full two-session price
+refresh. A changed day/window revalidates the bounded requirement; this is not
+suffix-only incremental acquisition. Immutable captures and receipts survive
+replacement of the private current-result locator.
+
+JSON contains feature-local Price Action, source/basis labels, exact references,
+actual knowledge times and scoped reasons—not raw bars, an observed whole
+report, a corporate-action qualification or a trade recommendation. Exit `0`
+means observed Price Action; `1` means a structured unavailable/insufficient
+result. Invalid arguments or an unexpected internal failure return `2` with a
+sanitized stderr code. Live provider use and real-stock validation still require
+their exact authority; deterministic synthetic checks do not establish them.
 
 ## Structured daily OHLCV downloader
 

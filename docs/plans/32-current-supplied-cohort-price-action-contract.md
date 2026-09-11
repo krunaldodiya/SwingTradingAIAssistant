@@ -10,6 +10,22 @@
 **Risk:** R3  
 **Contract:** `current-supplied-cohort-price-action@v1`
 
+## Independent current-research successor — Issue 186
+
+[Issue #186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186),
+the first working child of #172, reuses the delivered Plan30 BharatStock
+two-session Price Action projection through a new public orchestration/result
+contract. It is not yet released and does not change this plan's exact Upstox
+raw/Plan-21/Market-Structure-bound V1 report or claim those guarantees for
+source-reported BharatStock prices.
+
+The new command's required evidence is its canonical equity mapping, official
+completed sessions and admitted source-reported capture. Its feature-local
+Price Action can be observed while the legacy enclosing packet lacks Structure
+history. Separate single-candle/cross-session and integrated requirement
+decomposition remains governed by #187; stronger historical, price-integrity,
+qualification and trade-readiness requirements are not removed.
+
 ## Authority and outcome
 
 Sprint 19 delivers the smallest usable current/live Price Action fact for one explicit bounded canonical listed-equity cohort. The deterministic tool consumes already-admitted completed-session Upstox raw daily evidence and the exact current Market Structure result. It returns direct versioned S19/S20 price-behavior facts or one explicit fail-closed evidence outcome. The external AI may explain the supplied facts but must not receive raw OHLCV or recompute them.

@@ -45,9 +45,11 @@ replace active yfinance daily acquisition with direct BharatStock access,
 without a separate service or mixed-provider fallback. The
 [provider migration record](roadmap.md#bharatstock-migration-direction)
 owns the scope, measured data-check limits and unresolved prerequisites.
-This source revision is under implementation and is not a delivered runtime
-change. Yahoo-specific evidence keeps its original provider, basis, identities,
-and observation times; versioned successors do not reinterpret it.
+The source-preserving runtime and #183 isolation were delivered through
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+on September 11, 2026, at merge `65bec9e6e8256f047a253a76d165e3b51a438692`.
+Yahoo-specific evidence keeps its original provider, basis, identities and
+observation times; versioned successors do not reinterpret it.
 Upstox raw/current behavior remains separate. Neither the provider decision nor
 the 100-stock input-data check closes
 [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
@@ -63,8 +65,8 @@ readers and independent review/release requirements remain intact.
 
 ## Delivery priority overlay
 
-The architecture, locked modules, pipeline, exclusions, and historical plan
-below remain intact. The owner has changed delivery priority only:
+The module responsibilities, exclusions and accepted historical capabilities
+remain intact. The current/live priority and #172 dependency migration require:
 
 1. make the current/live research path usable first through current
    price/volume, Market Regime, Sector Analysis, news/events, and one integrated
@@ -74,10 +76,11 @@ below remain intact. The owner has changed delivery priority only:
 3. complete the deferred historical store and backtest validation after the
    current packet is usable.
 
-This ordering removes no feature or gate. Historical work is deferred, not
-deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
-current delivery sequence; it does not change the module order or authorize
-autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
+This ordering removes no feature or claim-specific gate. Historical work is
+deferred, not deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md)
+owns delivery sequencing, while versioned feature contracts own actual execution
+dependencies. Neither authorizes autonomous signals, recommendations or broker
+execution. Sprint 15 / #120,
 Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
 closed/completed. Sprint 17 / #147 retained all `4/4` predeclared
 completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
@@ -89,12 +92,13 @@ merged that planning record without changing runtime. Issue #155 delivered the
 exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
 separately bounded Plan 33 implementation. The original owner instruction
 required its security follow-up after #145 and before #172 implementation.
-On 2026-09-10 the owner withdrew only that pre-implementation scheduling
-dependency for #184/#183 in
-[the scoped correction](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5614112378).
-Reversible implementation can proceed. The old review remains
-**INVALID / NO VERDICT**; no retry, replacement audit, policy bypass, successful
-review, or release waiver is implied. Protected release requirements remain.
+That stopped probe remains **INVALID / NO VERDICT**. The owner withdrew the
+old scheduling dependency and separately authorized ordinary current reviews;
+PR #185 completed those reviews without resuming the historical probe.
+The owner authorized starting #172 on September 11 after #183/#184 delivery;
+the [accepted start record](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5630961537)
+owns that current sequencing. No refusal retry, review substitution or release
+waiver is implied. Protected release requirements remain.
 Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
 policy below. It changes execution-failure handling, not the product-module
 sequence or the separately bounded scope of #156.
@@ -471,7 +475,7 @@ orchestrator that preserves exact whole-list semantics and one selection
 identity. Per-batch verdicts must not be averaged or combined when the feature
 depends on the complete cohort.
 
-## Locked pipeline
+## Module responsibility flow
 
 ```text
 Higher-level universe policy
@@ -494,6 +498,21 @@ Structured research facts
   -> AI reasoning
   -> Explainable recommendation or no-trade decision
 ```
+
+This flow is not a universal all-module admission gate.
+[The linked #172 slices](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5631137469)
+migrate execution to explicit capability dependencies while preserving every
+module responsibility below. Foundational identity, time, storage authority and
+price-integrity failures still invalidate all dependent facts. A missing
+question-specific requirement withholds that conclusion; unavailable optional
+context does not erase independent observations.
+
+The first working successor (#186, not yet released) uses the existing
+NSE/Upstox calendar policy, retained Upstox BOD equity mapping and source-reported
+BharatStock two-session capture. It exposes the existing feature-local Price
+Action result, not an observed whole Packet, corporate-action qualification,
+strategy effectiveness or trade eligibility. The frozen Upstox raw/Plan-21/
+21-session Structure and Price Action contracts remain distinct.
 
 ## Locked modules
 

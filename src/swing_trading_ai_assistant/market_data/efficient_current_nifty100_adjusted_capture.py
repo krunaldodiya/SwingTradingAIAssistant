@@ -20,6 +20,7 @@ from .bharatstock_capture import (
     CaptureResultV2,
     capture_bharatstock_v2,
     validate_capture_revision_v2,
+    validate_current_capture_request_v2,
 )
 from .http import (
     HttpResponseBodyTooLarge,
@@ -548,6 +549,7 @@ def capture_current_nifty100_v2(
     client: BharatStockClient | None = None,
 ) -> CurrentNifty100ResultV2:
     """Validate official selection before the serial, provider-neutral V2 capture."""
+    validate_current_capture_request_v2(request)
 
     try:
         selection = _read_retained_selection_v2(selection_root, request)

@@ -1,10 +1,44 @@
 # Instrument-agnostic feature boundary and coupling audit
 
-Status: **OWNER DECISION RECORDED / FUTURE REMEDIATION NOT STARTED**
+Status: **OWNER DECISION RECORDED / HISTORICAL AUDIT PRESERVED; CURRENT SUCCESSOR DELIVERY TRACKED IN ISSUE #172**
 
 Tracking: [GitHub Issue #130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130)
 
 Risk: **R2 documentation decision; later financial-research contract migrations retain their applicable R3 controls**
+
+## Current migration crosswalk — September 11, 2026
+
+The original audit and future-tense remediation rows below describe Issue
+#130's baseline, not a claim that all successors remain unstarted. The accepted
+current BharatStock capture and independent-fact work in #183/#184 was delivered
+through PR #185. Issue [#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172)
+must reuse those delivered cores rather than restart the historical audit.
+Its child [#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+is in implementation; none of the following allocation claims that child or
+the remaining public integrations are released.
+
+| Existing authority | Disposition in the current dependency migration |
+| --- | --- |
+| Plan 02 request-minimal ingestion | Preserve the bounded ingestion/planning primitives. #186 acquires only its own two-completed-session requirement, not a default broad history. |
+| Plan 04 public preview | Preserve its serialized contract and disclosure boundary. #186 adds a separately versioned public research result through the existing CLI; it does not widen old preview payloads. |
+| Plan 06 current-month incremental data | Preserve its provisional and completed boundaries. #189 owns new cross-window refresh; #186's exact warm reuse is not labelled suffix-only incremental acquisition. |
+| Plan 07 bounded Nifty 50 workflow | Preserve frozen named-universe behavior. #186's explicit symbol has no membership prerequisite and makes no index-eligibility claim. |
+| Plan 19 supplied-cohort market data | Reuse canonical mapping, evidence and completed-session controls where compatible; preserve the old cohort/runtime identities. #186 does not reinterpret its input or output as a new supplied-cohort result. |
+| Plan 20 Market Regime | Preserve the delivered core. #188 owns its supported independent price-context invocation; #186 does not manufacture a regime result. |
+| Plan 21 corporate-action screen | Preserve nonexhaustive screen semantics and its qualified claims. The source-reported two-session fact does not claim that screen passed, nor make it a global prerequisite. |
+| Plan 22 provider-neutral adjusted close | Preserve adjusted-close source/basis and predecessor readers. No BharatStock source-reported row is relabelled as qualified adjusted-close evidence. |
+| Plan 23 instrument boundary | Reuse explicit canonical listed-equity admission and keep selection policy outside the feature. Preserve historical index-specific contracts rather than globally renaming them. |
+| Plan 24 Sector Analysis | Preserve the delivered feature. #188 owns independent price context with its genuinely required classification evidence; classification is not a prerequisite for #186 Price Action. |
+| Plan 25 Event Notice | Preserve source and nonexhaustive event scope. #187 owns integrated feature-local outcomes; absent event evidence does not fabricate or suppress an unrelated observed price fact. |
+| Plan 27 composed evidence | #186 extracts/reuses the calendar-only composer and adds its canonical replay contract. Preserve the combined legacy acquisition and its historical claim scope. |
+| Plan 30 capture-forward evidence | Reuse existing immutable BharatStock capture/reader and public fact builder. Preserve exact admitted predecessor V2 and pre-change V3 bytes; the new writer and borrowed root authority require their own verification. |
+| Plan 31 Market Structure | Preserve its supported lookback and independent status. #187 composes it without imposing that lookback on two-session Price Action. |
+| Plan 32 Price Action | Preserve frozen V1 input, basis and identity. #186 exposes the already delivered BharatStock two-session builder under a new public orchestration contract, not a relabelled V1 result. |
+| Plan 33 efficient continuous capture | Reuse exact retained-evidence primitives. #189 owns changed-window/provisional behavior and #190 owns measured request, latency, retention and reuse evidence; no performance improvement is inferred from batching alone. |
+
+This is a reuse/preserve/version/defer allocation, not an authorization to retire
+historical readers or weaken source qualification, provider pauses, temporal
+truthfulness, exact-byte review, CI or protected release controls.
 
 ## Owner decision
 

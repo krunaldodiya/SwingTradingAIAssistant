@@ -42,8 +42,11 @@ Exact reuse precedes transport. Interrupted publication recovers validated
 prepared bytes without downloading again. Corrections name an admitted parent,
 preserve the old revision, and produce a new immutable identity only for changed
 material member evidence. Conflicting, unadmitted or unsafe files fail closed.
-The acquisition deadline is checked before each member and before retention.
-No automatic provider retries are introduced by recovery.
+The acquisition deadline is checked before client creation, each member and
+each prepared/revision/request publication, including prepared recovery.
+Expiry stops the next publication and prevents a completed-invocation claim;
+already valid retained bytes are not rewritten. Synchronous work is not claimed
+to be forcibly cancelled. No automatic provider retries are introduced by recovery.
 
 Request-pointer resolution binds both the exact request and the named
 revision's self-identity. Each held child directory revalidates its complete
@@ -85,6 +88,19 @@ value is rounded, clipped or applied to OHLC to enforce this resource boundary.
 
 The bounded read-only predecessor reader preserves exact V2 bytes and labels;
 it cannot write new V2 evidence or reinterpret V2 as the new source mode.
+The current #186 writer also preserves the exact pre-change V3 reader identity
+`bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d`
+from PR #185. That read-only admission is not an active-writer whitelist:
+current capture and request-entry paths require current runtime identity.
+An explicitly borrowed exact-root lease remains caller-owned across capture
+and exact reads; mismatched or lost root authority fails before acquisition.
+
+The not-yet-released
+[#186 single-stock command](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+composes this capture with calendar-only evidence and retained BOD mapping.
+Its separate result/receipt contract does not replace the capture schema,
+relabel historical evidence or claim the remaining #172 integrations are done.
+
 `build_bharatstock_research_packet_v1` consumes an admitted retained revision.
 Owner-private independent facts use its one consistent selected price basis: Price Action
 requires the latest two completed supplied sessions; Market Structure requires
@@ -103,8 +119,29 @@ facts stay owner-private.
 The generic downloader's Parquet output is not automatic Plan30 admission.
 The old Yahoo readers and Plan29 projections stay separate. The historical
 qualification and original provider approvals below do not qualify V2.
-Current delivery, exact-byte review and required verification remain governed
-by #184/#183; no merge or closure is claimed by this successor specification.
+The current #184/#183 implementation was delivered through PR #185 on
+September 11, 2026; the linked Issues own its exact review and verification
+receipt. That delivery does not qualify the separate historical source basis.
+
+## Single-stock public composition successor — Issue 186
+
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186), not
+yet released, composes this capture/reader and existing feature-local Price
+Action builder after automatic calendar and canonical mapping preparation.
+It does not reinterpret the original private capture CLI as a fact-disclosure
+surface. Its separately versioned result permits only the bounded derived fact,
+canonical requested identity, source/basis, times, exact evidence identities and
+scoped status; raw bars, source payloads, account data and private paths remain
+excluded.
+
+Warm reuse must resolve and validate exact immutable evidence before provider
+access. Refresh preserves the earlier observation and acquires a new minimal
+two-session window; it does not claim suffix-only incremental acquisition.
+The new public composition must preserve exact pre-change V3 and predecessor V2
+reads, current-writer admission, private root authority and cleanup precedence.
+Borrowing a caller-held lease must never transfer ownership or close that lease.
+The [frozen child contract](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186#issuecomment-5631150055)
+owns its new clocks, bounded lookup and adversarial acceptance.
 
 ## Historical Yahoo contract and delivery
 

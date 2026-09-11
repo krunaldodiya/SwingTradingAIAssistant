@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -53,6 +54,8 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleClosure,
     ScheduleSession,
+    canonical_schedule_bytes,
+    parse_canonical_schedule_bytes,
     schedule_digest,
 )
 
@@ -89,6 +92,10 @@ _MAX_JSON_DEPTH: Final = 8
 _MAX_JSON_NODES: Final = 20_000
 _MAX_JSON_ARRAY_ITEMS: Final = 5_000
 _MAX_NSE_HOLIDAY_ROWS: Final = 1_000
+_MAX_CALENDAR_OBSERVATIONS: Final = 34
+_MAX_SHARED_CALENDAR_OBSERVATIONS: Final = _MAX_OBSERVATIONS - 3
+_MAX_CALENDAR_EVIDENCE_BYTES: Final = 48_000_000
+_MAX_CURRENT_CALENDAR_COVERAGE_DAYS: Final = 32
 _NSE_HOLIDAY_SEGMENTS: Final = (
     "CBM",
     "CD",
@@ -166,6 +173,8 @@ class CurrentEvidenceAcquisitionFailureCode(StrEnum):
     SOURCE_MALFORMED = "SOURCE_MALFORMED"
     SOURCE_CONFLICT = "SOURCE_CONFLICT"
     SPECIAL_SESSION_UNCORROBORATED = "SPECIAL_SESSION_UNCORROBORATED"
+    ACQUISITION_CUTOFF_EXCEEDED = "ACQUISITION_CUTOFF_EXCEEDED"
+    ACQUISITION_DATE_ROLLOVER = "ACQUISITION_DATE_ROLLOVER"
 
 
 class CurrentEvidenceAcquisitionError(RuntimeError):
@@ -345,6 +354,133 @@ def _mint_observation_set(
     for name, value in values.items():
         object.__setattr__(result, name, value)
     _register_observation_set(result, _observation_set_binding(result))
+    return result
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, weakref_slot=True)
+class CurrentCalendarEvidenceObservationsV1:
+    """Exact calendar-source observations without unrelated capability inputs."""
+
+    upstox_current_year_holidays: OfficialHttpObservationV1
+    nse_holiday_masters: tuple[OfficialHttpObservationV1, ...]
+    upstox_prior_year_timings: tuple[OfficialHttpObservationV1, ...]
+
+    def __init__(self) -> None:
+        raise TypeError("calendar observation sets are acquisition-minted")
+
+    @property
+    def all(self) -> tuple[OfficialHttpObservationV1, ...]:
+        return (
+            self.upstox_current_year_holidays,
+            *self.nse_holiday_masters,
+            *self.upstox_prior_year_timings,
+        )
+
+    def __iter__(self) -> Iterator[OfficialHttpObservationV1]:
+        return iter(self.all)
+
+    def __len__(self) -> int:
+        return len(self.all)
+
+
+def _mint_calendar_observation_set(
+    observations: tuple[OfficialHttpObservationV1, ...],
+    *,
+    holiday_master_count: int,
+) -> CurrentCalendarEvidenceObservationsV1:
+    if (
+        type(observations) is not tuple
+        or type(holiday_master_count) is not int
+        or holiday_master_count not in (1, 2)
+        or not 2 <= len(observations) <= _MAX_SHARED_CALENDAR_OBSERVATIONS
+        or not all(_official_observation_is_exact_v1(item) for item in observations)
+        or len({item.observation_identity_sha256 for item in observations})
+        != len(observations)
+    ):
+        raise CurrentEvidenceAcquisitionError("SOURCE_MALFORMED")
+    result = object.__new__(CurrentCalendarEvidenceObservationsV1)
+    masters_end = 1 + holiday_master_count
+    values: dict[str, object] = {
+        "upstox_current_year_holidays": observations[0],
+        "nse_holiday_masters": observations[1:masters_end],
+        "upstox_prior_year_timings": observations[masters_end:],
+    }
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
+    _register_observation_set(result, _calendar_observation_set_binding(result))
+    return result
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, weakref_slot=True)
+class CurrentCalendarEvidenceBundleV1:
+    """Private reproducible calendar evidence and its canonical schedule."""
+
+    observations: CurrentCalendarEvidenceObservationsV1
+    source_manifest_bytes: bytes = field(repr=False)
+    source_manifest_sha256: str
+    schedule: ExpectedSessionSchedule
+    schedule_evidence_sha256: str
+    runtime_code_identity_sha256: str
+
+    def __init__(self) -> None:
+        raise TypeError("current calendar evidence bundles are acquisition-minted")
+
+    def canonical_json_bytes(self) -> bytes:
+        """Serialize one bounded private evidence record for exact re-admission."""
+        if not validate_current_calendar_evidence_bundle_v1(self):
+            raise ValueError("invalid current calendar evidence")
+        raw = _canonical(
+            {
+                "observations": [
+                    _calendar_observation_value(item) for item in self.observations
+                ],
+                "runtime_code_identity_sha256": self.runtime_code_identity_sha256,
+                "schedule_b64": _base64_encode(canonical_schedule_bytes(self.schedule)),
+                "schedule_evidence_sha256": self.schedule_evidence_sha256,
+                "schema_version": 1,
+                "source_manifest_b64": _base64_encode(self.source_manifest_bytes),
+                "source_manifest_sha256": self.source_manifest_sha256,
+            }
+        )
+        if len(raw) > _MAX_CALENDAR_EVIDENCE_BYTES:
+            raise ValueError("invalid current calendar evidence")
+        return raw
+
+
+def _mint_calendar_bundle(
+    *,
+    observations: CurrentCalendarEvidenceObservationsV1,
+    source_manifest_bytes: bytes,
+    schedule: ExpectedSessionSchedule,
+) -> CurrentCalendarEvidenceBundleV1:
+    manifest_sha256 = hashlib.sha256(source_manifest_bytes).hexdigest()
+    runtime_identity = current_evidence_acquisition_runtime_code_identity_v1()
+    if (
+        not _calendar_observation_set_is_exact_v1(observations)
+        or type(source_manifest_bytes) is not bytes
+        or not 1 <= len(source_manifest_bytes) <= _MAX_SCHEDULE_BYTES
+        or type(schedule) is not ExpectedSessionSchedule
+        or (schedule.covered_to - schedule.covered_from).days + 1
+        > _MAX_CURRENT_CALENDAR_COVERAGE_DAYS
+        or schedule.source != SCHEDULE_SOURCE
+        or schedule.source_release != f"composed-calendar@v1={manifest_sha256}"
+        or any(item.known_at > schedule.as_of for item in observations)
+    ):
+        raise CurrentEvidenceAcquisitionError("SOURCE_MALFORMED")
+    result = object.__new__(CurrentCalendarEvidenceBundleV1)
+    values: dict[str, object] = {
+        "observations": observations,
+        "source_manifest_bytes": source_manifest_bytes,
+        "source_manifest_sha256": manifest_sha256,
+        "schedule": schedule,
+        "schedule_evidence_sha256": schedule_digest(schedule),
+        "runtime_code_identity_sha256": runtime_identity,
+    }
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
+    _register_evidence_bundle(result, _calendar_bundle_binding(result))
+    if not validate_current_calendar_evidence_bundle_v1(result):
+        raise CurrentEvidenceAcquisitionError("SOURCE_MALFORMED")
     return result
 
 
@@ -631,6 +767,101 @@ def _observation_set_is_exact_v1(value: object) -> bool:
         return False
 
 
+def _calendar_observation_set_binding(
+    value: CurrentCalendarEvidenceObservationsV1,
+) -> tuple[tuple[int, str], ...]:
+    return tuple((id(item), item.observation_identity_sha256) for item in value.all)
+
+
+def _calendar_observation_set_is_exact_v1(value: object) -> bool:
+    try:
+        if type(value) is not CurrentCalendarEvidenceObservationsV1:
+            return False
+        observations = value.all
+        return (
+            2 <= len(observations) <= _MAX_SHARED_CALENDAR_OBSERVATIONS
+            and len(value.nse_holiday_masters) in (1, 2)
+            and len({item.observation_identity_sha256 for item in observations})
+            == len(observations)
+            and all(_official_observation_is_exact_v1(item) for item in observations)
+            and _observation_set_registered(
+                value, _calendar_observation_set_binding(value)
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _calendar_observations_from_combined(
+    observations: CurrentEvidenceObservationsV1,
+) -> CurrentCalendarEvidenceObservationsV1:
+    if not _observation_set_is_exact_v1(observations):
+        raise ValueError("invalid composed schedule input")
+    return _mint_calendar_observation_set(
+        (
+            observations.upstox_current_year_holidays,
+            *observations.nse_holiday_masters,
+            *observations.upstox_prior_year_timings,
+        ),
+        holiday_master_count=len(observations.nse_holiday_masters),
+    )
+
+
+def _calendar_bundle_binding(
+    value: CurrentCalendarEvidenceBundleV1,
+) -> tuple[object, ...]:
+    return (
+        id(value.observations),
+        hashlib.sha256(value.source_manifest_bytes).hexdigest(),
+        value.source_manifest_sha256,
+        id(value.schedule),
+        value.schedule_evidence_sha256,
+        value.runtime_code_identity_sha256,
+    )
+
+
+def _calendar_bundle_components_are_exact_v1(
+    value: CurrentCalendarEvidenceBundleV1,
+) -> bool:
+    try:
+        if not _calendar_observation_set_is_exact_v1(value.observations):
+            return False
+        manifest_bytes, schedule = _compose_calendar_schedule_v1(
+            observations=value.observations,
+            coverage_from=value.schedule.covered_from,
+            coverage_to=value.schedule.covered_to,
+            as_of=value.schedule.as_of,
+        )
+        return (
+            manifest_bytes == value.source_manifest_bytes
+            and hashlib.sha256(manifest_bytes).hexdigest()
+            == value.source_manifest_sha256
+            and schedule == value.schedule
+            and schedule_digest(schedule) == value.schedule_evidence_sha256
+            and value.runtime_code_identity_sha256
+            == current_evidence_acquisition_runtime_code_identity_v1()
+        )
+    except (
+        AttributeError,
+        CurrentEvidenceAcquisitionError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+
+def validate_current_calendar_evidence_bundle_v1(value: object) -> bool:
+    """Revalidate one exact private calendar bundle before downstream adoption."""
+    try:
+        return (
+            type(value) is CurrentCalendarEvidenceBundleV1
+            and _evidence_bundle_registered(value, _calendar_bundle_binding(value))
+            and _calendar_bundle_components_are_exact_v1(value)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _bundle_binding(value: CurrentSprint14EvidenceBundleV1) -> tuple[object, ...]:
     return (
         id(value.observations),
@@ -812,6 +1043,134 @@ def upstox_market_timings_url_v1(trade_date: date) -> str:
     return f"{UPSTOX_TIMINGS_URL}/{trade_date.isoformat()}"
 
 
+def acquire_current_calendar_evidence_v1(
+    *,
+    transport: HttpTransport,
+    clock: TrustedClockV1,
+    coverage_from: date,
+    as_of: datetime,
+) -> CurrentCalendarEvidenceBundleV1:
+    """Acquire only the bounded calendar sources admitted by the common policy."""
+    if type(coverage_from) is not date or not _is_utc(as_of):
+        raise ValueError("invalid current calendar evidence request")
+    coverage_to = _local_ist_date(as_of)
+    if (
+        not callable(getattr(transport, "get", None))
+        or not callable(clock)
+        or coverage_from > coverage_to
+        or not 2000 <= coverage_from.year <= coverage_to.year <= 2100
+        or (coverage_to - coverage_from).days + 1 > _MAX_CURRENT_CALENDAR_COVERAGE_DAYS
+    ):
+        raise ValueError("invalid current calendar evidence request")
+    years = tuple(range(coverage_from.year, coverage_to.year + 1))
+    prior_year_dates = tuple(
+        coverage_from + timedelta(days=offset)
+        for offset in range((coverage_to - coverage_from).days + 1)
+        if (coverage_from + timedelta(days=offset)).year != coverage_to.year
+    )
+    if len(years) not in (1, 2) or 1 + len(years) + len(prior_year_dates) > (
+        _MAX_CALENDAR_OBSERVATIONS
+    ):
+        raise ValueError("invalid current calendar evidence request")
+    _require_calendar_acquisition_time(
+        _trusted_clock_instant(clock), as_of=as_of, coverage_to=coverage_to
+    )
+    specs: list[tuple[str, dict[str, str], int, str, bool]] = [
+        (
+            UPSTOX_HOLIDAYS_URL,
+            {"Accept": "application/json"},
+            _MAX_SCHEDULE_BYTES,
+            "application/json",
+            False,
+        )
+    ]
+    specs.extend(
+        (
+            nse_holiday_master_url_v1(year),
+            {
+                "Accept": "application/json",
+                "Referer": (
+                    "https://www.nseindia.com/resources/exchange-communication-holidays"
+                ),
+            },
+            _MAX_SCHEDULE_BYTES,
+            "application/json",
+            False,
+        )
+        for year in years
+    )
+    specs.extend(
+        (
+            upstox_market_timings_url_v1(trade_date),
+            {"Accept": "application/json"},
+            _MAX_SCHEDULE_BYTES,
+            "application/json",
+            False,
+        )
+        for trade_date in prior_year_dates
+    )
+    observed: list[OfficialHttpObservationV1] = []
+    for index, (
+        url,
+        headers,
+        maximum_bytes,
+        content_type,
+        require_disposition,
+    ) in enumerate(specs):
+        _require_calendar_acquisition_time(
+            _trusted_clock_instant(clock), as_of=as_of, coverage_to=coverage_to
+        )
+        observation = _fetch_exact(
+            transport,
+            clock,
+            url=url,
+            headers=headers,
+            maximum_bytes=maximum_bytes,
+            content_type=content_type,
+            require_content_disposition=require_disposition,
+        )
+        _require_calendar_acquisition_time(
+            observation.known_at, as_of=as_of, coverage_to=coverage_to
+        )
+        if index == 0:
+            _parse_upstox(observation.body, expected_year=coverage_to.year)
+        elif index <= len(years):
+            _parse_nse_closures(observation.body, expected_year=years[index - 1])
+        else:
+            _parse_upstox_timing(
+                observation.body,
+                expected_date=prior_year_dates[index - len(years) - 1],
+            )
+        observed.append(observation)
+    composition_known_at = _trusted_clock_instant(clock)
+    _require_calendar_acquisition_time(
+        composition_known_at, as_of=as_of, coverage_to=coverage_to
+    )
+    observations = _mint_calendar_observation_set(
+        tuple(observed), holiday_master_count=len(years)
+    )
+    manifest_bytes, schedule = _compose_calendar_schedule_v1(
+        observations=observations,
+        coverage_from=coverage_from,
+        coverage_to=coverage_to,
+        as_of=composition_known_at,
+    )
+    return _mint_calendar_bundle(
+        observations=observations,
+        source_manifest_bytes=manifest_bytes,
+        schedule=schedule,
+    )
+
+
+def _require_calendar_acquisition_time(
+    known_at: datetime, *, as_of: datetime, coverage_to: date
+) -> None:
+    if _local_ist_date(known_at) != coverage_to:
+        raise CurrentEvidenceAcquisitionError("ACQUISITION_DATE_ROLLOVER")
+    if known_at > as_of:
+        raise CurrentEvidenceAcquisitionError("ACQUISITION_CUTOFF_EXCEEDED")
+
+
 def acquire_current_sprint14_evidence_v1(
     *,
     transport: HttpTransport,
@@ -991,16 +1350,16 @@ def acquire_current_sprint14_evidence_default_v1(
     )
 
 
-def compose_current_nse_schedule_v1(  # noqa: C901
+def _compose_calendar_schedule_v1(  # noqa: C901
     *,
-    observations: CurrentEvidenceObservationsV1,
+    observations: CurrentCalendarEvidenceObservationsV1,
     coverage_from: date,
     coverage_to: date,
     as_of: datetime,
 ) -> tuple[bytes, ExpectedSessionSchedule]:
-    """Replay the exact bounded named observations into one composed schedule."""
+    """Replay the one shared bounded calendar composition policy."""
     if (
-        not _observation_set_is_exact_v1(observations)
+        not _calendar_observation_set_is_exact_v1(observations)
         or type(coverage_from) is not date
         or type(coverage_to) is not date
         or coverage_from > coverage_to
@@ -1018,13 +1377,8 @@ def compose_current_nse_schedule_v1(  # noqa: C901
         for offset in range((coverage_to - coverage_from).days + 1)
         if (coverage_from + timedelta(days=offset)).year != coverage_to.year
     )
-    event_from = coverage_to - timedelta(days=1)
     if (
         len(years) not in (1, 2)
-        or observations.industry.request_url != INDUSTRY_URL
-        or observations.announcements_page.request_url != NSE_ANNOUNCEMENTS_PAGE_URL
-        or observations.event_csv.request_url
-        != event_api_url_v1(event_from, coverage_to)
         or observations.upstox_current_year_holidays.request_url != UPSTOX_HOLIDAYS_URL
         or tuple(item.request_url for item in observations.nse_holiday_masters)
         != tuple(nse_holiday_master_url_v1(year) for year in years)
@@ -1197,6 +1551,34 @@ def compose_current_nse_schedule_v1(  # noqa: C901
         tuple(closed_dates),
     )
     return manifest_bytes, schedule
+
+
+def compose_current_nse_schedule_v1(
+    *,
+    observations: CurrentEvidenceObservationsV1,
+    coverage_from: date,
+    coverage_to: date,
+    as_of: datetime,
+) -> tuple[bytes, ExpectedSessionSchedule]:
+    """Replay legacy combined inputs through the shared calendar policy."""
+    if (
+        not _observation_set_is_exact_v1(observations)
+        or type(coverage_to) is not date
+        or not 2000 <= coverage_to.year <= 2100
+        or not _is_utc(as_of)
+        or any(item.known_at > as_of for item in observations)
+        or observations.industry.request_url != INDUSTRY_URL
+        or observations.announcements_page.request_url != NSE_ANNOUNCEMENTS_PAGE_URL
+        or observations.event_csv.request_url
+        != event_api_url_v1(coverage_to - timedelta(days=1), coverage_to)
+    ):
+        raise ValueError("invalid composed schedule input")
+    return _compose_calendar_schedule_v1(
+        observations=_calendar_observations_from_combined(observations),
+        coverage_from=coverage_from,
+        coverage_to=coverage_to,
+        as_of=as_of,
+    )
 
 
 def _closed_content_type_source_encoding_v1(
@@ -1789,6 +2171,208 @@ def _canonical(value: object) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _base64_encode(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
+
+
+def _base64_decode(value: object, *, maximum_bytes: int) -> bytes:
+    if type(value) is not str or type(maximum_bytes) is not int:
+        raise ValueError("invalid current calendar evidence")
+    maximum_encoded = 4 * ((maximum_bytes + 2) // 3)
+    if not 1 <= len(value) <= maximum_encoded or not value.isascii():
+        raise ValueError("invalid current calendar evidence")
+    try:
+        decoded = base64.b64decode(value.encode("ascii"), validate=True)
+    except ValueError:
+        raise ValueError("invalid current calendar evidence") from None
+    if not 1 <= len(decoded) <= maximum_bytes:
+        raise ValueError("invalid current calendar evidence")
+    return decoded
+
+
+def _calendar_observation_value(
+    observation: OfficialHttpObservationV1,
+) -> dict[str, object]:
+    return {
+        "body_b64": _base64_encode(observation.body),
+        "cookie_aggregate_bytes": observation.cookie_aggregate_bytes,
+        "cookie_count": observation.cookie_count,
+        "headers": [list(item) for item in observation.headers],
+        "known_at": _instant(observation.known_at),
+        "observation_identity_sha256": observation.observation_identity_sha256,
+        "request_url": observation.request_url,
+        "response_url": observation.response_url,
+        "status": observation.status,
+    }
+
+
+def _parse_calendar_instant(value: object) -> datetime:
+    if type(value) is not str or not _safe_ascii(value, 32):
+        raise ValueError("invalid current calendar evidence")
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("invalid current calendar evidence") from None
+    if not _is_utc(result) or _instant(result) != value:
+        raise ValueError("invalid current calendar evidence")
+    return result
+
+
+def _parse_calendar_observation(
+    value: object,
+) -> OfficialHttpObservationV1:
+    if not _string_object_dict(value) or set(value) != {
+        "body_b64",
+        "cookie_aggregate_bytes",
+        "cookie_count",
+        "headers",
+        "known_at",
+        "observation_identity_sha256",
+        "request_url",
+        "response_url",
+        "status",
+    }:
+        raise ValueError("invalid current calendar evidence")
+    request_url = value["request_url"]
+    spec = _observation_required_spec_v1(request_url)
+    if (
+        spec is None
+        or request_url
+        in {
+            INDUSTRY_URL,
+            NSE_ANNOUNCEMENTS_PAGE_URL,
+        }
+        or (
+            type(request_url) is str
+            and request_url.startswith(NSE_ANNOUNCEMENTS_API_URL)
+        )
+    ):
+        raise ValueError("invalid current calendar evidence")
+    headers_value = cast(list[list[object]], value["headers"])
+    if (
+        type(headers_value) is not list
+        or len(headers_value) > len(_PROVENANCE_HEADERS)
+        or any(
+            type(item) is not list
+            or len(item) != 2
+            or type(item[0]) is not str
+            or type(item[1]) is not str
+            for item in headers_value
+        )
+    ):
+        raise ValueError("invalid current calendar evidence")
+    observation = _mint_observation(
+        request_url=cast(str, request_url),
+        response_url=cast(str, value["response_url"]),
+        status=cast(int, value["status"]),
+        headers=tuple(
+            (cast(str, item[0]), cast(str, item[1])) for item in headers_value
+        ),
+        body=_base64_decode(value["body_b64"], maximum_bytes=spec[0]),
+        known_at=_parse_calendar_instant(value["known_at"]),
+        cookie_count=cast(int, value["cookie_count"]),
+        cookie_aggregate_bytes=cast(int, value["cookie_aggregate_bytes"]),
+    )
+    if observation.observation_identity_sha256 != value["observation_identity_sha256"]:
+        raise ValueError("invalid current calendar evidence")
+    return observation
+
+
+def parse_current_calendar_evidence_v1(
+    raw: object,
+) -> CurrentCalendarEvidenceBundleV1:
+    """Re-admit only exact bounded private calendar evidence bytes."""
+    if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_CALENDAR_EVIDENCE_BYTES:
+        raise ValueError("invalid current calendar evidence")
+    try:
+        parsed: object = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_number,
+            parse_int=_bounded_json_int,
+        )
+        _validate_json_tree(parsed)
+        if (
+            not _string_object_dict(parsed)
+            or set(parsed)
+            != {
+                "observations",
+                "runtime_code_identity_sha256",
+                "schedule_b64",
+                "schedule_evidence_sha256",
+                "schema_version",
+                "source_manifest_b64",
+                "source_manifest_sha256",
+            }
+            or parsed["schema_version"] != 1
+        ):
+            raise ValueError
+        schedule_bytes = _base64_decode(
+            parsed["schedule_b64"], maximum_bytes=_MAX_SCHEDULE_BYTES
+        )
+        schedule = parse_canonical_schedule_bytes(schedule_bytes)
+        observations_value = cast(list[object], parsed["observations"])
+        if (
+            type(observations_value) is not list
+            or not 2 <= len(observations_value) <= _MAX_CALENDAR_OBSERVATIONS
+        ):
+            raise ValueError
+        observations_raw = tuple(
+            _parse_calendar_observation(item) for item in observations_value
+        )
+        years = tuple(range(schedule.covered_from.year, schedule.covered_to.year + 1))
+        prior_year_dates = tuple(
+            schedule.covered_from + timedelta(days=offset)
+            for offset in range((schedule.covered_to - schedule.covered_from).days + 1)
+            if (schedule.covered_from + timedelta(days=offset)).year
+            != schedule.covered_to.year
+        )
+        expected_urls = (
+            UPSTOX_HOLIDAYS_URL,
+            *(nse_holiday_master_url_v1(year) for year in years),
+            *(upstox_market_timings_url_v1(day) for day in prior_year_dates),
+        )
+        if (
+            len(years) not in (1, 2)
+            or tuple(item.request_url for item in observations_raw) != expected_urls
+        ):
+            raise ValueError
+        observations = _mint_calendar_observation_set(
+            observations_raw, holiday_master_count=len(years)
+        )
+        source_manifest_bytes = _base64_decode(
+            parsed["source_manifest_b64"], maximum_bytes=_MAX_SCHEDULE_BYTES
+        )
+        if (
+            type(parsed["source_manifest_sha256"]) is not str
+            or hashlib.sha256(source_manifest_bytes).hexdigest()
+            != parsed["source_manifest_sha256"]
+            or type(parsed["schedule_evidence_sha256"]) is not str
+            or schedule_digest(schedule) != parsed["schedule_evidence_sha256"]
+            or type(parsed["runtime_code_identity_sha256"]) is not str
+        ):
+            raise ValueError
+        result = _mint_calendar_bundle(
+            observations=observations,
+            source_manifest_bytes=source_manifest_bytes,
+            schedule=schedule,
+        )
+        if (
+            result.runtime_code_identity_sha256
+            != parsed["runtime_code_identity_sha256"]
+            or result.canonical_json_bytes() != raw
+        ):
+            raise ValueError
+        return result
+    except (
+        CurrentEvidenceAcquisitionError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
+        raise ValueError("invalid current calendar evidence") from None
 
 
 def _identity(value: object) -> str:
