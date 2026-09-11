@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from http.client import HTTPResponse
 from pathlib import Path
 from typing import Final, Literal, Protocol, cast
 from urllib.request import BaseHandler, Request, build_opener
@@ -193,6 +194,25 @@ class _MappingGuardHandler(BaseHandler):
 
     def default_open(self, _request: Request) -> None:
         self._window.ensure_live()
+
+
+class _MappingRedirectHandler(SameOriginAuthorizationRedirectHandler):
+    """Discard native redirect responses without draining their unused bodies."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> Request | None:
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            # Closing HTTPResponse makes urllib's subsequent unbounded read empty.
+            cast(HTTPResponse, fp).close()
+        return redirected
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,7 +598,7 @@ def _prepare_mapping(
                     timeout_seconds=15,
                     max_body_bytes=DEFAULT_MAX_CATALOG_COMPRESSED_BYTES,
                     opener=build_opener(
-                        SameOriginAuthorizationRedirectHandler(),
+                        _MappingRedirectHandler(),
                         _MappingGuardHandler(window),
                     ).open,
                 )
@@ -629,14 +649,19 @@ def _prepare_capture(
         if not refresh or captured.code != "REUSED" or captured.revision is None:
             return captured
         parent = captured.revision
-    corrected = capture_bharatstock_v2(
-        replace(request, parent_revision_sha256=parent.revision_identity_sha256),
-        root,
-        root,
-        client=client,
-        clock=window.now,
-        lease=lease,
-    )
+    while True:
+        corrected = capture_bharatstock_v2(
+            replace(request, parent_revision_sha256=parent.revision_identity_sha256),
+            root,
+            root,
+            client=client,
+            clock=window.now,
+            lease=lease,
+        )
+        if corrected.code != "REUSED" or corrected.revision is None:
+            break
+        # Interrupted receipts can lag capture's validated, bounded correction chain.
+        parent = corrected.revision
     if (
         corrected.code == "INSUFFICIENT_EVIDENCE"
         and corrected.reason == "CORRECTION_CONTENT_UNCHANGED"

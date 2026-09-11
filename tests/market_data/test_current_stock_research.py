@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.message import Message
+from http.client import HTTPResponse
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from urllib.request import HTTPSHandler
 from urllib.response import addinfourl
@@ -21,6 +23,9 @@ from swing_trading_ai_assistant.market_data import (
     capture_forward_adjusted_ohlcv as private_store,
 )
 from swing_trading_ai_assistant.market_data import catalog as catalog_api
+from swing_trading_ai_assistant.market_data import (
+    current_stock_research as workflow,
+)
 from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
@@ -375,6 +380,44 @@ def test_exact_refresh_preserves_or_corrects_observed_content(
     assert corrected_again.price_action.body_size == Decimal(7)
     assert len(prices.calls) == 3
     assert revision_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("initial_receipt", [False, True])
+def test_refresh_revalidates_after_repeated_receipt_publication_interruptions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial_receipt: bool
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    if initial_receipt:
+        assert _research(tmp_path, clock, sources, prices).status == "OBSERVED"
+    retain = workflow._retain_immutable
+
+    def interrupt_receipt(*args, **kwargs):
+        if args[2] == "receipts":
+            raise RuntimeError("synthetic receipt interruption")
+        return retain(*args, **kwargs)
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(workflow, "_retain_immutable", interrupt_receipt)
+        for close in (Decimal(106), Decimal(107)):
+            prices.close = close
+            with pytest.raises(RuntimeError, match="synthetic receipt interruption"):
+                _research(tmp_path, clock, sources, prices, refresh=True)
+    retained = {
+        path: path.read_bytes()
+        for path in (tmp_path / "bharatstock-capture-v3" / "revisions").glob("*.json")
+    }
+    prices.close = Decimal(108)
+    refreshed = _research(tmp_path, clock, sources, prices, refresh=True)
+    assert refreshed.status == "OBSERVED"
+    assert refreshed.price_action is not None
+    assert refreshed.price_action.body_size == Decimal(8)
+    assert len(prices.calls) == 3 + int(initial_receipt)
+    assert all(path.read_bytes() == raw for path, raw in retained.items())
+    prices.failure = AssertionError("published refresh must be reusable")
+    reused = _research(tmp_path, clock, sources, prices)
+    assert reused.capture_revision_sha256 == refreshed.capture_revision_sha256
+    assert reused.price_action == refreshed.price_action
 
 
 def test_new_completed_session_requires_new_bounded_window(tmp_path: Path) -> None:
@@ -1154,9 +1197,10 @@ def test_clock_error_during_retained_admission_keeps_its_origin(
 
 
 @pytest.mark.parametrize(
-    "mode", ["valid", "deadline", "root-replaced", "private-mode-lost"]
+    "mode",
+    ["valid", "oversized-body", "deadline", "root-replaced", "private-mode-lost"],
 )
-def test_default_mapping_redirect_rechecks_authority_before_next_request(
+def test_default_mapping_redirect_bounds_reads_and_rechecks_next_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     clock, sources = _Clock(), _OfficialSources()
@@ -1164,11 +1208,18 @@ def test_default_mapping_redirect_rechecks_authority_before_next_request(
     body = sources.get(UPSTOX_NSE_INSTRUMENTS_URL, {}).body
     requests: list[str] = []
     redirected_url = "https://assets.upstox.com/redirected-nse.json.gz"
+    consumed = 0
 
     class RedirectBody(BytesIO):
         invalidated = False
 
         def read(self, size: int = -1) -> bytes:
+            nonlocal consumed
+            value = super().read(size)
+            consumed += len(value)
+            return value
+
+        def close(self) -> None:
             if not self.invalidated:
                 self.invalidated = True
                 if mode == "deadline":
@@ -1178,29 +1229,40 @@ def test_default_mapping_redirect_rechecks_authority_before_next_request(
                     tmp_path.mkdir(mode=0o700)
                 elif mode == "private-mode-lost":
                     tmp_path.chmod(0o755)
-            return super().read(size)
+            super().close()
 
     def https_open(self, request):
         requests.append(request.full_url)
-        headers = Message()
         if request.full_url == UPSTOX_NSE_INSTRUMENTS_URL:
-            headers["Location"] = redirected_url
-            response = addinfourl(
-                RedirectBody(b"redirect"), headers, request.full_url, 302
+            redirect_body = b"x" * (
+                DEFAULT_MAX_CATALOG_COMPRESSED_BYTES + 1
+                if mode == "oversized-body"
+                else 8
             )
-            response.msg = "Found"
+            wire = (
+                f"HTTP/1.1 302 Found\r\nLocation: {redirected_url}\r\n"
+                f"Content-Length: {len(redirect_body)}\r\n\r\n"
+            ).encode() + redirect_body
+            stream = RedirectBody(wire)
         else:
             assert request.full_url == redirected_url
-            headers["Content-Type"] = "application/json"
-            response = addinfourl(BytesIO(body), headers, request.full_url, 200)
-            response.msg = "OK"
+            wire = (
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n\r\n"
+            ).encode() + body
+            stream = BytesIO(wire)
+        response = HTTPResponse(SimpleNamespace(makefile=lambda _mode: stream))
+        response.begin()
+        response.url = request.full_url
+        response.msg = response.reason
         return response
 
     monkeypatch.setattr(HTTPSHandler, "https_open", https_open)
     result = research_current_stock_v1(
         "PNB", tmp_path, clock=clock, calendar_transport=sources, price_client=prices
     )
-    if mode == "valid":
+    assert consumed <= DEFAULT_MAX_CATALOG_COMPRESSED_BYTES
+    if mode in ("valid", "oversized-body"):
         assert result.status == "OBSERVED"
         assert requests == [UPSTOX_NSE_INSTRUMENTS_URL, redirected_url]
         assert len(prices.calls) == 1
