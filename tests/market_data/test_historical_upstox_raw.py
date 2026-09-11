@@ -18,7 +18,7 @@ from swing_trading_ai_assistant.market_data import (
     historical_revision_store,
     historical_upstox_raw,
 )
-from swing_trading_ai_assistant.market_data.adjusted_daily import yfinance_adapter
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.historical_revision_store import (
     HistoricalOhlcvImportOutcomeV1,
@@ -612,7 +612,7 @@ def test_real_retained_reliance_july_initial_and_exact_retry(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
 
     identity = historical_upstox_raw.StorageRootLease.admit_existing_private_identity(
         tmp_path
@@ -769,7 +769,7 @@ def test_real_current_august_provisional_partition_is_insufficient(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
     evaluator = historical_upstox_raw.StoredCoverageEvaluatorV1()
     coverage_observed_at = datetime(2026, 9, 1, tzinfo=UTC)
     with evaluator.admit(source) as admission:
@@ -1392,7 +1392,7 @@ def test_synthetic_fifty_member_initial_is_source_backed_exact_and_effect_free(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
 
     identity = StorageRootLease.admit_existing_private_identity(destination)
     assert identity is not None

@@ -1,7 +1,7 @@
 """Deterministic current/live Market Structure over one exact 21-session grid.
 
-This module only classifies supplied, completed raw daily bars. It performs no
-I/O, provider access, historical qualification, forecasting, or trade advice.
+This module only classifies supplied, completed daily bars. It performs no I/O,
+provider access, historical qualification, forecasting, or trade advice.
 """
 
 from __future__ import annotations
@@ -111,11 +111,11 @@ _RUNTIME_MANIFEST: Final = (
 )
 _RUNTIME_SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py",
-    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py",
+    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/market_structure/__init__.py",
     "src/swing_trading_ai_assistant/market_structure/current_live.py",
-    "src/swing_trading_ai_assistant/market_structure/current_same_pass.py",
+    "src/swing_trading_ai_assistant/market_structure/current_same_pass_v4.py",
 )
 
 
@@ -125,7 +125,7 @@ def _runtime_source_sha(relative: str) -> str:
             "swing_trading_ai_assistant.market_data.current_corporate_action_screen"
         ),
         _RUNTIME_SOURCES[1]: (
-            "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+            "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
         ),
         _RUNTIME_SOURCES[2]: (
             "swing_trading_ai_assistant.market_data.runtime_source_verifier"
@@ -133,7 +133,7 @@ def _runtime_source_sha(relative: str) -> str:
         _RUNTIME_SOURCES[3]: "swing_trading_ai_assistant.market_structure",
         _RUNTIME_SOURCES[4]: __name__,
         _RUNTIME_SOURCES[5]: (
-            "swing_trading_ai_assistant.market_structure.current_same_pass"
+            "swing_trading_ai_assistant.market_structure.current_same_pass_v4"
         ),
         _RUNTIME_MANIFEST: _RUNTIME_MANIFEST_MODULE,
     }
@@ -383,6 +383,78 @@ class _MarketStructureBarV1:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketStructureMathBarV1:
+    """Provider-neutral completed bar for deterministic structure mathematics."""
+
+    session: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+    source_bar_identity_sha256: str
+
+    def __post_init__(self) -> None:
+        if type(self.session) is not date:
+            raise ValueError("market structure bar session must be a date")
+        for name in ("open", "high", "low", "close"):
+            value = getattr(self, name)
+            if not isinstance(value, Decimal):
+                raise ValueError(f"market structure bar {name} must be Decimal")
+            _positive_finite_decimal(value, f"market structure bar {name}")
+        if self.low > self.high:
+            raise ValueError("market structure bar low exceeds high")
+        if not self.low <= self.open <= self.high:
+            raise ValueError("market structure bar open is outside low/high")
+        if not self.low <= self.close <= self.high:
+            raise ValueError("market structure bar close is outside low/high")
+        if type(self.volume) is not int or self.volume < 0:
+            raise ValueError(
+                "market structure bar volume must be a non-negative integer"
+            )
+        _require_digest(self.source_bar_identity_sha256, "source_bar_identity_sha256")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketStructureMathMemberInputV1:
+    """Provider-neutral member and exact completed bar grid for structure math."""
+
+    isin: str
+    exchange: str
+    effective_symbol: str
+    bars: tuple[MarketStructureMathBarV1, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.isin) is not str
+            or type(self.exchange) is not str
+            or type(self.effective_symbol) is not str
+            or not self.isin
+            or not self.exchange
+            or not self.effective_symbol
+            or type(self.bars) is not tuple
+            or any(type(bar) is not MarketStructureMathBarV1 for bar in self.bars)
+        ):
+            raise ValueError("market structure math-member identity is incomplete")
+        if len(self.bars) != _EXPECTED_SESSIONS:
+            raise ValueError("market structure math-member requires exactly 21 bars")
+        sessions = tuple(bar.session for bar in self.bars)
+        if sessions != tuple(sorted(sessions)) or len(set(sessions)) != len(sessions):
+            raise ValueError(
+                "market structure math-member sessions must be unique and ordered"
+            )
+
+
+_StructureMathBarV1: TypeAlias = _MarketStructureBarV1 | MarketStructureMathBarV1
+
+
+def _source_bar_identity(bar: _StructureMathBarV1) -> str:
+    if isinstance(bar, _MarketStructureBarV1):
+        return bar.raw_bar_identity_sha256
+    return bar.source_bar_identity_sha256
+
+
+@dataclass(frozen=True, slots=True)
 class _CurrentMarketStructureMemberInputV1:
     """Canonical member and its exact completed 21-session bar grid."""
 
@@ -410,6 +482,11 @@ class _CurrentMarketStructureMemberInputV1:
             raise ValueError(
                 "market structure member input sessions must be unique and ordered"
             )
+
+
+_StructureMathMemberInputV1: TypeAlias = (
+    _CurrentMarketStructureMemberInputV1 | MarketStructureMathMemberInputV1
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,7 +820,7 @@ def _relation(
 
 
 def _detect_pivots(
-    bars: tuple[_MarketStructureBarV1, ...],
+    bars: tuple[_StructureMathBarV1, ...],
 ) -> tuple[MarketStructurePivotV1, ...]:
     pivots: list[MarketStructurePivotV1] = []
     latest: dict[PivotKind, MarketStructurePivotV1 | None] = {
@@ -775,12 +852,12 @@ def _detect_pivots(
                 price=price,
                 relation=relation,
                 unclassified_reason=reason,
-                source_bar_identity_sha256=current.raw_bar_identity_sha256,
+                source_bar_identity_sha256=_source_bar_identity(current),
                 comparison_bar_identities_sha256=(
-                    neighbors[0].raw_bar_identity_sha256,
-                    neighbors[1].raw_bar_identity_sha256,
-                    neighbors[2].raw_bar_identity_sha256,
-                    neighbors[3].raw_bar_identity_sha256,
+                    _source_bar_identity(neighbors[0]),
+                    _source_bar_identity(neighbors[1]),
+                    _source_bar_identity(neighbors[2]),
+                    _source_bar_identity(neighbors[3]),
                 ),
             )
             pivots.append(pivot)
@@ -824,7 +901,7 @@ def _latest_confirmed(
 
 
 def _detect_events(
-    bars: tuple[_MarketStructureBarV1, ...],
+    bars: tuple[_StructureMathBarV1, ...],
     pivots: tuple[MarketStructurePivotV1, ...],
 ) -> tuple[MarketStructureEventV1, ...]:
     events: list[MarketStructureEventV1] = []
@@ -864,19 +941,17 @@ def _detect_events(
                 broken_pivot_identity_sha256=pivot.pivot_identity_sha256,
                 broken_level=pivot.price,
                 prior_trend=trend,
-                previous_close_bar_identity_sha256=(
-                    bars[position - 1].raw_bar_identity_sha256
+                previous_close_bar_identity_sha256=_source_bar_identity(
+                    bars[position - 1]
                 ),
-                current_close_bar_identity_sha256=(
-                    bars[position].raw_bar_identity_sha256
-                ),
+                current_close_bar_identity_sha256=_source_bar_identity(bars[position]),
             )
         )
     return tuple(events)
 
 
 def _evaluate_member(
-    value: _CurrentMarketStructureMemberInputV1,
+    value: _StructureMathMemberInputV1,
 ) -> CurrentMarketStructureMemberV1:
     pivots = _detect_pivots(value.bars)
     trend = _trend_at(pivots, len(value.bars) - 1)
@@ -888,7 +963,7 @@ def _evaluate_member(
         exchange=value.exchange,
         effective_symbol=value.effective_symbol,
         input_bar_identities_sha256=tuple(
-            bar.raw_bar_identity_sha256 for bar in value.bars
+            _source_bar_identity(bar) for bar in value.bars
         ),
         structure_state=structure_state,
         trend=trend,
@@ -897,7 +972,16 @@ def _evaluate_member(
     )
 
 
-def _evaluate_current_market_structure_v1(  # pyright: ignore[reportUnusedFunction]
+def evaluate_market_structure_math_member_v1(
+    value: MarketStructureMathMemberInputV1,
+) -> CurrentMarketStructureMemberV1:
+    """Evaluate one provider-neutral, immutable 21-session math input."""
+    if type(value) is not MarketStructureMathMemberInputV1:
+        raise ValueError("market structure math-member input is invalid")
+    return _evaluate_member(value)
+
+
+def _evaluate_current_market_structure_v1(
     value: _CurrentMarketStructureInputV1,
 ) -> CurrentMarketStructureReportV1:
     """Classify supplied current-session evidence without external effects."""
@@ -918,6 +1002,13 @@ def _evaluate_current_market_structure_v1(  # pyright: ignore[reportUnusedFuncti
         members=members,
         reasons=(),
     )
+
+
+def evaluate_current_market_structure_v1(
+    value: _CurrentMarketStructureInputV1,
+) -> CurrentMarketStructureReportV1:
+    """Evaluate one exact raw-evidence cohort input without external effects."""
+    return _evaluate_current_market_structure_v1(value)
 
 
 RUNTIME_CODE_IDENTITY_SHA256_V1: Final = (

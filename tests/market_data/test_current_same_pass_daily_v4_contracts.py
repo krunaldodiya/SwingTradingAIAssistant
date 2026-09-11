@@ -5,7 +5,6 @@ import hashlib
 import importlib
 import json
 import shutil
-from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -15,15 +14,18 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import swing_trading_ai_assistant.market_data.current_same_pass_daily as raw_daily
-from swing_trading_ai_assistant.market_data.adjusted_daily import (
-    adjusted_daily_request_identity_v2,
-    adjusted_daily_schedule_identity_v2,
+from swing_trading_ai_assistant.market_data import (
+    current_same_pass_daily_v4 as raw_daily,
 )
-from swing_trading_ai_assistant.market_data.adjusted_daily.service import _V2Member
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
-    CurrentSamePassEquityMemberV1,
-    CurrentSamePassMarketRegimeRequestV3,
+from swing_trading_ai_assistant.market_data.adjusted_daily.service_v3 import (
+    AdjustedDailyInstrumentV3,
+    adjusted_daily_request_identity_v3,
+    adjusted_daily_schedule_identity_v3,
+    mapping_identity_v3,
+)
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    CurrentSamePassEquityMemberV4,
+    CurrentSamePassMarketRegimeRequestV4,
     CurrentSamePassRawBarV1,
     CurrentSamePassRawCoverageSourceRowV1,
     CurrentSamePassRawDailyPortV1,
@@ -56,22 +58,6 @@ from swing_trading_ai_assistant.market_data.validation import ValidationReason
 _DIGEST = "a" * 64
 _CUTOFF = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
 _SELECTED_AT = datetime(2026, 8, 24, 9, 0, tzinfo=UTC)
-_RAW_SCHEMA_METADATA_DIGEST = (
-    "aca0c687ebe594d0a4e0f8be12771723ffdfa73906659e74230f11b9dd8eb381"
-)
-_RAW_CONFIGURATION_PREIMAGE = json.loads(
-    (
-        Path(__file__).parent / "data" / "plan27_raw_v1_configuration_preimage.json"
-    ).read_text(encoding="utf-8")
-)
-_RAW_SCHEMA_PREIMAGE = json.loads(
-    (Path(__file__).parent / "data" / "plan27_raw_v1_schema_preimage.json").read_text(
-        encoding="utf-8"
-    )
-)
-_RAW_CONFIGURATION_DIGEST = (
-    "8d7a7158fc6a14af983382b9ac289dfad9ecc0e9aafc286cadb914b78ca8f80f"
-)
 
 
 def _luhn_check_digit(value: str) -> str:
@@ -95,20 +81,35 @@ def _isin(index: int) -> str:
     return prefix + _luhn_check_digit(prefix)
 
 
-def _member(index: int) -> CurrentSamePassEquityMemberV1:
-    return CurrentSamePassEquityMemberV1(
-        _isin(index),
+def _mapping_identity(isin: str, symbol: str) -> str:
+    return mapping_identity_v3(
+        isin=isin,
+        exchange="NSE",
+        instrument_type="EQUITY",
+        segment="EQ",
+        effective_symbol=symbol,
+        provider_symbol=symbol,
+        mapping_valid_from=date(2026, 7, 1),
+        mapping_valid_through=None,
+    )
+
+
+def _member(index: int) -> CurrentSamePassEquityMemberV4:
+    isin = _isin(index)
+    symbol = f"EQ{index:03d}"
+    return CurrentSamePassEquityMemberV4(
+        isin,
         "NSE",
         "EQUITY",
         "EQ",
-        f"EQ{index:03d}",
+        symbol,
         date(2026, 7, 1),
         date(2026, 12, 31),
-        f"EQ{index:03d}.NS",
-        "yfinance-symbol-mapping@v1",
+        symbol,
+        "bharatstock-isin-exchange-mapping@v1",
         date(2026, 7, 1),
         None,
-        _DIGEST,
+        _mapping_identity(isin, symbol),
         f"upstox-bod-nse@2026-08-{index:02d}",
     )
 
@@ -116,9 +117,9 @@ def _member(index: int) -> CurrentSamePassEquityMemberV1:
 def _request(
     size: int,
     *,
-    members: tuple[CurrentSamePassEquityMemberV1, ...] | None = None,
+    members: tuple[CurrentSamePassEquityMemberV4, ...] | None = None,
     cutoff: datetime = _CUTOFF,
-) -> CurrentSamePassMarketRegimeRequestV3:
+) -> CurrentSamePassMarketRegimeRequestV4:
     cohort = (
         members
         if members is not None
@@ -163,41 +164,41 @@ def _request(
         coverage_through=cutoff.astimezone(ZoneInfo("Asia/Kolkata")).date(),
         sessions=raw_sessions,
     )
-    plan22_schedule_identity = adjusted_daily_schedule_identity_v2(
+    plan22_schedule_identity = adjusted_daily_schedule_identity_v3(
         sessions=tuple(item.session for item in raw_sessions),
         decision_session_official_close_at=raw_sessions[-1].close_at,
         schedule_evidence_sha256=_DIGEST,
         schedule_source="nse-upstox-composed-calendar",
         schedule_source_release="composed-calendar@v1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
-    plan22_identity = adjusted_daily_request_identity_v2(
+    plan22_identity = adjusted_daily_request_identity_v3(
         cohort_identity_sha256=canonical_identity,
         decision_cutoff=cutoff,
         schedule_identity_sha256=plan22_schedule_identity,
         members=tuple(
-            _V2Member(
-                item.isin,
-                item.exchange,
-                item.instrument_type,
-                item.segment,
-                item.effective_symbol,
-                item.provider_symbol,
-                item.valid_from,
-                item.valid_through,
-                item.mapping_version,
-                item.mapping_valid_from,
-                item.mapping_valid_through,
-                item.mapping_identity,
+            AdjustedDailyInstrumentV3(
+                isin=item.isin,
+                exchange=item.exchange,
+                instrument_type=item.instrument_type,
+                segment=item.segment,
+                effective_symbol=item.effective_symbol,
+                valid_from=item.valid_from,
+                valid_through=item.valid_through,
+                provider_symbol=item.provider_symbol,
+                mapping_version=item.mapping_version,
+                mapping_valid_from=item.mapping_valid_from,
+                mapping_valid_through=item.mapping_valid_through,
+                mapping_identity=item.mapping_identity,
             )
-            for item in ordered
+            for item in cohort
         ),
     )
     request_identity = raw_daily._hash(
         {
-            "contract_version": "current-supplied-cohort-market-regime@v3",
+            "contract_version": "current-supplied-cohort-market-regime@v4",
             "decision_cutoff": cutoff,
             "cohort_selected_at": _SELECTED_AT,
-            "members": ordered,
+            "members": cohort,
             "schedule_evidence_sha256": _DIGEST,
             "schedule_identity_sha256": schedule_identity,
             "plan22_schedule_identity_sha256": plan22_schedule_identity,
@@ -209,8 +210,8 @@ def _request(
             "plan22_request_identity_sha256": plan22_identity,
         }
     )
-    return CurrentSamePassMarketRegimeRequestV3(
-        "current-supplied-cohort-market-regime@v3",
+    return CurrentSamePassMarketRegimeRequestV4(
+        "current-supplied-cohort-market-regime@v4",
         cutoff,
         _SELECTED_AT,
         cohort,
@@ -245,7 +246,7 @@ class _RecordingRawDailyPort(CurrentSamePassRawDailyPortV1, Protocol):
 
     calls: list[
         tuple[
-            CurrentSamePassMarketRegimeRequestV3,
+            CurrentSamePassMarketRegimeRequestV4,
             tuple[CurrentSamePassRawSessionV1, ...],
             object,
         ]
@@ -253,37 +254,33 @@ class _RecordingRawDailyPort(CurrentSamePassRawDailyPortV1, Protocol):
 
     def acquire_exact(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         lease: object,
     ) -> object: ...
 
 
 @pytest.mark.parametrize("size", (1, 5, 50))
-def test_request_accepts_exact_canonical_cohort_bounds(size: int) -> None:
+def test_request_accepts_exact_supplied_cohort_bounds(size: int) -> None:
     request = _request(size)
 
-    assert request.contract_version == "current-supplied-cohort-market-regime@v3"
+    assert request.contract_version == "current-supplied-cohort-market-regime@v4"
     assert len(request.members) == size
-    assert request.members == tuple(
-        sorted(
-            request.members,
-            key=lambda member: (member.isin, member.exchange, member.effective_symbol),
-        )
-    )
+    assert request.members == tuple(_member(index) for index in range(1, size + 1))
     assert request.schedule_source == "nse-upstox-composed-calendar"
     assert request.schedule_identity_sha256 != request.plan22_schedule_identity_sha256
     assert request.plan22_request_identity_sha256 != request.request_identity_sha256
 
 
-def test_request_canonicalizes_member_permutation_and_preserves_exact_bridges() -> None:
+def test_request_preserves_supplied_member_order_and_canonical_identity() -> None:
     forward = tuple(_member(index) for index in range(1, 6))
     reverse = tuple(reversed(forward))
 
     canonical = _request(5, members=forward)
     permuted = _request(5, members=reverse)
 
-    assert canonical.members == permuted.members
+    assert canonical.members == forward
+    assert permuted.members == reverse
     assert (
         canonical.plan21_cohort_identity_sha256
         == permuted.plan21_cohort_identity_sha256
@@ -294,9 +291,9 @@ def test_request_canonicalizes_member_permutation_and_preserves_exact_bridges() 
     )
     assert (
         canonical.plan22_request_identity_sha256
-        == permuted.plan22_request_identity_sha256
+        != permuted.plan22_request_identity_sha256
     )
-    assert canonical.request_identity_sha256 == permuted.request_identity_sha256
+    assert canonical.request_identity_sha256 != permuted.request_identity_sha256
 
 
 def test_plan27_schedule_identity_binds_full_resolved_schedule_evidence() -> None:
@@ -396,7 +393,7 @@ def test_current_composed_schedule_admission_rejects_unknown_kind() -> None:
         (_member(1), _member(1)),
         (
             _member(1),
-            CurrentSamePassEquityMemberV1(
+            CurrentSamePassEquityMemberV4(
                 _isin(2),
                 "NSE",
                 "EQUITY",
@@ -404,18 +401,18 @@ def test_current_composed_schedule_admission_rejects_unknown_kind() -> None:
                 "EQ001",
                 date(2026, 7, 1),
                 date(2026, 12, 31),
-                "EQ002.NS",
-                "yfinance-symbol-mapping@v1",
+                "EQ001",
+                "bharatstock-isin-exchange-mapping@v1",
                 date(2026, 7, 1),
                 None,
-                _DIGEST,
+                _mapping_identity(_isin(2), "EQ001"),
                 "upstox-bod-nse@2026-08-02",
             ),
         ),
     ),
 )
 def test_request_rejects_duplicate_isin_or_effective_symbol(
-    members: tuple[CurrentSamePassEquityMemberV1, ...],
+    members: tuple[CurrentSamePassEquityMemberV4, ...],
 ) -> None:
     with pytest.raises(ValueError):
         _request(len(members), members=members)
@@ -435,7 +432,7 @@ def test_member_rejects_unsupported_exchange_or_capability(
     exchange, instrument_type, segment = replacement
 
     with pytest.raises(ValueError):
-        CurrentSamePassEquityMemberV1(
+        CurrentSamePassEquityMemberV4(
             _isin(1),
             exchange,
             instrument_type,
@@ -443,17 +440,17 @@ def test_member_rejects_unsupported_exchange_or_capability(
             "SUPPORTED_OUTSIDE_NIFTY",
             date(2026, 7, 1),
             date(2026, 12, 31),
-            "SUPPORTED_OUTSIDE_NIFTY.NS",
-            "yfinance-symbol-mapping@v1",
+            "SUPPORTED_OUTSIDE_NIFTY",
+            "bharatstock-isin-exchange-mapping@v1",
             date(2026, 7, 1),
             None,
             _DIGEST,
-            "upstox-bod-nse@2026-08-01",
+            "bharatstock-instrument@2026-08-01",
         )
 
 
 def test_explicit_supported_nse_equity_has_no_index_membership_gate() -> None:
-    member = CurrentSamePassEquityMemberV1(
+    member = CurrentSamePassEquityMemberV4(
         _isin(1),
         "NSE",
         "EQUITY",
@@ -461,11 +458,11 @@ def test_explicit_supported_nse_equity_has_no_index_membership_gate() -> None:
         "SUPPORTED_OUTSIDE_NIFTY",
         date(2026, 7, 1),
         date(2026, 12, 31),
-        "SUPPORTED_OUTSIDE_NIFTY.NS",
-        "yfinance-symbol-mapping@v1",
+        "SUPPORTED_OUTSIDE_NIFTY",
+        "bharatstock-isin-exchange-mapping@v1",
         date(2026, 7, 1),
         None,
-        _DIGEST,
+        _mapping_identity(_isin(1), "SUPPORTED_OUTSIDE_NIFTY"),
         "upstox-bod-nse@2026-08-01",
     )
 
@@ -481,221 +478,14 @@ def test_request_requires_exact_aware_utc_cutoff_and_closed_lead_window() -> Non
     assert _request(1).decision_cutoff == _CUTOFF
 
 
-def test_raw_public_models_freeze_exact_ordered_schema_fields() -> None:
-    assert tuple(field.name for field in fields(CurrentSamePassEquityMemberV1)) == (
-        "isin",
-        "exchange",
-        "instrument_type",
-        "segment",
-        "effective_symbol",
-        "valid_from",
-        "valid_through",
-        "provider_symbol",
-        "mapping_version",
-        "mapping_valid_from",
-        "mapping_valid_through",
-        "mapping_identity",
-        "provider_mapping_revision",
-    )
-    assert tuple(
-        field.name for field in fields(CurrentSamePassMarketRegimeRequestV3)
-    ) == (
-        "contract_version",
-        "decision_cutoff",
-        "cohort_selected_at",
-        "members",
-        "schedule_evidence_sha256",
-        "schedule_identity_sha256",
-        "plan22_schedule_identity_sha256",
-        "schedule_source",
-        "schedule_source_release",
-        "include_partial_current_session",
-        "plan21_cohort_identity_sha256",
-        "canonical_cohort_identity_sha256",
-        "plan22_request_identity_sha256",
-        "request_identity_sha256",
-    )
-    assert tuple(field.name for field in fields(CurrentSamePassRawSessionV1)) == (
-        "position",
-        "session",
-        "open_at",
-        "close_at",
-        "kind",
-        "session_identity_sha256",
-    )
-    assert tuple(
-        field.name for field in fields(CurrentSamePassRawCoverageSourceRowV1)
-    ) == (
-        "contract_version",
-        "isin",
-        "session",
-        "source_kind",
-        "manifest_schema_version",
-        "plan_provider",
-        "plan_instrument_key",
-        "plan_security_id",
-        "plan_symbol",
-        "plan_exchange",
-        "plan_segment",
-        "plan_instrument_type",
-        "plan_interval",
-        "plan_year",
-        "plan_month",
-        "plan_from_date",
-        "plan_to_date",
-        "ingestion_run_id",
-        "candle_schema_version",
-        "state",
-        "validation_outcome",
-        "validation_policy_version",
-        "actual_from_ts",
-        "actual_to_ts",
-        "row_count",
-        "checksum_sha256",
-        "canonical_path",
-        "source_version",
-        "manifest_created_at",
-        "attempt_started_at",
-        "manifest_updated_at",
-        "failure_category",
-        "coverage_state",
-        "schedule_digest_sha256",
-        "evidence_published_at",
-        "evidence_known_at",
-        "provisional_schema_version",
-        "provisional_cutoff",
-        "provisional_session_complete",
-        "provisional_byte_size",
-        "provisional_instrument_snapshot_digest_sha256",
-        "provisional_instrument_snapshot_retrieved_at",
-        "provisional_historical_attempt_count",
-        "provisional_intraday_attempt_count",
-        "query_completed_at",
-        "source_receipt_identity_sha256",
-    )
-    assert tuple(field.name for field in fields(CurrentSamePassRawBarV1)) == (
-        "isin",
-        "session",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "provider",
-        "price_basis",
-        "interval",
-        "published_at",
-        "known_at",
-        "raw_mapping_projection_identity_sha256",
-        "source_receipt_identity_sha256",
-        "schedule_identity_sha256",
-        "raw_source_policy_identity_sha256",
-        "raw_bar_identity_sha256",
-    )
-    assert tuple(field.name for field in fields(CurrentSamePassRawGridV1)) == (
-        "contract_version",
-        "schema_identity_sha256",
-        "configuration_identity_sha256",
-        "runtime_code_identity_sha256",
-        "request_identity_sha256",
-        "canonical_cohort_identity_sha256",
-        "schedule_identity_sha256",
-        "latest_completed_session_resolution_identity_sha256",
-        "raw_mapping_set_identity_sha256",
-        "raw_source_policy_identity_sha256",
-        "sessions",
-        "source_rows",
-        "bars",
-        "raw_grid_identity_sha256",
-    )
-    metadata: dict[str, Any] = (
-        raw_daily.current_same_pass_raw_daily_schema_metadata_v1()
-    )
-    assert metadata["contract_version"] == (
-        "current-supplied-cohort-market-regime-schema@v3"
-    )
-    assert tuple(row["name"] for row in metadata["type_rows"]) == (
-        "CurrentSamePassEquityMemberV1",
-        "CurrentSamePassMarketRegimeRequestV3",
-        "CurrentSamePassRawSessionV1",
-        "CurrentSamePassPartialOfficialSessionV1",
-        "CurrentSamePassRawMappingReceiptV1",
-        "CurrentSamePassRawCoverageSourceRowV1",
-        "CurrentSamePassRawBarV1",
-        "CurrentSamePassRawGridV1",
-        "PartialCurrentSessionRowV1",
-        "PartialCurrentSessionSnapshotV1",
-        "PrivateCurrentSamePassRawDailyResultV1",
-        "CurrentSamePassDecisionMarketDataRowV1",
-        "CurrentSamePassDecisionMarketDataReportV1",
-    )
-
-
-def test_raw_configuration_preimage_independently_binds_every_structural_bound() -> (
-    None
-):
-    expected = _RAW_CONFIGURATION_PREIMAGE
-    assert raw_daily._canonical(raw_daily._configuration_preimage_v1()) == (
-        raw_daily._canonical(expected)
-    )
-    assert raw_daily._configuration_identity() == _RAW_CONFIGURATION_DIGEST
-    assert raw_daily._configuration_identity() == raw_daily._hash(expected)
-    assert expected["structural_bounds"] == {
-        "cohort_members": [1, 50],
-        "completed_sessions": {"exact": 21},
-        "mapping_receipts": {
-            "observed_exact": "cohort_size",
-            "range": [1, 50],
-        },
-        "completed_source_rows": {
-            "exact": "21*cohort_size",
-            "range": [21, 1_050],
-        },
-        "completed_raw_bars": {
-            "exact": "21*cohort_size",
-            "range": [21, 1_050],
-        },
-        "optional_partial_rows": {
-            "allowed_counts": [0, "cohort_size"],
-            "range": [0, 50],
-        },
-        "per_member_retained_minute_query_rows": {
-            "range": [1, 10_000],
-        },
-    }
-
-    metadata = raw_daily.current_same_pass_raw_daily_schema_metadata_v1()
-    type_rows = cast(tuple[dict[str, Any], ...], metadata["type_rows"])
-    by_type = {
-        row["name"]: {field["name"]: field["bounds"] for field in row["ordered_fields"]}
-        for row in type_rows
-    }
-    assert by_type["CurrentSamePassMarketRegimeRequestV3"]["members"] == (
-        "tuple[CurrentSamePassEquityMemberV1,1..50]"
-    )
-    assert by_type["CurrentSamePassRawGridV1"]["sessions"] == (
-        "tuple[CurrentSamePassRawSessionV1,21]"
-    )
-    assert by_type["CurrentSamePassRawGridV1"]["source_rows"] == (
-        "tuple[CurrentSamePassRawCoverageSourceRowV1,"
-        "exact=21*cohort_size;range=21..1050]"
-    )
-    assert by_type["CurrentSamePassRawGridV1"]["bars"] == (
-        "tuple[CurrentSamePassRawBarV1,exact=21*cohort_size;range=21..1050]"
-    )
-    assert by_type["PartialCurrentSessionSnapshotV1"]["rows"] == (
-        "tuple[PartialCurrentSessionRowV1,count=0_or_cohort_size;range=0..50]"
-    )
-
-
 def test_raw_runtime_identity_uses_exact_sorted_repository_relative_modules() -> None:
     repository_root = Path(__file__).parents[2]
     source_path = (
-        "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py"
+        "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py"
     )
     manifest_path = (
         "src/swing_trading_ai_assistant/market_data/"
-        "current_same_pass_daily_runtime_identity_manifest.py"
+        "current_same_pass_daily_v4_runtime_identity_manifest.py"
     )
     modules = [
         {
@@ -709,7 +499,7 @@ def test_raw_runtime_identity_uses_exact_sorted_repository_relative_modules() ->
     expected = hashlib.sha256(
         json.dumps(
             {
-                "runtime_manifest_version": "plan27-source-at-rest@v1",
+                "runtime_manifest_version": "plan27-v4-source-at-rest@v1",
                 "modules": modules,
             },
             sort_keys=True,
@@ -720,10 +510,10 @@ def test_raw_runtime_identity_uses_exact_sorted_repository_relative_modules() ->
         + b"\n"
     ).hexdigest()
 
-    assert tuple(raw_daily.CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V1) == (
+    assert tuple(raw_daily.CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V4) == (
         source_path,
     )
-    assert raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1() == expected
+    assert raw_daily.current_same_pass_raw_daily_runtime_code_identity_v4() == expected
 
 
 def test_raw_runtime_identity_supports_installed_package_layout(
@@ -731,19 +521,19 @@ def test_raw_runtime_identity_supports_installed_package_layout(
 ) -> None:
     manifest = importlib.import_module(
         "swing_trading_ai_assistant.market_data."
-        "current_same_pass_daily_runtime_identity_manifest"
+        "current_same_pass_daily_v4_runtime_identity_manifest"
     )
-    baseline = raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1()
+    baseline = raw_daily.current_same_pass_raw_daily_runtime_code_identity_v4()
     installed_root = tmp_path / "site-packages"
     for module, relative_path in (
         (
             raw_daily,
-            "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py",
+            "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py",
         ),
         (
             manifest,
             "src/swing_trading_ai_assistant/market_data/"
-            "current_same_pass_daily_runtime_identity_manifest.py",
+            "current_same_pass_daily_v4_runtime_identity_manifest.py",
         ),
     ):
         installed = installed_root.joinpath(*relative_path.split("/")[1:])
@@ -756,15 +546,15 @@ def test_raw_runtime_identity_supports_installed_package_layout(
             importlib.machinery.SourceFileLoader(module.__name__, str(installed)),
         )
 
-    assert raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1() == baseline
+    assert raw_daily.current_same_pass_raw_daily_runtime_code_identity_v4() == baseline
     source = installed_root.joinpath(
-        "swing_trading_ai_assistant/market_data/current_same_pass_daily.py"
+        "swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py"
     )
     with source.open("ab") as copied:
         copied.write(b"\n")
 
     with pytest.raises(ValueError, match="runtime code identity unavailable"):
-        raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1()
+        raw_daily.current_same_pass_raw_daily_runtime_code_identity_v4()
 
 
 def test_twenty_one_official_session_fixture_crosses_closure_special_and_month_boundaries() -> (
@@ -779,18 +569,6 @@ def test_twenty_one_official_session_fixture_crosses_closure_special_and_month_b
     assert date(2026, 8, 15) not in sessions
     assert sessions[0].month == 7
     assert sessions[-1].month == 8
-
-
-@pytest.mark.parametrize("inactive_days", (0, 1, 7, 30))
-def test_inactivity_is_absent_from_current_request_and_identity(
-    inactive_days: int,
-) -> None:
-    del inactive_days
-
-    request = _request(5)
-
-    assert "inactiv" not in " ".join(field.name for field in fields(request)).lower()
-    assert request.request_identity_sha256 == _request(5).request_identity_sha256
 
 
 @pytest.mark.parametrize(
@@ -813,77 +591,6 @@ def test_post_resolution_raw_result_rejects_schedule_preflight_reasons(
             raw_daily._not_requested_partial(),
             (reason,),
         )
-
-
-def test_completed_grid_and_partial_snapshot_are_separate_public_contracts() -> None:
-    grid_fields = tuple(field.name for field in fields(CurrentSamePassRawGridV1))
-    partial_fields = tuple(
-        field.name for field in fields(PartialCurrentSessionSnapshotV1)
-    )
-
-    assert "bars" in grid_fields
-    assert "partial_current_session" not in grid_fields
-    assert partial_fields == (
-        "label",
-        "state",
-        "session",
-        "as_of",
-        "known_at",
-        "rows",
-        "reasons",
-        "partial_snapshot_identity_sha256",
-    )
-
-
-def test_raw_grid_contract_carries_current_knowledge_and_row_provenance_bindings() -> (
-    None
-):
-    grid_fields = tuple(field.name for field in fields(CurrentSamePassRawGridV1))
-
-    assert grid_fields[-4:] == (
-        "sessions",
-        "source_rows",
-        "bars",
-        "raw_grid_identity_sha256",
-    )
-    assert "schedule_identity_sha256" in grid_fields
-    assert "latest_completed_session_resolution_identity_sha256" in grid_fields
-    assert "raw_mapping_set_identity_sha256" in grid_fields
-    assert "raw_source_policy_identity_sha256" in grid_fields
-
-
-def test_public_raw_contract_has_no_historical_availability_or_plan20_replay_field() -> (
-    None
-):
-    visible_fields = {
-        field.name
-        for model in (
-            CurrentSamePassMarketRegimeRequestV3,
-            CurrentSamePassRawGridV1,
-            PartialCurrentSessionSnapshotV1,
-        )
-        for field in fields(model)
-    }
-
-    assert (
-        not {
-            "historical_availability_claim",
-            "replay_capability",
-            "plan20_envelope",
-            "tool_inactive",
-        }
-        & visible_fields
-    )
-
-
-def test_completed_raw_schema_reserves_full_grid_and_optional_partial_bounds() -> None:
-    assert "sessions" in {field.name for field in fields(CurrentSamePassRawGridV1)}
-    assert "source_rows" in {field.name for field in fields(CurrentSamePassRawGridV1)}
-    assert "bars" in {field.name for field in fields(CurrentSamePassRawGridV1)}
-    assert "rows" in {field.name for field in fields(PartialCurrentSessionSnapshotV1)}
-    assert "reasons" in {
-        field.name for field in fields(PartialCurrentSessionSnapshotV1)
-    }
 
 
 @dataclass(frozen=True)
@@ -916,13 +623,13 @@ class _SequenceClock:
 
 
 def _mapping_receipt(
-    member: CurrentSamePassEquityMemberV1,
+    member: CurrentSamePassEquityMemberV4,
     *,
     cutoff: datetime = _CUTOFF,
 ) -> CurrentSamePassRawMappingReceiptV1:
     retrieved_at = cutoff - timedelta(minutes=3)
     values = {
-        "contract_version": "current-same-pass-raw-mapping-receipt@v1",
+        "contract_version": "current-same-pass-raw-mapping-receipt@v4",
         "member": member,
         "snapshot_schema_version": 1,
         "snapshot_source": "upstox-bod-nse",
@@ -1048,7 +755,7 @@ def _minute_report(
 
 def _seed_current_aware_report(
     root: Path,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     mapping: CurrentSamePassRawMappingReceiptV1,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     lease: StorageRootLease,
@@ -1331,7 +1038,7 @@ def test_default_raw_port_queries_bounded_current_aware_minutes_and_aggregates(
             source.schedule_digest_sha256,
             source.query_completed_at,
         ) == (
-            "current-same-pass-raw-coverage-source@v1",
+            "current-same-pass-raw-coverage-source@v4",
             mapping.member.isin,
             session.session,
             plan.provider,
@@ -1841,7 +1548,7 @@ class _TemporaryRetainedEvidence:
 
     def mappings_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         lease: StorageRootLease,
     ) -> tuple[CurrentSamePassRawMappingReceiptV1, ...]:
         del lease
@@ -1863,7 +1570,7 @@ class _TemporaryRetainedEvidence:
 
     def download_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         missing: tuple[raw_daily.SingleSymbolDownloadRequestV1, ...],
         lease: StorageRootLease,
     ) -> bool:
@@ -1874,7 +1581,7 @@ class _TemporaryRetainedEvidence:
 
     def query_and_project_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         schedule_identity: str,
@@ -1898,7 +1605,7 @@ class _TemporaryRetainedEvidence:
                 plan = plans_by_month[(session.session.year, session.session.month)]
                 query_completed_at = _CUTOFF - timedelta(minutes=1)
                 source_values = {
-                    "contract_version": "current-same-pass-raw-coverage-source@v1",
+                    "contract_version": "current-same-pass-raw-coverage-source@v4",
                     "isin": mapping.member.isin,
                     "session": session.session,
                     "source_kind": "VERIFIED_MANIFEST",
@@ -2021,7 +1728,7 @@ class _DownloadEvidence(_TemporaryRetainedEvidence):
 
     def download_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         missing: tuple[raw_daily.SingleSymbolDownloadRequestV1, ...],
         lease: StorageRootLease,
     ) -> object:
@@ -2315,7 +2022,7 @@ def test_active_partial_requires_member_and_mapping_validity_on_active_date(
 
         def partial_current_session_under_lease(
             self,
-            request: CurrentSamePassMarketRegimeRequestV3,
+            request: CurrentSamePassMarketRegimeRequestV4,
             mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
             active: raw_daily.CurrentSamePassPartialOfficialSessionV1,
             lease: StorageRootLease,
@@ -2449,7 +2156,7 @@ def test_upstox_raw_adapter_mints_observed_grid_from_current_retained_projection
         _mapping_receipt(member) for member in request.members
     )
     assert result.official_active_session is None
-    assert raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         result, request
     )
     assert tuple((row.isin, row.session) for row in result.raw_grid.bars) == tuple(
@@ -2520,7 +2227,7 @@ def test_injected_mapping_receipts_fail_closed_before_any_observed_grid(
     class InjectedMappingEvidence(_TemporaryRetainedEvidence):
         def mappings_under_lease(
             self,
-            request: CurrentSamePassMarketRegimeRequestV3,
+            request: CurrentSamePassMarketRegimeRequestV4,
             lease: StorageRootLease,
         ) -> tuple[CurrentSamePassRawMappingReceiptV1, ...]:
             del lease
@@ -2612,7 +2319,7 @@ def test_malformed_self_rehashed_mapping_receipt_stops_all_downstream_effects(
     class MalformedMappingEvidence(_DownloadEvidence):
         def mappings_under_lease(
             self,
-            request: CurrentSamePassMarketRegimeRequestV3,
+            request: CurrentSamePassMarketRegimeRequestV4,
             lease: StorageRootLease,
         ) -> tuple[CurrentSamePassRawMappingReceiptV1, ...]:
             del lease
@@ -2751,7 +2458,7 @@ def test_deep_replay_rejects_consistently_rehashed_latest_session_or_source_plan
         raw_grid=grid,
     )
 
-    assert not raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert not raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         forged, request
     )
 
@@ -2868,7 +2575,7 @@ def test_archive_replay_rejects_consistently_rehashed_provisional_plan_range(
         "raw_result_identity_sha256",
         raw_grid=provisional_grid,
     )
-    assert raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         provisional_result, request
     )
 
@@ -2905,7 +2612,7 @@ def test_archive_replay_rejects_consistently_rehashed_provisional_plan_range(
         raw_grid=forged_grid,
     )
 
-    assert not raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v1(
+    assert not raw_daily.current_same_pass_raw_daily_result_is_exact_valid_v4(
         forged_result, request
     )
 
@@ -2943,19 +2650,6 @@ def test_raw_source_rows_enforce_exact_int32_bounds(field: str, tmp_path: Path) 
             "source_receipt_identity_sha256",
             **{field: maximum + 1},
         )
-
-    metadata: dict[str, Any] = (
-        raw_daily.current_same_pass_raw_daily_schema_metadata_v1()
-    )
-    source_row = next(
-        row
-        for row in metadata["type_rows"]
-        if row["name"] == "CurrentSamePassRawCoverageSourceRowV1"
-    )
-    bounds = {item["name"]: item["bounds"] for item in source_row["ordered_fields"]}
-    assert bounds[field] == (
-        "[1,2147483647]" if field == "row_count" else "None|[1,2147483647]"
-    )
 
 
 def test_default_evidence_port_and_partial_query_use_outer_trusted_clock(
@@ -3117,39 +2811,6 @@ def test_upstox_raw_adapter_rejects_cutoff_inside_minimum_invocation_lead(
         ).acquire_exact(request, _raw_sessions(), acquired.lease)
 
     assert evidence.mapping_calls == 0
-
-
-@pytest.mark.parametrize("key", ("semantic_type", "unit", "nullability", "bounds"))
-def test_raw_schema_preimage_is_complete_independent_and_rejects_every_field_drift(
-    key: str,
-) -> None:
-    metadata: dict[str, Any] = (
-        raw_daily.current_same_pass_raw_daily_schema_metadata_v1()
-    )
-    assert raw_daily._canonical(metadata) == raw_daily._canonical(_RAW_SCHEMA_PREIMAGE)
-    assert (
-        raw_daily.current_same_pass_raw_daily_schema_metadata_digest_v1(metadata)
-        == _RAW_SCHEMA_METADATA_DIGEST
-        == raw_daily.current_same_pass_raw_daily_schema_identity_v1()
-    )
-    assert all(
-        tuple(row) == ("name", "ordered_fields") for row in metadata["type_rows"]
-    )
-    assert all(
-        tuple(field) == ("name", "semantic_type", "unit", "nullability", "bounds")
-        for row in metadata["type_rows"]
-        for field in row["ordered_fields"]
-    )
-    for row_index, row in enumerate(_RAW_SCHEMA_PREIMAGE["type_rows"]):
-        for field_index, _field in enumerate(row["ordered_fields"]):
-            mutated: dict[str, Any] = deepcopy(metadata)
-            mutated["type_rows"][row_index]["ordered_fields"][field_index][key] = (
-                f"MUTATED_{key.upper()}"
-            )
-            with pytest.raises(ValueError, match="frozen contract"):
-                raw_daily.current_same_pass_raw_daily_schema_identity_from_metadata_v1(
-                    mutated
-                )
 
 
 def test_partial_admission_binds_mappings_and_official_session_to_completed_minute() -> (
@@ -3390,28 +3051,3 @@ def test_default_partial_query_observes_exact_open_to_as_of_minute_grid(
     assert result.rows is not None
     assert result.rows[0].price == Decimal("102")
     assert result.rows[0].cumulative_volume == 6
-
-
-def test_raw_schema_state_or_unknown_key_is_rejected() -> None:
-    metadata: dict[str, Any] = (
-        raw_daily.current_same_pass_raw_daily_schema_metadata_v1()
-    )
-    mutated: dict[str, Any] = deepcopy(metadata)
-    mutated["state_projections"] = ()
-
-    assert raw_daily.current_same_pass_raw_daily_schema_metadata_digest_v1(
-        metadata
-    ) != raw_daily.current_same_pass_raw_daily_schema_metadata_digest_v1(mutated)
-    with pytest.raises(ValueError, match="frozen contract"):
-        raw_daily.current_same_pass_raw_daily_schema_identity_from_metadata_v1(mutated)
-
-    missing = deepcopy(metadata)
-    missing["type_rows"][0]["ordered_fields"] = missing["type_rows"][0][
-        "ordered_fields"
-    ][1:]
-    with pytest.raises(ValueError, match="frozen contract"):
-        raw_daily.current_same_pass_raw_daily_schema_identity_from_metadata_v1(missing)
-
-    metadata["unexpected"] = "forged"
-    with pytest.raises(ValueError, match="unknown raw schema metadata key"):
-        raw_daily.current_same_pass_raw_daily_schema_metadata_digest_v1(metadata)

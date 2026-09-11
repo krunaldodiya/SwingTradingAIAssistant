@@ -37,6 +37,30 @@ this boundary. Migration is incremental and versioned under
 [Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md);
 there is no big-bang rename or reinterpretation of frozen evidence.
 
+## Owner decision: BharatStock migration
+
+On 2026-09-10 the owner approved
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184):
+replace active yfinance daily acquisition with direct BharatStock access,
+without a separate service or mixed-provider fallback. The
+[provider migration record](roadmap.md#bharatstock-migration-direction)
+owns the scope, measured data-check limits and unresolved prerequisites.
+This source revision is under implementation and is not a delivered runtime
+change. Yahoo-specific evidence keeps its original provider, basis, identities,
+and observation times; versioned successors do not reinterpret it.
+Upstox raw/current behavior remains separate. Neither the provider decision nor
+the 100-stock input-data check closes
+[#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
+The later [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+selects unchanged provider OHLCV, assuming its adjustment is correct for the
+declared current workflow. After the provider reported a correction and warned
+against multiplying OHLC by its factor, the owner
+[retired the optional transformation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210).
+Adjustment fields remain separate; volume is source-reported and unchanged.
+The provider's report is not independent post-deployment verification or proof
+of uniformly adjusted historical OHLC. Earlier evidence, strict predecessor
+readers and independent review/release requirements remain intact.
+
 ## Delivery priority overlay
 
 The architecture, locked modules, pipeline, exclusions, and historical plan
@@ -63,9 +87,14 @@ accepted Plan 33 own only the bounded source decision, benchmark, and contract
 for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
 merged that planning record without changing runtime. Issue #155 delivered the
 exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
-separately bounded Plan 33 implementation. The owner requires its security
-review/audit follow-up after #145 and before #172 implementation; its closed
-tracker state does not establish that security acceptance.
+separately bounded Plan 33 implementation. The original owner instruction
+required its security follow-up after #145 and before #172 implementation.
+On 2026-09-10 the owner withdrew only that pre-implementation scheduling
+dependency for #184/#183 in
+[the scoped correction](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5614112378).
+Reversible implementation can proceed. The old review remains
+**INVALID / NO VERDICT**; no retry, replacement audit, policy bypass, successful
+review, or release waiver is implied. Protected release requirements remain.
 Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
 policy below. It changes execution-failure handling, not the product-module
 sequence or the separately bounded scope of #156.

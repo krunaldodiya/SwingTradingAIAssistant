@@ -99,18 +99,36 @@ not expand either issue. The architecture sequence, historical validation
 controls, forward/paper path, costs/slippage requirements, and Plan 18
 fixed-cohort limitation remain intact.
 
+**Provider direction update — 2026-09-10:** the owner approved
+[#184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+to replace active yfinance daily acquisition with direct BharatStock access.
+The [migration record](roadmap.md#bharatstock-migration-direction) distinguishes
+the scoped 100-stock input-data check from implementation and release evidence.
+The owner withdrew only the old pre-implementation scheduling dependency;
+review limitations and protected release gates remain explicit.
+Issue #183 tracks separate member-isolation acceptance; current review and
+delivery evidence is recorded in
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185).
+
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.
-yfinance is first only for the separate Plan-22 adjusted daily close; every fact
-records provider and price basis, and no provider is a generic silent fallback.
-Angel One is deferred as a future qualified adapter and is not implemented now.
-yfinance offers long daily history but only the latest 60 days of intraday data;
-it is an unofficial personal/research-use Yahoo client whose retrospective
-adjustments may be revised and are not strict point-in-time authority.
+The Plan22 V3 source path follows the
+[accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation):
+keep supplied BharatStock OHLCV unchanged. Following the provider's reply, the
+owner retired optional factor application; adjustment fields remain separate
+and source volume never changes. This replaces the provider-clarification wait
+for source-preserving implementation, not historical evidence or protected
+release gates. Every fact binds its provider, fixed basis and retrieval
+provenance. Provider-reported corrections do not independently establish
+uniformly comparable historical full OHLC, exchange-raw volume, total return or
+historical availability.
+No provider is a silent fallback.
+Historical Yahoo records remain readable under their original identities;
+their acquisition path is retired by #184. Angel One remains deferred.
 
-Raw Upstox OHLCV remains unchanged. A yfinance adjusted close never fills an
-Upstox candle. Any later Market Structure calculation must use a complete raw
-OHLC series or a complete adjusted OHLC series consistently, never mixed bases.
+Raw Upstox OHLCV remains separate. No adjusted provider value fills an Upstox
+candle. Market Structure uses a complete raw OHLC series or a complete adjusted
+OHLC series consistently, never mixed bases.
 
 | Sprint | Tracker and lifecycle | Atomic outcome | Minimum dependency and gate | Explicit non-goals |
 | --- | --- | --- | --- | --- |

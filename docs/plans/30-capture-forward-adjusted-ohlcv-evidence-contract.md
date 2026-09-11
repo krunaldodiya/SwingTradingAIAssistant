@@ -1,5 +1,113 @@
 # Capture-forward adjusted OHLCV evidence contract
 
+> Successor work (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> and [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+> govern the BharatStock V3 and member-isolation path below.
+> The later Yahoo-specific contract and delivery evidence are historical;
+> their immutable data, labels and supported readers are not reinterpreted.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for source-preserving implementation.
+> Historical evidence and independent review/release requirements remain intact.
+
+## BharatStock capture V3 and independent facts
+
+`bharatstock-capture@v3` accepts an ordered list of 1–100 explicit
+ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
+It verifies the exact retained official schedule, runtime source identity,
+configuration, cutoff, and selection identity before provider effects.
+The provider is `bharatstock-api@v1`. It preserves supplied OHLCV with basis
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`. The owner has
+[retired optional factor application](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210);
+current processing never applies the reported factor to OHLC or volume.
+Volume is unchanged and labelled `SOURCE_REPORTED`. Original prices and
+optional adjustment fields are retained separately. Fixed source-preserving
+semantics bind request identity, reuse, recovery, correction-parent matching
+and downstream facts. Strict predecessor readers retain their original
+interpretation without exposing an active adjustment option. No hourly
+reconstruction, filling, fallback, total-return claim or fabricated historical
+publication time is permitted.
+
+Every requested member has exactly one result: `OBSERVED`,
+`INSUFFICIENT_EVIDENCE` with its local reason, or `NOT_ATTEMPTED` after the
+recorded shared failure. The original ordered selection identity remains
+separate from actual evidence coverage. Invalid local history does not discard
+another member's valid history. Authentication, authorization, quota,
+runtime/source, schedule and storage boundaries remain shared; unexpected
+software exceptions are not disguised as missing stock evidence.
+
+The immutable namespace is `bharatstock-capture-v3`, with separate prepared,
+revision and exact-request admission records beneath a held private root.
+Exact reuse precedes transport. Interrupted publication recovers validated
+prepared bytes without downloading again. Corrections name an admitted parent,
+preserve the old revision, and produce a new immutable identity only for changed
+material member evidence. Conflicting, unadmitted or unsafe files fail closed.
+The acquisition deadline is checked before each member and before retention.
+No automatic provider retries are introduced by recovery.
+
+Request-pointer resolution binds both the exact request and the named
+revision's self-identity. Each held child directory revalidates its complete
+canonical ancestry to the leased root; an intermediate namespace replacement
+invalidates the operation. Known immutable read, prepare and publication
+conflicts, root-authority loss and lease-cleanup failures produce governed
+storage or schedule failures, not unclassified exceptions. This applies to
+capture, exact reads and official-selection retention/reuse. Malformed retained
+decimal values are unavailable evidence rather than internal decimal errors.
+Unexpected provider/software defects still propagate without being masked by
+cleanup failures.
+Directory and publication scopes share one primary-preserving cleanup policy.
+The active scope's exception, including cancellation, remains primary; an
+already-handled outer exception is not an active failure. Unexpected standalone
+file or directory cleanup failures remain observable execution failures rather
+than unavailable-evidence claims. Ownership is relinquished before close, and
+released descriptors are never retried. Disappearance of an already-open
+publication is a conflict, not permission to recreate it.
+
+The canonical revision budget is 8 MiB, including serialization and its final
+newline. Fresh capture checks the same limit as read/recovery before any
+prepared or admission publication. Oversized evidence returns
+`INSUFFICIENT_EVIDENCE / REVISION_TOO_LARGE`; prices are not rounded and members
+are not silently dropped to fit the budget.
+
+Fresh and prepared corrections enforce the exact reader's resulting-chain
+limits: at most 64 revisions, an admitted matching parent and nondecreasing
+observation time. Both admission paths also require materially changed
+evidence. A child of a 64-revision parent chain is rejected before transport or publication with
+`INSUFFICIENT_EVIDENCE / CORRECTION_LINEAGE_LIMIT`. An earlier child observation
+returns `CORRECTION_OBSERVATION_ORDER`; unchanged evidence retains
+`CORRECTION_CONTENT_UNCHANGED` precedence. Prepared recovery applies these same
+checks before admission and does not consume provider calls.
+
+Research identities serialize exact Decimal values compactly, including
+scientific notation where appropriate. A compact optional adjustment exponent
+must not expand into an unbounded fixed-point string during research; no source
+value is rounded, clipped or applied to OHLC to enforce this resource boundary.
+
+The bounded read-only predecessor reader preserves exact V2 bytes and labels;
+it cannot write new V2 evidence or reinterpret V2 as the new source mode.
+`build_bharatstock_research_packet_v1` consumes an admitted retained revision.
+Owner-private independent facts use its one consistent selected price basis: Price Action
+requires the latest two completed supplied sessions; Market Structure requires
+the latest 21. Missing history for one feature must not erase an independently
+valid fact for another. Each feature must expose its own evidence state/reason.
+Shared deterministic mathematics must use neutral price/source inputs, never
+forge an Upstox raw-grid envelope from adjusted prices.
+
+Requested, observed, insufficient and unattempted membership remains explicit.
+Whole-list breadth, regime, Industry and other dependent conclusions retain
+their original denominators and evidence prerequisites; coverage is not a
+confidence score. Sanitized CLI output exposes only governed aggregate status
+and revision handles. Member identities, prices, source payloads and detailed
+facts stay owner-private.
+
+The generic downloader's Parquet output is not automatic Plan30 admission.
+The old Yahoo readers and Plan29 projections stay separate. The historical
+qualification and original provider approvals below do not qualify V2.
+Current delivery, exact-byte review and required verification remain governed
+by #184/#183; no merge or closure is claimed by this successor specification.
+
+## Historical Yahoo contract and delivery
+
 **Status:** ACCEPTED — Sprint 17 / Issue #147
 **Parent:** Issue #139
 **Prerequisites:** Issues #120 and #122 closed/completed

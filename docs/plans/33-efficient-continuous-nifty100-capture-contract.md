@@ -1,5 +1,42 @@
 # Plan 33: efficient continuous Nifty 100 adjusted-capture contract
 
+> Successor work (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> `current-nifty100-bharatstock-capture@v3` selects the same official list
+> through versioned current-observation evidence and composes Plan30 V3.
+> The old Yahoo-specific pool, cadence, session and acknowledgement below
+> describe historical V1 only; they are not BharatStock requirements.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for source-preserving implementation.
+> Independent review and release requirements remain unchanged.
+
+V3 must retain and validate exact Nifty50, Next50 and Nifty100 witness bytes,
+source identities and retrieval times, then bind the ordered 100-member union,
+source observation and fixed source-preserving price basis to the exact capture
+request. The optional factor mode is retired; earlier mode-bearing request
+identities cannot be silently accepted as the new contract.
+Reuse must resolve the retained request/selection/revision binding before any
+source or provider call.
+Only a genuinely absent request binding permits cold source acquisition.
+An initial target-open miss is genuine only after the held parent/root authority
+is revalidated; disappearance after a successful open is an evidence conflict.
+Malformed bindings, missing bound source evidence, unsafe retained objects and
+lost root authority return `SELECTION_EVIDENCE_UNAVAILABLE` with no official
+source/provider call, implicit refetch or repair. A replacement root is not an
+automatic recovery authority.
+Later observations of the same membership have distinct source provenance;
+they must not overwrite prior evidence or manufacture earlier knowledge.
+The source-observation identity commits to all three exact URL/body digests
+and the normalized UTC time at which the union was observed (the latest
+witness retrieval). Ordered membership identity remains independent of that
+observation time. Changing a retained timestamp cannot satisfy its old
+observation identity merely because the new timestamp precedes the cutoff.
+An incomplete capture still accounts for all 100 members, with no claim that
+99 observations constitute complete Nifty100 research. The public surface stays
+sanitized; source/member evidence stays private. Provider replacement alone
+does not satisfy #183, and no V1 approval transfers to this successor.
+
 > Harness portability: historical named-model review choices below record the
 > original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
 > and [portable review procedure](../agent-workflow.md); independent exact-byte

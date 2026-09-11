@@ -17,16 +17,18 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from .adjusted_daily import adjusted_daily_request_identity_v2
-from .adjusted_daily.service import _V2Member
+from .adjusted_daily.service_v3 import (
+    AdjustedDailyInstrumentV3,
+    adjusted_daily_request_identity_v3,
+)
 from .catalog import CatalogError, DuckDBCatalog
 from .current_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortAdmissionPolicyV1,
     RetainedCurrentCohortInstrumentResolverV1,
 )
-from .current_same_pass_daily_runtime_identity_manifest import (
-    CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V1,
+from .current_same_pass_daily_v4_runtime_identity_manifest import (
+    CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V4,
 )
 from .instrument_snapshot import (
     InstrumentSnapshotCorruptError,
@@ -61,12 +63,12 @@ from .schedule_evidence import (
 )
 from .storage_root_lease import StorageRootLease
 
-RAW_DAILY_CONTRACT_VERSION_V1: Final = "current-same-pass-raw-daily-grid@v1"
-REQUEST_CONTRACT_VERSION_V3: Final = "current-supplied-cohort-market-regime@v3"
-RAW_SCHEMA_CONTRACT_VERSION_V1: Final = (
-    "current-supplied-cohort-market-regime-schema@v3"
+RAW_DAILY_CONTRACT_VERSION_V4: Final = "current-same-pass-raw-daily-grid@v4"
+REQUEST_CONTRACT_VERSION_V4: Final = "current-supplied-cohort-market-regime@v4"
+RAW_SCHEMA_CONTRACT_VERSION_V4: Final = (
+    "current-supplied-cohort-market-regime-schema@v4"
 )
-RUNTIME_MANIFEST_VERSION_V1: Final = "plan27-source-at-rest@v1"
+RUNTIME_MANIFEST_VERSION_V4: Final = "plan27-v4-source-at-rest@v1"
 _MAX_COHORT_SIZE_V1: Final = 50
 _SESSION_COUNT_V1: Final = 21
 _MAX_RAW_ROWS_V1: Final = _MAX_COHORT_SIZE_V1 * _SESSION_COUNT_V1
@@ -246,7 +248,7 @@ def _ordered_reasons(value: object, allowed: tuple[str, ...]) -> tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentSamePassEquityMemberV1:
+class CurrentSamePassEquityMemberV4:
     isin: str
     exchange: Literal["NSE"]
     instrument_type: Literal["EQUITY"]
@@ -255,7 +257,7 @@ class CurrentSamePassEquityMemberV1:
     valid_from: date
     valid_through: date
     provider_symbol: str
-    mapping_version: Literal["yfinance-symbol-mapping@v1"]
+    mapping_version: Literal["bharatstock-isin-exchange-mapping@v1"]
     mapping_valid_from: date
     mapping_valid_through: date | None
     mapping_identity: str
@@ -272,8 +274,9 @@ class CurrentSamePassEquityMemberV1:
             or type(self.valid_through) is not date
             or self.valid_from > self.valid_through
             or type(self.provider_symbol) is not str
+            or self.provider_symbol != self.effective_symbol
             or not 1 <= len(self.provider_symbol.encode()) <= 64
-            or self.mapping_version != "yfinance-symbol-mapping@v1"
+            or self.mapping_version != "bharatstock-isin-exchange-mapping@v1"
             or type(self.mapping_valid_from) is not date
             or self.mapping_valid_through is not None
             and type(self.mapping_valid_through) is not date
@@ -289,11 +292,11 @@ class CurrentSamePassEquityMemberV1:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class CurrentSamePassMarketRegimeRequestV3:
-    contract_version: Literal["current-supplied-cohort-market-regime@v3"]
+class CurrentSamePassMarketRegimeRequestV4:
+    contract_version: Literal["current-supplied-cohort-market-regime@v4"]
     decision_cutoff: datetime
     cohort_selected_at: datetime
-    members: tuple[CurrentSamePassEquityMemberV1, ...]
+    members: tuple[CurrentSamePassEquityMemberV4, ...]
     schedule_evidence_sha256: str
     schedule_identity_sha256: str
     plan22_schedule_identity_sha256: str
@@ -310,7 +313,7 @@ class CurrentSamePassMarketRegimeRequestV3:
         contract_version: str,
         decision_cutoff: datetime,
         cohort_selected_at: datetime,
-        members: tuple[CurrentSamePassEquityMemberV1, ...],
+        members: tuple[CurrentSamePassEquityMemberV4, ...],
         schedule_evidence_sha256: str,
         schedule_identity_sha256: str,
         plan22_schedule_identity_sha256: str,
@@ -323,12 +326,12 @@ class CurrentSamePassMarketRegimeRequestV3:
         request_identity_sha256: str,
     ) -> None:
         if (
-            contract_version != REQUEST_CONTRACT_VERSION_V3
+            contract_version != REQUEST_CONTRACT_VERSION_V4
             or not _utc(decision_cutoff)
             or not _utc(cohort_selected_at)
             or type(members) is not tuple
             or type(include_partial_current_session) is not bool
-            or not all(type(item) is CurrentSamePassEquityMemberV1 for item in members)
+            or not all(type(item) is CurrentSamePassEquityMemberV4 for item in members)
             or not 1 <= len(members) <= _MAX_COHORT_SIZE_V1
             or not all(
                 _digest(item)
@@ -380,35 +383,35 @@ class CurrentSamePassMarketRegimeRequestV3:
             or canonical_cohort_identity_sha256 != canonical_identity
         ):
             raise ValueError("request cohort identity bridge mismatch")
-        plan22_identity = adjusted_daily_request_identity_v2(
+        plan22_identity = adjusted_daily_request_identity_v3(
             cohort_identity_sha256=canonical_identity,
             decision_cutoff=decision_cutoff,
             schedule_identity_sha256=plan22_schedule_identity_sha256,
             members=tuple(
-                _V2Member(
-                    item.isin,
-                    item.exchange,
-                    item.instrument_type,
-                    item.segment,
-                    item.effective_symbol,
-                    item.provider_symbol,
-                    item.valid_from,
-                    item.valid_through,
-                    item.mapping_version,
-                    item.mapping_valid_from,
-                    item.mapping_valid_through,
-                    item.mapping_identity,
+                AdjustedDailyInstrumentV3(
+                    isin=item.isin,
+                    exchange=item.exchange,
+                    instrument_type=item.instrument_type,
+                    segment=item.segment,
+                    effective_symbol=item.effective_symbol,
+                    valid_from=item.valid_from,
+                    valid_through=item.valid_through,
+                    provider_symbol=item.provider_symbol,
+                    mapping_version=item.mapping_version,
+                    mapping_valid_from=item.mapping_valid_from,
+                    mapping_valid_through=item.mapping_valid_through,
+                    mapping_identity=item.mapping_identity,
                 )
-                for item in canonical_members
+                for item in members
             ),
         )
         if plan22_request_identity_sha256 != plan22_identity:
             raise ValueError("request adjusted-daily identity bridge mismatch")
         for field_name, value in (
-            ("contract_version", REQUEST_CONTRACT_VERSION_V3),
+            ("contract_version", REQUEST_CONTRACT_VERSION_V4),
             ("decision_cutoff", decision_cutoff),
             ("cohort_selected_at", cohort_selected_at),
-            ("members", canonical_members),
+            ("members", members),
             ("schedule_evidence_sha256", schedule_evidence_sha256),
             ("schedule_identity_sha256", schedule_identity_sha256),
             ("plan22_schedule_identity_sha256", plan22_schedule_identity_sha256),
@@ -559,8 +562,8 @@ class CurrentSamePassPartialOfficialSessionV1:
 
 @dataclass(frozen=True, slots=True)
 class CurrentSamePassRawMappingReceiptV1:
-    contract_version: Literal["current-same-pass-raw-mapping-receipt@v1"]
-    member: CurrentSamePassEquityMemberV1
+    contract_version: Literal["current-same-pass-raw-mapping-receipt@v4"]
+    member: CurrentSamePassEquityMemberV4
     snapshot_schema_version: Literal[1]
     snapshot_source: Literal["upstox-bod-nse"]
     observation_date: date
@@ -591,8 +594,8 @@ class CurrentSamePassRawMappingReceiptV1:
     def _is_exact(self) -> bool:
         return bool(
             type(self.contract_version) is str
-            and self.contract_version == "current-same-pass-raw-mapping-receipt@v1"
-            and type(self.member) is CurrentSamePassEquityMemberV1
+            and self.contract_version == "current-same-pass-raw-mapping-receipt@v4"
+            and type(self.member) is CurrentSamePassEquityMemberV4
             and type(self.snapshot_schema_version) is int
             and self.snapshot_schema_version == 1
             and type(self.snapshot_source) is str
@@ -644,7 +647,7 @@ class CurrentSamePassRawMappingReceiptV1:
 
 @dataclass(frozen=True, slots=True)
 class CurrentSamePassRawCoverageSourceRowV1:
-    contract_version: Literal["current-same-pass-raw-coverage-source@v1"]
+    contract_version: Literal["current-same-pass-raw-coverage-source@v4"]
     isin: str
     session: date
     source_kind: Literal["VERIFIED_MANIFEST", "PROVISIONAL_PARTITION"]
@@ -693,7 +696,7 @@ class CurrentSamePassRawCoverageSourceRowV1:
 
     def __post_init__(self) -> None:
         common = (
-            self.contract_version == "current-same-pass-raw-coverage-source@v1"
+            self.contract_version == "current-same-pass-raw-coverage-source@v4"
             and _valid_isin(self.isin)
             and type(self.session) is date
             and self.plan_provider == "upstox"
@@ -928,7 +931,7 @@ class CurrentSamePassRawBarV1:
 
 @dataclass(frozen=True, slots=True)
 class CurrentSamePassRawGridV1:
-    contract_version: Literal["current-same-pass-raw-daily-grid@v1"]
+    contract_version: Literal["current-same-pass-raw-daily-grid@v4"]
     schema_identity_sha256: str
     configuration_identity_sha256: str
     runtime_code_identity_sha256: str
@@ -945,7 +948,7 @@ class CurrentSamePassRawGridV1:
 
     def __post_init__(self) -> None:
         valid = (
-            self.contract_version == RAW_DAILY_CONTRACT_VERSION_V1
+            self.contract_version == RAW_DAILY_CONTRACT_VERSION_V4
             and all(
                 _digest(item)
                 for item in (
@@ -975,7 +978,11 @@ class CurrentSamePassRawGridV1:
             )
             and all(type(item) is CurrentSamePassRawBarV1 for item in self.bars)
             and tuple((item.isin, item.session) for item in self.bars)
-            == tuple(sorted((item.isin, item.session) for item in self.bars))
+            == tuple(
+                (isin, session.session)
+                for isin in dict.fromkeys(item.isin for item in self.bars)
+                for session in self.sessions
+            )
             and len({(item.isin, item.session) for item in self.bars}) == len(self.bars)
         )
         if not valid or self.raw_grid_identity_sha256 != _identity(
@@ -1181,7 +1188,7 @@ class CurrentSamePassDecisionMarketDataRowV1:
 
 @dataclass(frozen=True, slots=True)
 class CurrentSamePassDecisionMarketDataReportV1:
-    contract_version: Literal["current-same-pass-decision-market-data@v1"]
+    contract_version: Literal["current-same-pass-decision-market-data@v4"]
     schema_identity_sha256: str
     evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"]
     request_identity_sha256: str
@@ -1196,7 +1203,7 @@ class CurrentSamePassDecisionMarketDataReportV1:
 
     def __post_init__(self) -> None:
         valid = (
-            self.contract_version == "current-same-pass-decision-market-data@v1"
+            self.contract_version == "current-same-pass-decision-market-data@v4"
             and _digest(self.schema_identity_sha256)
             and self.evidence_state in {"OBSERVED", "INSUFFICIENT_EVIDENCE"}
             and _digest(self.request_identity_sha256)
@@ -1263,7 +1270,7 @@ class CurrentSamePassAcquisitionOverrunV1(RuntimeError):
 class CurrentSamePassRawDailyPortV1(Protocol):
     def acquire_exact(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         lease: StorageRootLease,
         *,
@@ -1283,7 +1290,7 @@ class CurrentSamePassRawEvidencePortV1(Protocol):
 
     def mappings_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         lease: StorageRootLease,
     ) -> tuple[CurrentSamePassRawMappingReceiptV1, ...] | str: ...
 
@@ -1296,14 +1303,14 @@ class CurrentSamePassRawEvidencePortV1(Protocol):
 
     def download_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         missing: tuple[SingleSymbolDownloadRequestV1, ...],
         lease: StorageRootLease,
     ) -> CurrentSamePassAcquisitionCompletionV1: ...
 
     def partial_current_session_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
         active_session: CurrentSamePassPartialOfficialSessionV1,
         lease: StorageRootLease,
@@ -1311,7 +1318,7 @@ class CurrentSamePassRawEvidencePortV1(Protocol):
 
     def query_and_project_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         schedule_identity: str,
@@ -1368,7 +1375,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
 
     def mappings_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         lease: StorageRootLease,
     ) -> tuple[CurrentSamePassRawMappingReceiptV1, ...] | str:
         receipts: list[CurrentSamePassRawMappingReceiptV1] = []
@@ -1414,7 +1421,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
                 ):
                     return RawDailyReasonV1.RAW_MAPPING_CONFLICTED
                 values = {
-                    "contract_version": "current-same-pass-raw-mapping-receipt@v1",
+                    "contract_version": "current-same-pass-raw-mapping-receipt@v4",
                     "member": member,
                     "snapshot_schema_version": metadata.schema_version,
                     "snapshot_source": metadata.source,
@@ -1494,7 +1501,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
 
     def download_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         missing: tuple[SingleSymbolDownloadRequestV1, ...],
         lease: StorageRootLease,
     ) -> CurrentSamePassAcquisitionCompletionV1:
@@ -1532,7 +1539,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
 
     def partial_current_session_under_lease(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
         active_session: CurrentSamePassPartialOfficialSessionV1,
         lease: StorageRootLease,
@@ -1650,7 +1657,7 @@ class _DefaultCurrentSamePassRawEvidencePortV1:
 
     def query_and_project_under_lease(  # noqa: C901
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         schedule_identity: str,
@@ -1791,7 +1798,7 @@ class UpstoxCurrentSamePassRawDailyV1:
 
     def acquire_exact(  # noqa: C901
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         sessions: tuple[CurrentSamePassRawSessionV1, ...],
         lease: StorageRootLease,
         *,
@@ -2003,10 +2010,10 @@ class UpstoxCurrentSamePassRawDailyV1:
                 official_active_session=active,
             )
         grid_values = {
-            "contract_version": RAW_DAILY_CONTRACT_VERSION_V1,
-            "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v1(),
+            "contract_version": RAW_DAILY_CONTRACT_VERSION_V4,
+            "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v4(),
             "configuration_identity_sha256": _configuration_identity(),
-            "runtime_code_identity_sha256": current_same_pass_raw_daily_runtime_code_identity_v1(),
+            "runtime_code_identity_sha256": current_same_pass_raw_daily_runtime_code_identity_v4(),
             "request_identity_sha256": request.request_identity_sha256,
             "canonical_cohort_identity_sha256": request.canonical_cohort_identity_sha256,
             "schedule_identity_sha256": schedule_identity,
@@ -2056,7 +2063,7 @@ class UpstoxCurrentSamePassRawDailyV1:
 
 
 def _latest_completed_session_resolution_identity(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     schedule_identity: str,
 ) -> str:
@@ -2084,7 +2091,7 @@ def _identity_from_values(
 
 
 def _cohort_policy(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
 ) -> CurrentSuppliedCohortAdmissionPolicyV1:
     return CurrentSuppliedCohortAdmissionPolicyV1(
         tuple(
@@ -2147,7 +2154,7 @@ def _verified_manifest(value: object) -> bool:
 
 def _source_bindings_for_mapping(
     storage_root: Path,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     mapping: CurrentSamePassRawMappingReceiptV1,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     coverage_months: tuple[object, ...],
@@ -2224,7 +2231,7 @@ def _source_bindings_for_mapping(
 def _coverage_matches_provisional(
     coverage: object,
     metadata: ProvisionalPartitionMetadataV1,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
 ) -> bool:
     return bool(
         type(coverage).__name__ == "PublicCoverageMonthV1"
@@ -2256,7 +2263,7 @@ def _coverage_source_row(
     query_completed_at: datetime,
 ) -> CurrentSamePassRawCoverageSourceRowV1:
     values: dict[str, object] = {
-        "contract_version": "current-same-pass-raw-coverage-source@v1",
+        "contract_version": "current-same-pass-raw-coverage-source@v4",
         "isin": mapping.member.isin,
         "session": session.session,
         "plan_provider": plan.provider,
@@ -2472,7 +2479,7 @@ def _deadline_reached(clock: _TrustedClockV1, deadline: datetime) -> bool:
 
 
 def _admit_mappings(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
 ) -> str | None:
     if (
@@ -2514,7 +2521,7 @@ def _deadline_exceeded(clock: _TrustedClockV1, deadline: datetime) -> bool:
 
 
 def _schedule_identity(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> str:
     """Use the request's authoritative V3 schedule identity, never a local rehash."""
@@ -2535,14 +2542,14 @@ def _source_policy_identity() -> str:
             "manifest_schema": 1,
             "provisional_partition_schema": 1,
             "validation_policy": "equity-month-validation@v1",
-            "adapter_runtime_identity": "plan27-source-at-rest@v1",
+            "adapter_runtime_identity": "plan27-v4-source-at-rest@v1",
         }
     )
 
 
 def _configuration_preimage_v1() -> dict[str, object]:
     return {
-        "contract_version": RAW_DAILY_CONTRACT_VERSION_V1,
+        "contract_version": RAW_DAILY_CONTRACT_VERSION_V4,
         "structural_bounds": {
             "cohort_members": [1, _MAX_COHORT_SIZE_V1],
             "completed_sessions": {"exact": _SESSION_COUNT_V1},
@@ -2618,7 +2625,7 @@ def _configuration_identity() -> str:
 
 
 def _admit_projected_grid(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     source_rows: tuple[CurrentSamePassRawCoverageSourceRowV1, ...],
@@ -2756,13 +2763,13 @@ def _partial_snapshot_is_exact(value: object) -> bool:
         return False
 
 
-def current_same_pass_raw_daily_result_is_exact_valid_v1(  # noqa: C901
-    value: object, request: CurrentSamePassMarketRegimeRequestV3
+def current_same_pass_raw_daily_result_is_exact_valid_v4(  # noqa: C901
+    value: object, request: CurrentSamePassMarketRegimeRequestV4
 ) -> bool:
     """Revalidate retained raw evidence before a context can be archived."""
     if (
         type(value) is not PrivateCurrentSamePassRawDailyResultV1
-        or type(request) is not CurrentSamePassMarketRegimeRequestV3
+        or type(request) is not CurrentSamePassMarketRegimeRequestV4
         or not _partial_snapshot_is_exact(value.partial_current_session)
         or value.request_identity_sha256 != request.request_identity_sha256
         or value.canonical_cohort_identity_sha256
@@ -2830,12 +2837,12 @@ def current_same_pass_raw_daily_result_is_exact_valid_v1(  # noqa: C901
         grid = value.raw_grid
         _admit_sessions(request, grid.sessions)
         if (
-            grid.contract_version != RAW_DAILY_CONTRACT_VERSION_V1
+            grid.contract_version != RAW_DAILY_CONTRACT_VERSION_V4
             or grid.schema_identity_sha256
-            != current_same_pass_raw_daily_schema_identity_v1()
+            != current_same_pass_raw_daily_schema_identity_v4()
             or grid.configuration_identity_sha256 != _configuration_identity()
             or grid.runtime_code_identity_sha256
-            != current_same_pass_raw_daily_runtime_code_identity_v1()
+            != current_same_pass_raw_daily_runtime_code_identity_v4()
             or grid.request_identity_sha256 != request.request_identity_sha256
             or grid.canonical_cohort_identity_sha256
             != request.canonical_cohort_identity_sha256
@@ -2955,11 +2962,11 @@ def _schedule_has_complete_v3_calendar(schedule: ExpectedSessionSchedule) -> boo
 
 
 def resolve_latest_completed_sessions_v1(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     schedule: ExpectedSessionSchedule,
 ) -> tuple[CurrentSamePassRawSessionV1, ...]:
     if (
-        type(request) is not CurrentSamePassMarketRegimeRequestV3
+        type(request) is not CurrentSamePassMarketRegimeRequestV4
         or type(schedule) is not ExpectedSessionSchedule
         or schedule.source != request.schedule_source
         or schedule.source_release != request.schedule_source_release
@@ -2990,11 +2997,11 @@ def resolve_latest_completed_sessions_v1(
 
 
 def _admit_sessions(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> None:
     if (
-        type(request) is not CurrentSamePassMarketRegimeRequestV3
+        type(request) is not CurrentSamePassMarketRegimeRequestV4
         or type(sessions) is not tuple
         or len(sessions) != _SESSION_COUNT_V1
         or any(type(item) is not CurrentSamePassRawSessionV1 for item in sessions)
@@ -3064,7 +3071,7 @@ def _not_applicable_partial() -> PartialCurrentSessionSnapshotV1:
 
 
 def _active_market_window(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     active_session: ScheduleSession | None,
 ) -> bool:
     """Official schedule, never a weekday/clock heuristic, owns active status."""
@@ -3075,7 +3082,7 @@ def _active_market_window(
 
 
 def _partial_validity_gap(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     active_session: date,
 ) -> Literal["CANONICAL_VALIDITY", "MAPPING_VALIDITY"] | None:
     if any(
@@ -3094,7 +3101,7 @@ def _partial_validity_gap(
 
 
 def _partial_failure(
-    request: CurrentSamePassMarketRegimeRequestV3, reason: str
+    request: CurrentSamePassMarketRegimeRequestV4, reason: str
 ) -> PartialCurrentSessionSnapshotV1:
     if reason not in PARTIAL_REASON_ORDER_V1:
         reason = "PARTIAL_SNAPSHOT_INVALID"
@@ -3117,7 +3124,7 @@ def _partial_failure(
 
 
 def _admit_partial(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     value: object,
     active_session: CurrentSamePassPartialOfficialSessionV1,
     mappings: tuple[CurrentSamePassRawMappingReceiptV1, ...],
@@ -3197,7 +3204,7 @@ def _admit_partial(
 
 
 def _insufficient(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     partial: PartialCurrentSessionSnapshotV1,
     reasons: tuple[str, ...],
@@ -3231,7 +3238,7 @@ def _insufficient(
 
 _RAW_V3_TYPE_FIELDS_V1: Final = (
     (
-        "CurrentSamePassEquityMemberV1",
+        "CurrentSamePassEquityMemberV4",
         (
             "isin",
             "exchange",
@@ -3249,7 +3256,7 @@ _RAW_V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
     (
-        "CurrentSamePassMarketRegimeRequestV3",
+        "CurrentSamePassMarketRegimeRequestV4",
         (
             "contract_version",
             "decision_cutoff",
@@ -3490,7 +3497,7 @@ _RAW_V3_TYPE_FIELDS_V1: Final = (
 )
 _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
     (
-        "CurrentSamePassEquityMemberV1",
+        "CurrentSamePassEquityMemberV4",
         (
             ("isin", "ISIN", "NOT_APPLICABLE", "REQUIRED", "NSE_ISIN_LUHN_12"),
             ("exchange", "LITERAL", "NOT_APPLICABLE", "REQUIRED", 'Literal["NSE"]'),
@@ -3523,7 +3530,7 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["yfinance-symbol-mapping@v1"]',
+                'Literal["bharatstock-isin-exchange-mapping@v1"]',
             ),
             (
                 "mapping_valid_from",
@@ -3556,14 +3563,14 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "CurrentSamePassMarketRegimeRequestV3",
+        "CurrentSamePassMarketRegimeRequestV4",
         (
             (
                 "contract_version",
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-supplied-cohort-market-regime@v3"]',
+                'Literal["current-supplied-cohort-market-regime@v4"]',
             ),
             (
                 "decision_cutoff",
@@ -3584,7 +3591,7 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "ORDERED_TUPLE",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "tuple[CurrentSamePassEquityMemberV1,1..50]",
+                "tuple[CurrentSamePassEquityMemberV4,1..50]",
             ),
             (
                 "schedule_evidence_sha256",
@@ -3718,14 +3725,14 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-same-pass-raw-mapping-receipt@v1"]',
+                'Literal["current-same-pass-raw-mapping-receipt@v4"]',
             ),
             (
                 "member",
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "CurrentSamePassEquityMemberV1",
+                "CurrentSamePassEquityMemberV4",
             ),
             (
                 "snapshot_schema_version",
@@ -3861,7 +3868,7 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-same-pass-raw-coverage-source@v1"]',
+                'Literal["current-same-pass-raw-coverage-source@v4"]',
             ),
             ("isin", "ISIN", "NOT_APPLICABLE", "REQUIRED", "NSE_ISIN_LUHN_12"),
             ("session", "LOCAL_DATE", "ISO_8601_DATE", "REQUIRED", "YYYY_MM_DD"),
@@ -4222,7 +4229,7 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-same-pass-raw-daily-grid@v1"]',
+                'Literal["current-same-pass-raw-daily-grid@v4"]',
             ),
             (
                 "schema_identity_sha256",
@@ -4535,7 +4542,7 @@ _RAW_V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-same-pass-decision-market-data@v1"]',
+                'Literal["current-same-pass-decision-market-data@v4"]',
             ),
             (
                 "schema_identity_sha256",
@@ -4738,18 +4745,18 @@ def _raw_v3_schema_metadata_v1() -> dict[str, object]:
             }
         )
     return {
-        "contract_version": RAW_SCHEMA_CONTRACT_VERSION_V1,
+        "contract_version": RAW_SCHEMA_CONTRACT_VERSION_V4,
         "type_rows": tuple(type_rows),
         "state_projections": _RAW_V3_STATE_PROJECTIONS_V1,
         "unknown_key_policy": "REJECT",
     }
 
 
-def current_same_pass_raw_daily_schema_metadata_v1() -> dict[str, object]:
+def current_same_pass_raw_daily_schema_metadata_v4() -> dict[str, object]:
     return _raw_v3_schema_metadata_v1()
 
 
-def current_same_pass_raw_daily_schema_metadata_digest_v1(metadata: object) -> str:
+def current_same_pass_raw_daily_schema_metadata_digest_v4(metadata: object) -> str:
     if type(metadata) is not dict or set(metadata) != {
         "contract_version",
         "type_rows",
@@ -4760,39 +4767,39 @@ def current_same_pass_raw_daily_schema_metadata_digest_v1(metadata: object) -> s
     return _hash(metadata)
 
 
-def current_same_pass_raw_daily_schema_identity_from_metadata_v1(
+def current_same_pass_raw_daily_schema_identity_from_metadata_v4(
     metadata: object,
 ) -> str:
     if _canonical(metadata) != _canonical(_raw_v3_schema_metadata_v1()):
         raise ValueError("raw schema metadata differs from frozen contract")
-    return current_same_pass_raw_daily_schema_metadata_digest_v1(metadata)
+    return current_same_pass_raw_daily_schema_metadata_digest_v4(metadata)
 
 
-def current_same_pass_raw_daily_schema_identity_v1() -> str:
-    return current_same_pass_raw_daily_schema_identity_from_metadata_v1(
+def current_same_pass_raw_daily_schema_identity_v4() -> str:
+    return current_same_pass_raw_daily_schema_identity_from_metadata_v4(
         _raw_v3_schema_metadata_v1()
     )
 
 
-def current_same_pass_raw_daily_runtime_code_identity_v1() -> str:
-    """Verify exact Plan-27 repository-relative source-at-rest identities."""
+def current_same_pass_raw_daily_runtime_code_identity_v4() -> str:
+    """Verify the V4 source-at-rest hash before minting a runtime identity."""
     source_path = (
-        "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py"
+        "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py"
     )
     manifest_path = (
         "src/swing_trading_ai_assistant/market_data/"
-        "current_same_pass_daily_runtime_identity_manifest.py"
+        "current_same_pass_daily_v4_runtime_identity_manifest.py"
     )
     package_root = Path(__file__).resolve().parents[1]
     modules = {
         source_path: __name__,
         manifest_path: (
             "swing_trading_ai_assistant.market_data."
-            "current_same_pass_daily_runtime_identity_manifest"
+            "current_same_pass_daily_v4_runtime_identity_manifest"
         ),
     }
     try:
-        expected = CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V1
+        expected = CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V4
         if tuple(expected) != (source_path,):
             raise ValueError
         sources = []
@@ -4805,7 +4812,7 @@ def current_same_pass_raw_daily_runtime_code_identity_v1() -> str:
             sources.append({"relative_path": relative_path, "source_sha256": observed})
         return _hash(
             {
-                "runtime_manifest_version": RUNTIME_MANIFEST_VERSION_V1,
+                "runtime_manifest_version": RUNTIME_MANIFEST_VERSION_V4,
                 "modules": sources,
             }
         )

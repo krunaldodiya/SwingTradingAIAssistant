@@ -1,7 +1,7 @@
 # pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportReturnType=false
-"""Aggregate-only current supplied-cohort Industry Participation V2.
+"""Aggregate-only current supplied-cohort Industry Participation V4.
 
-The reducer consumes only the sealed V3 context's already-calculated private
+The reducer consumes only the sealed V4 context's already-calculated private
 handoff.  It never evaluates direction, reads an archive, or acquires evidence.
 """
 
@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+from swing_trading_ai_assistant.market_data.bharatstock import PRICE_BASIS
 from swing_trading_ai_assistant.market_data.current_industry_classification import (
     _PARSED_SEAL,  # pyright: ignore[reportPrivateUsage]
     CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
@@ -33,33 +34,33 @@ from swing_trading_ai_assistant.market_data.current_industry_classification impo
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
-from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v3 import (
-    CurrentSamePassMarketRegimeReportV3,
-    RetainedCurrentSamePassMarketContextV3,
-    _CurrentSamePassMemberDirectionCandidateV3,  # pyright: ignore[reportPrivateUsage]
-    _CurrentSamePassMemberDirectionRowV3,  # pyright: ignore[reportPrivateUsage]
-    _industry_projection_from_retained_context_v3,  # pyright: ignore[reportPrivateUsage]
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    CurrentSamePassMarketRegimeReportV4,
+    RetainedCurrentSamePassMarketContextV4,
+    _CurrentSamePassMemberDirectionCandidateV4,  # pyright: ignore[reportPrivateUsage]
+    _CurrentSamePassMemberDirectionRowV4,  # pyright: ignore[reportPrivateUsage]
+    _industry_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
 )
 
-CONTRACT_VERSION: Final = "current-supplied-cohort-industry-participation@v2"
+CONTRACT_VERSION: Final = "current-supplied-cohort-industry-participation@v4"
 _FAILURE_CONTRACT_VERSION: Final = (
-    "current-supplied-cohort-industry-participation-failure@v2"
+    "current-supplied-cohort-industry-participation-failure@v4"
 )
 _CALCULATION_CONTRACT_VERSION: Final = (
-    "current-supplied-cohort-industry-participation-calculation@v2"
+    "current-supplied-cohort-industry-participation-calculation@v4"
 )
 _RUNTIME_MANIFEST_VERSION: Final = "plan27-source-at-rest@v1"
 _RUNTIME_MANIFEST_MODULE: Final = (
     "swing_trading_ai_assistant.sector_analysis."
-    "current_industry_participation_v2_runtime_identity_manifest"
+    "current_industry_participation_v4_runtime_identity_manifest"
 )
 _RUNTIME_MANIFEST_PATH: Final = (
     "src/swing_trading_ai_assistant/sector_analysis/"
-    "current_industry_participation_v2_runtime_identity_manifest.py"
+    "current_industry_participation_v4_runtime_identity_manifest.py"
 )
 _SOURCE_PATH: Final = (
     "src/swing_trading_ai_assistant/sector_analysis/"
-    "current_industry_participation_v2.py"
+    "current_industry_participation_v4.py"
 )
 _RUNTIME_SOURCES: Final = (_SOURCE_PATH, _RUNTIME_MANIFEST_PATH)
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
@@ -207,11 +208,11 @@ def _runtime_source_sha256(relative_path: str) -> str:
         raise ValueError("industry participation v2 runtime identity invalid") from None
 
 
-def current_industry_participation_runtime_code_identity_v2() -> str:
+def current_industry_participation_runtime_code_identity_v4() -> str:
     try:
         raw = importlib.import_module(
             _RUNTIME_MANIFEST_MODULE
-        ).CURRENT_INDUSTRY_PARTICIPATION_V2_RUNTIME_SOURCE_DIGESTS
+        ).CURRENT_INDUSTRY_PARTICIPATION_V4_RUNTIME_SOURCE_DIGESTS
     except (AttributeError, ImportError):
         raise ValueError("industry participation v2 runtime identity invalid") from None
     if type(raw) is not dict or tuple(raw) != (_SOURCE_PATH,):
@@ -239,7 +240,7 @@ def current_industry_participation_runtime_code_identity_v2() -> str:
 
 
 _RUNTIME_CODE_IDENTITY: Final = (
-    current_industry_participation_runtime_code_identity_v2()
+    current_industry_participation_runtime_code_identity_v4()
 )
 
 
@@ -261,7 +262,7 @@ def _schema_field(
 
 _SCHEMA_TYPE_ROWS: Final = (
     {
-        "name": "CurrentIndustryCountV2",
+        "name": "CurrentIndustryCountV4",
         "ordered_fields": (
             _schema_field(
                 "industry", "SAFE_TEXT", "NOT_APPLICABLE", "REQUIRED", "LENGTH[1,512]"
@@ -280,14 +281,14 @@ _SCHEMA_TYPE_ROWS: Final = (
         ),
     },
     {
-        "name": "CurrentIndustryParticipationReportV2",
+        "name": "CurrentIndustryParticipationReportV4",
         "ordered_fields": (
             _schema_field(
                 "contract_version",
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-supplied-cohort-industry-participation@v2"]',
+                'Literal["current-supplied-cohort-industry-participation@v4"]',
             ),
             _schema_field(
                 "schema_identity_sha256",
@@ -454,7 +455,7 @@ _SCHEMA_TYPE_ROWS: Final = (
                 "ORDERED_TUPLE",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "tuple[CurrentIndustryCountV2,1..N]",
+                "tuple[CurrentIndustryCountV4,1..N]",
             ),
             _schema_field(
                 "reasons", "ORDERED_TUPLE", "NOT_APPLICABLE", "REQUIRED", "tuple[(),0]"
@@ -469,14 +470,14 @@ _SCHEMA_TYPE_ROWS: Final = (
         ),
     },
     {
-        "name": "CurrentIndustryParticipationFailureV2",
+        "name": "CurrentIndustryParticipationFailureV4",
         "ordered_fields": (
             _schema_field(
                 "contract_version",
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-supplied-cohort-industry-participation-failure@v2"]',
+                'Literal["current-supplied-cohort-industry-participation-failure@v4"]',
             ),
             _schema_field(
                 "evidence_state",
@@ -544,7 +545,7 @@ _SCHEMA_TYPE_ROWS: Final = (
 )
 _SCHEMA_STATE_PROJECTIONS: Final = (
     (
-        "CurrentIndustryParticipationFailureV2",
+        "CurrentIndustryParticipationFailureV4",
         (
             ("MALFORMED_EVIDENCE", "industries=NONE,reasons=NONEMPTY"),
             ("UNSUPPORTED_CAPABILITY", "industries=NONE,reasons=NONEMPTY"),
@@ -552,13 +553,13 @@ _SCHEMA_STATE_PROJECTIONS: Final = (
         ),
     ),
     (
-        "CurrentIndustryParticipationReportV2",
+        "CurrentIndustryParticipationReportV4",
         (("OBSERVED", "industries=REQUIRED,reasons=EMPTY"),),
     ),
 )
 
 
-def _industry_schema_metadata_v2() -> dict[str, object]:
+def _industry_schema_metadata_v4() -> dict[str, object]:
     return {
         "contract_version": CONTRACT_VERSION,
         "type_rows": _SCHEMA_TYPE_ROWS,
@@ -567,11 +568,11 @@ def _industry_schema_metadata_v2() -> dict[str, object]:
     }
 
 
-def current_industry_participation_schema_metadata_v2() -> dict[str, object]:
-    return _industry_schema_metadata_v2()
+def current_industry_participation_schema_metadata_v4() -> dict[str, object]:
+    return _industry_schema_metadata_v4()
 
 
-def current_industry_participation_schema_metadata_digest_v2(metadata: object) -> str:
+def current_industry_participation_schema_metadata_digest_v4(metadata: object) -> str:
     if type(metadata) is not dict or set(metadata) != {
         "contract_version",
         "type_rows",
@@ -582,17 +583,17 @@ def current_industry_participation_schema_metadata_digest_v2(metadata: object) -
     return _identity(metadata)
 
 
-def current_industry_participation_schema_identity_from_metadata_v2(
+def current_industry_participation_schema_identity_from_metadata_v4(
     metadata: object,
 ) -> str:
-    if _canonical(metadata) != _canonical(_industry_schema_metadata_v2()):
+    if _canonical(metadata) != _canonical(_industry_schema_metadata_v4()):
         raise ValueError("Industry schema metadata differs from frozen contract")
-    return current_industry_participation_schema_metadata_digest_v2(metadata)
+    return current_industry_participation_schema_metadata_digest_v4(metadata)
 
 
 SCHEMA_IDENTITY_SHA256: Final = (
-    current_industry_participation_schema_identity_from_metadata_v2(
-        _industry_schema_metadata_v2()
+    current_industry_participation_schema_identity_from_metadata_v4(
+        _industry_schema_metadata_v4()
     )
 )
 CALCULATION_IDENTITY_SHA256: Final = _identity(
@@ -618,7 +619,7 @@ CALCULATION_IDENTITY_SHA256: Final = _identity(
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentIndustryCountV2:
+class CurrentIndustryCountV4:
     industry: str
     member_count: int
     advances: int
@@ -659,8 +660,8 @@ class CurrentIndustryCountV2:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class CurrentIndustryParticipationReportV2:
-    contract_version: Literal["current-supplied-cohort-industry-participation@v2"]
+class CurrentIndustryParticipationReportV4:
+    contract_version: Literal["current-supplied-cohort-industry-participation@v4"]
     schema_identity_sha256: str
     calculation_identity_sha256: str
     runtime_code_identity_sha256: str
@@ -687,7 +688,7 @@ class CurrentIndustryParticipationReportV2:
     publisher_effective_from: None
     publisher_effective_through: None
     publisher_revision: None
-    industries: tuple[CurrentIndustryCountV2, ...]
+    industries: tuple[CurrentIndustryCountV4, ...]
     reasons: tuple[()]
     report_identity_sha256: str
     _reducer_seal: object = field(repr=False, compare=False, hash=False)
@@ -736,9 +737,9 @@ class CurrentIndustryParticipationReportV2:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class CurrentIndustryParticipationFailureV2:
+class CurrentIndustryParticipationFailureV4:
     contract_version: Literal[
-        "current-supplied-cohort-industry-participation-failure@v2"
+        "current-supplied-cohort-industry-participation-failure@v4"
     ]
     evidence_state: Literal[
         "MALFORMED_EVIDENCE", "UNSUPPORTED_CAPABILITY", "INSUFFICIENT_EVIDENCE"
@@ -777,19 +778,19 @@ class CurrentIndustryParticipationFailureV2:
         return _canonical(value)
 
 
-def _reduce_current_industry_participation_unsealed_v2(  # noqa: C901 - closed failure precedence is intentional.
-    market_context: RetainedCurrentSamePassMarketContextV3,
+def _reduce_current_industry_participation_unsealed_v4(  # noqa: C901 - closed failure precedence is intentional.
+    market_context: RetainedCurrentSamePassMarketContextV4,
     classification: RetainedCurrentIndustrySnapshotV1
     | CurrentIndustryClassificationFailureV1,
-) -> CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2:
-    """Reduce literal Industry membership with the sealed, precomputed V3 directions."""
+) -> CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4:
+    """Reduce literal Industry membership with the sealed, precomputed V4 directions."""
 
     def failure(
-        report: CurrentSamePassMarketRegimeReportV3,
+        report: CurrentSamePassMarketRegimeReportV4,
         classification_identity: str | None,
         known_at: datetime | None,
         reasons: tuple[str, ...],
-    ) -> CurrentIndustryParticipationFailureV2:
+    ) -> CurrentIndustryParticipationFailureV4:
         ordered = _ordered(reasons)
         values: dict[str, object] = {
             "contract_version": _FAILURE_CONTRACT_VERSION,
@@ -805,17 +806,17 @@ def _reduce_current_industry_participation_unsealed_v2(  # noqa: C901 - closed f
             "reasons": ordered,
         }
         identity = _identity(_plain(values))
-        result = object.__new__(CurrentIndustryParticipationFailureV2)
+        result = object.__new__(CurrentIndustryParticipationFailureV4)
         for name, value in (values | {"failure_identity_sha256": identity}).items():
             object.__setattr__(result, name, value)
         return result
 
     def observed(
-        report: CurrentSamePassMarketRegimeReportV3,
-        candidate: _CurrentSamePassMemberDirectionCandidateV3,
+        report: CurrentSamePassMarketRegimeReportV4,
+        candidate: _CurrentSamePassMemberDirectionCandidateV4,
         retained: RetainedCurrentIndustrySnapshotV1,
-        industries: tuple[CurrentIndustryCountV2, ...],
-    ) -> CurrentIndustryParticipationReportV2:
+        industries: tuple[CurrentIndustryCountV4, ...],
+    ) -> CurrentIndustryParticipationReportV4:
         values: dict[str, object] = {
             "contract_version": CONTRACT_VERSION,
             "schema_identity_sha256": SCHEMA_IDENTITY_SHA256,
@@ -848,12 +849,12 @@ def _reduce_current_industry_participation_unsealed_v2(  # noqa: C901 - closed f
             "reasons": (),
         }
         identity = _identity(_plain(values))
-        result = object.__new__(CurrentIndustryParticipationReportV2)
+        result = object.__new__(CurrentIndustryParticipationReportV4)
         for name, value in (values | {"report_identity_sha256": identity}).items():
             object.__setattr__(result, name, value)
         return result
 
-    if type(market_context) is not RetainedCurrentSamePassMarketContextV3:
+    if type(market_context) is not RetainedCurrentSamePassMarketContextV4:
         raise TypeError("industry participation v2 context invalid")
     if type(classification) not in (
         RetainedCurrentIndustrySnapshotV1,
@@ -909,20 +910,20 @@ def _reduce_current_industry_participation_unsealed_v2(  # noqa: C901 - closed f
 
 
 def _admit_context(
-    context: RetainedCurrentSamePassMarketContextV3,
+    context: RetainedCurrentSamePassMarketContextV4,
 ) -> tuple[
-    CurrentSamePassMarketRegimeReportV3,
-    _CurrentSamePassMemberDirectionCandidateV3 | None,
+    CurrentSamePassMarketRegimeReportV4,
+    _CurrentSamePassMemberDirectionCandidateV4 | None,
 ]:
     try:
-        report, candidate = cast(Any, _industry_projection_from_retained_context_v3)(
+        report, candidate = cast(Any, _industry_projection_from_retained_context_v4)(
             context
         )
     except (AttributeError, TypeError, ValueError):
         raise ValueError("industry participation v2 context invalid") from None
     if type(
         report
-    ) is not CurrentSamePassMarketRegimeReportV3 or not _valid_market_regime_report(
+    ) is not CurrentSamePassMarketRegimeReportV4 or not _valid_market_regime_report(
         report
     ):
         raise ValueError("industry participation v2 context invalid")
@@ -933,18 +934,18 @@ def _admit_context(
     return report, candidate
 
 
-def _valid_retained_context(context: RetainedCurrentSamePassMarketContextV3) -> bool:
-    """Require V3's closure-owned minimal projection before private reduction."""
+def _valid_retained_context(context: RetainedCurrentSamePassMarketContextV4) -> bool:
+    """Require V4's closure-owned minimal projection before private reduction."""
     try:
-        cast(Any, _industry_projection_from_retained_context_v3)(context)
+        cast(Any, _industry_projection_from_retained_context_v4)(context)
     except (AttributeError, TypeError, ValueError):
         return False
     return True
 
 
-def _valid_market_regime_report(report: CurrentSamePassMarketRegimeReportV3) -> bool:
+def _valid_market_regime_report(report: CurrentSamePassMarketRegimeReportV4) -> bool:
     if (
-        report.contract_version != "current-supplied-cohort-market-regime@v3"
+        report.contract_version != "current-supplied-cohort-market-regime@v4"
         or report.evidence_state not in ("OBSERVED", "INSUFFICIENT_EVIDENCE")
         or not all(
             _valid_digest(value)
@@ -997,13 +998,13 @@ def _valid_market_regime_report(report: CurrentSamePassMarketRegimeReportV3) -> 
         return False
 
 
-def _industry_value_is_exact_unsealed_v2(
+def _industry_value_is_exact_unsealed_v4(
     value: object,
     market_context: object,
     classification_schema_identity: str | None,
 ) -> bool:
-    """Revalidate a V2 report/failure against its sealed V3 upstream context."""
-    if type(market_context) is not RetainedCurrentSamePassMarketContextV3:
+    """Revalidate a V4 report/failure against its sealed V4 upstream context."""
+    if type(market_context) is not RetainedCurrentSamePassMarketContextV4:
         return False
     try:
         report, candidate = _admit_context(market_context)
@@ -1012,7 +1013,7 @@ def _industry_value_is_exact_unsealed_v2(
     expected_source_url = _admitted_classification_source_url(
         classification_schema_identity
     )
-    if type(value) is CurrentIndustryParticipationReportV2:
+    if type(value) is CurrentIndustryParticipationReportV4:
         if candidate is None or (
             value.contract_version != CONTRACT_VERSION
             or value.schema_identity_sha256 != SCHEMA_IDENTITY_SHA256
@@ -1062,7 +1063,7 @@ def _industry_value_is_exact_unsealed_v2(
             != tuple(sorted(row.industry for row in rows))
             or len({row.industry for row in rows}) != len(rows)
             or any(
-                type(row) is not CurrentIndustryCountV2
+                type(row) is not CurrentIndustryCountV4
                 or not _industry(row.industry)
                 or not all(
                     type(number) is int and 0 <= number <= value.cohort_size
@@ -1098,7 +1099,7 @@ def _industry_value_is_exact_unsealed_v2(
         return value.report_identity_sha256 == _object_identity_without(
             value, "report_identity_sha256", "_reducer_seal"
         )
-    if type(value) is CurrentIndustryParticipationFailureV2:
+    if type(value) is CurrentIndustryParticipationFailureV4:
         try:
             reasons = _ordered(value.reasons)
             state = _state(reasons)
@@ -1142,9 +1143,9 @@ def _industry_value_is_exact_unsealed_v2(
 
 
 def _valid_candidate(
-    candidate: _CurrentSamePassMemberDirectionCandidateV3 | None,
-    context: RetainedCurrentSamePassMarketContextV3,
-    report: CurrentSamePassMarketRegimeReportV3,
+    candidate: _CurrentSamePassMemberDirectionCandidateV4 | None,
+    context: RetainedCurrentSamePassMarketContextV4,
+    report: CurrentSamePassMarketRegimeReportV4,
 ) -> bool:
     if candidate is None or (
         not all(
@@ -1160,6 +1161,7 @@ def _valid_candidate(
                 candidate.direction_candidate_identity_sha256,
             )
         )
+        or candidate.price_basis != PRICE_BASIS
         or not _utc(candidate.decision_cutoff)
         or candidate.request_identity_sha256 != report.request_identity_sha256
         or candidate.market_regime_report_identity_sha256
@@ -1175,7 +1177,9 @@ def _valid_candidate(
         return False
     rows = candidate.rows
     if (
-        tuple(row.isin for row in rows) != tuple(sorted(row.isin for row in rows))
+        context.market_data_report.rows is None
+        or tuple(row.isin for row in rows)
+        != tuple(row.isin for row in context.market_data_report.rows)
         or len({(row.isin, row.exchange, row.effective_symbol) for row in rows})
         != len(rows)
         or any(not _valid_direction_row(row) for row in rows)
@@ -1189,6 +1193,8 @@ def _valid_candidate(
         "market_regime_report_identity_sha256": candidate.market_regime_report_identity_sha256,
         "raw_grid_identity_sha256": candidate.raw_grid_identity_sha256,
         "request_identity_sha256": candidate.request_identity_sha256,
+        "schedule_identity_sha256": candidate.schedule_identity_sha256,
+        "price_basis": candidate.price_basis,
         "rows": [
             {
                 "direction": row.direction,
@@ -1199,7 +1205,6 @@ def _valid_candidate(
             }
             for row in rows
         ],
-        "schedule_identity_sha256": candidate.schedule_identity_sha256,
     }
     if candidate.direction_candidate_identity_sha256 != _identity(candidate_value):
         return False
@@ -1211,7 +1216,7 @@ def _valid_candidate(
 
 
 def _valid_direction_row(row: object) -> bool:
-    if type(row) is not _CurrentSamePassMemberDirectionRowV3:
+    if type(row) is not _CurrentSamePassMemberDirectionRowV4:
         return False
     if (
         row.exchange != "NSE"
@@ -1360,9 +1365,9 @@ def _retained_classification_identity_matches(
 
 def _aggregate(
     retained: RetainedCurrentIndustrySnapshotV1,
-    candidate: _CurrentSamePassMemberDirectionCandidateV3,
-    report: CurrentSamePassMarketRegimeReportV3,
-) -> tuple[tuple[CurrentIndustryCountV2, ...], str | None]:
+    candidate: _CurrentSamePassMemberDirectionCandidateV4,
+    report: CurrentSamePassMarketRegimeReportV4,
+) -> tuple[tuple[CurrentIndustryCountV4, ...], str | None]:
     classifications = {
         (row.isin, row.exchange, row.effective_symbol): row.industry
         for row in cast(tuple[_PrivateIndustryRow, ...], retained._private_rows)  # pyright: ignore[reportPrivateUsage]
@@ -1395,7 +1400,7 @@ def _aggregate(
 
 def _industry_row(
     industry: str, member_count: int, advances: int, declines: int, unchanged: int
-) -> CurrentIndustryCountV2:
+) -> CurrentIndustryCountV4:
     value = {
         "advances": advances,
         "declines": declines,
@@ -1403,7 +1408,7 @@ def _industry_row(
         "member_count": member_count,
         "unchanged": unchanged,
     }
-    return CurrentIndustryCountV2(
+    return CurrentIndustryCountV4(
         industry, member_count, advances, declines, unchanged, _identity(value)
     )
 
@@ -1439,7 +1444,7 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
     @dataclass(frozen=True, slots=True)
     class _ReducerBinding:
         result: (
-            CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2
+            CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4
         )
         context_identity_sha256: str
         result_sha256: str
@@ -1457,19 +1462,19 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
         return any(item is seal for item in minted_seals)
 
     def seal(
-        result: CurrentIndustryParticipationReportV2
-        | CurrentIndustryParticipationFailureV2,
-        market_context: RetainedCurrentSamePassMarketContextV3,
+        result: CurrentIndustryParticipationReportV4
+        | CurrentIndustryParticipationFailureV4,
+        market_context: RetainedCurrentSamePassMarketContextV4,
         classification: (
             RetainedCurrentIndustrySnapshotV1 | CurrentIndustryClassificationFailureV1
         ),
-    ) -> CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2:
+    ) -> CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4:
         copy = object.__new__(type(result))
         local_seal = object.__new__(ReducerSeal)
         minted_seals.add(local_seal)
         classification_identity = (
             result.retained_classification_identity_sha256
-            if type(result) is CurrentIndustryParticipationReportV2
+            if type(result) is CurrentIndustryParticipationReportV4
             else result.classification_identity_sha256
         )
         classification_schema_identity = (
@@ -1491,12 +1496,12 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
         return copy
 
     def reduce(
-        market_context: RetainedCurrentSamePassMarketContextV3,
+        market_context: RetainedCurrentSamePassMarketContextV4,
         classification: RetainedCurrentIndustrySnapshotV1
         | CurrentIndustryClassificationFailureV1,
-    ) -> CurrentIndustryParticipationReportV2 | CurrentIndustryParticipationFailureV2:
+    ) -> CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4:
         return seal(
-            _reduce_current_industry_participation_unsealed_v2(
+            _reduce_current_industry_participation_unsealed_v4(
                 market_context, classification
             ),
             market_context,
@@ -1505,15 +1510,15 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
 
     def exact(value: object, market_context: object) -> bool:
         if type(value) not in {
-            CurrentIndustryParticipationReportV2,
-            CurrentIndustryParticipationFailureV2,
+            CurrentIndustryParticipationReportV4,
+            CurrentIndustryParticipationFailureV4,
         }:
             return False
         seal_value = value._reducer_seal
         binding = bindings.get(seal_value)
         classification_identity = (
             value.retained_classification_identity_sha256
-            if type(value) is CurrentIndustryParticipationReportV2
+            if type(value) is CurrentIndustryParticipationReportV4
             else value.classification_identity_sha256
         )
         return (
@@ -1525,7 +1530,7 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
             and binding.classification_identity_sha256 == classification_identity
             and binding.context_identity_sha256
             == getattr(market_context, "retained_context_identity_sha256", None)
-            and _industry_value_is_exact_unsealed_v2(
+            and _industry_value_is_exact_unsealed_v4(
                 value,
                 market_context,
                 binding.classification_schema_identity_sha256,
@@ -1536,8 +1541,8 @@ def _sealed_industry_boundary() -> tuple[object, object]:  # noqa: C901
 
 
 (
-    reduce_current_industry_participation_v2,
-    current_industry_participation_is_exact_valid_v2,
+    reduce_current_industry_participation_v4,
+    current_industry_participation_is_exact_valid_v4,
 ) = _sealed_industry_boundary()
 
 

@@ -5,14 +5,14 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-import swing_trading_ai_assistant.market_data.current_same_pass_daily as raw_daily
+import swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 as raw_daily
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
     PrivateCorporateActionScreenOutcomeV1,
     PublishedCurrentCorporateActionScreenV1,
     published_current_corporate_action_screen_is_exact_valid_v1,
 )
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
-    CurrentSamePassMarketRegimeRequestV3,
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    CurrentSamePassMarketRegimeRequestV4,
     PrivateCurrentSamePassRawDailyResultV1,
 )
 from swing_trading_ai_assistant.market_structure.current_live import (
@@ -30,7 +30,7 @@ _SUCCESSFUL_SCREEN = (
     PrivateCorporateActionScreenOutcomeV1.SCREENED_NO_SUPPORTED_ACTION_OBSERVED
 )
 _EXPECTED_RAW_RUNTIME_CODE_IDENTITY = (
-    raw_daily.current_same_pass_raw_daily_runtime_code_identity_v1()
+    raw_daily.current_same_pass_raw_daily_runtime_code_identity_v4()
 )
 
 
@@ -60,7 +60,7 @@ _REQUEST_STRING_FIELDS = (
 
 
 def _member_object_valid(member: object) -> bool:
-    if type(member) is not raw_daily.CurrentSamePassEquityMemberV1:
+    if type(member) is not raw_daily.CurrentSamePassEquityMemberV4:
         return False
     if any(type(getattr(member, field)) is not str for field in _MEMBER_STRING_FIELDS):
         return False
@@ -73,14 +73,14 @@ def _member_object_valid(member: object) -> bool:
     ):
         return False
     try:
-        raw_daily.CurrentSamePassEquityMemberV1.__post_init__(member)
+        raw_daily.CurrentSamePassEquityMemberV4.__post_init__(member)
     except (AttributeError, TypeError, ValueError):
         return False
     return True
 
 
-def _request_binding_valid(request: CurrentSamePassMarketRegimeRequestV3) -> bool:
-    if type(request) is not CurrentSamePassMarketRegimeRequestV3:
+def _request_binding_valid(request: CurrentSamePassMarketRegimeRequestV4) -> bool:
+    if type(request) is not CurrentSamePassMarketRegimeRequestV4:
         return False
     members = request.members
     if (
@@ -101,7 +101,7 @@ def _request_binding_valid(request: CurrentSamePassMarketRegimeRequestV3) -> boo
     ):
         return False
     try:
-        reconstructed = CurrentSamePassMarketRegimeRequestV3(
+        reconstructed = CurrentSamePassMarketRegimeRequestV4(
             request.contract_version,
             request.decision_cutoff,
             request.cohort_selected_at,
@@ -213,7 +213,7 @@ def _session_window_valid(raw: PrivateCurrentSamePassRawDailyResultV1) -> bool:
 
 
 def _member_grid_complete(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     if raw.raw_grid is None:
@@ -239,7 +239,7 @@ def _utc(value: object) -> bool:
 
 
 def _mapping_binding_valid(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     mappings = raw.mapping_receipts
@@ -263,7 +263,7 @@ def _mapping_binding_valid(
 
 
 def _active_session_binding_valid(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     active = raw.official_active_session
@@ -286,7 +286,7 @@ def _active_session_binding_valid(
 
 
 def _partial_binding_valid(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     partial = raw.partial_current_session
@@ -354,7 +354,7 @@ def _partial_binding_valid(
 
 
 def _projected_grid_binding_state(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> tuple[bool, bool]:
     grid = raw.raw_grid
@@ -436,7 +436,7 @@ def _projected_grid_binding_state(
 
 
 def _raw_reasons(  # noqa: C901
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> set[str]:
     reasons: set[str] = set()
@@ -454,9 +454,9 @@ def _raw_reasons(  # noqa: C901
     else:
         grid = raw.raw_grid
         structural_binding_valid = (
-            grid.contract_version == raw_daily.RAW_DAILY_CONTRACT_VERSION_V1
+            grid.contract_version == raw_daily.RAW_DAILY_CONTRACT_VERSION_V4
             and grid.schema_identity_sha256
-            == raw_daily.current_same_pass_raw_daily_schema_identity_v1()
+            == raw_daily.current_same_pass_raw_daily_schema_identity_v4()
             and grid.configuration_identity_sha256
             == raw_daily._configuration_identity()  # pyright: ignore[reportPrivateUsage]
             and grid.runtime_code_identity_sha256 == _EXPECTED_RAW_RUNTIME_CODE_IDENTITY
@@ -503,7 +503,7 @@ def _raw_reasons(  # noqa: C901
 
 
 def _screen_reasons(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: PublishedCurrentCorporateActionScreenV1,
 ) -> set[str]:
@@ -543,7 +543,7 @@ def _screen_reasons(
 
 
 def _insufficient(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     reasons: set[str],
 ) -> CurrentMarketStructureReportV1:
@@ -562,15 +562,15 @@ def _insufficient(
     )
 
 
-def evaluate_current_same_pass_market_structure_v1(
-    request: CurrentSamePassMarketRegimeRequestV3,
+def evaluate_current_same_pass_market_structure_v4(
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: PublishedCurrentCorporateActionScreenV1,
 ) -> CurrentMarketStructureReportV1:
     """Validate exact retained evidence and classify its completed-session grid."""
 
     if (
-        type(request) is not CurrentSamePassMarketRegimeRequestV3
+        type(request) is not CurrentSamePassMarketRegimeRequestV4
         or type(raw) is not PrivateCurrentSamePassRawDailyResultV1
         or type(screen) is not PublishedCurrentCorporateActionScreenV1
         or not _request_binding_valid(request)

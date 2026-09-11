@@ -22,8 +22,8 @@ from typing import (
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
     PublishedCurrentCorporateActionScreenV1,
 )
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
-    CurrentSamePassMarketRegimeRequestV3,
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    CurrentSamePassMarketRegimeRequestV4,
     PrivateCurrentSamePassRawDailyResultV1,
 )
 from swing_trading_ai_assistant.market_structure.current_live import (
@@ -34,8 +34,8 @@ from swing_trading_ai_assistant.market_structure.current_live import (
     current_market_structure_identity_sha256_v1,
     ordered_market_structure_reasons_v1,
 )
-from swing_trading_ai_assistant.market_structure.current_same_pass import (
-    evaluate_current_same_pass_market_structure_v1,
+from swing_trading_ai_assistant.market_structure.current_same_pass_v4 import (
+    evaluate_current_same_pass_market_structure_v4,
 )
 from swing_trading_ai_assistant.price_action.current_live import (
     PRICE_ACTION_BYTES_MAX_V1,
@@ -216,7 +216,7 @@ def _safe_typed_value(  # noqa: C901
 
 
 def _derived_price_action_values_are_bounded(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     grid = raw.raw_grid
@@ -257,7 +257,7 @@ def _market_structure_member_resources_are_bounded(
 
 
 def _bounded_caller_objects(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: PublishedCurrentCorporateActionScreenV1,
     market_structure: CurrentMarketStructureReportV1,
@@ -271,7 +271,7 @@ def _bounded_caller_objects(
             remaining=remaining,
         )
         for value, expected_type in (
-            (request, CurrentSamePassMarketRegimeRequestV3),
+            (request, CurrentSamePassMarketRegimeRequestV4),
             (raw, PrivateCurrentSamePassRawDailyResultV1),
             (screen, PublishedCurrentCorporateActionScreenV1),
             (market_structure, CurrentMarketStructureReportV1),
@@ -574,15 +574,15 @@ def _member(
     )
 
 
-def evaluate_current_same_pass_price_action_v1(
-    request: CurrentSamePassMarketRegimeRequestV3,
+def evaluate_current_same_pass_price_action_v4(
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: PublishedCurrentCorporateActionScreenV1,
     market_structure: CurrentMarketStructureReportV1,
 ) -> CurrentPriceActionReportV1:
     """Return exact S19/S20 Price Action facts without external effects."""
     if (
-        type(request) is not CurrentSamePassMarketRegimeRequestV3
+        type(request) is not CurrentSamePassMarketRegimeRequestV4
         or type(raw) is not PrivateCurrentSamePassRawDailyResultV1
         or type(screen) is not PublishedCurrentCorporateActionScreenV1
         or type(market_structure) is not CurrentMarketStructureReportV1
@@ -590,7 +590,7 @@ def evaluate_current_same_pass_price_action_v1(
     ):
         raise ValueError("invalid Price Action caller objects")
 
-    expected = evaluate_current_same_pass_market_structure_v1(request, raw, screen)
+    expected = evaluate_current_same_pass_market_structure_v4(request, raw, screen)
     if not _safe_market_structure_report(market_structure):
         raise ValueError("invalid Price Action Market Structure caller object")
     if not _safe_market_structure_report(expected):

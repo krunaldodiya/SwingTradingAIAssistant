@@ -1,7 +1,7 @@
 # pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportReturnType=false
-"""Plan-27 current same-pass Market Regime V3 and sealed context archive.
+"""Plan-27 current same-pass Market Regime V4 and sealed context archive.
 
-This module deliberately owns the deterministic V3 composition and immutable
+This module deliberately owns the deterministic V4 composition and immutable
 context archive.  Raw acquisition remains behind ``CurrentSamePassRawDailyPortV1``;
 the builder never reaches into a provider, retries adjusted acquisition, or
 creates a replacement result.
@@ -26,18 +26,23 @@ from typing import Any, Final, Literal, Protocol, TypeAlias, cast
 from weakref import WeakKeyDictionary
 from zoneinfo import ZoneInfo
 
-from swing_trading_ai_assistant.market_data.adjusted_daily import (
+from swing_trading_ai_assistant.market_data.adjusted_daily.service_v3 import (
     AdjustedDailyCloseFailure,
-    AdjustedDailyCloseHandoffV2,
-    AdjustedDailyCloseResultV2,
-    AdjustedDailyCloseSuccessV2,
-    AdjustedDailyDownloadAdapter,
-    acquire_adjusted_daily_close_v2,
-    adjusted_daily_close_handoff_identity_v2,
-    adjusted_daily_request_identity_v2,
-    adjusted_daily_schedule_identity_v2,
+    AdjustedDailyCloseHandoffV3,
+    AdjustedDailyCloseResultV3,
+    AdjustedDailyCloseSuccessV3,
+    AdjustedDailyInstrumentV3,
+    acquire_adjusted_daily_close_v3,
+    adjusted_daily_close_handoff_identity_v3,
+    adjusted_daily_close_handoff_is_valid_v3,
+    adjusted_daily_request_identity_v3,
+    adjusted_daily_schedule_identity_v3,
 )
-from swing_trading_ai_assistant.market_data.adjusted_daily.service import _V2Member
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    PRICE_BASIS,
+    BharatStockClient,
+    BharatStockPriceBasis,
+)
 from swing_trading_ai_assistant.market_data.current_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortManifestV1,
@@ -50,21 +55,21 @@ from swing_trading_ai_assistant.market_data.current_corporate_action_screen impo
     publish_current_corporate_action_screen_v1,
     published_current_corporate_action_screen_is_exact_valid_v1,
 )
-from swing_trading_ai_assistant.market_data.current_same_pass_daily import (
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
     CurrentSamePassAcquisitionOverrunV1,
     CurrentSamePassDecisionMarketDataReportV1,
     CurrentSamePassDecisionMarketDataRowV1,
-    CurrentSamePassEquityMemberV1,
-    CurrentSamePassMarketRegimeRequestV3,
+    CurrentSamePassEquityMemberV4,
+    CurrentSamePassMarketRegimeRequestV4,
     CurrentSamePassRawDailyPortV1,
     CurrentSamePassRawGridV1,
     CurrentSamePassRawSessionV1,
     PartialCurrentSessionSnapshotV1,
     PrivateCurrentSamePassRawDailyResultV1,
     _identity_from_values,
-    current_same_pass_raw_daily_result_is_exact_valid_v1,
-    current_same_pass_raw_daily_runtime_code_identity_v1,
-    current_same_pass_raw_daily_schema_identity_v1,
+    current_same_pass_raw_daily_result_is_exact_valid_v4,
+    current_same_pass_raw_daily_runtime_code_identity_v4,
+    current_same_pass_raw_daily_schema_identity_v4,
     current_same_pass_schedule_identity_v1,
     resolve_latest_completed_sessions_v1,
 )
@@ -83,30 +88,30 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 __all__ = (
-    "CurrentSamePassEquityMemberV1",
+    "CurrentSamePassEquityMemberV4",
     "CurrentSamePassRawGridV1",
 )
 
-CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime@v3"
+CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime@v4"
 PREFLIGHT_FAILURE_CONTRACT_VERSION: Final = "current-same-pass-preflight-failure@v1"
-SCHEMA_CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime-schema@v3"
+SCHEMA_CONTRACT_VERSION: Final = "current-supplied-cohort-market-regime-schema@v4"
 CALCULATION_CONTRACT_VERSION: Final = (
-    "current-supplied-cohort-market-regime-calculation@v3"
+    "current-supplied-cohort-market-regime-calculation@v4"
 )
-ARCHIVE_CONTRACT_VERSION: Final = "current-same-pass-market-context-archive@v1"
+ARCHIVE_CONTRACT_VERSION: Final = "current-same-pass-market-context-archive@v2"
 ADJUSTED_NOT_ATTEMPTED_CONTRACT_VERSION: Final = (
     "current-same-pass-adjusted-daily-close-not-attempted@v1"
 )
 _RUNTIME_MANIFEST_MODULE: Final = (
     "swing_trading_ai_assistant.market_regime."
-    "current_supplied_cohort_v3_runtime_identity_manifest"
+    "current_supplied_cohort_v4_runtime_identity_manifest"
 )
 _RUNTIME_MANIFEST: Final = (
     "src/swing_trading_ai_assistant/market_regime/"
-    "current_supplied_cohort_v3_runtime_identity_manifest.py"
+    "current_supplied_cohort_v4_runtime_identity_manifest.py"
 )
 _RUNTIME_SOURCE: Final = (
-    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v3.py"
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4.py"
 )
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}")
 _MAX_CONTEXT_BYTES: Final = 4_194_304
@@ -252,7 +257,7 @@ def _runtime_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def current_same_pass_market_regime_runtime_code_identity_v3() -> str:
+def current_same_pass_market_regime_runtime_code_identity_v4() -> str:
     """Verify reviewed source-at-rest identities; never claim byte attestation."""
     modules = {
         _RUNTIME_SOURCE: __name__,
@@ -260,19 +265,19 @@ def current_same_pass_market_regime_runtime_code_identity_v3() -> str:
     }
     try:
         manifest = importlib.import_module(_RUNTIME_MANIFEST_MODULE)
-        digests = manifest.CURRENT_SAME_PASS_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V3
+        digests = manifest.CURRENT_SAME_PASS_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V4
         if type(digests) is not dict or tuple(digests) != (_RUNTIME_SOURCE,):
-            raise ValueError("V3 runtime identity invalid")
+            raise ValueError("V4 runtime identity invalid")
         expected = digests[_RUNTIME_SOURCE]
         if type(expected) is not str or _DIGEST.fullmatch(expected) is None:
-            raise ValueError("V3 runtime identity invalid")
+            raise ValueError("V4 runtime identity invalid")
         sources = []
         for relative_path in sorted((_RUNTIME_SOURCE, _RUNTIME_MANIFEST)):
             source_sha256 = _runtime_source_sha256(
                 modules[relative_path], _runtime_root(), relative_path
             )
             if relative_path == _RUNTIME_SOURCE and source_sha256 != expected:
-                raise ValueError("V3 runtime identity invalid")
+                raise ValueError("V4 runtime identity invalid")
             sources.append(
                 {"relative_path": relative_path, "source_sha256": source_sha256}
             )
@@ -283,12 +288,12 @@ def current_same_pass_market_regime_runtime_code_identity_v3() -> str:
             }
         )
     except (AttributeError, ImportError, OSError, ValueError) as exc:
-        raise ValueError("V3 runtime identity invalid") from exc
+        raise ValueError("V4 runtime identity invalid") from exc
 
 
 @dataclass(frozen=True, slots=True)
 class CurrentSamePassAdjustedDailyCloseFailureProjectionV1:
-    contract_version: Literal["provider-neutral-adjusted-daily-close@v2"]
+    contract_version: Literal["provider-neutral-adjusted-daily-close@v3"]
     plan22_request_identity_sha256: str
     code: str
     reason: str
@@ -306,7 +311,7 @@ class CurrentSamePassAdjustedDailyCloseNotAttemptedProjectionV1:
 
 @dataclass(frozen=True, slots=True)
 class _CurrentSamePassAdjustedSuccessV1:
-    adjusted_handoff: AdjustedDailyCloseHandoffV2
+    adjusted_handoff: AdjustedDailyCloseHandoffV3
     adjusted_failure: None
     adjusted_not_attempted: None
 
@@ -383,7 +388,7 @@ class CurrentSamePassPreflightFailureV1:
 
 
 def _preflight_failure(
-    request: CurrentSamePassMarketRegimeRequestV3, reasons: tuple[str, ...]
+    request: CurrentSamePassMarketRegimeRequestV4, reasons: tuple[str, ...]
 ) -> CurrentSamePassPreflightFailureV1:
     core = {
         "contract_version": PREFLIGHT_FAILURE_CONTRACT_VERSION,
@@ -399,8 +404,8 @@ def _preflight_failure(
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentSamePassMarketRegimeReportV3:
-    contract_version: Literal["current-supplied-cohort-market-regime@v3"]
+class CurrentSamePassMarketRegimeReportV4:
+    contract_version: Literal["current-supplied-cohort-market-regime@v4"]
     schema_identity_sha256: str
     calculation_identity_sha256: str
     runtime_code_identity_sha256: str
@@ -423,7 +428,7 @@ class CurrentSamePassMarketRegimeReportV3:
 
 
 @dataclass(frozen=True, slots=True)
-class _CurrentSamePassMemberDirectionRowV3:
+class _CurrentSamePassMemberDirectionRowV4:
     isin: str
     exchange: Literal["NSE"]
     effective_symbol: str
@@ -432,7 +437,7 @@ class _CurrentSamePassMemberDirectionRowV3:
 
 
 @dataclass(frozen=True, slots=True)
-class _CurrentSamePassMemberDirectionCandidateV3:
+class _CurrentSamePassMemberDirectionCandidateV4:
     request_identity_sha256: str
     raw_grid_identity_sha256: str
     corporate_action_screen_identity_sha256: str
@@ -440,8 +445,9 @@ class _CurrentSamePassMemberDirectionCandidateV3:
     market_regime_report_identity_sha256: str
     canonical_cohort_identity_sha256: str
     schedule_identity_sha256: str
+    price_basis: BharatStockPriceBasis
     decision_cutoff: datetime
-    rows: tuple[_CurrentSamePassMemberDirectionRowV3, ...]
+    rows: tuple[_CurrentSamePassMemberDirectionRowV4, ...]
     direction_candidate_identity_sha256: str
 
 
@@ -452,7 +458,7 @@ class CurrentSamePassContextComponentLedgerRowV1:
         "RAW_GRID_V1",
         "CORPORATE_ACTION_SCREEN_V1",
         "ADJUSTED_DAILY_CLOSE_V2",
-        "MARKET_REGIME_V3",
+        "MARKET_REGIME_V4",
     ]
     contract_version: str
     evidence_state: str
@@ -465,22 +471,22 @@ class CurrentSamePassContextComponentLedgerRowV1:
 
 
 @dataclass(frozen=True, slots=True)
-class PrivateCurrentSamePassMarketContextObjectV3:
-    contract_version: Literal["current-same-pass-market-context-archive@v1"]
+class PrivateCurrentSamePassMarketContextObjectV4:
+    contract_version: Literal["current-same-pass-market-context-archive@v2"]
     schema_identity_sha256: str
     configuration_identity_sha256: str
     runtime_code_identity_sha256: str
-    request: CurrentSamePassMarketRegimeRequestV3
+    request: CurrentSamePassMarketRegimeRequestV4
     raw_result: PrivateCurrentSamePassRawDailyResultV1
     market_data_report: CurrentSamePassDecisionMarketDataReportV1
     corporate_action_screen: object
-    adjusted_handoff: AdjustedDailyCloseHandoffV2 | None
+    adjusted_handoff: AdjustedDailyCloseHandoffV3 | None
     adjusted_failure: CurrentSamePassAdjustedDailyCloseFailureProjectionV1 | None
     adjusted_not_attempted: (
         CurrentSamePassAdjustedDailyCloseNotAttemptedProjectionV1 | None
     )
-    market_regime_report: CurrentSamePassMarketRegimeReportV3
-    direction_candidate: _CurrentSamePassMemberDirectionCandidateV3 | None
+    market_regime_report: CurrentSamePassMarketRegimeReportV4
+    direction_candidate: _CurrentSamePassMemberDirectionCandidateV4 | None
     component_ledger: tuple[CurrentSamePassContextComponentLedgerRowV1, ...]
     temporal_scope: Literal["CURRENT_SAME_PASS_ONLY"]
     historical_availability_claim: Literal[False]
@@ -493,8 +499,8 @@ class PrivateCurrentSamePassMarketContextObjectV3:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class _CurrentSamePassMarketContextCandidateV3:
-    context_object: PrivateCurrentSamePassMarketContextObjectV3
+class _CurrentSamePassMarketContextCandidateV4:
+    context_object: PrivateCurrentSamePassMarketContextObjectV4
     candidate_identity_sha256: str
     _seal: object = field(repr=False, compare=False, hash=False)
 
@@ -575,7 +581,7 @@ def _retained_context_public_projection(
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class RetainedCurrentSamePassMarketContextV3:
+class RetainedCurrentSamePassMarketContextV4:
     evidence_state: Literal["RETAINED"]
     context_identity_sha256: str
     context_object_sha256: str
@@ -583,7 +589,7 @@ class RetainedCurrentSamePassMarketContextV3:
     completion_marker_identity_sha256: str
     archive_known_at: datetime
     market_data_report: CurrentSamePassDecisionMarketDataReportV1
-    market_regime_report: CurrentSamePassMarketRegimeReportV3
+    market_regime_report: CurrentSamePassMarketRegimeReportV4
     partial_current_session: PartialCurrentSessionSnapshotV1
     retained_context_identity_sha256: str
     _archive_seal: _CurrentSamePassMarketContextArchiveSealV1 = field(
@@ -623,15 +629,15 @@ class RetainedCurrentSamePassMarketContextV3:
 class CurrentSamePassMarketContextArchivePortV1(Protocol):
     def archive_exact(
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
-        candidate: _CurrentSamePassMarketContextCandidateV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
+        candidate: _CurrentSamePassMarketContextCandidateV4,
         lease: StorageRootLease,
         *,
         trusted_clock: _TrustedClockV1 | None = None,
-    ) -> RetainedCurrentSamePassMarketContextV3 | CurrentSamePassArchiveFailureV1: ...
+    ) -> RetainedCurrentSamePassMarketContextV4 | CurrentSamePassArchiveFailureV1: ...
 
 
-_V3_TYPE_FIELDS_V1: Final = (
+_V4_TYPE_FIELDS_V1: Final = (
     (
         "CurrentSamePassPreflightFailureV1",
         (
@@ -645,7 +651,7 @@ _V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
     (
-        "CurrentSamePassMarketRegimeReportV3",
+        "CurrentSamePassMarketRegimeReportV4",
         (
             "contract_version",
             "schema_identity_sha256",
@@ -702,11 +708,11 @@ _V3_TYPE_FIELDS_V1: Final = (
         ("adjusted_handoff", "adjusted_failure", "adjusted_not_attempted"),
     ),
     (
-        "_CurrentSamePassMemberDirectionRowV3",
+        "_CurrentSamePassMemberDirectionRowV4",
         ("isin", "exchange", "effective_symbol", "direction", "row_identity_sha256"),
     ),
     (
-        "_CurrentSamePassMemberDirectionCandidateV3",
+        "_CurrentSamePassMemberDirectionCandidateV4",
         (
             "request_identity_sha256",
             "raw_grid_identity_sha256",
@@ -715,6 +721,7 @@ _V3_TYPE_FIELDS_V1: Final = (
             "market_regime_report_identity_sha256",
             "canonical_cohort_identity_sha256",
             "schedule_identity_sha256",
+            "price_basis",
             "decision_cutoff",
             "rows",
             "direction_candidate_identity_sha256",
@@ -736,7 +743,7 @@ _V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
     (
-        "PrivateCurrentSamePassMarketContextObjectV3",
+        "PrivateCurrentSamePassMarketContextObjectV4",
         (
             "contract_version",
             "schema_identity_sha256",
@@ -760,7 +767,7 @@ _V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
     (
-        "_CurrentSamePassMarketContextCandidateV3",
+        "_CurrentSamePassMarketContextCandidateV4",
         ("context_object", "candidate_identity_sha256"),
     ),
     (
@@ -799,7 +806,7 @@ _V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
     (
-        "RetainedCurrentSamePassMarketContextV3",
+        "RetainedCurrentSamePassMarketContextV4",
         (
             "evidence_state",
             "context_identity_sha256",
@@ -814,7 +821,7 @@ _V3_TYPE_FIELDS_V1: Final = (
         ),
     ),
 )
-_V3_SCHEMA_FIELD_ROWS_V1: Final = (
+_V4_SCHEMA_FIELD_ROWS_V1: Final = (
     (
         "CurrentSamePassPreflightFailureV1",
         (
@@ -870,14 +877,14 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "CurrentSamePassMarketRegimeReportV3",
+        "CurrentSamePassMarketRegimeReportV4",
         (
             (
                 "contract_version",
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-supplied-cohort-market-regime@v3"]',
+                'Literal["current-supplied-cohort-market-regime@v4"]',
             ),
             (
                 "schema_identity_sha256",
@@ -998,7 +1005,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["provider-neutral-adjusted-daily-close@v2"]',
+                'Literal["provider-neutral-adjusted-daily-close@v3"]',
             ),
             (
                 "plan22_request_identity_sha256",
@@ -1078,7 +1085,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "AdjustedDailyCloseHandoffV2",
+                "AdjustedDailyCloseHandoffV3",
             ),
             (
                 "adjusted_failure",
@@ -1149,7 +1156,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "_CurrentSamePassMemberDirectionRowV3",
+        "_CurrentSamePassMemberDirectionRowV4",
         (
             ("isin", "ISIN", "NOT_APPLICABLE", "REQUIRED", "NSE_ISIN_LUHN_12"),
             ("exchange", "LITERAL", "NOT_APPLICABLE", "REQUIRED", 'Literal["NSE"]'),
@@ -1177,7 +1184,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "_CurrentSamePassMemberDirectionCandidateV3",
+        "_CurrentSamePassMemberDirectionCandidateV4",
         (
             (
                 "request_identity_sha256",
@@ -1229,6 +1236,13 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LOWERCASE_64_HEX",
             ),
             (
+                "price_basis",
+                "LITERAL",
+                "NOT_APPLICABLE",
+                "REQUIRED",
+                'Literal["BHARATSTOCK_SOURCE_REPORTED_OHLC"]',
+            ),
+            (
                 "decision_cutoff",
                 "UTC_INSTANT",
                 "UTC",
@@ -1240,7 +1254,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "ORDERED_TUPLE",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "tuple[_CurrentSamePassMemberDirectionRowV3,N]",
+                "tuple[_CurrentSamePassMemberDirectionRowV4,N]",
             ),
             (
                 "direction_candidate_identity_sha256",
@@ -1260,7 +1274,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["RAW_GRID_V1","CORPORATE_ACTION_SCREEN_V1","ADJUSTED_DAILY_CLOSE_V2","MARKET_REGIME_V3"]',
+                'Literal["RAW_GRID_V1","CORPORATE_ACTION_SCREEN_V1","ADJUSTED_DAILY_CLOSE_V2","MARKET_REGIME_V4"]',
             ),
             (
                 "contract_version",
@@ -1315,14 +1329,14 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "PrivateCurrentSamePassMarketContextObjectV3",
+        "PrivateCurrentSamePassMarketContextObjectV4",
         (
             (
                 "contract_version",
                 "LITERAL",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                'Literal["current-same-pass-market-context-archive@v1"]',
+                'Literal["current-same-pass-market-context-archive@v2"]',
             ),
             (
                 "schema_identity_sha256",
@@ -1350,7 +1364,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "CurrentSamePassMarketRegimeRequestV3",
+                "CurrentSamePassMarketRegimeRequestV4",
             ),
             (
                 "raw_result",
@@ -1378,7 +1392,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "NULLABLE",
-                "AdjustedDailyCloseHandoffV2",
+                "AdjustedDailyCloseHandoffV3",
             ),
             (
                 "adjusted_failure",
@@ -1399,14 +1413,14 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "CurrentSamePassMarketRegimeReportV3",
+                "CurrentSamePassMarketRegimeReportV4",
             ),
             (
                 "direction_candidate",
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "NULLABLE",
-                "_CurrentSamePassMemberDirectionCandidateV3",
+                "_CurrentSamePassMemberDirectionCandidateV4",
             ),
             (
                 "component_ledger",
@@ -1453,14 +1467,14 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "_CurrentSamePassMarketContextCandidateV3",
+        "_CurrentSamePassMarketContextCandidateV4",
         (
             (
                 "context_object",
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "PrivateCurrentSamePassMarketContextObjectV3",
+                "PrivateCurrentSamePassMarketContextObjectV4",
             ),
             (
                 "candidate_identity_sha256",
@@ -1621,7 +1635,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
         ),
     ),
     (
-        "RetainedCurrentSamePassMarketContextV3",
+        "RetainedCurrentSamePassMarketContextV4",
         (
             (
                 "evidence_state",
@@ -1677,7 +1691,7 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
                 "CLOSED_OBJECT",
                 "NOT_APPLICABLE",
                 "REQUIRED",
-                "CurrentSamePassMarketRegimeReportV3",
+                "CurrentSamePassMarketRegimeReportV4",
             ),
             (
                 "partial_current_session",
@@ -1698,9 +1712,9 @@ _V3_SCHEMA_FIELD_ROWS_V1: Final = (
 )
 
 
-_V3_STATE_PROJECTIONS_V1: Final = (
+_V4_STATE_PROJECTIONS_V1: Final = (
     (
-        "CurrentSamePassMarketRegimeReportV3",
+        "CurrentSamePassMarketRegimeReportV4",
         (
             ("OBSERVED", "regime/counts/adjusted_handoff=REQUIRED,reasons=EMPTY"),
             ("INSUFFICIENT_EVIDENCE", "regime/counts=NONE,reasons=NONEMPTY"),
@@ -1720,11 +1734,11 @@ _V3_STATE_PROJECTIONS_V1: Final = (
         (
             (
                 "RAW_GRID_V1/OBSERVED",
-                "position=0,contract=current-same-pass-raw-daily-grid@v1,schema_runtime=RAW_GRID,primary=RAW_GRID,known_at=MAX_RAW_PARTIAL,reasons=EMPTY",
+                "position=0,contract=current-same-pass-raw-daily-grid@v4,schema_runtime=RAW_GRID,primary=RAW_GRID,known_at=MAX_RAW_PARTIAL,reasons=EMPTY",
             ),
             (
                 "RAW_GRID_V1/INSUFFICIENT_EVIDENCE",
-                "position=0,contract=current-same-pass-raw-daily-grid@v1,schema_runtime=RAW_SUCCESSOR,primary=RAW_RESULT,known_at=PARTIAL_OR_NONE,reasons=RAW_RESULT",
+                "position=0,contract=current-same-pass-raw-daily-grid@v4,schema_runtime=RAW_SUCCESSOR,primary=RAW_RESULT,known_at=PARTIAL_OR_NONE,reasons=RAW_RESULT",
             ),
             (
                 "CORPORATE_ACTION_SCREEN_V1/SCREENED",
@@ -1736,23 +1750,23 @@ _V3_STATE_PROJECTIONS_V1: Final = (
             ),
             (
                 "ADJUSTED_DAILY_CLOSE_V2/SUCCESS",
-                "position=2,contract=provider-neutral-adjusted-daily-close@v2,schema_runtime=NONE,primary=HANDOFF,known_at=HANDOFF_RETRIEVED,reasons=EMPTY",
+                "position=2,contract=provider-neutral-adjusted-daily-close@v3,schema_runtime=NONE,primary=HANDOFF,known_at=HANDOFF_RETRIEVED,reasons=EMPTY",
             ),
             (
                 "ADJUSTED_DAILY_CLOSE_V2/FAILURE",
-                "position=2,contract=provider-neutral-adjusted-daily-close@v2,schema_runtime=NONE,primary=FAILURE_PROJECTION,known_at=NONE,reasons=ADJUSTED_FAILURE_REASON",
+                "position=2,contract=provider-neutral-adjusted-daily-close@v3,schema_runtime=NONE,primary=FAILURE_PROJECTION,known_at=NONE,reasons=ADJUSTED_FAILURE_REASON",
             ),
             (
                 "ADJUSTED_DAILY_CLOSE_V2/NOT_ATTEMPTED",
-                "position=2,contract=provider-neutral-adjusted-daily-close@v2,schema_runtime=NONE,primary=NOT_ATTEMPTED_PROJECTION,known_at=NONE,reasons=UPSTREAM_INSUFFICIENT_EVIDENCE",
+                "position=2,contract=provider-neutral-adjusted-daily-close@v3,schema_runtime=NONE,primary=NOT_ATTEMPTED_PROJECTION,known_at=NONE,reasons=UPSTREAM_INSUFFICIENT_EVIDENCE",
             ),
             (
-                "MARKET_REGIME_V3/OBSERVED",
-                "position=3,contract=current-supplied-cohort-market-regime@v3,schema_runtime=V3_REPORT,primary=V3_REPORT,known_at=MAX_POSITIONS_0_2,reasons=EMPTY",
+                "MARKET_REGIME_V4/OBSERVED",
+                "position=3,contract=current-supplied-cohort-market-regime@v4,schema_runtime=V4_REPORT,primary=V4_REPORT,known_at=MAX_POSITIONS_0_2,reasons=EMPTY",
             ),
             (
-                "MARKET_REGIME_V3/INSUFFICIENT_EVIDENCE",
-                "position=3,contract=current-supplied-cohort-market-regime@v3,schema_runtime=V3_REPORT,primary=V3_REPORT,known_at=MAX_POSITIONS_0_2_OR_NONE,reasons=V3_REPORT",
+                "MARKET_REGIME_V4/INSUFFICIENT_EVIDENCE",
+                "position=3,contract=current-supplied-cohort-market-regime@v4,schema_runtime=V4_REPORT,primary=V4_REPORT,known_at=MAX_POSITIONS_0_2_OR_NONE,reasons=V4_REPORT",
             ),
         ),
     ),
@@ -1761,23 +1775,23 @@ _V3_STATE_PROJECTIONS_V1: Final = (
         (("ARCHIVE_FAILED", "reason=SAME_PASS_CONTEXT_ARCHIVE_FAILED"),),
     ),
     (
-        "RetainedCurrentSamePassMarketContextV3",
+        "RetainedCurrentSamePassMarketContextV4",
         (("RETAINED", "archive_projection=SERIALIZED_FIELDS_ONLY"),),
     ),
 )
 
 
-def _v3_schema_metadata_v1() -> dict[str, object]:
-    """Return the frozen, exhaustive Plan-27 V3 field metadata."""
-    field_rows = dict(_V3_SCHEMA_FIELD_ROWS_V1)
+def _v4_schema_metadata_v1() -> dict[str, object]:
+    """Return the frozen, exhaustive Plan-27 V4 field metadata."""
+    field_rows = dict(_V4_SCHEMA_FIELD_ROWS_V1)
     rows = []
-    for name, ordered_fields in _V3_TYPE_FIELDS_V1:
+    for name, ordered_fields in _V4_TYPE_FIELDS_V1:
         exact_fields = field_rows.get(name)
         if (
             exact_fields is None
             or tuple(item[0] for item in exact_fields) != ordered_fields
         ):
-            raise ValueError("incomplete exact V3 schema metadata")
+            raise ValueError("incomplete exact V4 schema metadata")
         rows.append(
             {
                 "name": name,
@@ -1796,37 +1810,37 @@ def _v3_schema_metadata_v1() -> dict[str, object]:
     return {
         "contract_version": SCHEMA_CONTRACT_VERSION,
         "type_rows": tuple(rows),
-        "state_projections": _V3_STATE_PROJECTIONS_V1,
+        "state_projections": _V4_STATE_PROJECTIONS_V1,
         "unknown_key_policy": "REJECT",
     }
 
 
-def current_same_pass_market_regime_schema_metadata_v3() -> dict[str, object]:
-    return _v3_schema_metadata_v1()
+def current_same_pass_market_regime_schema_metadata_v4() -> dict[str, object]:
+    return _v4_schema_metadata_v1()
 
 
-def current_same_pass_market_regime_schema_metadata_digest_v3(metadata: object) -> str:
+def current_same_pass_market_regime_schema_metadata_digest_v4(metadata: object) -> str:
     if type(metadata) is not dict or set(metadata) != {
         "contract_version",
         "type_rows",
         "state_projections",
         "unknown_key_policy",
     }:
-        raise ValueError("unknown V3 schema metadata key")
+        raise ValueError("unknown V4 schema metadata key")
     return _identity(metadata)
 
 
-def current_same_pass_market_regime_schema_identity_from_metadata_v3(
+def current_same_pass_market_regime_schema_identity_from_metadata_v4(
     metadata: object,
 ) -> str:
-    if _canonical(metadata) != _canonical(_v3_schema_metadata_v1()):
-        raise ValueError("V3 schema metadata differs from frozen contract")
-    return current_same_pass_market_regime_schema_metadata_digest_v3(metadata)
+    if _canonical(metadata) != _canonical(_v4_schema_metadata_v1()):
+        raise ValueError("V4 schema metadata differs from frozen contract")
+    return current_same_pass_market_regime_schema_metadata_digest_v4(metadata)
 
 
 def _schema_identity() -> str:
-    return current_same_pass_market_regime_schema_identity_from_metadata_v3(
-        _v3_schema_metadata_v1()
+    return current_same_pass_market_regime_schema_identity_from_metadata_v4(
+        _v4_schema_metadata_v1()
     )
 
 
@@ -1850,7 +1864,7 @@ def _configuration_identity() -> str:
                 "schedule-before-raw-before-screen-before-adjusted; "
                 "upstream-insufficiency-skips-adjusted; whole-result-suppression"
             ),
-            "raw_source_policy": "current-same-pass-raw-daily-grid@v1-only",
+            "raw_source_policy": "current-same-pass-raw-daily-grid@v4-only",
             "partial_policy": "separate-optional-context",
             "retention_names_and_limits": {
                 "context": "context-<identity>.json",
@@ -1886,7 +1900,7 @@ def _calculation_identity() -> str:
 
 
 def _failure(
-    request: CurrentSamePassMarketRegimeRequestV3, context_identity: str | None = None
+    request: CurrentSamePassMarketRegimeRequestV4, context_identity: str | None = None
 ) -> CurrentSamePassArchiveFailureV1:
     core = {
         "contract_version": "current-same-pass-market-context-archive-failure@v1",
@@ -1901,7 +1915,7 @@ def _failure(
 
 
 def _archive_failure_is_exact(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     context_identity: str,
     value: object,
 ) -> bool:
@@ -1933,12 +1947,12 @@ def _raw_direction(first: str, last: str) -> str:
 
 def _decision_report(
     raw: PrivateCurrentSamePassRawDailyResultV1,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
 ) -> CurrentSamePassDecisionMarketDataReportV1:
     if raw.evidence_state != "OBSERVED" or raw.raw_grid is None:
         core = {
-            "contract_version": "current-same-pass-decision-market-data@v1",
-            "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v1(),
+            "contract_version": "current-same-pass-decision-market-data@v4",
+            "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v4(),
             "evidence_state": "INSUFFICIENT_EVIDENCE",
             "request_identity_sha256": request.request_identity_sha256,
             "canonical_cohort_identity_sha256": request.canonical_cohort_identity_sha256,
@@ -1983,8 +1997,8 @@ def _decision_report(
             )
         )
     core = {
-        "contract_version": "current-same-pass-decision-market-data@v1",
-        "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v1(),
+        "contract_version": "current-same-pass-decision-market-data@v4",
+        "schema_identity_sha256": current_same_pass_raw_daily_schema_identity_v4(),
         "evidence_state": "OBSERVED",
         "request_identity_sha256": request.request_identity_sha256,
         "canonical_cohort_identity_sha256": request.canonical_cohort_identity_sha256,
@@ -2027,12 +2041,12 @@ def _raw_insufficient(
 
 def _raw_result_is_authoritative(
     raw: PrivateCurrentSamePassRawDailyResultV1,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> bool:
     """Bind the returned raw result to this builder's authoritative S0..S20."""
     if (
-        not current_same_pass_raw_daily_result_is_exact_valid_v1(raw, request)
+        not current_same_pass_raw_daily_result_is_exact_valid_v4(raw, request)
         or raw.resolved_sessions != sessions
         or raw.comparison_session != sessions[0].session
         or raw.decision_session != sessions[-1].session
@@ -2047,20 +2061,23 @@ def _raw_result_is_authoritative(
 
 def _adjusted_handoff_is_exact(
     handoff: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> bool:
-    if type(handoff) is not AdjustedDailyCloseHandoffV2:
+    if (
+        type(handoff) is not AdjustedDailyCloseHandoffV3
+        or not adjusted_daily_close_handoff_is_valid_v3(handoff)
+    ):
         return False
     bridge = _plan22_bridge(request, sessions)
     schedule = bridge["plan21_schedule"]
     if not isinstance(schedule, dict):
         return False
     if (
-        handoff.contract_version != "provider-neutral-adjusted-daily-close@v2"
-        or handoff.provider_id != "YFINANCE"
-        or handoff.price_basis != "ADJUSTED"
-        or handoff.provider_source != "yfinance==1.6.0"
+        handoff.contract_version != "provider-neutral-adjusted-daily-close@v3"
+        or handoff.provider_id != "BHARATSTOCK"
+        or handoff.price_basis != PRICE_BASIS
+        or handoff.provider_source != "bharatstock-api@v1"
         or handoff.cohort_identity_sha256 != request.canonical_cohort_identity_sha256
         or handoff.request_identity_sha256 != request.plan22_request_identity_sha256
         or handoff.request_identity_sha256 == request.request_identity_sha256
@@ -2074,7 +2091,7 @@ def _adjusted_handoff_is_exact(
         or handoff.comparison_session != sessions[0].session
         or handoff.decision_session != sessions[-1].session
         or handoff.retrieved_at > request.decision_cutoff
-        or adjusted_daily_close_handoff_identity_v2(handoff)
+        or adjusted_daily_close_handoff_identity_v3(handoff)
         != handoff.handoff_identity_sha256
         or len(handoff.members) != len(request.members)
     ):
@@ -2093,6 +2110,7 @@ def _adjusted_handoff_is_exact(
             fact.mapping_valid_from,
             fact.mapping_valid_through,
             fact.mapping_identity,
+            fact.price_basis,
             fact.s0.session,
             fact.s20.session,
         )
@@ -2109,6 +2127,7 @@ def _adjusted_handoff_is_exact(
             member.mapping_valid_from,
             member.mapping_valid_through,
             member.mapping_identity,
+            PRICE_BASIS,
             sessions[0].session,
             sessions[-1].session,
         )
@@ -2124,7 +2143,6 @@ _ADJUSTED_FAILURE_PAIRS: Final = {
             "PRICE_BASIS_INVALID",
             "DECISION_CUTOFF_INVALID",
             "SCHEDULE_INVALID",
-            "DECISION_SESSION_AFTER_CUTOFF",
             "SCHEDULE_IDENTITY_INVALID",
             "INSTRUMENT_COUNT_INVALID",
             "INSTRUMENT_IDENTITY_INVALID",
@@ -2132,39 +2150,43 @@ _ADJUSTED_FAILURE_PAIRS: Final = {
             "MAPPING_IDENTITY_INVALID",
             "MAPPING_EFFECTIVE_FOR_FACT_WINDOW_REQUIRED",
             "CANONICAL_IDENTITY_OVERLAP",
-            "EFFECTIVE_SYMBOL_OVERLAP",
-            "PROVIDER_MAPPING_OVERLAP",
             "REQUEST_IDENTITY_INVALID",
-        }
-    ),
-    "UNSUPPORTED_CAPABILITY": frozenset(
-        {
-            "EXCHANGE_UNSUPPORTED",
-            "INSTRUMENT_TYPE_UNSUPPORTED",
-            "SEGMENT_UNSUPPORTED",
-            "PROVIDER_MAPPING_UNSUPPORTED",
-            "MAPPING_VERSION_UNSUPPORTED",
         }
     ),
     "INSUFFICIENT_DATA": frozenset(
         {
-            "PROVIDER_EMPTY",
-            "FRAME_INDEX_INVALID",
-            "FRAME_COVERAGE_INCOMPLETE",
-            "FRAME_SCHEMA_INVALID",
+            "RESPONSE_INVALID",
+            "PAGINATION_INVALID",
+            "NOT_FOUND",
+            "REQUEST_REJECTED",
+            "IDENTITY_MISMATCH",
+            "PRICE_EVIDENCE_INVALID",
+            "EMPTY_HISTORY",
+            "PROVIDER_HISTORY_INVALID",
         }
     ),
-    "PROVIDER_FAILURE": frozenset({"PROVIDER_CALL_FAILED"}),
+    "PROVIDER_FAILURE": frozenset(
+        {
+            "REQUEST_BUDGET_EXHAUSTED",
+            "AUTHENTICATION",
+            "AUTHORIZATION",
+            "TRANSPORT_FAILED",
+            "RESPONSE_LIMIT_EXCEEDED",
+            "REDIRECT_REJECTED",
+            "RATE_LIMITED",
+            "PROVIDER_UNAVAILABLE",
+        }
+    ),
 }
 
 
 def _adjusted_failure_is_exact(
-    failure: object, request: CurrentSamePassMarketRegimeRequestV3
+    failure: object, request: CurrentSamePassMarketRegimeRequestV4
 ) -> bool:
     if type(failure) is not CurrentSamePassAdjustedDailyCloseFailureProjectionV1:
         return False
     core = {
-        "contract_version": "provider-neutral-adjusted-daily-close@v2",
+        "contract_version": "provider-neutral-adjusted-daily-close@v3",
         "plan22_request_identity_sha256": request.plan22_request_identity_sha256,
         "code": failure.code,
         "reason": failure.reason,
@@ -2181,7 +2203,7 @@ def _adjusted_failure_is_exact(
 
 def _adjusted_not_attempted_is_exact(
     projection: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
 ) -> bool:
     if (
         type(projection)
@@ -2205,7 +2227,7 @@ def _adjusted_not_attempted_is_exact(
 
 
 def _upstream_insufficient_adjusted_composition(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
 ) -> _CurrentSamePassAdjustedNotAttemptedV1:
     core = {
         "contract_version": ADJUSTED_NOT_ATTEMPTED_CONTRACT_VERSION,
@@ -2224,11 +2246,11 @@ def _upstream_insufficient_adjusted_composition(
 
 
 def _adjusted_composition(
-    result: AdjustedDailyCloseResultV2,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    result: AdjustedDailyCloseResultV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> CurrentSamePassAdjustedCompositionResultV1:
-    if type(result) is AdjustedDailyCloseSuccessV2:
+    if type(result) is AdjustedDailyCloseSuccessV3:
         handoff = result.handoff
         if not _adjusted_handoff_is_exact(handoff, request, sessions):
             raise ValueError("adjusted handoff invalid")
@@ -2240,7 +2262,7 @@ def _adjusted_composition(
         ):
             raise ValueError("adjusted failure invalid")
         core = {
-            "contract_version": "provider-neutral-adjusted-daily-close@v2",
+            "contract_version": "provider-neutral-adjusted-daily-close@v3",
             "plan22_request_identity_sha256": request.plan22_request_identity_sha256,
             "code": result.code,
             "reason": result.reason,
@@ -2257,9 +2279,9 @@ def _adjusted_composition(
 
 def _adjusted_valid(
     adjusted: CurrentSamePassAdjustedCompositionResultV1,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
-) -> tuple[AdjustedDailyCloseHandoffV2 | None, str | None]:
+) -> tuple[AdjustedDailyCloseHandoffV3 | None, str | None]:
     if type(adjusted) is _CurrentSamePassAdjustedFailureV1:
         if (
             adjusted.adjusted_handoff is not None
@@ -2291,13 +2313,13 @@ def _adjusted_valid(
     ):
         raise TypeError("adjusted composition invalid")
     handoff = adjusted.adjusted_handoff
-    if handoff.temporal_label != "CURRENT_PROSPECTIVE":
+    if handoff.temporal_label != "CURRENT_OBSERVATION":
         return handoff, "ADJUSTED_DAILY_CLOSE_HANDOFF_INVALID"
     return handoff, None
 
 
 def _plan21_input(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> CurrentSuppliedCohortCorporateActionScreenInputV1:
     manifest = CurrentSuppliedCohortManifestV1(
@@ -2323,7 +2345,7 @@ def _plan21_input(
 
 def _screen_valid(
     screen: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     return published_current_corporate_action_screen_is_exact_valid_v1(
@@ -2341,7 +2363,7 @@ def _screen_valid(
 
 def _screen_is_exact_structure(
     screen: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
 ) -> bool:
     if (
@@ -2349,6 +2371,7 @@ def _screen_is_exact_structure(
         or not _published_screen_core_valid(screen)
     ):
         return False
+    # Plan21 stays canonical; V4 raw and adjusted rows retain selection order.
     private = screen.private_result
     if (
         private.cohort_identity_sha256 != request.plan21_cohort_identity_sha256
@@ -2359,7 +2382,7 @@ def _screen_is_exact_structure(
         or private.schedule_source != request.schedule_source
         or private.schedule_source_release != request.schedule_source_release
         or tuple(item.provider_result.isin for item in private.member_results)
-        != tuple(member.isin for member in request.members)
+        != tuple(sorted(member.isin for member in request.members))
     ):
         return False
     if (
@@ -2374,16 +2397,16 @@ def _screen_is_exact_structure(
 
 
 def _report_and_candidate(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     market_data: CurrentSamePassDecisionMarketDataReportV1,
     screen: object,
     adjusted: CurrentSamePassAdjustedCompositionResultV1,
 ) -> tuple[
-    CurrentSamePassMarketRegimeReportV3,
-    _CurrentSamePassMemberDirectionCandidateV3 | None,
+    CurrentSamePassMarketRegimeReportV4,
+    _CurrentSamePassMemberDirectionCandidateV4 | None,
 ]:
-    runtime = current_same_pass_market_regime_runtime_code_identity_v3()
+    runtime = current_same_pass_market_regime_runtime_code_identity_v4()
     schema, calc = _schema_identity(), _calculation_identity()
     screen_identity = getattr(
         getattr(screen, "public_report", screen), "report_identity_sha256", None
@@ -2401,7 +2424,7 @@ def _report_and_candidate(
     if adjusted_reason:
         reasons.add(adjusted_reason)
     raw_grid = raw.raw_grid
-    rows: list[_CurrentSamePassMemberDirectionRowV3] = []
+    rows: list[_CurrentSamePassMemberDirectionRowV4] = []
     if not reasons and raw_grid is not None and handoff is not None:
         bars = {(bar.isin, bar.session): bar for bar in raw_grid.bars}
         adjusted_members = {member.isin: member for member in handoff.members}
@@ -2416,8 +2439,8 @@ def _report_and_candidate(
                 break
             direction = _raw_direction(start.close, end.close)
             if direction != _raw_direction(
-                str(adjusted_member.s0.adjusted_close),
-                str(adjusted_member.s20.adjusted_close),
+                str(adjusted_member.s0.close),
+                str(adjusted_member.s20.close),
             ):
                 reasons.add("RAW_ADJUSTED_DIRECTION_CONFLICT")
                 break
@@ -2428,7 +2451,7 @@ def _report_and_candidate(
                 "direction": direction,
             }
             rows.append(
-                _CurrentSamePassMemberDirectionRowV3(
+                _CurrentSamePassMemberDirectionRowV4(
                     **core, row_identity_sha256=_identity(core)
                 )
             )
@@ -2457,7 +2480,7 @@ def _report_and_candidate(
             "unchanged": None,
             "reasons": ordered,
         }
-        return CurrentSamePassMarketRegimeReportV3(
+        return CurrentSamePassMarketRegimeReportV4(
             **core, report_identity_sha256=_identity(core)
         ), None
     advances = sum(row.direction == "ADVANCE" for row in rows)
@@ -2490,7 +2513,7 @@ def _report_and_candidate(
         "unchanged": len(rows) - advances - declines,
         "reasons": (),
     }
-    report = CurrentSamePassMarketRegimeReportV3(
+    report = CurrentSamePassMarketRegimeReportV4(
         **core, report_identity_sha256=_identity(core)
     )
     candidate_core = {
@@ -2501,21 +2524,22 @@ def _report_and_candidate(
         "market_regime_report_identity_sha256": report.report_identity_sha256,
         "canonical_cohort_identity_sha256": request.canonical_cohort_identity_sha256,
         "schedule_identity_sha256": raw_grid.schedule_identity_sha256,
+        "price_basis": PRICE_BASIS,
         "decision_cutoff": request.decision_cutoff,
         "rows": tuple(rows),
     }
-    return report, _CurrentSamePassMemberDirectionCandidateV3(
+    return report, _CurrentSamePassMemberDirectionCandidateV4(
         **candidate_core, direction_candidate_identity_sha256=_identity(candidate_core)
     )
 
 
 def _ledger(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     market_data: CurrentSamePassDecisionMarketDataReportV1,
     screen: object,
     adjusted: CurrentSamePassAdjustedCompositionResultV1,
-    report: CurrentSamePassMarketRegimeReportV3,
+    report: CurrentSamePassMarketRegimeReportV4,
 ) -> tuple[CurrentSamePassContextComponentLedgerRowV1, ...]:
     raw_identity = (
         raw.raw_grid.raw_grid_identity_sha256
@@ -2576,7 +2600,7 @@ def _ledger(
         (
             0,
             "RAW_GRID_V1",
-            "current-same-pass-raw-daily-grid@v1",
+            "current-same-pass-raw-daily-grid@v4",
             raw.evidence_state,
             raw_identity,
             raw_known_at,
@@ -2598,7 +2622,7 @@ def _ledger(
         (
             2,
             "ADJUSTED_DAILY_CLOSE_V2",
-            "provider-neutral-adjusted-daily-close@v2",
+            "provider-neutral-adjusted-daily-close@v3",
             "SUCCESS"
             if type(adjusted) is _CurrentSamePassAdjustedSuccessV1
             else adjusted.adjusted_failure.code
@@ -2614,7 +2638,7 @@ def _ledger(
         ),
         (
             3,
-            "MARKET_REGIME_V3",
+            "MARKET_REGIME_V4",
             CONTRACT_VERSION,
             report.evidence_state,
             report.report_identity_sha256,
@@ -2632,7 +2656,7 @@ def _ledger(
             "schema_identity_sha256": (
                 raw.raw_grid.schema_identity_sha256
                 if raw.raw_grid is not None
-                else current_same_pass_raw_daily_schema_identity_v1()
+                else current_same_pass_raw_daily_schema_identity_v4()
             )
             if position == 0
             else getattr(screen_report, "screen_schema_identity_sha256", None)
@@ -2643,7 +2667,7 @@ def _ledger(
             "runtime_code_identity_sha256": (
                 raw.raw_grid.runtime_code_identity_sha256
                 if raw.raw_grid is not None
-                else current_same_pass_raw_daily_runtime_code_identity_v1()
+                else current_same_pass_raw_daily_runtime_code_identity_v4()
             )
             if position == 0
             else getattr(screen_report, "runtime_code_identity_sha256", None)
@@ -2664,11 +2688,11 @@ def _ledger(
 
 
 def _context_object(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     raw: PrivateCurrentSamePassRawDailyResultV1,
     screen: object,
     adjusted: CurrentSamePassAdjustedCompositionResultV1,
-) -> PrivateCurrentSamePassMarketContextObjectV3:
+) -> PrivateCurrentSamePassMarketContextObjectV4:
     market_data = _decision_report(raw, request)
     report, candidate = _report_and_candidate(
         request, raw, market_data, screen, adjusted
@@ -2689,7 +2713,7 @@ def _context_object(
         else None
     )
     ledger = _ledger(request, raw, market_data, screen, adjusted, report)
-    runtime = current_same_pass_market_regime_runtime_code_identity_v3()
+    runtime = current_same_pass_market_regime_runtime_code_identity_v4()
     identity_core = {
         "contract_version": ARCHIVE_CONTRACT_VERSION,
         "schema_identity_sha256": _schema_identity(),
@@ -2741,24 +2765,24 @@ def _context_object(
         "context_identity_sha256": context_identity,
     }
     context_object_sha256 = _sha(_canonical(base))
-    context = PrivateCurrentSamePassMarketContextObjectV3(
+    context = PrivateCurrentSamePassMarketContextObjectV4(
         **base, context_object_sha256=context_object_sha256
     )
     return context
 
 
 def _candidate_structure_exactness_failure(  # noqa: C901 - exact replay discriminator
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     candidate: object,
 ) -> str | None:
     """Replay every closed context binding and name the first failed invariant."""
-    if type(candidate) is not _CurrentSamePassMarketContextCandidateV3:
+    if type(candidate) is not _CurrentSamePassMarketContextCandidateV4:
         return "CANDIDATE_TYPE_MISMATCH"
     context = candidate.context_object
-    if type(context) is not PrivateCurrentSamePassMarketContextObjectV3:
+    if type(context) is not PrivateCurrentSamePassMarketContextObjectV4:
         return "CONTEXT_TYPE_MISMATCH"
     adjusted_states = (
-        type(context.adjusted_handoff) is AdjustedDailyCloseHandoffV2
+        type(context.adjusted_handoff) is AdjustedDailyCloseHandoffV3
         and context.adjusted_failure is None
         and context.adjusted_not_attempted is None,
         context.adjusted_handoff is None
@@ -2772,7 +2796,7 @@ def _candidate_structure_exactness_failure(  # noqa: C901 - exact replay discrim
         return "ADJUSTED_STATE_INVALID"
     if context.request != request:
         return "REQUEST_MISMATCH"
-    if not current_same_pass_raw_daily_result_is_exact_valid_v1(
+    if not current_same_pass_raw_daily_result_is_exact_valid_v4(
         context.raw_result, request
     ):
         return "RAW_RESULT_REPLAY_FAILED"
@@ -2815,19 +2839,19 @@ def _candidate_structure_exactness_failure(  # noqa: C901 - exact replay discrim
 
 
 def _candidate_structure_is_exact(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     candidate: object,
 ) -> bool:
     return _candidate_structure_exactness_failure(request, candidate) is None
 
 
-def _legacy_validate_retained_current_same_pass_market_context_v3(
+def _legacy_validate_retained_current_same_pass_market_context_v4(
     value: object,
-    context: PrivateCurrentSamePassMarketContextObjectV3,
+    context: PrivateCurrentSamePassMarketContextObjectV4,
 ) -> bool:
     """Validate an archive projection against the caller's current candidate."""
     if (
-        type(value) is not RetainedCurrentSamePassMarketContextV3
+        type(value) is not RetainedCurrentSamePassMarketContextV4
         or type(value._archive_seal) is not _CurrentSamePassMarketContextArchiveSealV1
     ):
         return False
@@ -2934,7 +2958,7 @@ def _parse_archive_instant(value: object) -> datetime:
 
 
 def _parse_context_archive_records(
-    context: PrivateCurrentSamePassMarketContextObjectV3,
+    context: PrivateCurrentSamePassMarketContextObjectV4,
     receipt_raw: bytes,
     marker_raw: bytes,
     decision_cutoff: datetime,
@@ -3060,7 +3084,7 @@ def _archive_directory_bound(root: int, directory: int) -> bool:
     """Prove the held directory is still the name under the leased root."""
     try:
         named = os.stat(
-            ".current-same-pass-market-regime-v3",
+            ".current-same-pass-market-regime-v4",
             dir_fd=root,
             follow_symlinks=False,
         )
@@ -3108,19 +3132,19 @@ class _FileCurrentSamePassMarketContextArchiveV1:
 
     def archive_exact(  # noqa: C901
         self,
-        request: CurrentSamePassMarketRegimeRequestV3,
-        candidate: _CurrentSamePassMarketContextCandidateV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
+        candidate: _CurrentSamePassMarketContextCandidateV4,
         lease: StorageRootLease,
         *,
         trusted_clock: _TrustedClockV1 | None = None,
-    ) -> RetainedCurrentSamePassMarketContextV3 | CurrentSamePassArchiveFailureV1:
+    ) -> RetainedCurrentSamePassMarketContextV4 | CurrentSamePassArchiveFailureV1:
         archive_clock = trusted_clock or self._clock
 
         def retained_context(
-            context: PrivateCurrentSamePassMarketContextObjectV3,
+            context: PrivateCurrentSamePassMarketContextObjectV4,
             receipt: CurrentSamePassContextReceiptV1,
             marker: CurrentSamePassContextCompletionMarkerV1,
-        ) -> RetainedCurrentSamePassMarketContextV3:
+        ) -> RetainedCurrentSamePassMarketContextV4:
             retained_core = _retained_context_public_projection(
                 evidence_state="RETAINED",
                 context_identity_sha256=context.context_identity_sha256,
@@ -3134,7 +3158,7 @@ class _FileCurrentSamePassMarketContextArchiveV1:
             )
             retained_identity = _identity(retained_core)
             seal = object.__new__(_CurrentSamePassMarketContextArchiveSealV1)
-            result = object.__new__(RetainedCurrentSamePassMarketContextV3)
+            result = object.__new__(RetainedCurrentSamePassMarketContextV4)
             for name, value in {
                 **retained_core,
                 "retained_context_identity_sha256": retained_identity,
@@ -3146,7 +3170,7 @@ class _FileCurrentSamePassMarketContextArchiveV1:
         context_identity: str | None = None
         try:
             if (
-                type(request) is not CurrentSamePassMarketRegimeRequestV3
+                type(request) is not CurrentSamePassMarketRegimeRequestV4
                 or type(lease) is not StorageRootLease
                 or not cast(Any, _candidate_is_exact)(request, candidate)
             ):
@@ -3159,12 +3183,12 @@ class _FileCurrentSamePassMarketContextArchiveV1:
             with lease.root_operation(self._root) as operation:
                 with suppress(FileExistsError):
                     os.mkdir(
-                        ".current-same-pass-market-regime-v3",
+                        ".current-same-pass-market-regime-v4",
                         0o700,
                         dir_fd=operation.descriptor,
                     )
                 directory = os.open(
-                    ".current-same-pass-market-regime-v3",
+                    ".current-same-pass-market-regime-v4",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=operation.descriptor,
                 )
@@ -3537,7 +3561,7 @@ class _FileCurrentSamePassMarketContextArchiveV1:
 
 def _resolve_sessions(
     schedule_store: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     lease: StorageRootLease,
 ) -> tuple[CurrentSamePassRawSessionV1, ...] | CurrentSamePassPreflightFailureV1:
     if (
@@ -3600,7 +3624,7 @@ def _resolve_sessions(
 
 def _resolve_schedule(
     schedule_store: object,
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     lease: StorageRootLease,
 ) -> ExpectedSessionSchedule:
     """Re-read the exact immutable schedule after public preflight succeeds."""
@@ -3631,27 +3655,27 @@ def _active_official_session(
 
 
 def _plan22_bridge(
-    request: CurrentSamePassMarketRegimeRequestV3,
+    request: CurrentSamePassMarketRegimeRequestV4,
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
 ) -> dict[str, object]:
     members = tuple(
-        _V2Member(
-            member.isin,
-            member.exchange,
-            member.instrument_type,
-            member.segment,
-            member.effective_symbol,
-            member.provider_symbol,
-            member.valid_from,
-            member.valid_through,
-            member.mapping_version,
-            member.mapping_valid_from,
-            member.mapping_valid_through,
-            member.mapping_identity,
+        AdjustedDailyInstrumentV3(
+            isin=member.isin,
+            exchange=member.exchange,
+            instrument_type=member.instrument_type,
+            segment=member.segment,
+            effective_symbol=member.effective_symbol,
+            provider_symbol=member.provider_symbol,
+            valid_from=member.valid_from,
+            valid_through=member.valid_through,
+            mapping_version=member.mapping_version,
+            mapping_valid_from=member.mapping_valid_from,
+            mapping_valid_through=member.mapping_valid_through,
+            mapping_identity=member.mapping_identity,
         )
         for member in request.members
     )
-    schedule_identity = adjusted_daily_schedule_identity_v2(
+    schedule_identity = adjusted_daily_schedule_identity_v3(
         sessions=tuple(item.session for item in sessions),
         decision_session_official_close_at=sessions[-1].close_at,
         schedule_evidence_sha256=request.schedule_evidence_sha256,
@@ -3660,7 +3684,7 @@ def _plan22_bridge(
     )
     if schedule_identity != request.plan22_schedule_identity_sha256:
         raise ValueError("Plan22 schedule bridge mismatch")
-    request_identity = adjusted_daily_request_identity_v2(
+    request_identity = adjusted_daily_request_identity_v3(
         cohort_identity_sha256=request.canonical_cohort_identity_sha256,
         decision_cutoff=request.decision_cutoff,
         schedule_identity_sha256=request.plan22_schedule_identity_sha256,
@@ -3669,8 +3693,7 @@ def _plan22_bridge(
     if request_identity != request.plan22_request_identity_sha256:
         raise ValueError("Plan22 request bridge mismatch")
     return {
-        "provider_id": "YFINANCE",
-        "price_basis": "ADJUSTED",
+        "provider_id": "BHARATSTOCK",
         "decision_cutoff": request.decision_cutoff,
         "plan21_schedule": {
             "sessions": tuple(item.session for item in sessions),
@@ -3702,19 +3725,19 @@ def _plan22_bridge(
     }
 
 
-def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
-    """Create the module-private authority for Plan-27 V3 retention."""
+def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
+    """Create the module-private authority for Plan-27 V4 retention."""
     minted_seals: set[object] = set()
 
     @dataclass(frozen=True, slots=True)
     class _CandidateBinding:
-        candidate: _CurrentSamePassMarketContextCandidateV3
-        context: PrivateCurrentSamePassMarketContextObjectV3
+        candidate: _CurrentSamePassMarketContextCandidateV4
+        context: PrivateCurrentSamePassMarketContextObjectV4
 
     @dataclass(frozen=True, slots=True)
     class _ArchiveBinding:
         candidate_seal: object
-        candidate: _CurrentSamePassMarketContextCandidateV3
+        candidate: _CurrentSamePassMarketContextCandidateV4
         retained_object_id: int
         trusted_clock: _TrustedClockV1
         root: Path
@@ -3754,9 +3777,9 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         return any(item is seal for item in minted_seals)
 
     def mint_candidate(
-        context: PrivateCurrentSamePassMarketContextObjectV3,
-    ) -> _CurrentSamePassMarketContextCandidateV3:
-        result = object.__new__(_CurrentSamePassMarketContextCandidateV3)
+        context: PrivateCurrentSamePassMarketContextObjectV4,
+    ) -> _CurrentSamePassMarketContextCandidateV4:
+        result = object.__new__(_CurrentSamePassMarketContextCandidateV4)
         local_seal = object.__new__(CandidateSeal)
         minted_seals.add(local_seal)
         candidate_bindings[local_seal] = _CandidateBinding(result, context)
@@ -3775,12 +3798,12 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         return result
 
     def candidate_exactness_failure(
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         candidate: object,
     ) -> str | None:
         seal = getattr(candidate, "_seal", None)
         binding = candidate_bindings.get(seal)
-        if type(candidate) is not _CurrentSamePassMarketContextCandidateV3:
+        if type(candidate) is not _CurrentSamePassMarketContextCandidateV4:
             return "CANDIDATE_TYPE_MISMATCH"
         if type(seal) is not CandidateSeal:
             return "CANDIDATE_SEAL_TYPE_MISMATCH"
@@ -3795,14 +3818,14 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         return _candidate_structure_exactness_failure(request, candidate)
 
     def candidate_is_exact(
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         candidate: object,
     ) -> bool:
         return candidate_exactness_failure(request, candidate) is None
 
     def _persisted_archive_binding(
-        candidate: _CurrentSamePassMarketContextCandidateV3,
-        value: RetainedCurrentSamePassMarketContextV3,
+        candidate: _CurrentSamePassMarketContextCandidateV4,
+        value: RetainedCurrentSamePassMarketContextV4,
         lease: StorageRootLease,
         root: Path,
     ) -> (
@@ -3824,7 +3847,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         context = candidate.context_object
         context_raw = context.canonical_json_bytes()
         stem = context.context_identity_sha256
-        directory_name = ".current-same-pass-market-regime-v3"
+        directory_name = ".current-same-pass-market-regime-v4"
         context_name = f"context-{stem}.json"
         receipt_name = f"retained-{stem}.json"
         marker_name = f"completion-{stem}.json"
@@ -3876,13 +3899,13 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
             return None
 
     def retained_from_legacy(
-        request: CurrentSamePassMarketRegimeRequestV3,
-        candidate: _CurrentSamePassMarketContextCandidateV3,
-        value: RetainedCurrentSamePassMarketContextV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
+        candidate: _CurrentSamePassMarketContextCandidateV4,
+        value: RetainedCurrentSamePassMarketContextV4,
         lease: StorageRootLease,
         root: Path,
         trusted_clock: _TrustedClockV1,
-    ) -> RetainedCurrentSamePassMarketContextV3 | CurrentSamePassArchiveFailureV1:
+    ) -> RetainedCurrentSamePassMarketContextV4 | CurrentSamePassArchiveFailureV1:
         candidate_binding = candidate_bindings.get(candidate._seal)
         persisted = _persisted_archive_binding(candidate, value, lease, root)
         if (
@@ -3934,7 +3957,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         }
         retained_identity = _identity(retained_core)
         if (
-            not _legacy_validate_retained_current_same_pass_market_context_v3(
+            not _legacy_validate_retained_current_same_pass_market_context_v4(
                 value, context
             )
             or value.context_receipt_identity_sha256
@@ -3945,7 +3968,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
             or value.retained_context_identity_sha256 != retained_identity
         ):
             return _failure(request, getattr(value, "context_identity_sha256", None))
-        result = object.__new__(RetainedCurrentSamePassMarketContextV3)
+        result = object.__new__(RetainedCurrentSamePassMarketContextV4)
         local_seal = object.__new__(ArchiveSeal)
         minted_seals.add(local_seal)
         archive_bindings[local_seal] = _ArchiveBinding(
@@ -3985,7 +4008,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         value: object,
         expected_candidate: object | None = None,
     ) -> bool:
-        if type(value) is not RetainedCurrentSamePassMarketContextV3:
+        if type(value) is not RetainedCurrentSamePassMarketContextV4:
             return False
         seal = value._archive_seal
         binding = archive_bindings.get(seal)
@@ -4032,7 +4055,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         )
 
     def adopt(
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         value: object,
         current_candidate: object,
         lease: StorageRootLease,
@@ -4113,8 +4136,8 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
     def industry_projection(
         value: object,
     ) -> tuple[
-        CurrentSamePassMarketRegimeReportV3,
-        _CurrentSamePassMemberDirectionCandidateV3 | None,
+        CurrentSamePassMarketRegimeReportV4,
+        _CurrentSamePassMemberDirectionCandidateV4 | None,
     ]:
         if not validate(value):
             raise ValueError("invalid retained same-pass market context")
@@ -4154,7 +4177,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
             "raw_runtime_code_identity_sha256": (
                 context.raw_result.raw_grid.runtime_code_identity_sha256
                 if context.raw_result.raw_grid is not None
-                else current_same_pass_raw_daily_runtime_code_identity_v1()
+                else current_same_pass_raw_daily_runtime_code_identity_v4()
             ),
             "raw_source_policy_identity_sha256": (
                 context.raw_result.raw_grid.raw_source_policy_identity_sha256
@@ -4166,6 +4189,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
             "adjusted_component_state": ledger[2].evidence_state,
             "adjusted_component_identity_sha256": ledger[2].primary_identity_sha256,
             "adjusted_component_reasons": ledger[2].reasons,
+            "price_basis": PRICE_BASIS,
             "request_matches": request_matches,
         }
 
@@ -4187,12 +4211,12 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
 
         def archive_exact(
             self,
-            request: CurrentSamePassMarketRegimeRequestV3,
-            candidate: _CurrentSamePassMarketContextCandidateV3,
+            request: CurrentSamePassMarketRegimeRequestV4,
+            candidate: _CurrentSamePassMarketContextCandidateV4,
             lease: StorageRootLease,
             *,
             trusted_clock: _TrustedClockV1 | None = None,
-        ) -> RetainedCurrentSamePassMarketContextV3 | CurrentSamePassArchiveFailureV1:
+        ) -> RetainedCurrentSamePassMarketContextV4 | CurrentSamePassArchiveFailureV1:
             # The descriptor-relative archive reopens and stable-rereads every
             # artifact under this current lease before a closure record is minted.
             with _CONTEXT_ARCHIVE_TRANSACTION_LOCK:
@@ -4218,7 +4242,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
                 )
 
     def build(
-        request: CurrentSamePassMarketRegimeRequestV3,
+        request: CurrentSamePassMarketRegimeRequestV4,
         raw: PrivateCurrentSamePassRawDailyResultV1,
         screen: object,
         adjusted: CurrentSamePassAdjustedCompositionResultV1,
@@ -4226,9 +4250,9 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
         lease: StorageRootLease,
         *,
         trusted_clock: _TrustedClockV1 | None = None,
-    ) -> RetainedCurrentSamePassMarketContextV3 | CurrentSamePassArchiveFailureV1:
+    ) -> RetainedCurrentSamePassMarketContextV4 | CurrentSamePassArchiveFailureV1:
         if (
-            type(request) is not CurrentSamePassMarketRegimeRequestV3
+            type(request) is not CurrentSamePassMarketRegimeRequestV4
             or type(raw) is not PrivateCurrentSamePassRawDailyResultV1
             or type(lease) is not StorageRootLease
         ):
@@ -4241,7 +4265,7 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
             lease,
             trusted_clock=archive_clock,
         )
-        if type(result) is RetainedCurrentSamePassMarketContextV3:
+        if type(result) is RetainedCurrentSamePassMarketContextV4:
             if not adopt(request, result, candidate, lease, archive_clock):
                 raise ValueError("archive returned an unsealed same-pass context")
             return result
@@ -4266,13 +4290,13 @@ def _sealed_v3_boundary() -> tuple[object, ...]:  # noqa: C901
 
 (
     FileCurrentSamePassMarketContextArchiveV1,
-    build_and_retain_current_supplied_cohort_market_regime_v3,
+    build_and_retain_current_supplied_cohort_market_regime_v4,
     _candidate_is_exact,
     _candidate_exactness_failure,
-    validate_retained_current_same_pass_market_context_v3,
-    _industry_projection_from_retained_context_v3,
-    _packet_projection_from_retained_context_v3,
-) = _sealed_v3_boundary()
+    validate_retained_current_same_pass_market_context_v4,
+    _industry_projection_from_retained_context_v4,
+    _packet_projection_from_retained_context_v4,
+) = _sealed_v4_boundary()
 
 
 class _TrustedClockV1(Protocol):
@@ -4285,18 +4309,18 @@ class _SystemClockV1:
         return datetime.now(UTC)
 
 
-def acquire_build_and_retain_current_supplied_cohort_market_regime_v3(
-    request: CurrentSamePassMarketRegimeRequestV3,
+def acquire_build_and_retain_current_supplied_cohort_market_regime_v4(
+    request: CurrentSamePassMarketRegimeRequestV4,
     schedule_store: object,
     raw_daily: CurrentSamePassRawDailyPortV1,
     corporate_action_resolver: object,
-    adjusted_provider: AdjustedDailyDownloadAdapter,
+    adjusted_provider: BharatStockClient,
     archive: CurrentSamePassMarketContextArchivePortV1,
     lease: StorageRootLease,
     *,
     clock: _TrustedClockV1 | None = None,
 ) -> (
-    RetainedCurrentSamePassMarketContextV3
+    RetainedCurrentSamePassMarketContextV4
     | CurrentSamePassArchiveFailureV1
     | CurrentSamePassPreflightFailureV1
 ):
@@ -4344,7 +4368,7 @@ def acquire_build_and_retain_current_supplied_cohort_market_regime_v3(
             or adjusted_started_at >= acquisition_effect_deadline
         ):
             return _failure(request)
-        result = acquire_adjusted_daily_close_v2(
+        result = acquire_adjusted_daily_close_v3(
             _plan22_bridge(request, sessions), provider=adjusted_provider
         )
         adjusted_returned_at = trusted_clock.now()
@@ -4356,7 +4380,7 @@ def acquire_build_and_retain_current_supplied_cohort_market_regime_v3(
         adjusted = _adjusted_composition(result, request, sessions)
     else:
         adjusted = _upstream_insufficient_adjusted_composition(request)
-    return cast(Any, build_and_retain_current_supplied_cohort_market_regime_v3)(
+    return cast(Any, build_and_retain_current_supplied_cohort_market_regime_v4)(
         request,
         raw,
         screen,

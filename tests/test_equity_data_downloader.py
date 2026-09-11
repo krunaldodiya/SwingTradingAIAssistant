@@ -1,1279 +1,796 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
-import subprocess
-import sys
-from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
-import pandas as pd
 import pyarrow as _pyarrow
-import pyarrow.parquet as _pyarrow_parquet
+import pyarrow.parquet as _parquet
 import pytest
 
 from equity_data_downloader import (
     DownloadError,
+    DownloadReceipt,
     PersistenceError,
+    RetainedYahooDatasetReceiptV2,
     cli,
     core,
     download_daily_ohlcv,
+    read_retained_yahoo_daily_ohlcv_v2,
 )
-from equity_data_downloader.core import DownloadReceipt
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockDailyPrice,
+    BharatStockError,
+    BharatStockHistory,
+    BharatStockInstrument,
+)
 
-pq: Any = cast(Any, _pyarrow_parquet)
 pa: Any = cast(Any, _pyarrow)
-
-_FIELDS = ("Open", "High", "Low", "Close", "Volume")
-
-
-def _use_provider(
-    monkeypatch: pytest.MonkeyPatch,
-    download: Callable[..., object],
-) -> None:
-    monkeypatch.setattr(core, "_public_download", download)
+pq: Any = cast(Any, _parquet)
+_MEMBER = BharatStockInstrument("INE002A01018", "NSE", "RELIANCE")
+_OTHER = BharatStockInstrument("INE062A01020", "NSE", "SBIN")
+_START = date(2026, 8, 27)
+_END = date(2026, 8, 28)
 
 
-def _frame(symbols: tuple[str, ...], sessions: tuple[str, ...]) -> pd.DataFrame:
-    columns = pd.MultiIndex.from_tuples(
-        tuple((symbol, field) for symbol in symbols for field in _FIELDS),
-        names=("Ticker", "Price"),
-    )
-    rows: list[list[float | int]] = []
-    for position, _session in enumerate(sessions):
-        row: list[float | int] = []
-        for symbol_position, _symbol in enumerate(symbols):
-            base = 100 + position + symbol_position * 10
-            row.extend((base, base + 2, base - 1, base + 1, 1_000 + position))
-        rows.append(row)
-    return pd.DataFrame(rows, index=pd.DatetimeIndex(sessions), columns=columns)
-
-
-def test_persists_parquet_only_under_configured_storage_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _frame(("TATASTEEL.NS",), ("2026-08-28",))
-    cache_locations: list[Path] = []
-
-    def record_cache(location: Path) -> None:
-        cache = tmp_path / ".cache" / "yfinance"
-        assert os.stat(location).st_dev == cache.stat().st_dev
-        assert os.stat(location).st_ino == cache.stat().st_ino
-        cache_locations.append(location)
-
-    monkeypatch.setattr(core, "_configure_provider_cache", record_cache)
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    _use_provider(monkeypatch, fake_download)
-    receipt = download_daily_ohlcv(
-        ("TATASTEEL.NS",),
-        date(2026, 8, 1),
-        date(2026, 8, 31),
-        tmp_path,
+def _history(member: BharatStockInstrument) -> BharatStockHistory:
+    return BharatStockHistory(
+        member,
+        (
+            BharatStockDailyPrice(
+                _START,
+                Decimal(100),
+                Decimal(104),
+                Decimal(98),
+                Decimal(102),
+                1000,
+                Decimal(51),
+                Decimal("0.5"),
+            ),
+            BharatStockDailyPrice(
+                _END,
+                Decimal(102),
+                Decimal(106),
+                Decimal(100),
+                Decimal(104),
+                1100,
+                Decimal(52),
+                Decimal("0.5"),
+            ),
+        ),
+        datetime(2026, 8, 29, tzinfo=UTC),
+        ("a" * 64, "b" * 64),
+        2,
     )
 
-    assert receipt.destination.is_relative_to(tmp_path)
-    assert len(cache_locations) == 1
-    assert cache_locations[0] != tmp_path / ".cache" / "yfinance"
-    assert receipt.destination.suffix == ".parquet"
-    assert receipt.destination.parts[-4:-1] == (
-        "adjusted_daily",
-        "provider=yfinance",
-        f"request={receipt.request_identity_sha256}",
+
+class _Client:
+    def __init__(self, failures: dict[str, BharatStockError] | None = None) -> None:
+        self.calls: list[BharatStockInstrument] = []
+        self.failures = {} if failures is None else failures
+
+    def history(
+        self, instrument: BharatStockInstrument, start: date, end: date
+    ) -> BharatStockHistory:
+        self.calls.append(instrument)
+        if instrument.isin in self.failures:
+            raise self.failures[instrument.isin]
+        return _history(instrument)
+
+
+def _download(
+    root: Path,
+    client: _Client | None = None,
+) -> DownloadReceipt:
+    return download_daily_ohlcv(
+        (_MEMBER,),
+        _START,
+        _END,
+        root,
+        client=_Client() if client is None else client,
     )
-    table = pq.read_table(receipt.destination)
-    assert table.column_names == [
-        "symbol",
-        "session",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-    ]
-    assert table.to_pylist() == [
+
+
+def _rewrite(path: Path, transform) -> None:
+    table = pq.ParquetFile(path).read()
+    path.chmod(0o600)
+    pq.write_table(transform(table), path)
+    path.chmod(0o400)
+
+
+def _retained_yahoo_v2(root: Path) -> tuple[Path, str, bytes]:
+    """Synthetic V2 fixture from the immutable 0851102 writer contract."""
+    symbols = ("RELIANCE.NS",)
+    configuration = "794989712c1c76f1fb112670ad77c2f096b299259f3155614dde7c576a30ab56"
+    schema_identity = "2ca51c9c4553d4ed0e8ac2f1620ba1c8f3a3abe7450263f2412bbe234aed6c4f"
+    request = {
+        "configuration_identity_sha256": configuration,
+        "contract_version": "equity-data-downloader@v2",
+        "end": _END.isoformat(),
+        "interval": "1d",
+        "price_basis": "YFINANCE_AUTO_ADJUSTED_OHLC",
+        "provider": "YFINANCE",
+        "provider_version": "1.6.0",
+        "schema_identity_sha256": schema_identity,
+        "start": _START.isoformat(),
+        "symbols": list(symbols),
+        "volume_basis": "YFINANCE_SOURCE_REPORTED_VOLUME",
+    }
+    identity = hashlib.sha256(
+        json.dumps(
+            request,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    metadata = {
+        key.encode("ascii"): str(value).encode("ascii")
+        for key, value in request.items()
+        if key not in {"interval", "symbols"}
+    }
+    metadata.update(
         {
-            "symbol": "TATASTEEL.NS",
-            "session": date(2026, 8, 28),
-            "open": 100.0,
-            "high": 102.0,
-            "low": 99.0,
-            "close": 101.0,
+            b"symbols": b'["RELIANCE.NS"]',
+            b"retrieved_at": b"2026-08-29T00:00:00+00:00",
+            b"schema_version": b"2",
+            b"request_identity_sha256": identity.encode("ascii"),
+        }
+    )
+    schema = pa.schema(
+        (
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("session", pa.date32(), nullable=False),
+            pa.field("open", pa.float64(), nullable=False),
+            pa.field("high", pa.float64(), nullable=False),
+            pa.field("low", pa.float64(), nullable=False),
+            pa.field("close", pa.float64(), nullable=False),
+            pa.field("volume", pa.int64(), nullable=False),
+        ),
+        metadata=metadata,
+    )
+    rows = [
+        {
+            "symbol": "RELIANCE.NS",
+            "session": session,
+            "open": 50.0,
+            "high": 52.0,
+            "low": 49.0,
+            "close": 51.0,
             "volume": 1000,
         }
+        for session in (_START, _END)
     ]
-    assert tuple(tmp_path.rglob("*.csv")) == ()
-    assert tuple(tmp_path.rglob("*.feather")) == ()
+    lease = core._acquire_storage_root(root)
+    lease.close()
+    directory = root
+    for name in ("adjusted_daily", "provider=yfinance", f"request={identity}"):
+        directory = directory / name
+        directory.mkdir(mode=0o700)
+    path = directory / "data.parquet"
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+    path.chmod(0o400)
+    return path, identity, path.read_bytes()
 
 
-def test_provider_cache_path_remains_bound_to_held_directory_after_edge_replacement(
+def test_retained_yahoo_v2_remains_readable_without_any_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, identity, original = _retained_yahoo_v2(tmp_path)
+
+    def no_provider(*args: object, **kwargs: object) -> None:
+        pytest.fail("historical reads must not construct an acquisition client")
+
+    monkeypatch.setattr(core, "BharatStockClient", no_provider)
+    receipt = read_retained_yahoo_daily_ohlcv_v2(
+        ("reliance.ns",), _START, _END, tmp_path
+    )
+    assert isinstance(receipt, RetainedYahooDatasetReceiptV2)
+    assert receipt.destination == path
+    assert receipt.request_identity_sha256 == identity
+    assert receipt.symbols == ("RELIANCE.NS",)
+    assert receipt.rows_by_symbol == (("RELIANCE.NS", 2),)
+    assert receipt.row_count == 2
+    assert receipt.retrieved_at == datetime(2026, 8, 29, tzinfo=UTC)
+    assert receipt.provider == "YFINANCE"
+    assert receipt.provider_version == "1.6.0"
+    assert receipt.price_basis == "YFINANCE_AUTO_ADJUSTED_OHLC"
+    assert receipt.volume_basis == "YFINANCE_SOURCE_REPORTED_VOLUME"
+    assert receipt.outcome == "REUSED"
+    assert path.read_bytes() == original
+    assert not (tmp_path / "adjusted_daily" / "provider=bharatstock").exists()
+
+
+def test_retained_yahoo_v2_rejects_corrupt_prices_without_repair(
     tmp_path: Path,
 ) -> None:
-    storage_root = tmp_path / "root"
-    cache = storage_root / ".cache" / "yfinance"
-    cache.mkdir(parents=True)
-    displaced = cache.with_name("held-yfinance")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    descriptor = os.open(
-        cache,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    path, _, _ = _retained_yahoo_v2(tmp_path)
+    _rewrite(
+        path,
+        lambda table: table.set_column(
+            table.schema.get_field_index("high"),
+            table.schema.field("high"),
+            pa.array([0.0, 0.0], type=pa.float64()),
+        ),
     )
-    try:
-        location = core._descriptor_directory_path(  # pyright: ignore[reportPrivateUsage]
-            descriptor
-        )
-        cache.rename(displaced)
-        cache.symlink_to(outside, target_is_directory=True)
-        location.joinpath("cache.sqlite").write_bytes(b"held")
-    finally:
-        os.close(descriptor)
-
-    assert displaced.joinpath("cache.sqlite").read_bytes() == b"held"
-    assert not outside.joinpath("cache.sqlite").exists()
+    corrupted = path.read_bytes()
+    with pytest.raises(PersistenceError):
+        read_retained_yahoo_daily_ohlcv_v2(("RELIANCE.NS",), _START, _END, tmp_path)
+    assert path.read_bytes() == corrupted
 
 
-def test_downloads_multiple_symbols_and_persists_only_inclusive_period(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-    response = _frame(
-        ("SBIN.NS", "RELIANCE.NS"),
-        ("2026-08-23", "2026-08-24", "2026-08-28", "2026-08-29"),
-    )
+def test_retained_yahoo_v2_requires_exact_provider_version(tmp_path: Path) -> None:
+    path, _, original = _retained_yahoo_v2(tmp_path)
 
-    def fake_download(**kwargs: object) -> object:
-        calls.append(kwargs)
-        return response
-
-    _use_provider(monkeypatch, fake_download)
-    receipt = download_daily_ohlcv(
-        ("sbin.ns", "RELIANCE.NS"),
-        date(2026, 8, 24),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert calls == [
-        {
-            "tickers": ("RELIANCE.NS", "SBIN.NS"),
-            "start": "2026-08-24",
-            "end": "2026-08-29",
-            "interval": "1d",
-            "actions": False,
-            "threads": True,
-            "ignore_tz": True,
-            "group_by": "ticker",
-            "auto_adjust": True,
-            "back_adjust": False,
-            "repair": False,
-            "keepna": False,
-            "progress": False,
-            "prepost": False,
-            "rounding": False,
-            "timeout": 10,
-            "multi_level_index": True,
-        }
-    ]
-    assert receipt.symbols == ("RELIANCE.NS", "SBIN.NS")
-    assert receipt.row_count == 4
-    assert receipt.rows_by_symbol == (("RELIANCE.NS", 2), ("SBIN.NS", 2))
-    assert [
-        (row["symbol"], row["session"])
-        for row in pq.read_table(receipt.destination).to_pylist()
-    ] == [
-        ("RELIANCE.NS", date(2026, 8, 24)),
-        ("RELIANCE.NS", date(2026, 8, 28)),
-        ("SBIN.NS", date(2026, 8, 24)),
-        ("SBIN.NS", date(2026, 8, 28)),
-    ]
-
-
-def test_missing_rows_for_one_symbol_do_not_block_other_downloads(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _frame(("SBIN.NS", "MISSING.NS"), ("2026-08-28",))
-    for field in _FIELDS:
-        response[("MISSING.NS", field)] = float("nan")
-
-    def partial_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    _use_provider(monkeypatch, partial_download)
-    receipt = download_daily_ohlcv(
-        ("SBIN.NS", "MISSING.NS"),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert receipt.rows_by_symbol == (("MISSING.NS", 0), ("SBIN.NS", 1))
-    assert receipt.row_count == 1
-    assert pq.read_table(receipt.destination).num_rows == 1
-
-
-def test_existing_exact_request_is_reused_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("RELIANCE.NS", "SBIN.NS"), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    first = download_daily_ohlcv(
-        ("SBIN.NS", "RELIANCE.NS"),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    original = first.destination.read_bytes()
-
-    reused = download_daily_ohlcv(
-        ("RELIANCE.NS", "SBIN.NS"),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert calls == 1
-    assert first.outcome == "INSERTED"
-    assert reused.outcome == "REUSED"
-    assert reused.destination == first.destination
-    assert reused.retrieved_at == first.retrieved_at
-    assert reused.rows_by_symbol == first.rows_by_symbol
-    assert reused.destination.read_bytes() == original
-    assert pq.read_table(reused.destination).num_rows == 2
-
-
-def test_invalid_existing_dataset_fails_closed_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    inserted.destination.chmod(0o600)
-    inserted.destination.write_bytes(b"not parquet")
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
+    with pytest.raises(PersistenceError, match="dataset is unavailable"):
+        read_retained_yahoo_daily_ohlcv_v2(
+            ("RELIANCE.NS",),
+            _START,
+            _END,
             tmp_path,
+            provider_version="1.6.1",
         )
 
-    assert calls == 1
-    assert inserted.destination.read_bytes() == b"not parquet"
+    assert path.read_bytes() == original
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
-def test_existing_fifo_fails_promptly_without_provider_or_storage_mutation(
+def test_persists_source_ohlcv_and_optional_adjustment_evidence(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
+    receipt = _download(tmp_path)
+    assert receipt.destination.parts[-4:-1] == (
+        "adjusted_daily",
+        "provider=bharatstock",
+        f"request={receipt.request_identity_sha256}",
     )
-    displaced = inserted.destination.with_name("displaced.parquet")
-    inserted.destination.rename(displaced)
-    original = displaced.read_bytes()
-    os.mkfifo(inserted.destination, mode=0o600)
-
-    script = """
-from datetime import date
-from pathlib import Path
-import sys
-
-from equity_data_downloader import PersistenceError, core, download_daily_ohlcv
-
-def provider_forbidden(**_kwargs: object) -> object:
-    raise AssertionError("provider must not be called")
-
-core._public_download = provider_forbidden
-try:
-    download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        Path(sys.argv[1]),
+    assert receipt.instruments == (_MEMBER,)
+    assert receipt.rows_by_instrument == (("INE002A01018:NSE:RELIANCE", 2),)
+    assert receipt.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert stat.S_IMODE(receipt.destination.stat().st_mode) == 0o400
+    table = pq.ParquetFile(receipt.destination).read()
+    assert table.to_pylist()[0] == {
+        "isin": _MEMBER.isin,
+        "exchange": "NSE",
+        "symbol": "RELIANCE",
+        "session": _START,
+        "open": 100.0,
+        "high": 104.0,
+        "low": 98.0,
+        "close": 102.0,
+        "volume": 1000,
+        "source_open": "100",
+        "source_high": "104",
+        "source_low": "98",
+        "source_close": "102",
+        "source_adjusted_close": "51",
+        "source_adjustment_factor": "0.5",
+    }
+    assert table.schema.metadata[b"provider"] == b"BHARATSTOCK"
+    assert table.schema.metadata[b"price_basis"] == (
+        b"BHARATSTOCK_SOURCE_REPORTED_OHLC"
     )
-except PersistenceError as error:
-    if str(error) != "existing dataset is invalid":
-        raise
-else:
-    raise AssertionError("FIFO dataset was accepted")
-"""
-    completed = subprocess.run(  # noqa: S603 - trusted isolated interpreter
-        [sys.executable, "-c", script, str(tmp_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=3,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    assert table.schema.metadata[b"contract_version"] == b"equity-data-downloader@v5"
+    assert b"apply_adjustment" not in table.schema.metadata
+    assert table.schema.metadata[b"volume_basis"] == b"SOURCE_REPORTED"
+    assert not (tmp_path / ".cache").exists()
+
+
+def test_retired_adjustment_option_is_rejected_before_acquisition(
+    tmp_path: Path,
+) -> None:
+    client = _Client()
+    with pytest.raises(TypeError):
+        download_daily_ohlcv(
+            (_MEMBER,), _START, _END, tmp_path, client=client, apply_adjustment=True
+        )
+    assert client.calls == []
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+def test_precise_source_factor_preserves_supplied_ohlc_and_exact_reuse(
+    tmp_path: Path,
+) -> None:
+    factor = Decimal("0.07462686567164179")
+
+    class Client(_Client):
+        def history(self, instrument, start, end):
+            history = super().history(instrument, start, end)
+            return replace(
+                history,
+                rows=tuple(
+                    replace(
+                        row, adjustment_factor=factor, adjusted_close=row.close * factor
+                    )
+                    for row in history.rows
+                ),
+            )
+
+    client = Client()
+    receipt = _download(tmp_path, client)
+    again = _download(tmp_path, client)
+    rows = pq.ParquetFile(receipt.destination).read().to_pylist()
+    assert [
+        tuple(row[field] for field in ("open", "high", "low", "close")) for row in rows
+    ] == [(100.0, 104.0, 98.0, 102.0), (102.0, 106.0, 100.0, 104.0)]
+    assert [row["volume"] for row in rows] == [1000, 1100]
+    assert [row["source_adjustment_factor"] for row in rows] == [str(factor)] * 2
+    assert [row["source_adjusted_close"] for row in rows] == [
+        str(Decimal(row["source_close"]) * factor) for row in rows
+    ]
+    assert again.outcome == "REUSED"
+    assert client.calls == [_MEMBER]
+
+
+def test_existing_exact_request_is_reused_without_provider_call(tmp_path: Path) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+    original = receipt.destination.read_bytes()
+    again = _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+    assert again.outcome == "REUSED"
+    assert again.retrieved_at == receipt.retrieved_at
+    assert again.request_identity_sha256 == receipt.request_identity_sha256
+    assert receipt.destination.read_bytes() == original
+
+
+def test_requested_order_and_exchange_identity_bind_distinct_datasets(
+    tmp_path: Path,
+) -> None:
+    first = download_daily_ohlcv(
+        (_MEMBER, _OTHER), _START, _END, tmp_path, client=_Client()
+    )
+    reverse = download_daily_ohlcv(
+        (_OTHER, _MEMBER), _START, _END, tmp_path, client=_Client()
+    )
+    assert first.request_identity_sha256 != reverse.request_identity_sha256
+    assert first.instruments == (_MEMBER, _OTHER)
+    assert reverse.instruments == (_OTHER, _MEMBER)
+
+
+def test_member_local_insufficiency_retains_other_members_and_original_coverage(
+    tmp_path: Path,
+) -> None:
+    client = _Client(
+        {_OTHER.isin: BharatStockError("EMPTY_HISTORY", member_local=True)}
+    )
+    receipt = download_daily_ohlcv(
+        (_OTHER, _MEMBER), _START, _END, tmp_path, client=client
+    )
+    assert receipt.instruments == (_OTHER, _MEMBER)
+    assert receipt.rows_by_instrument == (
+        ("INE062A01020:NSE:SBIN", 0),
+        ("INE002A01018:NSE:RELIANCE", 2),
+    )
+    assert receipt.row_count == 2
+    assert client.calls == [_OTHER, _MEMBER]
+
+
+def test_shared_failure_stops_later_members_without_publishing_subset(
+    tmp_path: Path,
+) -> None:
+    client = _Client(
+        {_MEMBER.isin: BharatStockError("RATE_LIMITED", member_local=False)}
+    )
+    with pytest.raises(DownloadError, match="RATE_LIMITED"):
+        download_daily_ohlcv((_MEMBER, _OTHER), _START, _END, tmp_path, client=client)
+    assert client.calls == [_MEMBER]
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+def test_all_insufficient_publishes_no_empty_success(tmp_path: Path) -> None:
+    client = _Client(
+        {_MEMBER.isin: BharatStockError("EMPTY_HISTORY", member_local=True)}
+    )
+    with pytest.raises(DownloadError):
+        _download(tmp_path, client)
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+@pytest.mark.parametrize("kind", ["garbage", "fifo", "hardlink", "symlink"])
+def test_invalid_existing_file_fails_without_provider_call(
+    tmp_path: Path, kind: str
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+    path = receipt.destination
+    if kind == "hardlink":
+        os.link(path, tmp_path / "additional-link")
+    else:
+        original = path.read_bytes()
+        path.unlink()
+        if kind == "fifo":
+            os.mkfifo(path, 0o400)
+        elif kind == "symlink":
+            outside = tmp_path / "outside.parquet"
+            outside.write_bytes(original)
+            path.symlink_to(outside)
+        else:
+            path.write_bytes(b"not-parquet")
+            path.chmod(0o400)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "bad-price",
+        "unknown-metadata",
+        "field-metadata",
+        "wrong-identity",
+        "source-vs-processed",
+    ],
+)
+def test_invalid_existing_parquet_semantics_fail_without_acquisition(
+    tmp_path: Path, kind: str
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+
+    def transform(table):
+        if kind == "unknown-metadata":
+            return table.replace_schema_metadata(
+                {**table.schema.metadata, b"unknown": b"value"}
+            )
+        if kind == "field-metadata":
+            schema = table.schema.set(
+                0, table.schema.field(0).with_metadata({b"unknown": b"value"})
+            )
+            return pa.Table.from_arrays(table.columns, schema=schema)
+        rows = table.to_pylist()
+        if kind == "source-vs-processed":
+            rows[0]["open"] = 50.0
+        else:
+            rows[0]["close" if kind == "bad-price" else "isin"] = (
+                -1.0 if kind == "bad-price" else _OTHER.isin
+            )
+        return pa.Table.from_pylist(rows, schema=table.schema)
+
+    _rewrite(receipt.destination, transform)
+    original = receipt.destination.read_bytes()
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+    assert receipt.destination.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        pytest.param({"source_adjusted_close": "NaN"}, id="nonfinite-optional-close"),
+        pytest.param({"source_adjustment_factor": "0"}, id="nonpositive-factor"),
+        pytest.param(
+            {
+                **dict.fromkeys(("open", "high", "low", "close"), 1e19),
+                **dict.fromkeys(
+                    ("source_open", "source_high", "source_low", "source_close"),
+                    "1E+19",
+                ),
+            },
+            id="source-price-above-provider-bound",
+        ),
+        pytest.param(
+            {
+                **dict.fromkeys(("open", "high", "low", "close"), 100.0),
+                **dict.fromkeys(
+                    ("source_open", "source_high", "source_low", "source_close"),
+                    "100",
+                ),
+                "source_open": "100.00000000000000001",
+            },
+            id="exact-price-order-hidden-by-float-rounding",
+        ),
+    ],
+)
+def test_reuse_enforces_exact_source_price_domain(
+    tmp_path: Path, updates: dict[str, object]
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+
+    def transform(table):
+        rows = table.to_pylist()
+        rows[0].update(updates)
+        return pa.Table.from_pylist(rows, schema=table.schema)
+
+    _rewrite(receipt.destination, transform)
+    original = receipt.destination.read_bytes()
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+    assert receipt.destination.read_bytes() == original
+
+
+def test_reuse_rejects_metadata_change_during_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+    original = core._validate_existing_table
+
+    def mutate(table, **kwargs):
+        result = original(table, **kwargs)
+        receipt.destination.chmod(0o600)
+        return result
+
+    monkeypatch.setattr(core, "_validate_existing_table", mutate)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+
+
+def test_insert_rejects_file_substitution_after_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = core._persist
+
+    def substitute(table, directory, name):
+        descriptor = original(table, directory, name)
+        os.unlink(name, dir_fd=directory.descriptor)
+        replacement = os.open(
+            name,
+            os.O_CREAT | os.O_WRONLY | os.O_EXCL,
+            0o600,
+            dir_fd=directory.descriptor,
+        )
+        os.write(replacement, b"substituted")
+        os.close(replacement)
+        return descriptor
+
+    monkeypatch.setattr(core, "_persist", substitute)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path)
+    assert tuple(tmp_path.rglob("data.parquet"))[0].read_bytes() == b"substituted"
+
+
+@pytest.mark.parametrize("root_kind", ["relative", "missing", "symlink"])
+def test_invalid_storage_root_prevents_provider_effect(
+    tmp_path: Path, root_kind: str
+) -> None:
+    client = _Client()
+    root = Path("relative") if root_kind == "relative" else tmp_path / "missing"
+    if root_kind == "symlink":
+        root.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises((ValueError, PersistenceError)):
+        _download(root, client)
+    assert client.calls == []
+
+
+def test_symlinked_request_directory_is_not_followed(tmp_path: Path) -> None:
+    client = _Client()
+    receipt = _download(tmp_path, client)
+    directory = receipt.destination.parent
+    held = directory.with_name("displaced")
+    directory.rename(held)
+    directory.symlink_to(held, target_is_directory=True)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    assert client.calls == [_MEMBER]
+
+
+def test_publication_does_not_delete_substituted_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = pq.write_table
+    replacement = b"independent replacement"
+
+    def substitute(table, stream, **kwargs):
+        original(table, stream, **kwargs)
+        path = tuple(tmp_path.rglob("data.parquet"))[0]
+        path.unlink()
+        path.write_bytes(replacement)
+        raise OSError("write failed after replacement")
+
+    monkeypatch.setattr(pq, "write_table", substitute)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path)
+    assert tuple(tmp_path.rglob("data.parquet"))[0].read_bytes() == replacement
+
+
+def test_mode_commit_failure_recovers_without_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _Client()
+    original = os.fchmod
+    failed = False
+
+    def fail_once(fd: int, mode: int) -> None:
+        nonlocal failed
+        if mode == 0o400 and not failed:
+            failed = True
+            raise OSError("mode commit interrupted")
+        original(fd, mode)
+
+    monkeypatch.setattr(os, "fchmod", fail_once)
+    with pytest.raises(PersistenceError):
+        _download(tmp_path, client)
+    receipt = _download(tmp_path, client)
+    assert receipt.outcome == "REUSED"
+    assert client.calls == [_MEMBER]
+    assert stat.S_IMODE(receipt.destination.stat().st_mode) == 0o400
+
+
+def test_directory_fsync_failure_does_not_claim_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = os.fsync
+
+    def fail_directory(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("directory durability unavailable")
+        original(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_directory)
+    with pytest.raises((PersistenceError, OSError)):
+        _download(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "members", [(), (_MEMBER, _MEMBER), ("RELIANCE.NS",), (_MEMBER,) * 101]
+)
+def test_invalid_request_has_no_provider_or_storage_effect(
+    tmp_path: Path, members: object
+) -> None:
+    client = _Client()
+    with pytest.raises(ValueError):
+        download_daily_ohlcv(members, _START, _END, tmp_path, client=client)
+    assert client.calls == []
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+def test_persists_absent_optional_adjustment_evidence(tmp_path: Path) -> None:
+    history = BharatStockHistory(
+        _MEMBER,
+        (
+            BharatStockDailyPrice(
+                _START,
+                Decimal(100),
+                Decimal(104),
+                Decimal(98),
+                Decimal(102),
+                1000,
+                None,
+                None,
+            ),
+        ),
+        datetime(2026, 8, 29, tzinfo=UTC),
+        ("a" * 64, "b" * 64),
+        2,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    assert calls == 1
-    assert stat.S_ISFIFO(inserted.destination.lstat().st_mode)
-    assert displaced.read_bytes() == original
-    assert set(inserted.destination.parent.iterdir()) == {
-        inserted.destination,
-        displaced,
+    class Client:
+        def history(
+            self, instrument: BharatStockInstrument, start: date, end: date
+        ) -> BharatStockHistory:
+            assert (instrument, start, end) == (_MEMBER, _START, _END)
+            return history
+
+    receipt = download_daily_ohlcv((_MEMBER,), _START, _END, tmp_path, client=Client())
+    assert pq.ParquetFile(receipt.destination).read().to_pylist()[0] == {
+        "isin": _MEMBER.isin,
+        "exchange": "NSE",
+        "symbol": "RELIANCE",
+        "session": _START,
+        "open": 100.0,
+        "high": 104.0,
+        "low": 98.0,
+        "close": 102.0,
+        "volume": 1000,
+        "source_open": "100",
+        "source_high": "104",
+        "source_low": "98",
+        "source_close": "102",
+        "source_adjusted_close": None,
+        "source_adjustment_factor": None,
     }
 
 
-def test_semantically_invalid_existing_parquet_fails_closed_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
+def test_one_hundred_canonical_members_are_retained(tmp_path: Path) -> None:
+    members = tuple(
+        BharatStockInstrument(f"INE{position:09d}", "NSE", f"STOCK{position}")
+        for position in range(100)
     )
-    table = pq.read_table(inserted.destination)
-    invalid = table.set_column(
-        table.column_names.index("open"),
-        "open",
-        pa.array([float("nan")], type=pa.float64()),
-    )
-    inserted.destination.chmod(0o600)
-    pq.write_table(invalid, inserted.destination)
-    inserted.destination.chmod(0o600)
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
+    client = _Client()
+    receipt = download_daily_ohlcv(members, _START, _END, tmp_path, client=client)
+    assert receipt.instruments == members
+    assert tuple(client.calls) == members
+    assert tuple(count for _, count in receipt.rows_by_instrument) == (2,) * 100
+    assert receipt.row_count == 200
 
 
-def test_reuse_rejects_unknown_parquet_metadata_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_cli_reports_canonical_receipt_and_reuses_without_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    table = pq.read_table(inserted.destination)
-    metadata = dict(table.schema.metadata or {})
-    metadata[b"unknown_metadata"] = b"not-permitted"
-    inserted.destination.chmod(0o600)
-    pq.write_table(table.replace_schema_metadata(metadata), inserted.destination)
-    inserted.destination.chmod(0o600)
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-
-
-def test_reuse_rejects_unknown_parquet_field_metadata_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    table = pq.read_table(inserted.destination)
-    fields = [
-        field.with_metadata({b"unknown_field_metadata": b"not-permitted"})
-        if position == 0
-        else field
-        for position, field in enumerate(table.schema)
-    ]
-    schema = pa.schema(fields, metadata=table.schema.metadata)
-    invalid = pa.Table.from_arrays(table.columns, schema=schema)
-    inserted.destination.chmod(0o600)
-    pq.write_table(invalid, inserted.destination)
-    inserted.destination.chmod(0o600)
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    assert stat.S_IMODE(inserted.destination.stat().st_mode) == 0o600
-
-
-def test_reuse_rejects_metadata_change_during_parquet_validation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    original_read = core.pq.read_table
-
-    def read_then_touch(*args: object, **kwargs: object) -> object:
-        table = original_read(*args, **kwargs)
-        metadata = inserted.destination.stat()
-        os.utime(
-            inserted.destination,
-            ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000),
-        )
-        return table
-
-    monkeypatch.setattr(core.pq, "read_table", read_then_touch)
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-
-
-def test_insert_rejects_dataset_substitution_after_publication(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _frame(("SBIN.NS",), ("2026-08-28",))
-    original_ensure = core._ensure_directories  # pyright: ignore[reportPrivateUsage]
-    substituted = False
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    def substitute_before_receipt(
-        directories: list[core._PrivateDirectory],  # pyright: ignore[reportPrivateUsage]
-    ) -> None:
-        nonlocal substituted
-        original_ensure(directories)
-        parquet = tuple(tmp_path.rglob("data.parquet"))
-        if not substituted and directories[-1].name == "yfinance" and len(parquet) == 1:
-            substituted = True
-            original = parquet[0].read_bytes()
-            parquet[0].rename(parquet[0].with_name("displaced.parquet"))
-            parquet[0].write_bytes(original)
-            parquet[0].chmod(0o600)
-
-    _use_provider(monkeypatch, fake_download)
-    monkeypatch.setattr(core, "_ensure_directories", substitute_before_receipt)
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert substituted is True
-
-
-def test_relative_storage_root_is_rejected_before_provider_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return object()
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(ValueError, match="invalid download request"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            Path("relative-root"),
-        )
-
-    assert calls == 0
-
-
-def test_symlinked_storage_root_is_rejected_before_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    actual = tmp_path / "actual"
-    actual.mkdir(mode=0o700)
-    linked = tmp_path / "linked"
-    linked.symlink_to(actual, target_is_directory=True)
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return object()
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(PersistenceError, match="storage root is unavailable"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            linked,
-        )
-
-    assert calls == 0
-
-
-def test_reuse_rejects_symlinked_request_directory_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    request_directory = inserted.destination.parent
-    displaced = request_directory.with_name("displaced-request")
-    request_directory.rename(displaced)
-    request_directory.symlink_to(displaced, target_is_directory=True)
-
-    with pytest.raises(PersistenceError, match="storage directory is unsafe"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    assert displaced.joinpath("data.parquet").is_file()
-
-
-def test_reuse_rejects_extra_parquet_hardlink_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    inserted = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-    linked = inserted.destination.with_name("linked.parquet")
-    linked.hardlink_to(inserted.destination)
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    assert linked.is_file()
-
-
-def test_direct_publication_never_moves_or_deletes_substituted_final(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**kwargs: object) -> object:
-        nonlocal calls
-        del kwargs
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    original_require = core._require_exact_private_file  # pyright: ignore[reportPrivateUsage]
-    substituted = False
-
-    def substitute_before_validation(
-        *args: object,
-        **kwargs: object,
-    ) -> tuple[int, ...]:
-        nonlocal substituted
-        if not substituted and args[1] == "data.parquet":
-            directory = cast(core._PrivateDirectory, args[0])  # pyright: ignore[reportPrivateUsage]
-            canonical = (
-                tmp_path
-                / "adjusted_daily"
-                / "provider=yfinance"
-                / directory.name
-                / "data.parquet"
-            )
-            displaced = canonical.with_name("displaced.parquet")
-            canonical.rename(displaced)
-            canonical.write_bytes(displaced.read_bytes())
-            canonical.chmod(0o600)
-            substituted = True
-        return original_require(*args, **kwargs)  # type: ignore[arg-type]
-
-    _use_provider(monkeypatch, fake_download)
-    monkeypatch.setattr(
-        core,
-        "_require_exact_private_file",
-        substitute_before_validation,
-    )
-    with pytest.raises(PersistenceError, match="destination write failed"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    canonical = next(tmp_path.rglob("data.parquet"))
-    displaced = canonical.with_name("displaced.parquet")
-    assert canonical.is_file()
-    assert displaced.is_file()
-    assert canonical.read_bytes() == displaced.read_bytes()
-
-
-def test_post_publication_directory_fsync_failure_fails_closed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**kwargs: object) -> object:
-        nonlocal calls
-        del kwargs
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    original_require = core._require_exact_private_file  # pyright: ignore[reportPrivateUsage]
-    real_fsync = core.os.fsync
-    publication_complete = False
-
-    def observe_publication(*args: object, **kwargs: object) -> tuple[int, ...]:
-        nonlocal publication_complete
-        result = original_require(*args, **kwargs)  # type: ignore[arg-type]
-        if args[1] == "data.parquet" and kwargs.get("expected_nlink", 1) == 1:
-            publication_complete = True
-        return result
-
-    def reject_post_publication_fsync(descriptor: int) -> None:
-        if publication_complete:
-            raise OSError("post-publication fsync")
-        real_fsync(descriptor)
-
-    _use_provider(monkeypatch, fake_download)
-    monkeypatch.setattr(core, "_require_exact_private_file", observe_publication)
-    monkeypatch.setattr(core.os, "fsync", reject_post_publication_fsync)
-    with pytest.raises(PersistenceError, match="destination write failed"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    parquet = tuple(tmp_path.rglob("data.parquet"))
-    assert len(parquet) == 1
-    assert parquet[0].stat().st_nlink == 1
-    assert stat.S_IMODE(parquet[0].stat().st_mode) == 0o600
-
-    monkeypatch.setattr(core.os, "fsync", real_fsync)
-    reused = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert reused.outcome == "REUSED"
-    assert calls == 1
-    assert stat.S_IMODE(parquet[0].stat().st_mode) == 0o400
-
-
-def test_mode_commit_fsync_failure_recovers_without_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_download(**kwargs: object) -> object:
-        nonlocal calls
-        del kwargs
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    real_fchmod = core.os.fchmod
-    real_fsync = core.os.fsync
-    mode_committed = False
-
-    def observe_mode_commit(descriptor: int, mode: int) -> None:
-        nonlocal mode_committed
-        real_fchmod(descriptor, mode)
-        if mode == 0o400:
-            mode_committed = True
-
-    def reject_commit_fsync(descriptor: int) -> None:
-        if mode_committed:
-            raise OSError("mode commit fsync")
-        real_fsync(descriptor)
-
-    _use_provider(monkeypatch, fake_download)
-    monkeypatch.setattr(core.os, "fchmod", observe_mode_commit)
-    monkeypatch.setattr(core.os, "fsync", reject_commit_fsync)
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    parquet = tuple(tmp_path.rglob("data.parquet"))
-    assert len(parquet) == 1
-    assert stat.S_IMODE(parquet[0].stat().st_mode) == 0o400
-
-    monkeypatch.setattr(core.os, "fsync", real_fsync)
-    reused = download_daily_ohlcv(
-        ("SBIN.NS",),
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert reused.outcome == "REUSED"
-    assert calls == 1
-
-
-def test_mode_commit_rereads_and_rejects_same_inode_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-    mutated = False
-
-    def fake_download(**kwargs: object) -> object:
-        nonlocal calls
-        del kwargs
-        calls += 1
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    real_fchmod = core.os.fchmod
-
-    def mutate_through_existing_writer(descriptor: int, mode: int) -> None:
-        nonlocal mutated
-        with os.fdopen(os.dup(descriptor), "rb") as stream:
-            table = pq.read_table(stream)
-        real_fchmod(descriptor, mode)
-        replacement = table.set_column(
-            table.column_names.index("volume"),
-            "volume",
-            pa.array(
-                [cast(int, table["volume"][0].as_py()) + 1],
-                type=pa.int64(),
-            ),
-        )
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        os.ftruncate(descriptor, 0)
-        with os.fdopen(os.dup(descriptor), "wb") as stream:
-            pq.write_table(replacement, stream)
-        mutated = True
-
-    _use_provider(monkeypatch, fake_download)
-    monkeypatch.setattr(core.os, "fchmod", mutate_through_existing_writer)
-
-    with pytest.raises(PersistenceError, match="existing dataset is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert calls == 1
-    assert mutated is True
-    parquet = tuple(tmp_path.rglob("data.parquet"))
-    assert len(parquet) == 1
-    assert stat.S_IMODE(parquet[0].stat().st_mode) == 0o400
-
-
-@pytest.mark.parametrize(
-    "symbols,start,end",
-    [
-        ((), date(2026, 8, 28), date(2026, 8, 28)),
-        (("SBIN.NS", "sbin.ns"), date(2026, 8, 28), date(2026, 8, 28)),
-        (("bad symbol",), date(2026, 8, 28), date(2026, 8, 28)),
-        (("SBIN.NS",), date(2026, 8, 29), date(2026, 8, 28)),
-        (
-            tuple(f"STOCK{position}.NS" for position in range(101)),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-        ),
-    ],
-)
-def test_invalid_requests_have_no_provider_or_filesystem_effect(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    symbols: tuple[str, ...],
-    start: date,
-    end: date,
-) -> None:
-    calls = 0
-
-    def fake_download(**_kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return object()
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(ValueError, match="invalid download request"):
-        download_daily_ohlcv(symbols, start, end, tmp_path)
-
-    assert calls == 0
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-def test_accepts_one_hundred_symbols_in_one_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    symbols = tuple(f"STOCK{position}.NS" for position in range(100))
-    canonical = tuple(sorted(symbols))
-    calls: list[tuple[str, ...]] = []
-
-    def fake_download(**kwargs: object) -> object:
-        tickers = cast(tuple[str, ...], kwargs["tickers"])
-        calls.append(tickers)
-        return _frame(tickers, ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    receipt = download_daily_ohlcv(
-        symbols,
-        date(2026, 8, 28),
-        date(2026, 8, 28),
-        tmp_path,
-    )
-
-    assert calls == [canonical]
-    assert receipt.row_count == 100
-    assert receipt.rows_by_symbol == tuple((symbol, 1) for symbol in canonical)
-
-
-def test_provider_failure_or_empty_period_persists_nothing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fail(**_kwargs: object) -> object:
-        raise RuntimeError("private provider detail")
-
-    _use_provider(monkeypatch, fail)
-    with pytest.raises(DownloadError, match="provider download failed"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-    assert not (tmp_path / "adjusted_daily").exists()
-
-    def empty_period(**kwargs: object) -> object:
-        del kwargs
-        return _frame(("SBIN.NS",), ("2026-08-27",))
-
-    _use_provider(monkeypatch, empty_period)
-    with pytest.raises(DownloadError, match="no rows"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-def test_cli_accepts_repeated_symbols_and_reports_receipt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    observed: list[tuple[object, ...]] = []
-    request_identity = "a" * 64
-    destination = (
-        tmp_path
-        / "adjusted_daily"
-        / "provider=yfinance"
-        / f"request={request_identity}"
-        / "data.parquet"
-    )
-
-    def fake_download(
-        symbols: tuple[str, ...],
-        start: date,
-        end: date,
-        storage_root: Path,
-    ) -> DownloadReceipt:
-        observed.append((symbols, start, end, storage_root))
-        return DownloadReceipt(
-            symbols=symbols,
-            start=start,
-            end=end,
-            destination=destination,
-            request_identity_sha256=request_identity,
-            retrieved_at=datetime(2026, 8, 30, tzinfo=UTC),
-            provider="YFINANCE",
-            provider_version="1.6.0",
-            price_basis="YFINANCE_AUTO_ADJUSTED_OHLC",
-            volume_basis="YFINANCE_SOURCE_REPORTED_VOLUME",
-            row_count=2,
-            rows_by_symbol=(("SBIN.NS", 1), ("RELIANCE.NS", 1)),
-            outcome="REUSED",
-        )
-
-    monkeypatch.setattr(cli, "download_daily_ohlcv", fake_download)
+    receipt = _download(tmp_path)
+    monkeypatch.delenv("BHARATSTOCK_API_KEY", raising=False)
     status = cli.main(
         [
-            "--symbol",
-            "SBIN.NS",
-            "--symbol",
-            "RELIANCE.NS",
+            "--instrument",
+            "INE002A01018:NSE:RELIANCE",
             "--start",
-            "2026-08-28",
+            str(_START),
             "--end",
-            "2026-08-28",
+            str(_END),
             "--storage-root",
             str(tmp_path),
         ]
     )
-
+    result = json.loads(capsys.readouterr().out)
     assert status == 0
-    assert observed == [
-        (
-            ("SBIN.NS", "RELIANCE.NS"),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
+    assert result["outcome"] == "REUSED"
+    assert result["price_basis"] == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    assert result["request_identity_sha256"] == receipt.request_identity_sha256
+    assert result["instruments"] == [
+        {"isin": _MEMBER.isin, "exchange": "NSE", "symbol": _MEMBER.symbol}
     ]
-    payload = cast(dict[str, object], json.loads(capsys.readouterr().out))
-    assert payload["format"] == "PARQUET"
-    assert payload["outcome"] == "REUSED"
-    assert payload["request_identity_sha256"] == request_identity
-    assert payload["row_count"] == 2
-    assert payload["symbols"] == ["SBIN.NS", "RELIANCE.NS"]
 
 
-@pytest.mark.parametrize(
-    "response,error",
-    [
-        (object(), "provider response is invalid"),
-        (
-            _frame(("SBIN.NS",), ("2026-08-28",)).drop(  # pyright: ignore[reportUnknownMemberType]
-                columns=[("SBIN.NS", "Volume")]
-            ),
-            "provider response is incomplete",
-        ),
-    ],
-)
-def test_rejects_invalid_or_incomplete_provider_frames(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    response: object,
-    error: str,
+def test_cli_rejects_retired_adjustment_flag_before_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
+    def unexpected_download(*args: object, **kwargs: object) -> None:
+        pytest.fail("retired CLI option must be rejected before download")
 
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(DownloadError, match=error):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-@pytest.mark.parametrize(
-    "sessions",
-    [
-        ("2026-08-29", "2026-08-28"),
-        ("2026-08-28T09:15:00", "2026-08-28T15:30:00"),
-    ],
-)
-def test_rejects_reordered_or_duplicate_projected_provider_sessions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    sessions: tuple[str, str],
-) -> None:
-    response = _frame(("SBIN.NS",), sessions)
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(DownloadError, match="provider response is invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 29),
-            tmp_path,
-        )
-
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-class _FormulaFloat(float):
-    def item(self) -> str:
-        return '=HYPERLINK("https://attacker.invalid")'
-
-
-@pytest.mark.parametrize(
-    ("invalid_value", "case"),
-    [
-        ('=HYPERLINK("https://attacker.invalid")', "formula"),
-        (True, "boolean"),
-        (float("inf"), "infinity"),
-        (object(), "object"),
-        (_FormulaFloat(1.0), "numeric-subclass"),
-    ],
-)
-def test_rejects_nonnumeric_provider_cells_without_publication(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    invalid_value: object,
-    case: str,
-) -> None:
-    response = _frame(("SBIN.NS",), ("2026-08-28",))
-    response[("SBIN.NS", "Open")] = pd.Series(
-        [invalid_value],
-        index=response.index,
-        dtype=object,
-    )
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(DownloadError, match="invalid values"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-@pytest.mark.parametrize("volume", [1.5, 1 << 63])
-def test_rejects_volume_outside_exact_int64_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    volume: int | float,
-) -> None:
-    response = _frame(("SBIN.NS",), ("2026-08-28",))
-    response[("SBIN.NS", "Volume")] = pd.Series(
-        [volume],
-        index=response.index,
-        dtype=object,
-    )
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        return response
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(DownloadError, match="OHLCV values are invalid"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path,
-        )
-
-    assert not (tmp_path / "adjusted_daily").exists()
-
-
-def test_missing_storage_root_prevents_provider_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    called = False
-
-    def fake_download(**kwargs: object) -> object:
-        del kwargs
-        nonlocal called
-        called = True
-        return _frame(("SBIN.NS",), ("2026-08-28",))
-
-    _use_provider(monkeypatch, fake_download)
-    with pytest.raises(PersistenceError, match="storage root is unavailable"):
-        download_daily_ohlcv(
-            ("SBIN.NS",),
-            date(2026, 8, 28),
-            date(2026, 8, 28),
-            tmp_path / "missing",
-        )
-
-    assert called is False
-
-
-@pytest.mark.parametrize(
-    ("failure", "expected_status", "expected_message"),
-    [
-        (ValueError("bad request"), 2, "invalid request: bad request"),
-        (
-            DownloadError("provider unavailable"),
-            1,
-            "download failed: provider unavailable",
-        ),
-    ],
-)
-def test_cli_maps_failures_to_stable_exit_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    failure: Exception,
-    expected_status: int,
-    expected_message: str,
-) -> None:
-    def fail(*args: object, **kwargs: object) -> DownloadReceipt:
-        del args, kwargs
-        raise failure
-
-    monkeypatch.setattr(cli, "download_daily_ohlcv", fail)
-    status = cli.main(
-        [
-            "--symbol",
-            "SBIN.NS",
-            "--start",
-            "2026-08-28",
-            "--end",
-            "2026-08-28",
-            "--storage-root",
-            str(tmp_path),
-        ]
-    )
-
-    assert status == expected_status
-    assert capsys.readouterr().err.strip() == expected_message
-
-
-def test_cli_rejects_non_iso_dates() -> None:
+    monkeypatch.setattr(cli, "download_daily_ohlcv", unexpected_download)
     with pytest.raises(SystemExit) as error:
         cli.main(
             [
-                "--symbol",
-                "SBIN.NS",
+                "--instrument",
+                "INE002A01018:NSE:RELIANCE",
                 "--start",
-                "28-08-2026",
+                str(_START),
                 "--end",
-                "2026-08-28",
+                str(_END),
+                "--storage-root",
+                str(tmp_path),
+                "--apply-adjustment",
             ]
         )
-
     assert error.value.code == 2
+    assert not (tmp_path / "adjusted_daily").exists()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [],
+        ["--instrument", "RELIANCE.NS"],
+        ["--instrument", "INE002A01018:NSE:RELIANCE", "--start", "not-a-date"],
+    ],
+)
+def test_cli_rejects_missing_or_noncanonical_request(extra: list[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(extra)
+    assert error.value.code == 2
+
+
+def test_legacy_yahoo_parquet_stays_readable_without_relabelling(
+    tmp_path: Path,
+) -> None:
+    lease = core._acquire_storage_root(tmp_path)
+    lease.close()
+    (tmp_path / "adjusted_daily").mkdir(mode=0o700)
+    old = (
+        tmp_path
+        / "adjusted_daily"
+        / "provider=yfinance"
+        / "request=historical"
+        / "data.parquet"
+    )
+    old.parent.mkdir(parents=True)
+    table = pa.Table.from_pylist(
+        [{"symbol": "RELIANCE.NS", "close": 101.0}]
+    ).replace_schema_metadata({b"provider": b"YFINANCE", b"schema_version": b"2"})
+    pq.write_table(table, old)
+    original = old.read_bytes()
+    _download(tmp_path)
+    assert old.read_bytes() == original
+    assert pq.ParquetFile(old).read().equals(table, check_metadata=True)
