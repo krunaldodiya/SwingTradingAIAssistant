@@ -7,7 +7,7 @@ HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3dbb44af9ba07efc1e6306890269c005ce36947bd471b1e0db8b68f611abc13d",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "03e2674ae8e931d1d78c37ecb51903a2006338a5ff940af0ad352a0306859071",
-    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "1e0b49e969c98ffe23fc3869d92bee06136a6d90dcb766503cce9d501871d1dd",
+    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "9dff899d47241382f769998f03f92a28445f21399d2c30ebf2431d43cb23e70f",
     "src/swing_trading_ai_assistant/market_data/instruments.py": "88da37f7a12c1e7e8a3dfa44c2755e12581f986886728b6addce91e851123029",
     "src/swing_trading_ai_assistant/market_data/manifest_lifecycle.py": "fbf92746d79a8569cbd84aa9cd5be6c4d201b3a3f23abf19a86b7fb6925282e5",
     "src/swing_trading_ai_assistant/market_data/monthly_request_planner.py": "5854dfc5c9e4b24ff6a4f7c79f61b0a445789f8cd305e1dbcd0f130bc3ce0b00",

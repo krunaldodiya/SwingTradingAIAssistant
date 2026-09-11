@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, DecimalException, localcontext
@@ -47,6 +48,10 @@ from .storage_root_lease import (
 CONTRACT_VERSION_V3: Final = "bharatstock-capture@v3"
 SOURCE_PROFILE_V3: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3"
 _PROCESSING_REVISION_V3: Final = "source-reported-ohlc@v2"
+# PR185's exact V3 schema/basis remains readable, never a current writer token.
+_READ_ONLY_RUNTIME_IDENTITY_V3: Final = (
+    "bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d"
+)
 _PREDECESSOR_SOURCE_PROFILE_V2: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2"
 _PREDECESSOR_PRICE_BASIS_V2: Final = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
 _PREDECESSOR_VOLUME_BASIS_V2: Final = "SOURCE_REPORTED_UNADJUSTED"
@@ -68,6 +73,28 @@ _DIGEST_HEX: Final = frozenset("0123456789abcdef")
 
 class CaptureRevisionUnavailableV2(ValueError):
     """The requested immutable capture evidence cannot be read safely."""
+
+
+class _CaptureDeadlineExceeded(RuntimeError):
+    """The capture cutoff elapsed before a subsequent provider effect."""
+
+
+def _borrowed_lease_authorizes(
+    lease: StorageRootLease, root: Path, *, write: bool
+) -> bool:
+    """Validate caller-owned private-root authority without taking ownership."""
+
+    if lease._root_private is not True:  # pyright: ignore[reportPrivateUsage]
+        return False
+    try:
+        with lease.read_operation(root):
+            pass
+        if write:
+            with lease.root_operation(root):
+                pass
+    except StorageRootLeaseError:
+        return False
+    return True
 
 
 def _canonical(value: object) -> bytes:
@@ -317,7 +344,8 @@ class CaptureRequestV2:
             )
             or self.selection_identity_sha256 != selection_identity_v2(self.members)
             or self.schema_identity_sha256 != _schema_identity()
-            or self.runtime_code_identity_sha256 != _runtime_identity()
+            or self.runtime_code_identity_sha256
+            not in (_runtime_identity(), _READ_ONLY_RUNTIME_IDENTITY_V3)
             or self.configuration_identity_sha256 != _configuration_identity()
         ):
             raise ValueError("BharatStock capture request is invalid")
@@ -646,9 +674,16 @@ RetainedCaptureRevisionV2: TypeAlias = CaptureRevisionV2 | _PredecessorCaptureRe
 
 @dataclass(frozen=True, slots=True)
 class CaptureResultV2:
+    """Outcome origin covers an admitted revision or unchanged acknowledgement.
+
+    ``from_acquisition`` is not a request counter; failures may follow requests
+    without producing either an admitted revision or an unchanged acknowledgement.
+    """
+
     code: Literal["CAPTURED", "REUSED", "INSUFFICIENT_EVIDENCE", "STORE_UNAVAILABLE"]
     revision: CaptureRevisionV2 | None
     reason: str | None = None
+    from_acquisition: bool = False
 
     def __post_init__(self) -> None:
         success = self.code in {"CAPTURED", "REUSED"}
@@ -658,6 +693,17 @@ class CaptureResultV2:
             raise ValueError("BharatStock capture result is invalid")
         if not success and (self.revision is not None or not self.reason):
             raise ValueError("BharatStock capture result is invalid")
+        if type(self.from_acquisition) is not bool or (
+            self.from_acquisition
+            and not (
+                self.code == "CAPTURED"
+                or (
+                    self.code == "INSUFFICIENT_EVIDENCE"
+                    and self.reason == "CORRECTION_CONTENT_UNCHANGED"
+                )
+            )
+        ):
+            raise ValueError("BharatStock capture result origin is invalid")
 
 
 def _validate_capture_members(
@@ -990,13 +1036,21 @@ def _publish(
         raise ValueError("capture evidence conflict") from None
 
 
-def _schedule_matches(request: CaptureRequestV2, root: Path) -> bool:
-    lease = _acquire_root(root)
-    if lease is None:
+def _schedule_matches(
+    request: CaptureRequestV2,
+    root: Path,
+    *,
+    lease: StorageRootLease | None = None,
+) -> bool:
+    owned_lease = lease is None
+    active_lease = _acquire_root(root) if owned_lease else lease
+    if active_lease is None:
         return False
     try:
-        with lease:
-            result = ScheduleEvidenceStore(root, lease).resolve(
+        with ExitStack() as stack:
+            if owned_lease:
+                stack.enter_context(active_lease)
+            result = ScheduleEvidenceStore(root, active_lease).resolve(
                 request.schedule_evidence_sha256
             )
             if result.outcome is ScheduleOutcome.FAILED or result.schedule is None:
@@ -1228,14 +1282,20 @@ def _material_member_values(revision: CaptureRevisionV2) -> tuple[object, ...]:
 
 
 def _revision_bytes_for_admission(
-    revision: CaptureRevisionV2, parent: CaptureRevisionV2 | None
+    revision: CaptureRevisionV2,
+    parent: CaptureRevisionV2 | None,
+    *,
+    from_acquisition: bool,
 ) -> bytes | CaptureResultV2:
     if parent is not None and (
         _material_member_values(parent) == _material_member_values(revision)
         and parent.shared_failure == revision.shared_failure
     ):
         return CaptureResultV2(
-            "INSUFFICIENT_EVIDENCE", None, "CORRECTION_CONTENT_UNCHANGED"
+            "INSUFFICIENT_EVIDENCE",
+            None,
+            "CORRECTION_CONTENT_UNCHANGED",
+            from_acquisition=from_acquisition,
         )
     if parent is not None and parent.observed_at > revision.observed_at:
         return CaptureResultV2(
@@ -1247,17 +1307,46 @@ def _revision_bytes_for_admission(
     return raw
 
 
+def _capture_effect_guard(
+    request: CaptureRequestV2,
+    operation: StorageRootLeaseOperation,
+    clock: Callable[[], datetime] | None,
+) -> Callable[[], None]:
+    current_time = _now if clock is None else clock
+
+    def guard() -> None:
+        if _instant(current_time()) > request.decision_cutoff:
+            raise _CaptureDeadlineExceeded
+        operation.ensure_live()
+
+    return guard
+
+
 def _member_result(
-    request: CaptureRequestV2, member: BharatStockInstrument, client: BharatStockClient
+    request: CaptureRequestV2,
+    member: BharatStockInstrument,
+    client: BharatStockClient,
+    effect_guard: Callable[[], None] | None,
 ) -> CaptureMemberResultV2:
+    if effect_guard is not None:
+        effect_guard()
     try:
-        history = client.history(member, request.sessions[0], request.sessions[-1])
+        history = client.history(
+            member,
+            request.sessions[0],
+            request.sessions[-1],
+            effect_guard=effect_guard,
+        )
     except BharatStockError as error:
+        if effect_guard is not None:
+            effect_guard()
         if error.member_local:
             return CaptureMemberResultV2(
                 member, "INSUFFICIENT_EVIDENCE", error.category, None
             )
         raise
+    if effect_guard is not None:
+        effect_guard()
     if type(history) is not BharatStockHistory:
         return CaptureMemberResultV2(
             member, "INSUFFICIENT_EVIDENCE", "HISTORY_INVALID", None
@@ -1285,8 +1374,12 @@ def _acquire_revision(
     request: CaptureRequestV2,
     client: BharatStockClient | None,
     clock: Callable[[], datetime] | None,
+    *,
+    effect_guard: Callable[[], None] | None = None,
 ) -> CaptureRevisionV2 | CaptureResultV2:
     current_time = _now if clock is None else clock
+    if (failure := _publication_failure(request, clock)) is not None:
+        return failure
     active_client = BharatStockClient() if client is None else client
     results: list[CaptureMemberResultV2] = []
     shared_failure: str | None = None
@@ -1308,7 +1401,15 @@ def _acquire_revision(
                 "ACQUISITION_DEADLINE_EXCEEDED",
             )
         try:
-            results.append(_member_result(request, member, active_client))
+            results.append(_member_result(request, member, active_client, effect_guard))
+        except _CaptureDeadlineExceeded:
+            return CaptureResultV2(
+                "INSUFFICIENT_EVIDENCE",
+                None,
+                "ACQUISITION_DEADLINE_EXCEEDED",
+            )
+        except StorageRootLeaseError:
+            return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
         except BharatStockError as error:
             shared_failure = error.category
             results.append(
@@ -1338,12 +1439,58 @@ def _acquire_revision(
     return revision
 
 
+def _publication_failure(
+    request: CaptureRequestV2, clock: Callable[[], datetime] | None
+) -> CaptureResultV2 | None:
+    if _instant((_now if clock is None else clock)()) > request.decision_cutoff:
+        return CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "ACQUISITION_DEADLINE_EXCEEDED"
+        )
+    return None
+
+
+def _publish_revision(
+    revision: CaptureRevisionV2,
+    raw: bytes,
+    prepared: _PrivateDirectory | None,
+    revisions: _PrivateDirectory,
+    requests: _PrivateDirectory,
+    clock: Callable[[], datetime] | None,
+    *,
+    from_acquisition: bool,
+) -> CaptureResultV2:
+    request = revision.request
+    if (failure := _publication_failure(request, clock)) is not None:
+        return failure
+    if prepared is not None:
+        _publish(prepared, f"{request.request_identity_sha256}.json", raw, held=True)
+        if (failure := _publication_failure(request, clock)) is not None:
+            return failure
+    _publish(revisions, f"{revision.revision_identity_sha256}.json", raw)
+    if (failure := _publication_failure(request, clock)) is not None:
+        return failure
+    _publish(
+        requests,
+        f"{request.request_identity_sha256}.json",
+        _line(
+            {
+                "request_identity_sha256": request.request_identity_sha256,
+                "revision_identity_sha256": revision.revision_identity_sha256,
+            }
+        ),
+    )
+    if (failure := _publication_failure(request, clock)) is not None:
+        return failure
+    return CaptureResultV2("CAPTURED", revision, from_acquisition=from_acquisition)
+
+
 def _recover_prepared(
     request: CaptureRequestV2,
     prepared: _PrivateDirectory,
     revisions: _PrivateDirectory,
     requests: _PrivateDirectory,
     parent: CaptureRevisionV2 | None,
+    clock: Callable[[], datetime] | None,
 ) -> CaptureResultV2 | None:
     try:
         revision = _revision_from_bytes(
@@ -1358,48 +1505,50 @@ def _recover_prepared(
         return None
     if revision.request != request:
         return CaptureResultV2("STORE_UNAVAILABLE", None, "PREPARED_REVISION_MISMATCH")
-    raw = _revision_bytes_for_admission(revision, parent)
+    raw = _revision_bytes_for_admission(revision, parent, from_acquisition=False)
     if isinstance(raw, CaptureResultV2):
         return raw
-    _publish(
-        revisions,
-        f"{revision.revision_identity_sha256}.json",
-        raw,
+    return _publish_revision(
+        revision, raw, None, revisions, requests, clock, from_acquisition=False
     )
-    _publish(
-        requests,
-        f"{request.request_identity_sha256}.json",
-        _line(
-            {
-                "request_identity_sha256": request.request_identity_sha256,
-                "revision_identity_sha256": revision.revision_identity_sha256,
-            }
-        ),
-    )
-    return CaptureResultV2("CAPTURED", revision)
+
+
+def validate_current_capture_request_v2(request: object) -> None:
+    """Admit current writer bytes, never the supported read-only V3 identity."""
+    if (
+        type(request) is not CaptureRequestV2
+        or request.runtime_code_identity_sha256 != _runtime_identity()
+        or replace(request) != request
+    ):
+        raise ValueError("BharatStock capture request binding is invalid")
 
 
 def _capture_preflight(
     request: CaptureRequestV2,
     store_root: Path,
     schedule_root: Path,
-) -> StorageRootLease | CaptureResultV2:
-    if (
-        type(request) is not CaptureRequestV2
-        or not store_root.is_absolute()
-        or not schedule_root.is_absolute()
-    ):
+    *,
+    lease: StorageRootLease | None = None,
+) -> tuple[StorageRootLease, bool] | CaptureResultV2:
+    validate_current_capture_request_v2(request)
+    if not store_root.is_absolute() or not schedule_root.is_absolute():
         raise ValueError("BharatStock capture invocation is invalid")
-    if replace(request) != request:
-        raise ValueError("BharatStock capture request binding is invalid")
-    if not _schedule_matches(request, schedule_root):
+    if lease is not None and (
+        type(lease) is not StorageRootLease or store_root != schedule_root
+    ):
+        raise ValueError("BharatStock borrowed lease is invalid")
+    if lease is not None and not _borrowed_lease_authorizes(
+        lease, store_root, write=True
+    ):
+        return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
+    if not _schedule_matches(request, schedule_root, lease=lease):
         return CaptureResultV2(
             "INSUFFICIENT_EVIDENCE", None, "SCHEDULE_EVIDENCE_MISMATCH"
         )
-    lease = _acquire_root(store_root)
-    if lease is None:
+    active_lease = _acquire_root(store_root) if lease is None else lease
+    if active_lease is None:
         return CaptureResultV2("STORE_UNAVAILABLE", None, "STORAGE_UNSAFE_OR_HELD")
-    return lease
+    return active_lease, lease is None
 
 
 def capture_bharatstock_v2(
@@ -1409,29 +1558,41 @@ def capture_bharatstock_v2(
     *,
     client: BharatStockClient | None = None,
     clock: Callable[[], datetime] | None = None,
+    lease: StorageRootLease | None = None,
 ) -> CaptureResultV2:
-    """Capture one V2 request, reusing exact immutable evidence before transport."""
+    """Capture one V2 request, reusing exact immutable evidence before transport.
 
-    lease = _capture_preflight(request, store_root, schedule_root)
-    if isinstance(lease, CaptureResultV2):
-        return lease
+    ``lease`` is a caller-owned, exact-root authority used by composed workflows.
+    It is validated but never entered or closed here.
+    """
+
+    preflight = _capture_preflight(request, store_root, schedule_root, lease=lease)
+    if isinstance(preflight, CaptureResultV2):
+        return preflight
+    active_lease, owned_lease = preflight
     acquiring_evidence = False
     try:
-        with (
-            lease,
-            lease.root_operation(store_root) as operation,
-            _open_directory(
-                operation,
-                operation.descriptor,
-                "bharatstock-capture-v3",
-                create=True,
-            ) as namespace,
-            _open_directory(
-                operation, namespace, "revisions", create=True
-            ) as revisions,
-            _open_directory(operation, namespace, "requests", create=True) as requests,
-            _open_directory(operation, namespace, "prepared", create=True) as prepared,
-        ):
+        with ExitStack() as stack:
+            if owned_lease:
+                stack.enter_context(active_lease)
+            operation = stack.enter_context(active_lease.root_operation(store_root))
+            namespace = stack.enter_context(
+                _open_directory(
+                    operation,
+                    operation.descriptor,
+                    "bharatstock-capture-v3",
+                    create=True,
+                )
+            )
+            revisions = stack.enter_context(
+                _open_directory(operation, namespace, "revisions", create=True)
+            )
+            requests = stack.enter_context(
+                _open_directory(operation, namespace, "requests", create=True)
+            )
+            prepared = stack.enter_context(
+                _open_directory(operation, namespace, "prepared", create=True)
+            )
             existing = _read_pointer(requests, revisions, request)
             if existing is not None:
                 _require_admitted_chain(requests, revisions, existing)
@@ -1440,37 +1601,30 @@ def capture_bharatstock_v2(
             if isinstance(parent, CaptureResultV2):
                 return parent
             recovered = _recover_prepared(
-                request, prepared, revisions, requests, parent
+                request, prepared, revisions, requests, parent, clock
             )
             if recovered is not None:
                 return recovered
-            # Expected storage failures must not hide provider/code defects.
             acquiring_evidence = True
-            revision = _acquire_revision(request, client, clock)
+            effect_guard = _capture_effect_guard(request, operation, clock)
+            revision = _acquire_revision(
+                request, client, clock, effect_guard=effect_guard
+            )
             acquiring_evidence = False
             if isinstance(revision, CaptureResultV2):
                 return revision
-            raw = _revision_bytes_for_admission(revision, parent)
+            raw = _revision_bytes_for_admission(revision, parent, from_acquisition=True)
             if isinstance(raw, CaptureResultV2):
                 return raw
-            _publish(
-                prepared,
-                f"{request.request_identity_sha256}.json",
+            return _publish_revision(
+                revision,
                 raw,
-                held=True,
-            )
-            _publish(revisions, f"{revision.revision_identity_sha256}.json", raw)
-            _publish(
+                prepared,
+                revisions,
                 requests,
-                f"{request.request_identity_sha256}.json",
-                _line(
-                    {
-                        "request_identity_sha256": request.request_identity_sha256,
-                        "revision_identity_sha256": revision.revision_identity_sha256,
-                    }
-                ),
+                clock,
+                from_acquisition=True,
             )
-            return CaptureResultV2("CAPTURED", revision)
     except (OSError, ValueError, StorageRootLeaseError, json.JSONDecodeError):
         if acquiring_evidence:
             raise
@@ -1478,55 +1632,67 @@ def capture_bharatstock_v2(
 
 
 def read_bharatstock_capture_revision_v2(
-    store_root: Path, revision_sha256: str
+    store_root: Path,
+    revision_sha256: str,
+    *,
+    lease: StorageRootLease | None = None,
 ) -> CaptureRevisionV2 | _PredecessorCaptureRevisionV2:
-    """Read admitted current V3 or exact frozen predecessor V2 evidence."""
+    """Read admitted evidence under an owned or validated caller-owned lease."""
 
     if not store_root.is_absolute() or not _valid_digest(revision_sha256):
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
-    lease = _acquire_root(store_root)
-    if lease is None:
+    if lease is not None and type(lease) is not StorageRootLease:
+        raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
+    if lease is not None and not _borrowed_lease_authorizes(
+        lease, store_root, write=False
+    ):
+        raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
+    active_lease = _acquire_root(store_root) if lease is None else lease
+    if active_lease is None:
         raise CaptureRevisionUnavailableV2("BharatStock capture revision unavailable")
     try:
-        with lease, lease.read_operation(store_root) as operation:
+        with ExitStack() as stack:
+            if lease is None:
+                stack.enter_context(active_lease)
+            operation = stack.enter_context(active_lease.read_operation(store_root))
             try:
-                with (
+                namespace = stack.enter_context(
                     _open_directory(
                         operation,
                         operation.descriptor,
                         "bharatstock-capture-v3",
                         create=False,
-                    ) as namespace,
-                    _open_directory(
-                        operation, namespace, "requests", create=False
-                    ) as requests,
-                    _open_directory(
-                        operation, namespace, "revisions", create=False
-                    ) as revisions,
-                ):
-                    revision = _read_named(revisions, revision_sha256)
-                    _require_admitted_chain(requests, revisions, revision)
-                    validate_capture_revision_v2(revision)
-                    return revision
+                    )
+                )
+                requests = stack.enter_context(
+                    _open_directory(operation, namespace, "requests", create=False)
+                )
+                revisions = stack.enter_context(
+                    _open_directory(operation, namespace, "revisions", create=False)
+                )
+                revision = _read_named(revisions, revision_sha256)
+                _require_admitted_chain(requests, revisions, revision)
+                validate_capture_revision_v2(revision)
+                return revision
             except FileNotFoundError:
-                with (
+                namespace = stack.enter_context(
                     _open_directory(
                         operation,
                         operation.descriptor,
                         "bharatstock-capture-v2",
                         create=False,
-                    ) as namespace,
-                    _open_directory(
-                        operation, namespace, "requests", create=False
-                    ) as requests,
-                    _open_directory(
-                        operation, namespace, "revisions", create=False
-                    ) as revisions,
-                ):
-                    revision = _read_predecessor_named(revisions, revision_sha256)
-                    _require_predecessor_admitted_chain(requests, revisions, revision)
-                    validate_capture_revision_v2(revision)
-                    return revision
+                    )
+                )
+                requests = stack.enter_context(
+                    _open_directory(operation, namespace, "requests", create=False)
+                )
+                revisions = stack.enter_context(
+                    _open_directory(operation, namespace, "revisions", create=False)
+                )
+                revision = _read_predecessor_named(revisions, revision_sha256)
+                _require_predecessor_admitted_chain(requests, revisions, revision)
+                validate_capture_revision_v2(revision)
+                return revision
     except (OSError, ValueError, StorageRootLeaseError, json.JSONDecodeError) as error:
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
@@ -1540,6 +1706,7 @@ def parse_bharatstock_capture_request_v2(raw: bytes) -> CaptureRequestV2:
         if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_REVISION_BYTES:
             raise ValueError
         request = _request_from_value(json.loads(raw))
+        validate_current_capture_request_v2(request)
         if raw != _line(request.canonical_value()):
             raise ValueError
         return request

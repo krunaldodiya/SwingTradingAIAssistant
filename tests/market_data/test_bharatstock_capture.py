@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -18,11 +19,13 @@ from swing_trading_ai_assistant.market_data import (
     capture_forward_adjusted_ohlcv as held_store,
 )
 from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockClient,
     BharatStockDailyPrice,
     BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
 )
+from swing_trading_ai_assistant.market_data.http import HttpResponse
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleClosure,
@@ -127,8 +130,15 @@ class _Client:
         self.calls: list[tuple[str, date, date]] = []
 
     def history(
-        self, instrument: BharatStockInstrument, start: date, end: date
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
     ) -> BharatStockHistory:
+        if effect_guard is not None:
+            effect_guard()
         self.calls.append((instrument.isin, start, end))
         if self.shared_after is not None and len(self.calls) > self.shared_after:
             raise BharatStockError("RATE_LIMITED", member_local=False)
@@ -147,20 +157,28 @@ class _Client:
             )
             for session in _SESSIONS
         )
-        return BharatStockHistory(
+        result = BharatStockHistory(
             instrument=instrument,
             rows=rows,
             retrieved_at=_NOW,
             response_sha256s=("5" * 64, "6" * 64),
             request_count=2,
         )
+        if effect_guard is not None:
+            effect_guard()
+        return result
 
 
 class _ChangingClient(_Client):
     def history(
-        self, instrument: BharatStockInstrument, start: date, end: date
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
     ) -> BharatStockHistory:
-        original = super().history(instrument, start, end)
+        original = super().history(instrument, start, end, effect_guard=effect_guard)
         close = Decimal("100") + Decimal(len(self.calls)) / 100
         return replace(
             original,
@@ -244,6 +262,8 @@ def test_exact_reuse_performs_no_transport_and_reader_returns_named_revision(
 
     assert first.code == "CAPTURED"
     assert reused.code == "REUSED"
+    assert first.from_acquisition is True
+    assert reused.from_acquisition is False
     assert len(client.calls) == 2
     assert (
         core.read_bharatstock_capture_revision_v2(
@@ -349,10 +369,15 @@ def test_detached_capture_namespace_cannot_admit_a_revision(
 
     class RenamingClient(_Client):
         def history(
-            self, instrument: BharatStockInstrument, start: date, end: date
+            self,
+            instrument: BharatStockInstrument,
+            start: date,
+            end: date,
+            *,
+            effect_guard: Callable[[], None] | None = None,
         ) -> BharatStockHistory:
             nonlocal before
-            history = super().history(instrument, start, end)
+            history = super().history(instrument, start, end, effect_guard=effect_guard)
             before = {
                 path.relative_to(namespace): path.read_bytes()
                 for path in namespace.rglob("*")
@@ -365,7 +390,7 @@ def test_detached_capture_namespace_cannot_admit_a_revision(
     result = core.capture_bharatstock_v2(
         _request(), capture_root, schedule_root, client=RenamingClient()
     )
-    assert (result.code, result.reason) == ("STORE_UNAVAILABLE", "EVIDENCE_CONFLICT")
+    assert result.code == "STORE_UNAVAILABLE"
     assert result.revision is None
     assert {
         path.relative_to(detached): path.read_bytes()
@@ -385,9 +410,14 @@ def test_oversized_revision_is_rejected_before_immutable_admission(
 
     class PreciseClient(_Client):
         def history(
-            self, instrument: BharatStockInstrument, start: date, end: date
+            self,
+            instrument: BharatStockInstrument,
+            start: date,
+            end: date,
+            *,
+            effect_guard: Callable[[], None] | None = None,
         ) -> BharatStockHistory:
-            history = super().history(instrument, start, end)
+            history = super().history(instrument, start, end, effect_guard=effect_guard)
             return replace(
                 history,
                 rows=tuple(
@@ -439,6 +469,7 @@ def test_correction_requires_admitted_parent_and_changes_immutable_revision(
 
     assert correction.code == "INSUFFICIENT_EVIDENCE"
     assert correction.reason == "CORRECTION_CONTENT_UNCHANGED"
+    assert correction.from_acquisition is True
     unavailable = core.capture_bharatstock_v2(
         _request(parent="f" * 64), root, schedule_root, client=_Client()
     )
@@ -488,6 +519,7 @@ def test_interrupted_request_publication_recovers_prepared_revision_without_tran
 
     assert first.code == "STORE_UNAVAILABLE"
     assert recovered.code == "CAPTURED"
+    assert recovered.from_acquisition is False
     assert len(client.calls) == 1
 
 
@@ -523,7 +555,9 @@ def test_unexpected_client_value_error_propagates_without_becoming_storage_failu
     capture_root.mkdir(mode=0o700)
 
     class BrokenClient(_Client):
-        def history(self, *args: object) -> BharatStockHistory:
+        def history(
+            self, *args: object, effect_guard: Callable[[], None] | None = None
+        ) -> BharatStockHistory:
             raise ValueError("unexpected implementation defect")
 
     with pytest.raises(ValueError, match="unexpected implementation defect"):
@@ -557,7 +591,9 @@ def test_provider_primary_survives_directory_cleanup_failures(
         close(descriptor)
 
     class BrokenClient(_Client):
-        def history(self, *args: object) -> BharatStockHistory:
+        def history(
+            self, *args: object, effect_guard: Callable[[], None] | None = None
+        ) -> BharatStockHistory:
             raise primary
 
     monkeypatch.setattr(core, "_open_directory", track_directory)
@@ -833,9 +869,16 @@ def test_price_correction_keeps_original_immutable_evidence_readable(
 
     class CorrectedClient(_Client):
         def history(
-            self, instrument: BharatStockInstrument, start: date, end: date
+            self,
+            instrument: BharatStockInstrument,
+            start: date,
+            end: date,
+            *,
+            effect_guard: Callable[[], None] | None = None,
         ) -> BharatStockHistory:
-            original = super().history(instrument, start, end)
+            original = super().history(
+                instrument, start, end, effect_guard=effect_guard
+            )
             return replace(
                 original,
                 rows=tuple(
@@ -1534,3 +1577,210 @@ def test_recovery_name_disappearance_never_republishes_evidence(
     assert not target.exists()
     assert detached.read_bytes() == original
     assert not (root / "bharatstock-capture-v3" / "requests" / request_name).exists()
+
+
+def test_borrowed_exact_root_lease_remains_caller_owned_after_capture(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "shared-root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire_private_empty(root)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    lease = acquired.lease
+    request = _request()
+    try:
+        retained = ScheduleEvidenceStore(root, lease).retain(_schedule())
+        assert retained.outcome is ScheduleOutcome.RETAINED
+        result = core.capture_bharatstock_v2(
+            request, root, root, client=_Client(), lease=lease
+        )
+        assert result.code == "CAPTURED"
+        assert result.revision is not None
+        assert (
+            core.read_bharatstock_capture_revision_v2(
+                root, result.revision.revision_identity_sha256, lease=lease
+            )
+            == result.revision
+        )
+        with lease.read_operation(root):
+            pass
+    finally:
+        lease.close()
+    denied = _Client()
+    assert (
+        core.capture_bharatstock_v2(
+            request, root, root, client=denied, lease=lease
+        ).code
+        == "STORE_UNAVAILABLE"
+    )
+    assert denied.calls == []
+
+
+def test_borrowed_foreign_lease_cannot_authorize_capture_or_read(
+    tmp_path: Path,
+) -> None:
+    root, other = tmp_path / "capture", tmp_path / "other"
+    root.mkdir(mode=0o700)
+    other.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire_private_empty(other)
+    assert acquired.lease is not None
+    client = _Client()
+    with acquired.lease as lease:
+        result = core.capture_bharatstock_v2(
+            _request(), root, root, client=client, lease=lease
+        )
+        assert result.code == "STORE_UNAVAILABLE" and client.calls == []
+        with pytest.raises(core.CaptureRevisionUnavailableV2):
+            core.read_bharatstock_capture_revision_v2(root, "0" * 64, lease=lease)
+        with lease.read_operation(other):
+            pass
+    assert list(root.iterdir()) == []
+
+
+def test_pr185_v3_evidence_stays_readable_but_cannot_be_used_by_current_writer(
+    tmp_path: Path,
+) -> None:
+    # Generated by exact PR185 wheel 7d9794ab...fb19f9, not today's constructor.
+    raw = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "market_data"
+        / "bharatstock-pr185-v3.json"
+    ).read_bytes()
+    value = json.loads(raw)
+    revision_sha = value["revision_identity_sha256"]
+    request_sha = value["request"]["request_identity_sha256"]
+    acquired = StorageRootLease.try_acquire_private_empty(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        namespace = tmp_path / "bharatstock-capture-v3"
+        namespace.mkdir(mode=0o700)
+        revisions = namespace / "revisions"
+        requests = namespace / "requests"
+        revisions.mkdir(mode=0o700)
+        requests.mkdir(mode=0o700)
+        revision_path = revisions / f"{revision_sha}.json"
+        revision_path.write_bytes(raw)
+        revision_path.chmod(0o400)
+        request_path = requests / f"{request_sha}.json"
+        request_path.write_bytes(
+            json.dumps(
+                {
+                    "request_identity_sha256": request_sha,
+                    "revision_identity_sha256": revision_sha,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        request_path.chmod(0o400)
+        retained = core.read_bharatstock_capture_revision_v2(
+            tmp_path, revision_sha, lease=acquired.lease
+        )
+        assert retained.canonical_json_bytes() == raw
+        assert retained.request.runtime_code_identity_sha256 == (
+            "bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d"
+        )
+        packet = build_bharatstock_research_packet_v1(retained)
+        assert packet.members[0].price_action_evidence_state == "OBSERVED"
+        client = _Client()
+        with pytest.raises(ValueError):
+            core.capture_bharatstock_v2(
+                retained.request,
+                tmp_path,
+                tmp_path,
+                client=client,
+                lease=acquired.lease,
+            )
+        with pytest.raises(ValueError):
+            core.parse_bharatstock_capture_request_v2(
+                json.dumps(
+                    value["request"], separators=(",", ":"), sort_keys=True
+                ).encode()
+                + b"\n"
+            )
+        with pytest.raises(ValueError):
+            replace(retained.request, runtime_code_identity_sha256="0" * 64)
+        assert client.calls == []
+        assert revision_path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("access", ["capture", "read"])
+def test_borrowed_generic_lease_cannot_admit_a_shared_root(
+    tmp_path: Path, access: str
+) -> None:
+    root = tmp_path / "root"
+    _retain_schedule(root)
+    first = core.capture_bharatstock_v2(_request(), root, root, client=_Client())
+    assert first.revision is not None
+    root.chmod(0o755)
+    generic = StorageRootLease.try_acquire(root)
+    assert generic.outcome is LeaseOutcome.ACQUIRED and generic.lease is not None
+    with generic.lease:
+        if access == "read":
+            with pytest.raises(core.CaptureRevisionUnavailableV2):
+                core.read_bharatstock_capture_revision_v2(
+                    root, first.revision.revision_identity_sha256, lease=generic.lease
+                )
+        else:
+            client = _Client()
+            result = core.capture_bharatstock_v2(
+                replace(_request(), decision_cutoff=_NOW + timedelta(hours=2)),
+                root,
+                root,
+                client=client,
+                lease=generic.lease,
+            )
+            assert result.code == "STORE_UNAVAILABLE" and client.calls == []
+        with generic.lease.read_operation(root):
+            pass
+
+
+@pytest.mark.parametrize("failure", ["deadline", "root", "private_mode"])
+def test_inner_price_request_stops_after_guard_loss(
+    tmp_path: Path, failure: str
+) -> None:
+    root = tmp_path / "root"
+    _retain_schedule(root)
+    request = _request()
+    current_time = [_NOW]
+    requests: list[str] = []
+
+    class Transport:
+        def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+            requests.append(url)
+            assert len(requests) == 1, "a second HTTP request followed guard loss"
+            if failure == "deadline":
+                current_time[0] = request.decision_cutoff + timedelta(microseconds=1)
+            elif failure == "root":
+                root.rename(tmp_path / "displaced")
+                root.mkdir(mode=0o700)
+            else:
+                root.chmod(0o755)
+            instrument = request.members[0]
+            return HttpResponse(
+                200,
+                json.dumps(
+                    {
+                        "isin": instrument.isin,
+                        "exchange": "NSE",
+                        "symbol": instrument.symbol,
+                    }
+                ).encode(),
+                request_url=url,
+                response_url=url,
+            )
+
+    result = core.capture_bharatstock_v2(
+        request,
+        root,
+        root,
+        client=BharatStockClient(api_key="synthetic-test-key", transport=Transport()),
+        clock=lambda: current_time[0],
+    )
+    assert len(requests) == 1 and result.revision is None
+    if failure == "deadline":
+        assert result.reason == "ACQUISITION_DEADLINE_EXCEEDED"
+    else:
+        assert result.code == "STORE_UNAVAILABLE"

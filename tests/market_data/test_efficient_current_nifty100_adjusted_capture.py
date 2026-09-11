@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -292,8 +293,15 @@ class _CliClient:
         self.calls: list[str] = []
 
     def history(
-        self, instrument: BharatStockInstrument, start: date, end: date
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
     ) -> BharatStockHistory:
+        if effect_guard is not None:
+            effect_guard()
         assert (start, end) == (_SESSION, _SESSION)
         self.calls.append(instrument.isin)
         if self.shared_after is not None and len(self.calls) > self.shared_after:
@@ -310,13 +318,16 @@ class _CliClient:
             self.close,
             Decimal("1"),
         )
-        return BharatStockHistory(
+        result = BharatStockHistory(
             instrument,
             (row,),
             _CAPTURED_AT,
             ("4" * 64, "5" * 64),
             2,
         )
+        if effect_guard is not None:
+            effect_guard()
+        return result
 
 
 def _arguments(

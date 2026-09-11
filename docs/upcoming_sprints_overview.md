@@ -9,6 +9,26 @@ evidence, exact reviewed revision, and applicable repository/hosted gates.
 Failed or insufficient evidence requires a replacement sprint rather than
 automatic progression.
 
+## Active ordered usability work
+
+The owner started [#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172)
+on September 11 after #183/#184 were delivered through merged PR #185.
+The linked sequence is:
+
+| Child | Observable outcome | Current boundary |
+| --- | --- | --- |
+| #186 | One single-stock command from empty private storage to independent completed-bar Price Action | First implementation slice; no release or live-stock result claimed yet |
+| #187 | Versioned integrated, independently available feature/member results | After the first usable command; reuse delivered #183 isolation |
+| #188 | Independent supported price-based context | Preserve basis/comparability and exact cohort requirements |
+| #189 | Bounded refresh, safe incremental reuse and truthful provisional states | No undocumented stream or suffix-only claim |
+| #190 | Measured acquisition efficiency | Baseline and budgets before optimization |
+
+The governing [acceptance allocation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5631137469)
+preserves every remaining parent criterion. Applicable compatibility, reviews
+and delivery gates accompany each slice, not just parent closure. GitHub Project
+fields own live status; these child numbers do not assign new sprint milestones.
+#167 distribution remains independently scoped and nonblocking.
+
 ## Shared lane rule
 
 Current/live/realtime work starts with current supplied-cohort price/volume,
@@ -99,16 +119,16 @@ not expand either issue. The architecture sequence, historical validation
 controls, forward/paper path, costs/slippage requirements, and Plan 18
 fixed-cohort limitation remain intact.
 
-**Provider direction update — 2026-09-10:** the owner approved
+**Provider delivery update — 2026-09-11:**
 [#184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
-to replace active yfinance daily acquisition with direct BharatStock access.
-The [migration record](roadmap.md#bharatstock-migration-direction) distinguishes
-the scoped 100-stock input-data check from implementation and release evidence.
-The owner withdrew only the old pre-implementation scheduling dependency;
-review limitations and protected release gates remain explicit.
-Issue #183 tracks separate member-isolation acceptance; current review and
-delivery evidence is recorded in
-[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185).
+and #183 are closed/completed through
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185),
+merge `65bec9e6e8256f047a253a76d165e3b51a438692`.
+The [migration record](roadmap.md#bharatstock-migration-direction) preserves
+earlier source observations separately from exact current review and delivery
+evidence. The old #156 probe remains INVALID / NO VERDICT, not a prerequisite
+to retry; ordinary current independent reviews and protected gates remain
+mandatory. September 10 retained-source production admission is separate.
 
 Provider routing is capability-based, explicit, and provenance-bound. Upstox is
 primary for current/live raw OHLCV and the Plan-21 corporate-action screen.

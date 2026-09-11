@@ -2,20 +2,23 @@
 
 ## Current delivery priority
 
-All phases and module outcomes below remain planned. Only their delivery
-priority changes: make the current/live/realtime path usable first, then perform
-historical storage and backtest validation. Nothing in the original roadmap is
-removed.
+The module outcomes below remain in scope; linked delivery records distinguish
+completed behavior from unfinished work. Make the current/live/realtime path
+usable first without making independent facts wait for unrelated historical
+storage or backtest qualification. Nothing in the accepted roadmap is removed.
 
-The immediate sequence is current price/volume, current Market Regime, current
-Sector Analysis, current news/events, and one integrated current packet for an
-external AI. Historical fixed-cohort OHLCV storage and validation follow. The
-tool continues to retain point-in-time provenance from now so later work cannot
-project current knowledge backward.
+The current ordered implementation programme is
+[#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172):
+first the usable single-stock command (#186), then integrated independent
+results (#187), independent price context (#188), bounded refresh (#189) and
+measured acquisition efficiency (#190). These are working slices, not a new
+analytical catalogue. Reuse #183/#184's delivered capture and member isolation.
+Historical fixed-cohort storage, validation and stronger claim-specific gates
+remain intact; current knowledge is never projected backward.
 
-[Upcoming Sprints Overview](upcoming_sprints_overview.md) maps this priority to
-the current sprint dependency sequence. It preserves the locked module order,
-historical work, release gates, `NO_TRADE`, and all explicit exclusions.
+[Upcoming Sprints Overview](upcoming_sprints_overview.md) maps the remaining
+dependencies. A feature's declared requirements, not a universal all-module
+chain, govern its admission. Preserve release gates, `NO_TRADE` and exclusions.
 
 ## Listed-equity feature boundary and Nifty 100 focus
 
@@ -263,12 +266,21 @@ Upstox raw OHLCV and does not make yfinance strict point-in-time authority.
 
 ### BharatStock migration direction
 
-**2026-09-10 owner decision — implementation in progress, not released.**
+**2026-09-10 owner decision — delivered on 2026-09-11 through PR #185.**
 [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
 owns replacement of every active yfinance daily-acquisition path with the
 direct BharatStock API. Use one authorized paid account, no Next.js service,
 and no Yahoo/BharatStock missing-row fallback. Upstox's separate raw/current
 OHLCV and Plan-21 screen remain unchanged.
+
+Merge `65bec9e6e8256f047a253a76d165e3b51a438692` contains the exact reviewed
+source-preserving candidate `b145fa0afc60885aa28211a1648e358dd92eaf80`.
+Both #183 and #184 are closed/completed; the
+[final delivery receipt](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185#issuecomment-5630747666)
+records current independent reviews and local, installed-artifact and hosted
+evidence. The observations and superseded candidates below retain their original
+dates and limits. They do not claim that the separate September 10 source
+collection has completed production revision admission.
 
 The owner-authorized direct API check covered the exact 100 canonical members
 and nine-session August 27–September 8 window from the failed capture request.
@@ -288,7 +300,7 @@ requests across the two batches; pages, other endpoints and attempts add to
 that count. This is a capacity forecast, not a remaining-quota observation or
 confirmation that the previously reported 10,000/day subscription was changed.
 
-The governed cutover must address all of these surfaces:
+The governed cutover covered these successor and preservation responsibilities:
 
 | Surface | Required successor or preservation |
 | --- | --- |
@@ -310,11 +322,11 @@ data check still does not establish provider adjustment/correction methodology,
 permitted redistribution, historical availability, or production capture.
 
 [Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
-remains separate and open: provider replacement cannot prove that 99 valid
-stocks retain usable independent research when one stock lacks required
-evidence. Its real public-consumer, aggregate-coverage, recovery, review and
-release criteria must pass before closure. A missing member must never be
-silently omitted or a partial list represented as complete.
+was separately verified and closed through PR #185: provider replacement alone
+would not prove that 99 valid stocks retain usable independent research when
+one stock lacks required evidence. Its delivered public-consumer,
+aggregate-coverage and recovery behavior is reused by #172. A missing member
+must never be silently omitted or a partial list represented as complete.
 
 ### BharatStock price and volume qualification hold
 
@@ -354,7 +366,7 @@ availability retroactively makes that earlier capture successful.
 
 ### Accepted as-provided OHLCV decision and member isolation
 
-**2026-09-10 — ACCEPTED owner direction; not released.**
+**2026-09-10 — ACCEPTED owner direction; source-preserving successor delivered through PR #185.**
 The repository owner prioritized finishing the existing BharatStock daily-OHLCV
 replacement for owner-private current research, assuming for now that the
 provider supplies correctly adjusted OHLCV. The owner explicitly chose not to

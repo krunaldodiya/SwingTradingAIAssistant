@@ -55,6 +55,11 @@ from .current_cohort import (
     RetainedCurrentNifty50UniverseResolverV1,
     parse_current_cohort_manifest_bytes_v1,
 )
+from .current_stock_research import (
+    CurrentStockResearchInputError,
+    CurrentStockResearchResultV1,
+    research_current_stock_v1,
+)
 from .daily_ohlcv import (
     DailyQueryServiceV1,
     DuckDBDailyOHLCVEngineV1,
@@ -192,6 +197,12 @@ class CurrentCohortServicePortV1(Protocol):
     def evaluate(
         self, request: CurrentCohortMarketDataRequestV1
     ) -> CurrentCohortMarketDataReportV1: ...
+
+
+class CurrentStockResearchPortV1(Protocol):
+    def __call__(
+        self, symbol: str, storage_root: Path, *, refresh: bool = False
+    ) -> CurrentStockResearchResultV1: ...
 
 
 class _ClockV1(Protocol):
@@ -451,6 +462,19 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     historical_read.add_argument("--output", choices=("json",), required=True)
+    research_current = commands.add_parser(
+        "research-current",
+        help="prepare two completed sessions and return one Price Action fact",
+    )
+    research_current.add_argument("--symbol", required=True)
+    research_current.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    research_current.add_argument("--refresh", action="store_true")
+    research_current.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -491,6 +515,7 @@ def main(
     coverage_service: PublicCoveragePortV1 | None = None,
     query_service: PublicQueryPortV1 | None = None,
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
+    current_stock_research: CurrentStockResearchPortV1 | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
     try:
@@ -504,6 +529,8 @@ def main(
             return _run_current_cohort_command(
                 args, current_cohort_service, trusted_clock or _SystemClock()
             )
+        if args.command == "research-current":
+            return _run_research_current_command(args, current_stock_research)
         if args.command == "regime-current":
             return _run_current_regime_command(args)
         if args.command == "historical-ohlcv-upstox-raw":
@@ -519,6 +546,24 @@ def main(
     except Exception:
         sys.stderr.write("internal_error\n")
         return 2
+
+
+def _run_research_current_command(
+    args: argparse.Namespace, service: CurrentStockResearchPortV1 | None
+) -> int:
+    try:
+        result = (
+            research_current_stock_v1(
+                args.symbol, args.storage_root, refresh=args.refresh
+            )
+            if service is None
+            else service(args.symbol, args.storage_root, refresh=args.refresh)
+        )
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    sys.stdout.buffer.write(result.canonical_json_bytes())
+    return 0 if result.status == "OBSERVED" else 1
 
 
 def _run_historical_ohlcv_upstox_raw_command(args: argparse.Namespace) -> int:

@@ -14,7 +14,10 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockError,
     BharatStockInstrument,
 )
-from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.market_data.http import (
+    HttpResponse,
+    HttpResponseBodyTooLarge,
+)
 
 _MEMBER = BharatStockInstrument("INE002A01018", "NSE", "RELIANCE")
 _START = date(2026, 8, 27)
@@ -198,6 +201,57 @@ def test_history_spans_pages_without_losing_boundary_row() -> None:
         start + timedelta(days=index) for index in range(1001)
     )
     assert result.request_count == 3
+
+
+def test_effect_guard_stops_before_a_later_price_page() -> None:
+    start = date(2020, 1, 1)
+    end = start + timedelta(days=1000)
+    rows = [_row((end - timedelta(days=index)).isoformat()) for index in range(1001)]
+    transport = _Transport(
+        _identity(),
+        _page(rows[:1000], total_items=1001, total_pages=2),
+        _page(rows[1000:], page=2, total_items=1001, total_pages=2),
+    )
+    guard_loss = RuntimeError("effect authority lost")
+
+    def guard() -> None:
+        if len(transport.urls) == 2:
+            raise guard_loss
+
+    with pytest.raises(RuntimeError) as raised:
+        BharatStockClient(api_key="test-key", transport=transport).history(
+            _MEMBER, start, end, effect_guard=guard
+        )
+    assert raised.value is guard_loss
+    assert len(transport.urls) == 2
+
+
+def test_guard_failure_after_credentials_is_not_a_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BHARATSTOCK_API_KEY", "synthetic-test-key")
+    read_environment = bharatstock.os.environ.get
+    credential_read = False
+    failure = HttpResponseBodyTooLarge("guard failure")
+    transport = _Transport()
+
+    def environment(key, default=None):
+        nonlocal credential_read
+        if key == "BHARATSTOCK_API_KEY":
+            credential_read = True
+        return read_environment(key, default)
+
+    def guard() -> None:
+        if credential_read:
+            raise failure
+
+    monkeypatch.setattr(bharatstock.os.environ, "get", environment)
+    with pytest.raises(HttpResponseBodyTooLarge) as raised:
+        BharatStockClient(transport=transport).history(
+            _MEMBER, _START, _END, effect_guard=guard
+        )
+    assert raised.value is failure
+    assert transport.urls == []
 
 
 def test_default_transport_does_not_follow_authenticated_redirect(

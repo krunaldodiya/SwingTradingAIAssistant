@@ -74,6 +74,10 @@ class SnapshotInstrumentNotFoundError(InstrumentSnapshotError):
     """No equity matches the requested identity in retained evidence."""
 
 
+class SnapshotInstrumentUnsupportedError(SnapshotInstrumentNotFoundError):
+    """The requested symbol exists but is not an admitted NSE equity."""
+
+
 class SnapshotInstrumentAmbiguousError(InstrumentSnapshotError):
     """More than one equity matches the requested identity."""
 
@@ -261,7 +265,10 @@ class InstrumentSnapshotStoreV1:
         self._catalog = catalog
 
     def retain(
-        self, fetched: FetchedInstrumentSnapshotV1
+        self,
+        fetched: FetchedInstrumentSnapshotV1,
+        *,
+        deadline: InstrumentSnapshotDeadlinePortV1 | None = None,
     ) -> InstrumentSnapshotMetadataV1:
         try:
             if type(fetched) is not FetchedInstrumentSnapshotV1:
@@ -301,11 +308,13 @@ class InstrumentSnapshotStoreV1:
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
+        _ensure_deadline_live(deadline)
         try:
             with self._lease.root_operation(self._root) as operation:
                 snapshot_fd = _open_snapshot_root(operation, create=True)
                 active_exception: BaseException | None = None
                 try:
+                    _ensure_deadline_live(deadline)
                     _publish_exact(
                         operation,
                         snapshot_fd,
@@ -317,6 +326,7 @@ class InstrumentSnapshotStoreV1:
                         operation, metadata.compressed_sha256, create=True
                     )
                     try:
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             object_fd,
@@ -324,6 +334,7 @@ class InstrumentSnapshotStoreV1:
                             "snapshot.json.gz",
                             fetched.compressed_bytes,
                         )
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             observations_fd,
@@ -338,7 +349,9 @@ class InstrumentSnapshotStoreV1:
                         _close_snapshot_directories(
                             object_fd, observations_fd, active_exception
                         )
+                    _ensure_deadline_live(deadline)
                     self._catalog.save_instrument_snapshot(metadata)
+                    _ensure_deadline_live(deadline)
                     _remove_journal(operation, snapshot_fd)
                 except BaseException as error:
                     active_exception = error
@@ -346,15 +359,18 @@ class InstrumentSnapshotStoreV1:
                 finally:
                     _close_snapshot_descriptor(snapshot_fd, active_exception)
             return metadata
-        except InstrumentSnapshotError:
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except (OSError, StorageRootLeaseError):
+        except OSError:
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
 
-    def recover_pending(self) -> InstrumentSnapshotMetadataV1 | None:
+    def recover_pending(
+        self, *, deadline: InstrumentSnapshotDeadlinePortV1 | None = None
+    ) -> InstrumentSnapshotMetadataV1 | None:
         """Recover one fixed journal before any provider request."""
+        _ensure_deadline_live(deadline)
         try:
             with self._lease.root_operation(self._root) as operation:
                 try:
@@ -363,6 +379,7 @@ class InstrumentSnapshotStoreV1:
                     return None
                 active_exception: BaseException | None = None
                 try:
+                    _ensure_deadline_live(deadline)
                     _remove_safe_temp(
                         operation, snapshot_fd, _RECOVERY_JOURNAL_TEMP_NAME
                     )
@@ -379,6 +396,7 @@ class InstrumentSnapshotStoreV1:
                         operation, metadata.compressed_sha256, create=True
                     )
                     try:
+                        _ensure_deadline_live(deadline)
                         _remove_safe_temp(operation, object_fd, ".snapshot.json.gz.tmp")
                         _remove_safe_temp(
                             operation,
@@ -399,6 +417,7 @@ class InstrumentSnapshotStoreV1:
                                     MAX_OBSERVATION_JSON_BYTES_V1,
                                 )
                             except FileNotFoundError:
+                                _ensure_deadline_live(deadline)
                                 _remove_journal(operation, snapshot_fd)
                                 return None
                             raise InstrumentSnapshotCorruptError(
@@ -408,6 +427,7 @@ class InstrumentSnapshotStoreV1:
                         sidecar = _canonical_observation_bytes(
                             _metadata_without_digest(metadata)
                         )
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             observations_fd,
@@ -422,7 +442,9 @@ class InstrumentSnapshotStoreV1:
                         _close_snapshot_directories(
                             object_fd, observations_fd, active_exception
                         )
+                    _ensure_deadline_live(deadline)
                     self._catalog.save_instrument_snapshot(metadata)
+                    _ensure_deadline_live(deadline)
                     _remove_journal(operation, snapshot_fd)
                     return metadata
                 except BaseException as error:
@@ -533,15 +555,23 @@ def _resolve_equity_in_payload(
     decompressed: bytes, segment: str, symbol: str
 ) -> Instrument:
     try:
-        instrument = InstrumentCatalog.from_json_bytes(decompressed).resolve(
+        catalog = InstrumentCatalog.from_json_bytes(decompressed)
+    except InstrumentCatalogPayloadError:
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
+    try:
+        instrument = catalog.resolve(
             segment=segment, symbol=symbol, instrument_type="EQ"
         )
     except InstrumentNotFoundError:
-        raise SnapshotInstrumentNotFoundError("instrument not found") from None
+        try:
+            catalog.resolve(segment=segment, symbol=symbol)
+        except InstrumentNotFoundError:
+            raise SnapshotInstrumentNotFoundError("instrument not found") from None
+        except AmbiguousInstrumentError:
+            raise SnapshotInstrumentAmbiguousError("instrument ambiguous") from None
+        raise SnapshotInstrumentUnsupportedError("instrument unsupported") from None
     except AmbiguousInstrumentError:
         raise SnapshotInstrumentAmbiguousError("instrument ambiguous") from None
-    except InstrumentCatalogPayloadError:
-        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
     if (
         instrument.exchange != "NSE"
         or instrument.segment != "NSE_EQ"

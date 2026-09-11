@@ -23,6 +23,24 @@ withholds the dependent whole-list conclusion without changing its denominator.
 Independent selected-basis member facts use the separate Plan30 V3/#183 path.
 The V4 completion record remains #184; this notice is not release acceptance.
 
+## Calendar-only successor boundary — Issue 186
+
+[Issue #186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+is the first working child of #172, not yet released. It extracts the existing
+official calendar composition policy for a separately sealed calendar-only
+input. Industry and event observations remain mandatory for this plan's combined
+context where its existing contract requires them; they are not forged, made
+nullable or fetched merely to prepare an independent calendar.
+
+The successor retains actual source observations, manifest and canonical
+schedule, preserves source conflict/special-session rejection, and selects the
+two latest closes at invocation data-selection time. Its acquisition deadline
+does not make a later bar completed. The historical combined context below,
+its source identities, 21-session requirements and supported readers are not
+relabelled as the new single-stock result.
+
+## Delivered historical Plan 27 baseline
+
 Status: **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED; ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE, ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**
 Issue: [#119 — Sprint 14: integrated current research packet](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
 Risk: **R3 / High — financial, temporal, and evidence impact**
