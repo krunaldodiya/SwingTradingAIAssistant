@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -641,7 +642,9 @@ def test_selection_root_authority_loss_returns_governed_outcome(
     assert len(fetcher.calls) == (0 if warm else 3)
 
 
-@pytest.mark.parametrize("damage", ["missing_source", "malformed_binding"])
+@pytest.mark.parametrize(
+    "damage", ["missing_source", "malformed_binding", "nested_source"]
+)
 def test_retained_selection_conflicts_never_refetch_or_repair(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
 ) -> None:
@@ -669,10 +672,16 @@ def test_retained_selection_conflicts_never_refetch_or_repair(
     if damage == "missing_source":
         source_identity = json.loads(binding.read_bytes())["source_identity_sha256"]
         (namespace / "sources" / f"{source_identity}.json").unlink()
-    else:
+    elif damage == "malformed_binding":
         binding.chmod(0o600)
         binding.write_bytes(b"{}\n")
         binding.chmod(0o400)
+    else:
+        source_identity = json.loads(binding.read_bytes())["source_identity_sha256"]
+        source = namespace / "sources" / f"{source_identity}.json"
+        source.chmod(0o600)
+        source.write_bytes(b"[" * 2000 + b"0" + b"]" * 2000)
+        source.chmod(0o400)
     before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
     fetcher = _CliFetcher()
     client = _CliClient()
@@ -683,3 +692,61 @@ def test_retained_selection_conflicts_never_refetch_or_repair(
     assert result.revision_identity_sha256 is None
     assert fetcher.calls == client.calls == []
     assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == before
+
+
+@pytest.mark.parametrize("boundary", ["directory", "parent", "binding"])
+def test_selection_disappearance_after_open_never_refetches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    monkeypatch.setattr(capture, "_now", lambda: _CAPTURED_AT)
+    request = _request(_members())
+    selection_root = tmp_path / "selection"
+    selection_root.mkdir(mode=0o700)
+    capture_root = tmp_path / "capture"
+    capture_root.mkdir(mode=0o700)
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    arguments = {
+        "selection_root": selection_root,
+        "capture_root": capture_root,
+        "schedule_root": schedule_root,
+    }
+    assert (
+        capture_current_nifty100_v2(
+            request, **arguments, fetcher=_CliFetcher(), client=_CliClient()
+        ).code
+        == "COMPLETE_CURRENT_NIFTY100_CAPTURE"
+    )
+    namespace = selection_root / "nifty100-selection-v3"
+    target = (
+        namespace / "requests" / f"{request.request_identity_sha256}.json"
+        if boundary == "binding"
+        else namespace
+    )
+    disappear_on = 1 if boundary == "directory" else 2
+    detached = tmp_path / "detached-selection-evidence"
+    capture_before = {path: path.read_bytes() for path in capture_root.rglob("*.json")}
+    stat = os.stat
+    observations = 0
+
+    def disappear_after_open(path, *args, **kwargs):
+        nonlocal observations
+        if path == target.name and kwargs.get("dir_fd") is not None:
+            observations += 1
+            if observations == disappear_on:
+                target.rename(detached)
+        return stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", disappear_after_open)
+    fetcher = _CliFetcher()
+    client = _CliClient()
+    result = capture_current_nifty100_v2(
+        request, **arguments, fetcher=fetcher, client=client
+    )
+    assert observations >= disappear_on
+    assert result.reason == "SELECTION_EVIDENCE_UNAVAILABLE"
+    assert result.revision_identity_sha256 is None
+    assert fetcher.calls == client.calls == []
+    assert {
+        path: path.read_bytes() for path in capture_root.rglob("*.json")
+    } == capture_before

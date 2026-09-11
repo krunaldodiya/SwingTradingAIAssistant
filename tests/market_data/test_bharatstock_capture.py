@@ -570,6 +570,97 @@ def test_provider_primary_survives_directory_cleanup_failures(
     assert not tuple(root.rglob("*.json"))
 
 
+@pytest.mark.parametrize("access", ["directory", "file"])
+def test_post_open_primary_survives_descriptor_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    revision_id = None
+    if access == "file":
+        captured = core.capture_bharatstock_v2(
+            request, root, schedule_root, client=_Client()
+        )
+        assert captured.revision is not None
+        revision_id = captured.revision.revision_identity_sha256
+    target = "revisions" if access == "directory" else f"{revision_id}.json"
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    primary = AssertionError("unexpected post-open metadata failure")
+    open_file, fstat, close = os.open, os.fstat, os.close
+    owned: set[int] = set()
+
+    def track_open(path, *args, **kwargs):
+        descriptor = open_file(path, *args, **kwargs)
+        if path == target and kwargs.get("dir_fd") is not None:
+            owned.add(descriptor)
+        return descriptor
+
+    def fail_metadata(descriptor: int):
+        if descriptor in owned:
+            raise primary
+        return fstat(descriptor)
+
+    def fail_after_close(descriptor: int) -> None:
+        if descriptor in owned:
+            owned.remove(descriptor)
+            close(descriptor)
+            raise OSError("secondary descriptor cleanup failure")
+        close(descriptor)
+
+    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(os, "fstat", fail_metadata)
+    monkeypatch.setattr(os, "close", fail_after_close)
+    with pytest.raises(AssertionError) as raised:
+        if access == "directory":
+            core.capture_bharatstock_v2(request, root, schedule_root, client=_Client())
+        else:
+            assert revision_id is not None
+            core.read_bharatstock_capture_revision_v2(root, revision_id)
+    assert raised.value is primary
+    assert owned == set()
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+
+
+@pytest.mark.parametrize("access", ["capture", "reader"])
+def test_handled_exception_does_not_hide_standalone_directory_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, access: str
+) -> None:
+    schedule_root = tmp_path / "schedule"
+    _retain_schedule(schedule_root)
+    root = tmp_path / "capture"
+    root.mkdir(mode=0o700)
+    request = _request()
+    captured = core.capture_bharatstock_v2(
+        request, root, schedule_root, client=_Client()
+    )
+    assert captured.revision is not None
+    revision_id = captured.revision.revision_identity_sha256
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    secondary = OSError("standalone directory cleanup failure")
+    close = held_store._PrivateDirectory.close  # pyright: ignore[reportPrivateUsage]
+
+    def fail_after_close(directory) -> None:
+        close(directory)
+        raise secondary
+
+    monkeypatch.setattr(held_store._PrivateDirectory, "close", fail_after_close)
+    with pytest.raises(RuntimeError) as raised:
+        try:
+            raise FileNotFoundError("already handled lookup miss")
+        except FileNotFoundError:
+            if access == "capture":
+                core.capture_bharatstock_v2(
+                    request, root, schedule_root, client=_Client()
+                )
+            else:
+                core.read_bharatstock_capture_revision_v2(root, revision_id)
+    assert raised.value.__cause__ is secondary
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+
+
 def test_deadline_expiry_stops_before_another_member_call(tmp_path: Path) -> None:
     schedule_root = tmp_path / "schedule"
     _retain_schedule(schedule_root)

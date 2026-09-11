@@ -303,7 +303,10 @@ def _parse_retained_selection(
     raw: bytes, binding_source_identity: str, request: CaptureRequestV2
 ) -> OfficialSelectionV2 | None:
     """Revalidate retained source bytes against the exact capture selection."""
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw)
+    except RecursionError:
+        return None
     if type(value) is not dict:
         return None
     retained = cast(dict[str, object], value)
