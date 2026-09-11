@@ -1869,27 +1869,20 @@ def _ensure_historical_read_state(
 
 
 def _admit_existing_private_empty_store_v1(store_root: Path) -> bool:
-    descriptor: int | None = None
-    admitted = False
     try:
         descriptor = lease_core._open_directory_without_symlink_components(  # pyright: ignore[reportPrivateUsage]
             store_root
         )
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise RuntimeError
-        lease_core._assert_private_empty_root(  # pyright: ignore[reportPrivateUsage]
-            store_root, descriptor, metadata
-        )
-        admitted = True
-    except Exception:
-        admitted = False
-    finally:
-        if not lease_core._close_descriptor(  # pyright: ignore[reportPrivateUsage]
-            descriptor
-        ):
-            admitted = False
-    return admitted
+        with _capture_resource_scope_v1((descriptor,)):
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise lease_core.StorageRootLeaseError
+            lease_core._assert_private_empty_root(  # pyright: ignore[reportPrivateUsage]
+                store_root, descriptor, metadata
+            )
+    except (OSError, lease_core.StorageRootLeaseError):
+        return False
+    return True
 
 
 def _acquire_existing_private_lease(

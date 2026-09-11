@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -298,3 +300,101 @@ def test_historical_standalone_cleanup_is_not_hidden_by_handled_exception(
                 legacy.read_capture_forward_revision_v1(root, revision.revision_sha256)
     assert raised.value.__cause__ is secondary
     assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_historical_empty_store_preserves_unexpected_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool
+) -> None:
+    request = _historical_request()
+    root = tmp_path / "empty-historical"
+    root.mkdir(mode=0o700)
+    primary = RuntimeError("unexpected empty-store inspection failure")
+    secondary = OSError("empty-store close failure")
+    owned_descriptor: int | None = None
+    original_close = os.close
+
+    def fail_inspection(
+        _root: Path, descriptor: int, _metadata: os.stat_result
+    ) -> None:
+        nonlocal owned_descriptor
+        owned_descriptor = descriptor
+        raise primary
+
+    def close(descriptor: int) -> None:
+        original_close(descriptor)
+        if cleanup_fails and descriptor == owned_descriptor:
+            raise secondary
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(legacy.lease_core, "_assert_private_empty_root", fail_inspection)
+        scoped.setattr(os, "close", close)
+        with pytest.raises(RuntimeError) as raised:
+            legacy.read_capture_forward_request_revision_v1(root, request)
+
+    assert raised.value is primary
+    assert owned_descriptor is not None
+    with pytest.raises(OSError) as closed:
+        os.fstat(owned_descriptor)
+    assert closed.value.errno == errno.EBADF
+    assert tuple(root.iterdir()) == ()
+
+
+def test_historical_empty_store_surfaces_standalone_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _historical_request()
+    root = tmp_path / "empty-historical"
+    root.mkdir(mode=0o700)
+    secondary = OSError("empty-store close failure")
+    owned_descriptor: int | None = None
+    original_close = os.close
+    original_inspection = (
+        legacy.lease_core._assert_private_empty_root  # pyright: ignore[reportPrivateUsage]
+    )
+
+    def inspect_root(root: Path, descriptor: int, metadata: os.stat_result) -> None:
+        nonlocal owned_descriptor
+        original_inspection(root, descriptor, metadata)
+        owned_descriptor = descriptor
+
+    def close(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor == owned_descriptor:
+            raise secondary
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(legacy.lease_core, "_assert_private_empty_root", inspect_root)
+        scoped.setattr(os, "close", close)
+        with pytest.raises(RuntimeError) as raised:
+            try:
+                raise FileNotFoundError("already handled unrelated lookup")
+            except FileNotFoundError:
+                legacy.read_capture_forward_request_revision_v1(root, request)
+
+    assert raised.value.__cause__ is secondary
+    assert owned_descriptor is not None
+    with pytest.raises(OSError) as closed:
+        os.fstat(owned_descriptor)
+    assert closed.value.errno == errno.EBADF
+    assert tuple(root.iterdir()) == ()
+
+
+def test_historical_empty_store_distinguishes_genuine_absence_from_unsafe_state(
+    tmp_path: Path,
+) -> None:
+    request = _historical_request()
+    root = tmp_path / "empty-historical"
+    root.mkdir(mode=0o700)
+    assert legacy.read_capture_forward_request_revision_v1(root, request) is None
+    assert tuple(root.iterdir()) == ()
+
+    unexpected = root / "unadmitted.bin"
+    payload = b"unadmitted retained bytes"
+    unexpected.write_bytes(payload)
+    unexpected.chmod(0o400)
+    with pytest.raises(OSError) as raised:
+        legacy.read_capture_forward_request_revision_v1(root, request)
+    assert raised.value.errno == errno.EBUSY
+    assert unexpected.read_bytes() == payload
+    assert tuple(root.iterdir()) == (unexpected,)
