@@ -2,13 +2,13 @@
 
 from typing import Final
 
-CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final = {
+CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bharatstock.py": "4f43a61d44f9a907cc9274ab3ca3403854049b1c39f379b5730ca3d044bc78a1",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "6dd595e8f7d99d5db76c4613850045d1ee12b1966906cd38eed92fc2c9ae8476",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "0e7a9d1e280a663bcd20fb956e747d1080b255b4444166e6c4fa32005f640daf",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "52a5b5cfe6a04c5a6fe781f09236f867e7cff095c8dba3132556cd30d093a28a",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "e1b414e656b3fe8f42178aced6bafdf3c664d8713a0f463f5794ce80cb94c920",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "95e3dd0516bfb9d718376166c7b31e376566f12e8a9ce93bfaa47c5394e7d6a6",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "fd669350a715d8271a7359dcb4e4ae09374cd0db0e7c245054c7e9b7f7681a34",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "39abe6faeebb932c8fa64205f246e02906fed2cd4f36660af398cbbe2e9b57e2",
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "7ed22c33eed7ab906c5c198089f213edb3d64a3b58d85b54035282fe208b1b74",

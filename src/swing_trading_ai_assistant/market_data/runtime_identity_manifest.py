@@ -2,7 +2,7 @@
 
 from typing import Final
 
-MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
+MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
     "account_rate_limit.py": "655e233e28f14934efd4133fb873acc23efa44e4efa5b88b3b1cb574a0bb4752",
     "acquisition_capability.py": "ef82a41126c8faa1fa66df0e2cb15f503b5c6d15a4b714b8902978fb94f67bc9",
@@ -18,7 +18,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "capture_forward_adjusted_ohlcv_cli.py": "015c8a1fd168bdc749ce8e23605d50717c386af96aeedb8ee9a0fb6f07a497d0",
     "capture_forward_adjusted_ohlcv_runtime_identity_manifest.py": "600d48ca3391901460b9203d5e0e3353102f0a31c96e33a4988b95989677217e",
     "catalog.py": "52a5b5cfe6a04c5a6fe781f09236f867e7cff095c8dba3132556cd30d093a28a",
-    "cli.py": "e1b414e656b3fe8f42178aced6bafdf3c664d8713a0f463f5794ce80cb94c920",
+    "cli.py": "95e3dd0516bfb9d718376166c7b31e376566f12e8a9ce93bfaa47c5394e7d6a6",
     "corporate_actions.py": "fd669350a715d8271a7359dcb4e4ae09374cd0db0e7c245054c7e9b7f7681a34",
     "credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
     "current_cohort.py": "50d5e3198908a006be93ff4314fe7ceb5350785b1eb52bbb6dcf2fd468770bea",
@@ -26,6 +26,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "current_corporate_action_screen_runtime_identity_manifest.py": "29e528220dc63a4a5bdaf6e6edbc33277fb634ec391286a4d2144c14baecfe87",
     "current_event_notice.py": "39abe6faeebb932c8fa64205f246e02906fed2cd4f36660af398cbbe2e9b57e2",
     "current_event_notice_runtime_identity_manifest.py": "be6030af9f3b955f16b06cecb30568874b7b516788aa710d42f372668857a0e0",
+    "current_event_notice_v2.py": "7e2d71c8de783f1cdcb753009bd1a8274542251959b9450ea51771b5b98bfe8c",
     "current_evidence_acquisition.py": "7ed22c33eed7ab906c5c198089f213edb3d64a3b58d85b54035282fe208b1b74",
     "current_evidence_acquisition_runtime_identity_manifest.py": "d00f35a7318fc644006060bcc2c0c773b81e134e535fd5b88fbafe20e6dc3c22",
     "current_industry_classification.py": "c5692c886048885e33b36b68f9c63ac8ca9c3860e719585f9058b77a69fe1089",
@@ -33,7 +34,9 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final = {
     "current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "current_same_pass_daily_v4_runtime_identity_manifest.py": "15661e2d022afc5314fa690bafe130178a3d8f584e107a32b61d90bb5202edfb",
     "current_stock_research.py": "f1b65718d9f89a11b235510ca17d19ee6773a6271fc6efbedda2f13bace5f074",
-    "current_stock_research_runtime_identity_manifest.py": "3bd3104db1324955ab05a94f90d4ab62d70b775716fef7a736aa722f43cab864",
+    "current_stock_research_runtime_identity_manifest.py": "62775f0a33e11266dc681a30609bce8eb0f21c703131c1b58a7000f920699eac",
+    "current_stock_research_v2.py": "64e100f6f956acb598491fd8c139e81fa2c93662a790ee519e6e0f6663969859",
+    "current_stock_research_v2_runtime_identity_manifest.py": "5b45a69d1388ac5af1af2fc537d8846686439320c5a3cde5e4a177d3089c8d0b",
     "daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "download_preparation.py": "ddbd15438a7428997245b43d332f356f18a0c00c2e0a0f6b09a4572a67ec2bbf",
     "efficient_current_nifty100_adjusted_capture.py": "72d9014ce44bebb48d15fa7f5e6647733f04f682dd601eadc068f99178b4e1e3",

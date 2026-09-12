@@ -12,7 +12,7 @@ from http.client import HTTPResponse
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 from urllib.request import HTTPSHandler
 from urllib.response import addinfourl
 
@@ -44,6 +44,9 @@ from swing_trading_ai_assistant.market_data.current_evidence_acquisition import 
 from swing_trading_ai_assistant.market_data.current_stock_research import (
     CurrentStockResearchResultV1,
     research_current_stock_v1,
+)
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
 )
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
@@ -238,6 +241,78 @@ def _research(
         snapshot_transport=sources,
         price_client=cast(BharatStockClient, prices),
     )
+
+
+def test_v2_cli_is_explicit_and_preserves_unversioned_v1_admission(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def v2(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        del storage_root, refresh
+        return CurrentStockResearchResultV2(
+            "current-stock-research@v2",
+            "UNAVAILABLE",
+            "provider",
+            "PRICE_EVIDENCE_UNAVAILABLE",
+            question,
+            symbol,
+            _NOW,
+            _NOW + timedelta(minutes=1),
+            "a" * 64,
+            None,
+            ("fixture_only",),
+        )
+
+    assert (
+        main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--contract-version",
+                "v2",
+                "--question",
+                "LATEST_COMPLETED_CANDLE",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=v2,
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["contract_version"] == "current-stock-research@v2"
+    assert payload["question"] == "LATEST_COMPLETED_CANDLE"
+
+    assert (
+        main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--contract-version",
+                "v2",
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err == "request_invalid\n"
 
 
 def test_cold_research_computes_two_completed_session_fact_and_sanitized_cli(
