@@ -151,6 +151,8 @@ dialog only where the host permits the agent to do so. Never ask the owner merel
 
 ## Capability and responsibility selection
 
+**Project routing aliases (owner-approved):** Astra owns planning and architecture decisions; Sol owns coordination, integration and independent functional/domain plus security/privacy/provenance review, and does not implement the candidate; Terra owns bounded implementation, testing and in-scope fixes; Luna owns scouting, discovery, repetitive/mechanical labor and read-only preparation unless a separate assignment grants mutation. These project-local aliases preserve the generic responsibility boundaries below: they do not expand authority, replace required independence or permit nested delegation. Routine in-scope failures require diagnosis, bounded repair and retest. Pause only authority, safety, product, protected external-effect or release boundaries, and only the dependent work.
+
 Select from the current harness's available, authorized models and tools according to the responsibility and risk. Honor an explicit owner model choice when available; otherwise use a capable configured default and escalate only when the task needs more capability. Model names, reasoning-setting names, session-log schemas, and provider prefixes are not portable requirements.
 
 | Responsibility | Required capability and boundary |

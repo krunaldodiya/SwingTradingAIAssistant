@@ -899,3 +899,12 @@ Before any result can be treated as decision support, require:
 - explicit handling of stale or missing data;
 - traceable evidence for every recommendation; and
 - paper-trading observation before real-money use.
+
+### Issue #187 current-research successor
+
+The additive V2 current-stock command acquires calendar, mapping and BharatStock
+price evidence for a closed question. It does not acquire fresh regime, Industry
+or event context; V5 composes only independently validated retained context.
+Independent price facts remain available when unrelated context is unavailable.
+No refresh redesign, optimization, provider fallback, recommendation or
+historical qualification is introduced here.

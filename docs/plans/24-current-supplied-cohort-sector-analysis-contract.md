@@ -827,3 +827,10 @@ not optional diagnostics.
   position sizing, broker execution, and orders; and
 - renaming, aliasing, deleting, or reinterpreting frozen V1 contracts or their
   historical evidence.
+
+## Issue #187 successor crosswalk
+
+V5 may project validated retained Industry Participation V4 as a cohort-local
+feature with its original cohort denominator and classification identity. Missing
+or invalid Industry evidence remains local and cannot suppress admitted price
+facts; this Plan's classification and reducer contracts are unchanged.

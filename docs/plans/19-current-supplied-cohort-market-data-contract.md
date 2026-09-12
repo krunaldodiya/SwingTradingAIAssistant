@@ -287,3 +287,9 @@ immutable archive, not a substituted retrospective claim.
    feature/instrument/interval instead of reconstructing unavailable history.
 5. Decision: **accepted** — require immutable archive and the closed
    availability ledger, subject to separate provider/source execution authority.
+
+## Issue #187 successor crosswalk
+
+Issue #187 consumes separately admitted BharatStock 1/2/21 completed-session
+windows through a V2 projection. This Plan's retained raw-current cohort,
+whole-result insufficiency and archive/reader semantics remain unchanged.

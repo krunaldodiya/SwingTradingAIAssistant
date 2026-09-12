@@ -89,14 +89,14 @@ source-preserving BharatStock acquisition, exact capture reuse and independently
 available member/feature facts. Historical Yahoo records below remain historical
 delivery evidence, not an active Yahoo acquisition path.
 
-**Next working slice, not yet released:**
-[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
-adds one single-stock current-research command under #172. It reuses the
-delivered two-session Price Action calculation while automating calendar,
-mapping, capture and retained-result preparation. Integrated results (#187),
-independent price context (#188), bounded refresh (#189) and measured efficiency
-(#190) remain separately ordered. This does not claim a live PNB result,
-completed #172, new analytical modules or better trading returns.
+**Current working slice, not yet released:**
+[#187](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/187)
+adds an explicit V2 current-stock research result under #172. It keeps the
+unversioned V1 command while independently admitting one-, two- and 21-session
+BharatStock evidence into an integrated V5 envelope. Fresh regime, Industry and
+event context are not acquired by this command; #188, #189 and #190 retain their
+independent price-context, refresh and efficiency scope. This does not claim a
+live PNB result, completed #172, new analytical modules or better trading returns.
 
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:

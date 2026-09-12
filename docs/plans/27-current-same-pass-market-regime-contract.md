@@ -2362,3 +2362,10 @@ current data means exact admitted evidence only, never a partial-as-complete
 bar, mixed price basis, silent provider fallback, inferred value, or unproven
 row. `NO_TRADE`, unsupported capability, and insufficient evidence remain
 first-class outcomes.
+
+## Issue #187 successor crosswalk
+
+V5 composes a validated retained Market Regime V4 projection without reopening
+its same-pass acquisition, comparability, archive or suppression contracts.
+Regime remains a whole-cohort feature and is not an independent BharatStock
+price acquisition prerequisite.

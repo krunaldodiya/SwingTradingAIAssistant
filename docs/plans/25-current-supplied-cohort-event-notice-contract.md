@@ -645,3 +645,10 @@ and additional delivery surfaces remain deferred. Sprint 14 integration was subs
 PR #140; this completed historical Plan-25 record is not its acceptance authority.
 
 Every finding is triaged against the FIRST_WORKING_SLICE. Optional hardening, broader acquisition, generalized replay, attestation beyond the existing runtime-identity convention, extra providers, and delivery surfaces remain later work unless a finding proves a concrete current blocker.
+
+## Issue #187 successor crosswalk
+
+V5 uses a redacted event projection only after retained V1 evidence admission.
+It retains source knowledge time and artifact identities, exposes no notice body
+or private row, and makes event unavailability member-local where the admitted
+artifact permits it. This Plan's retention and source-use boundary is unchanged.
