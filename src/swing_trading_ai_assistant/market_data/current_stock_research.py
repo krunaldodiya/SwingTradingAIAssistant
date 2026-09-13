@@ -635,6 +635,7 @@ def _prepare_capture(
     *,
     refresh: bool,
     prior: CaptureRevisionV2 | None,
+    request_attempt_observer: Callable[[CaptureRequestV2], None] | None = None,
 ) -> CaptureResultV2:
     if (
         refresh
@@ -643,6 +644,8 @@ def _prepare_capture(
     ):
         parent = prior
     else:
+        if request_attempt_observer is not None:
+            request_attempt_observer(request)
         captured = capture_bharatstock_v2(
             request, root, root, client=client, clock=window.now, lease=lease
         )
@@ -650,8 +653,13 @@ def _prepare_capture(
             return captured
         parent = captured.revision
     while True:
+        correction_request = replace(
+            request, parent_revision_sha256=parent.revision_identity_sha256
+        )
+        if request_attempt_observer is not None:
+            request_attempt_observer(correction_request)
         corrected = capture_bharatstock_v2(
-            replace(request, parent_revision_sha256=parent.revision_identity_sha256),
+            correction_request,
             root,
             root,
             client=client,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import types
 import weakref
 from collections.abc import Callable
@@ -31,6 +32,13 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     RetainedCurrentSamePassMarketContextV4,
     _research_binding_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
+    current_same_pass_market_regime_runtime_code_identity_v4,
+)
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    _calculation_identity as _regime_calculation_identity,  # pyright: ignore[reportPrivateUsage]
+)
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    _schema_identity as _regime_schema_identity,  # pyright: ignore[reportPrivateUsage]
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockFeatureCoverageV2,
@@ -40,10 +48,25 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     validate_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    _CURRENT_CLASSIFICATION_SOURCE_URL,  # pyright: ignore[reportPrivateUsage]
+    _FAILURE_CONTRACT_VERSION,  # pyright: ignore[reportPrivateUsage]
+    _LEGACY_CLASSIFICATION_SOURCE_URL,  # pyright: ignore[reportPrivateUsage]
     CurrentIndustryParticipationFailureV4,
     CurrentIndustryParticipationReportV4,
     current_industry_participation_is_exact_valid_v4,
     current_industry_participation_runtime_code_identity_v4,
+)
+from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    CALCULATION_IDENTITY_SHA256 as INDUSTRY_CALCULATION_IDENTITY_SHA256,
+)
+from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    SCHEMA_IDENTITY_SHA256 as INDUSTRY_SCHEMA_IDENTITY_SHA256,
+)
+from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    _ordered as _ordered_industry_reasons,  # pyright: ignore[reportPrivateUsage]
+)
+from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    _state as _industry_failure_state,  # pyright: ignore[reportPrivateUsage]
 )
 
 from .current_supplied_cohort_v5_runtime_identity_manifest import (
@@ -52,10 +75,10 @@ from .current_supplied_cohort_v5_runtime_identity_manifest import (
 
 _CONTRACT: Final = "current-supplied-cohort-research-packet@v5"
 _SCHEMA_IDENTITY: Final = hashlib.sha256(
-    b"current-supplied-cohort-research-packet-schema@v5\n"
+    b"current-supplied-cohort-research-packet-schema@v6\n"
 ).hexdigest()
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
-    b"retained-price-event-regime-industry-mapping-complete@v5\n"
+    b"recursive-retained-price-event-regime-industry-mapping-complete@v6\n"
 ).hexdigest()
 _FEATURE_ORDER: Final = (
     "CANDLE_GEOMETRY",
@@ -65,6 +88,8 @@ _FEATURE_ORDER: Final = (
 
 
 def _wire(value: object) -> object:
+    if type(value) is Decimal:
+        return format(value, "f")
     if type(value) is datetime:
         return (
             value.astimezone(UTC)
@@ -303,6 +328,9 @@ class CurrentResearchV5ContextSection:
     market_regime_calculation_identity_sha256: str
     market_regime_runtime_code_identity_sha256: str
     market_regime_evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"]
+    market_regime_decision_session: date
+    market_regime_comparison_session: date
+    market_regime_decision_cutoff: datetime
     market_regime: (
         Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"] | None
     )
@@ -316,6 +344,7 @@ class CurrentResearchV5ContextSection:
     context_projection_identity_sha256: str
 
     def __post_init__(self) -> None:
+        regime_cutoff = _instant(self.market_regime_decision_cutoff)
         required = (
             self.context_identity_sha256,
             self.context_object_sha256,
@@ -341,6 +370,15 @@ class CurrentResearchV5ContextSection:
             or any(not _valid_digest(value) for value in required)
             or any(value is not None and not _valid_digest(value) for value in optional)
             or any(not _valid_digest(value) for value in regime_digests)
+            or self.market_regime_schema_identity_sha256 != _regime_schema_identity()
+            or self.market_regime_calculation_identity_sha256
+            != _regime_calculation_identity()
+            or self.market_regime_runtime_code_identity_sha256
+            != current_same_pass_market_regime_runtime_code_identity_v4()
+            or type(self.market_regime_decision_session) is not date
+            or type(self.market_regime_comparison_session) is not date
+            or self.market_regime_comparison_session
+            >= self.market_regime_decision_session
             or type(self.cohort_size) is not int
             or not 1 <= self.cohort_size <= 100
             or type(self.market_regime_reasons) is not tuple
@@ -383,6 +421,7 @@ class CurrentResearchV5ContextSection:
         )
         if self.context_projection_identity_sha256 != expected:
             raise ValueError("invalid current V5 context section")
+        object.__setattr__(self, "market_regime_decision_cutoff", regime_cutoff)
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +605,9 @@ def _context_section(
             "market_regime_runtime_code_identity_sha256"
         ],
         "market_regime_evidence_state": raw["market_regime_evidence_state"],
+        "market_regime_decision_session": raw["market_regime_decision_session"],
+        "market_regime_comparison_session": raw["market_regime_comparison_session"],
+        "market_regime_decision_cutoff": raw["market_regime_decision_cutoff"],
         "market_regime": raw["market_regime"],
         "market_regime_advances": raw["market_regime_advances"],
         "market_regime_declines": raw["market_regime_declines"],
@@ -594,6 +636,9 @@ def _context_section(
             Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"],
             values["market_regime_evidence_state"],
         ),
+        cast(date, values["market_regime_decision_session"]),
+        cast(date, values["market_regime_comparison_session"]),
+        cast(datetime, values["market_regime_decision_cutoff"]),
         cast(
             Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"] | None,
             values["market_regime"],
@@ -659,8 +704,14 @@ def _industry_semantics_are_valid_v5(
             for row in value.industries:
                 row.__post_init__()
             return (
-                value.runtime_code_identity_sha256
+                value.contract_version
+                == "current-supplied-cohort-industry-participation@v4"
+                and value.schema_identity_sha256 == INDUSTRY_SCHEMA_IDENTITY_SHA256
+                and value.calculation_identity_sha256
+                == INDUSTRY_CALCULATION_IDENTITY_SHA256
+                and value.runtime_code_identity_sha256
                 == current_industry_participation_runtime_code_identity_v4()
+                and value.evidence_state == "OBSERVED"
                 and value.report_identity_sha256
                 == hashlib.sha256(
                     value.canonical_json_bytes(include_identity=False)
@@ -670,12 +721,23 @@ def _industry_semantics_are_valid_v5(
                 and value.canonical_cohort_identity_sha256
                 == context.canonical_cohort_identity_sha256
                 and value.cohort_size == context.cohort_size
+                and value.decision_session == context.market_regime_decision_session
+                and value.comparison_session == context.market_regime_comparison_session
+                and value.decision_cutoff == context.market_regime_decision_cutoff
+                and value.source_url
+                in {
+                    _CURRENT_CLASSIFICATION_SOURCE_URL,
+                    _LEGACY_CLASSIFICATION_SOURCE_URL,
+                }
+                and value.source_attribution == "NSE_INDICES"
+                and value.classification_tier == "INDUSTRY"
+                and value.artifact_revision == f"sha256:{value.artifact_sha256}"
+                and value.publisher_published_at is None
+                and value.publisher_effective_from is None
+                and value.publisher_effective_through is None
+                and value.publisher_revision is None
+                and value.reasons == ()
                 and sum(row.member_count for row in value.industries)
-                == value.cohort_size
-                and sum(
-                    row.advances + row.declines + row.unchanged
-                    for row in value.industries
-                )
                 == value.cohort_size
                 and context.market_regime_evidence_state == "OBSERVED"
                 and sum(row.advances for row in value.industries)
@@ -689,19 +751,86 @@ def _industry_semantics_are_valid_v5(
                 and value.known_at <= value.decision_cutoff
             )
         if type(value) is CurrentIndustryParticipationFailureV4:
+            reasons = _ordered_industry_reasons(value.reasons)
             return (
-                value.failure_identity_sha256
+                bool(reasons)
+                and value.contract_version == _FAILURE_CONTRACT_VERSION
+                and value.evidence_state == _industry_failure_state(reasons)
+                and value.reasons == reasons
+                and value.failure_identity_sha256
                 == hashlib.sha256(
                     value.canonical_json_bytes(include_identity=False)
                 ).hexdigest()
                 and value.canonical_cohort_identity_sha256
                 == context.canonical_cohort_identity_sha256
                 and value.cohort_size == context.cohort_size
-                and (value.known_at is None or value.known_at <= value.decision_cutoff)
+                and value.decision_session == context.market_regime_decision_session
+                and value.decision_cutoff == context.market_regime_decision_cutoff
+                and value.market_regime_report_identity_sha256
+                == context.market_regime_report_identity_sha256
+                and value.industries is None
+                and (
+                    value.classification_identity_sha256 is None
+                    or _valid_digest(value.classification_identity_sha256)
+                )
+                and (
+                    value.known_at is None
+                    or value.known_at <= value.decision_cutoff
+                    or (
+                        value.evidence_state == "INSUFFICIENT_EVIDENCE"
+                        and "CLASSIFICATION_FUTURE_KNOWN" in reasons
+                    )
+                )
             )
     except (ArithmeticError, TypeError, ValueError):
         return False
     return False
+
+
+def _integrated_price_is_ready_v5(price: BharatStockResearchPacketV2) -> bool:
+    """Return true only for the mandatory retained 1/2/21 Price matrix."""
+    expected_counts = (1, 2, 21)
+    if (
+        price.execution_state != "COMPLETED"
+        or price.requested_features != _FEATURE_ORDER
+        or tuple(item.feature for item in price.coverage) != _FEATURE_ORDER
+        or len(price.feature_slots) != 3
+        or tuple(item.feature for item in price.feature_slots) != _FEATURE_ORDER
+    ):
+        return False
+    sessions = tuple(item.requested_sessions for item in price.feature_slots)
+    if (
+        tuple(len(item) for item in sessions) != expected_counts
+        or sessions[0] != sessions[1][-1:]
+        or sessions[1] != sessions[2][-2:]
+        or any(item.state != "RETAINED_REVISION" for item in price.feature_slots)
+    ):
+        return False
+    cohort_size = len(price.members)
+    return (
+        all(
+            slot.request_provenance is not None
+            and slot.request_provenance.schedule_identity_sha256
+            == price.mapping_projection.schedule_identity_sha256
+            and slot.request_provenance.decision_cutoff
+            == price.mapping_projection.decision_cutoff
+            for slot in price.feature_slots
+        )
+        and all(
+            item.requested == item.observed == cohort_size
+            and item.unsupported
+            == item.dependency_blocked
+            == item.insufficient
+            == item.not_attempted
+            == 0
+            for item in price.coverage
+        )
+        and all(
+            tuple(feature.availability for feature in member.features)
+            == ("OBSERVED", "OBSERVED", "OBSERVED")
+            for member in price.members
+        )
+    )
 
 
 def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
@@ -709,6 +838,8 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         packet.bound_request.request.__post_init__()
         packet.bound_request.mapping.__post_init__()
         packet.bound_request.__post_init__()
+        for component in packet.context.components:
+            component.__post_init__()
         packet.context.__post_init__()
         for coverage in packet.coverage:
             coverage.__post_init__()
@@ -726,6 +857,8 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         or tuple(item.mapping for item in packet.members) != mapping.members
         or packet.bound_request.request.selected_at != mapping.selected_at
         or packet.bound_request.request.decision_cutoff != mapping.decision_cutoff
+        or packet.price_evidence.requested_features != _FEATURE_ORDER
+        or packet.price_evidence.mapping_projection != mapping
         or packet.price_evidence.selection_identity_sha256
         != mapping.ordered_selection_identity_sha256
         or tuple(item.member for item in packet.price_evidence.members)
@@ -743,6 +876,10 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         != mapping.completion_marker_identity_sha256
         or packet.context.retained_context_identity_sha256
         != mapping.retained_context_identity_sha256
+        or packet.context.market_regime_decision_cutoff
+        != packet.bound_request.request.decision_cutoff
+        or packet.context.mapping_receipt_count
+        != sum(item.discovery_source is not None for item in mapping.members)
         or packet.coverage != packet.price_evidence.coverage
         or not bharatstock_research_packet_semantics_are_valid_v2(packet.price_evidence)
         or not current_event_notice_semantics_are_valid_v2(packet.event_evidence)
@@ -754,11 +891,7 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         or packet.execution_state
         != (
             "RESEARCH_READY"
-            if packet.price_evidence.execution_state == "COMPLETED"
-            and all(
-                item.observed == item.requested
-                for item in packet.price_evidence.coverage
-            )
+            if _integrated_price_is_ready_v5(packet.price_evidence)
             and packet.context.completion_status == "READY"
             and type(packet.industry_evidence) is CurrentIndustryParticipationReportV4
             and all(
@@ -776,6 +909,214 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         if item.name not in {"result_identity_sha256", "_seal"}
     }
     return packet.result_identity_sha256 == _digest(preimage)
+
+
+@dataclass(slots=True)
+class _BoundedJsonStatsV5:
+    """Diagnostic counters for bounded JSON admission tests.
+
+    The decoder never requires these counters; keeping them opt-in makes the
+    allocation boundary directly falsifiable without exposing a public parser.
+    """
+
+    nodes_admitted: int = 0
+    nodes_allocated: int = 0
+    nodes_attached: int = 0
+    peak_live_generic_nodes: int = 0
+    nodes_rejected_before_allocation: int = 0
+    decoded_string_bytes: int = 0
+
+
+def _parse_bounded_json_v5(  # noqa: C901
+    raw: bytes, stats: _BoundedJsonStatsV5 | None = None
+) -> object:
+    """Parse bounded JSON without allocating a value beyond the node budget."""
+    if type(raw) is not bytes or not 1 <= len(raw) <= 1024 * 1024:
+        raise ValueError("current V5 JSON bounds")
+    counters = stats if stats is not None else _BoundedJsonStatsV5()
+    index = 0
+    total = len(raw)
+
+    def whitespace() -> None:
+        nonlocal index
+        while index < total and raw[index] in b" \t\r\n":
+            index += 1
+
+    def admit(depth: int) -> None:
+        if depth > 16 or counters.nodes_admitted >= 50_000:
+            counters.nodes_rejected_before_allocation += 1
+            raise ValueError("current V5 JSON bounds")
+        counters.nodes_admitted += 1
+        counters.nodes_allocated += 1
+        counters.peak_live_generic_nodes = max(
+            counters.peak_live_generic_nodes, counters.nodes_allocated
+        )
+
+    def string() -> str:  # noqa: C901
+        nonlocal index
+        if index >= total or raw[index] != ord('"'):
+            raise ValueError("current V5 packet JSON")
+        start = index
+        index += 1
+        decoded_bytes = 0
+        while index < total:
+            character = raw[index]
+            if character == ord('"'):
+                index += 1
+                token = raw[start:index]
+                if (
+                    decoded_bytes > 4_096
+                    or counters.decoded_string_bytes + decoded_bytes > 1024 * 1024
+                ):
+                    raise ValueError("current V5 JSON bounds")
+                try:
+                    value = json.loads(token)
+                except (TypeError, ValueError):
+                    raise ValueError("current V5 packet JSON") from None
+                if type(value) is not str or len(value.encode()) != decoded_bytes:
+                    raise ValueError("current V5 packet JSON")
+                counters.decoded_string_bytes += decoded_bytes
+                return value
+            if character < 0x20:
+                raise ValueError("current V5 packet JSON")
+            if character == ord("\\"):
+                index += 1
+                if index >= total:
+                    raise ValueError("current V5 packet JSON")
+                escaped = raw[index]
+                if escaped in b'"\\/bfnrt':
+                    decoded_bytes += 1 if escaped in b'"\\/' else 1
+                    index += 1
+                    continue
+                if escaped != ord("u") or index + 4 >= total:
+                    raise ValueError("current V5 packet JSON")
+                digits = raw[index + 1 : index + 5]
+                try:
+                    codepoint = int(digits, 16)
+                except ValueError:
+                    raise ValueError("current V5 packet JSON") from None
+                index += 5
+                if 0xD800 <= codepoint <= 0xDBFF:
+                    if raw[index : index + 2] != b"\\u" or index + 6 > total:
+                        raise ValueError("current V5 packet JSON")
+                    try:
+                        low = int(raw[index + 2 : index + 6], 16)
+                    except ValueError:
+                        raise ValueError("current V5 packet JSON") from None
+                    if not 0xDC00 <= low <= 0xDFFF:
+                        raise ValueError("current V5 packet JSON")
+                    decoded_bytes += 4
+                    index += 6
+                elif 0xDC00 <= codepoint <= 0xDFFF:
+                    raise ValueError("current V5 packet JSON")
+                else:
+                    decoded_bytes += len(chr(codepoint).encode())
+                continue
+            # Validate one complete UTF-8 code point before the bounded decode.
+            width = 1
+            if character >= 0x80:
+                if character & 0xE0 == 0xC0:
+                    width = 2
+                elif character & 0xF0 == 0xE0:
+                    width = 3
+                elif character & 0xF8 == 0xF0:
+                    width = 4
+                else:
+                    raise ValueError("current V5 packet JSON")
+                try:
+                    raw[index : index + width].decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ValueError("current V5 packet JSON") from None
+            decoded_bytes += width
+            index += width
+        raise ValueError("current V5 packet JSON")
+
+    def value(depth: int) -> object:  # noqa: C901
+        nonlocal index
+        whitespace()
+        if index >= total:
+            raise ValueError("current V5 packet JSON")
+        admit(depth)
+        marker = raw[index]
+        if marker == ord('"'):
+            result: object = string()
+        elif marker == ord("["):
+            index += 1
+            result_list: list[object] = []
+            whitespace()
+            if index < total and raw[index] == ord("]"):
+                index += 1
+            else:
+                while True:
+                    result_list.append(value(depth + 1))
+                    whitespace()
+                    if index < total and raw[index] == ord(","):
+                        index += 1
+                        continue
+                    if index < total and raw[index] == ord("]"):
+                        index += 1
+                        break
+                    raise ValueError("current V5 packet JSON")
+            result = result_list
+        elif marker == ord("{"):
+            index += 1
+            result_dict: dict[str, object] = {}
+            whitespace()
+            if index < total and raw[index] == ord("}"):
+                index += 1
+            else:
+                while True:
+                    whitespace()
+                    admit(depth + 1)
+                    key = string()
+                    counters.nodes_attached += 1
+                    if key in result_dict:
+                        raise ValueError("current V5 duplicate key")
+                    whitespace()
+                    if index >= total or raw[index] != ord(":"):
+                        raise ValueError("current V5 packet JSON")
+                    index += 1
+                    result_dict[key] = value(depth + 1)
+                    whitespace()
+                    if index < total and raw[index] == ord(","):
+                        index += 1
+                        continue
+                    if index < total and raw[index] == ord("}"):
+                        index += 1
+                        break
+                    raise ValueError("current V5 packet JSON")
+            result = result_dict
+        else:
+            start = index
+            while index < total and raw[index] not in b" \t\r\n,]}":
+                index += 1
+                if index - start > 258:
+                    raise ValueError("current V5 JSON bounds")
+            token = raw[start:index]
+            if not token:
+                raise ValueError("current V5 packet JSON")
+            if token == b"true":
+                result = True
+            elif token == b"false":
+                result = False
+            elif token == b"null":
+                result = None
+            else:
+                try:
+                    text = token.decode("ascii")
+                    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", text) is None:
+                        raise ValueError
+                    result = int(text)
+                except (UnicodeDecodeError, ValueError):
+                    raise ValueError("current V5 packet JSON") from None
+        counters.nodes_attached += 1
+        return result
+
+    result = value(0)
+    whitespace()
+    if index != total:
+        raise ValueError("current V5 packet JSON")
+    return result
 
 
 def _bounded_json_value(
@@ -903,24 +1244,12 @@ def _read_current_research_packet_v5(raw: bytes) -> CurrentResearchPacketV5:
     ):
         raise ValueError("current V5 packet bytes")
 
-    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("current V5 duplicate key")
-            result[key] = value
-        return result
-
-    try:
-        decoded = json.loads(raw, object_pairs_hook=pairs)
-    except (TypeError, ValueError):
-        raise ValueError("current V5 packet JSON") from None
-    _bounded_json_value(decoded)
+    decoded = _parse_bounded_json_v5(raw)
     packet = _decode_typed(CurrentResearchPacketV5, decoded)
     if (
         type(packet) is not CurrentResearchPacketV5
-        or packet.canonical_json_bytes() != raw
         or not _validate_packet(packet)
+        or packet.canonical_json_bytes() != raw
     ):
         raise ValueError("current V5 packet semantics")
     return packet
@@ -937,43 +1266,86 @@ def validate_current_research_packet_v5(packet: object) -> CurrentResearchPacket
 
 
 def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
+    """Bound the exact JSON graph before canonical graph/byte construction."""
     stack = [(value, 0) for value in roots]
     nodes = 0
-    estimated_bytes = 0
+    estimated_bytes = len(roots)  # one terminal LF per independent root
+    decoded_string_bytes = 0
+
+    def add_string(value: str) -> None:
+        nonlocal estimated_bytes, decoded_string_bytes
+        size = len(value.encode())
+        if size > 4_096 or decoded_string_bytes + size > 1024 * 1024:
+            raise ValueError("current V5 string bounds")
+        decoded_string_bytes += size
+        estimated_bytes += len(json.dumps(value, ensure_ascii=True))
+
+    def add_key(value: str, depth: int) -> None:
+        nonlocal nodes, estimated_bytes
+        nodes += 1
+        if nodes > 50_000 or depth > 16:
+            raise ValueError("current V5 typed bounds")
+        add_string(value)
+        estimated_bytes += 1  # colon
+
     while stack:
         value, depth = stack.pop()
         nodes += 1
         if nodes > 50_000 or depth > 16:
             raise ValueError("current V5 typed bounds")
         if type(value) is str:
-            size = len(value.encode())
-            if size > 4_096:
-                raise ValueError("current V5 string bounds")
-            estimated_bytes += size + 3
+            add_string(value)
         elif type(value) is Decimal:
-            sign, digits, exponent = value.as_tuple()
+            decimal_value = value
+            _, digits, exponent = decimal_value.as_tuple()
             if (
-                not value.is_finite()
+                not decimal_value.is_finite()
                 or not isinstance(exponent, int)
                 or not -256 <= exponent <= 256
                 or len(digits) > 256
             ):
                 raise ValueError("current V5 decimal bounds")
-            estimated_bytes += len(digits) + abs(exponent) + int(bool(sign)) + 3
+            add_string(format(decimal_value, "f"))
         elif type(value) is tuple:
             items = cast(tuple[object, ...], value)
             if len(items) > 10_000:
                 raise ValueError("current V5 cardinality bounds")
-            estimated_bytes += len(items) + 2
-            stack.extend((item, depth + 1) for item in items)
+            estimated_bytes += 2 + max(0, len(items) - 1)
+            stack.extend((item, depth + 1) for item in reversed(items))
+        elif type(value) is dict:
+            items = tuple(cast(dict[object, object], value).items())
+            if len(items) > 10_000 or any(type(key) is not str for key, _ in items):
+                raise ValueError("current V5 typed value")
+            estimated_bytes += 2 + max(0, len(items) - 1)
+            for key, item in reversed(items):
+                add_key(cast(str, key), depth + 1)
+                stack.append((item, depth + 1))
+        elif type(value) is datetime:
+            instant_value = value
+            add_string(
+                instant_value.astimezone(UTC)
+                .isoformat(timespec="microseconds")
+                .replace("+00:00", "Z")
+            )
+        elif type(value) is date:
+            add_string(value.isoformat())
+        elif value is None:
+            estimated_bytes += 4
+        elif type(value) is bool:
+            estimated_bytes += 4 if value else 5
+        elif type(value) is int:
+            integer_value = value
+            if integer_value.bit_length() > 1024:
+                raise ValueError("current V5 integer bounds")
+            estimated_bytes += len(str(integer_value))
         elif is_dataclass(value) and not isinstance(value, type):
             public = tuple(
                 item for item in fields(value) if not item.name.startswith("_")
             )
-            estimated_bytes += sum(len(item.name) + 4 for item in public)
-            stack.extend((getattr(value, item.name), depth + 1) for item in public)
-        elif value is None or type(value) in {bool, int, date, datetime}:
-            estimated_bytes += 40
+            estimated_bytes += 2 + max(0, len(public) - 1)
+            for item in reversed(public):
+                add_key(item.name, depth + 1)
+                stack.append((getattr(value, item.name), depth + 1))
         else:
             raise ValueError("current V5 typed value")
         if estimated_bytes > 1024 * 1024:
@@ -993,13 +1365,21 @@ def build_current_research_packet_v5(
     if (
         type(request) is not CurrentResearchV5Request
         or type(retained_context) is not RetainedCurrentSamePassMarketContextV4
+        or type(price) is not BharatStockResearchPacketV2
+        or type(event) is not RetainedCurrentEventNoticeProjectionV2
+        or type(industry)
+        not in {
+            CurrentIndustryParticipationReportV4,
+            CurrentIndustryParticipationFailureV4,
+        }
     ):
         raise ValueError("invalid current V5 build input")
-    _preflight_typed_writer_v5(request, price, retained_context, event, industry)
     if len(price.members) > 100 or len(event.members) > 100:
         raise ValueError("invalid current V5 build input")
     mapping = validate_current_research_binding_v2(mapping_binding)
     price = validate_bharatstock_research_packet_v2(price)
+    if price.requested_features != _FEATURE_ORDER:
+        raise ValueError("current V5 mandatory Price matrix missing")
     event = validate_retained_current_event_notice_v2(event)
     industry_validator = cast(
         Callable[[object, object], bool],
@@ -1014,6 +1394,7 @@ def build_current_research_packet_v5(
         or request.decision_cutoff != mapping.decision_cutoff
         or request.schedule_identity_sha256 != mapping.schedule_identity_sha256
         or tuple(item.member for item in price.members) != expected_instruments
+        or price.mapping_projection != mapping
         or price.selection_identity_sha256 != mapping.ordered_selection_identity_sha256
         or event.mapping_projection != mapping
         or event.decision_cutoff != request.decision_cutoff
@@ -1026,8 +1407,7 @@ def build_current_research_packet_v5(
     )
     execution_state: Literal["RESEARCH_READY", "NON_READY"] = (
         "RESEARCH_READY"
-        if price.execution_state == "COMPLETED"
-        and all(item.observed == item.requested for item in price.coverage)
+        if _integrated_price_is_ready_v5(price)
         and context.completion_status == "READY"
         and type(industry) is CurrentIndustryParticipationReportV4
         and all(
@@ -1051,6 +1431,7 @@ def build_current_research_packet_v5(
         "coverage": price.coverage,
         "members": members,
     }
+    _preflight_typed_writer_v5(preimage)
     packet = object.__new__(CurrentResearchPacketV5)
     for name, value in {
         **preimage,

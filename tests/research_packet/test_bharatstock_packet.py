@@ -25,6 +25,7 @@ from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
+    BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
     build_bharatstock_research_packet_v2,
 )
@@ -275,6 +276,24 @@ def test_one_session_withholds_both_feature_facts_explicitly() -> None:
         == member.price_action_reason
         == "INSUFFICIENT_HISTORY"
     )
+
+
+def test_v2_requested_slot_provenance_is_exact_and_bounded() -> None:
+    request = _revision_with_history(1).request
+    provenance = BharatStockCaptureRequestProvenanceV2(
+        request.request_identity_sha256,
+        request.schedule_identity_sha256,
+        request.decision_cutoff,
+        request.sessions,
+    )
+    assert provenance.requested_sessions == request.sessions
+    with pytest.raises(ValueError, match="provenance"):
+        BharatStockCaptureRequestProvenanceV2(
+            request.request_identity_sha256,
+            request.schedule_identity_sha256,
+            request.decision_cutoff,
+            (),
+        )
 
 
 def test_v2_rejects_constructed_capture_without_owner_mapping_binding() -> None:

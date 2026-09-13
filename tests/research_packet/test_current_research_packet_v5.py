@@ -26,7 +26,11 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     compose_retained_integrated_current_research_v2,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.research_packet import (
+    current_supplied_cohort_v5,
+)
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
+    BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
     build_bharatstock_research_packet_v2,
 )
@@ -57,6 +61,31 @@ def test_v5_request_has_frozen_schedule_and_time_bounds() -> None:
             request.schedule_source_release,
             request.schedule_identity_sha256,
         )
+
+
+def test_v5_incremental_json_node_limit_stops_before_limit_plus_one_allocation() -> (
+    None
+):
+    exact = b"[" + b",".join([b"0"] * 49_999) + b"]\n"
+    plus_one = b"[" + b",".join([b"0"] * 50_000) + b"]\n"
+    exact_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()
+    assert (
+        current_supplied_cohort_v5._parse_bounded_json_v5(exact, exact_stats)
+        == [0] * 49_999
+    )
+    assert (
+        exact_stats.nodes_admitted
+        == exact_stats.nodes_allocated
+        == exact_stats.nodes_attached
+        == 50_000
+    )
+    overflow_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()
+    with pytest.raises(ValueError, match="JSON bounds"):
+        current_supplied_cohort_v5._parse_bounded_json_v5(plus_one, overflow_stats)
+    assert overflow_stats.nodes_admitted <= 50_000
+    assert overflow_stats.nodes_allocated <= 50_000
+    assert overflow_stats.nodes_attached <= 50_000
+    assert overflow_stats.nodes_rejected_before_allocation == 1
 
 
 def test_v5_constructor_and_reader_never_mint_retained_admission() -> None:
@@ -105,6 +134,42 @@ def _event_artifact(source_date: date) -> bytes:
     return ("\ufeff" + header + "\n" + row + "\n").encode()
 
 
+def test_failed_context_mapping_provenance_is_explicitly_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v4_test = _industry_test_module()._v4_test_module()
+    fixture = v4_test._bharatstock_fixture()
+
+    def missing_mapping(_raw_module: Any) -> object:
+        class MissingMappingEvidence(fixture._TemporaryRetainedEvidence):
+            def mappings_under_lease(self, *_: object) -> object:
+                return "RAW_MAPPING_MISSING"
+
+        return MissingMappingEvidence()
+
+    captured: dict[str, Any] = {}
+    v4_test.test_outer_composition_retains_real_context_and_archive_files(
+        tmp_path / "missing-mapping",
+        monkeypatch,
+        raw_evidence_factory=missing_mapping,
+        expected_plan22_calls=0,
+        expected_effects=("raw-mapping", "screen"),
+        exercise_archive_contracts=False,
+        capture=captured,
+    )
+    binding = admit_retained_context_research_binding_v2(captured["retained"])
+    mapping = validate_current_research_binding_v2(binding)
+    assert all(item.discovery_source is None for item in mapping.members)
+    assert all(
+        item.discovery_observation_identity_sha256 is None for item in mapping.members
+    )
+    assert all(item.discovery_retrieved_at is None for item in mapping.members)
+    assert all(
+        item.discovery_failure_reasons == ("RAW_MAPPING_MISSING",)
+        for item in mapping.members
+    )
+
+
 @pytest.mark.parametrize("failed_context", (False, True))
 def test_v5_composes_retained_failed_price_with_real_context_and_event(
     tmp_path: Path,
@@ -142,11 +207,23 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
     sessions = tuple(
         selected.date() - timedelta(days=index) for index in range(20, -1, -1)
     )
+
+    def provenance(window: tuple[date, ...]) -> BharatStockCaptureRequestProvenanceV2:
+        return BharatStockCaptureRequestProvenanceV2(
+            hashlib.sha256(
+                "|".join(item.isoformat() for item in window).encode()
+            ).hexdigest(),
+            mapping.schedule_identity_sha256,
+            cutoff,
+            window,
+        )
+
     slots = (
         BharatStockFeatureInputV2(
             "CANDLE_GEOMETRY",
             "ATTEMPTED_NO_REVISION",
             sessions[-1:],
+            request_provenance=provenance(sessions[-1:]),
             failure_code="MISSING_HISTORY",
             failure_reason="MISSING_HISTORY",
             executed_at=execution,
@@ -155,6 +232,7 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
             "PREVIOUS_CLOSE_COMPARISON",
             "ATTEMPTED_NO_REVISION",
             sessions[-2:],
+            request_provenance=provenance(sessions[-2:]),
             failure_code="MISSING_HISTORY",
             failure_reason="MISSING_HISTORY",
             executed_at=execution,
@@ -163,6 +241,7 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
             "MARKET_STRUCTURE",
             "ATTEMPTED_NO_REVISION",
             sessions,
+            request_provenance=provenance(sessions),
             failure_code="MISSING_HISTORY",
             failure_reason="MISSING_HISTORY",
             executed_at=execution,
@@ -206,6 +285,19 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
         "composed-calendar@v1=" + "b" * 64,
         mapping.schedule_identity_sha256,
     )
+    geometry_only = build_bharatstock_research_packet_v2(
+        (
+            slots[0],
+            BharatStockFeatureInputV2("PREVIOUS_CLOSE_COMPARISON", "UNREQUESTED", ()),
+            BharatStockFeatureInputV2("MARKET_STRUCTURE", "UNREQUESTED", ()),
+        ),
+        mapping_binding,
+    )
+    with pytest.raises(ValueError, match="mandatory Price matrix"):
+        build_current_research_packet_v5(
+            request, mapping_binding, geometry_only, context, event, industry
+        )
+
     packet = build_current_research_packet_v5(
         request, mapping_binding, price, context, event, industry
     )
@@ -304,6 +396,35 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
     )
     with pytest.raises(ValueError, match="semantics"):
         CurrentResearchPacketV5.from_canonical_json_bytes(tampered)
+
+    identity_payload = json.loads(packet.canonical_json_bytes())
+    identity_industry = identity_payload["industry_evidence"]
+    identity_industry["schema_identity_sha256"] = "d" * 64
+    identity_industry_core = {
+        key: value
+        for key, value in identity_industry.items()
+        if key != "report_identity_sha256"
+    }
+    identity_industry["report_identity_sha256"] = hashlib.sha256(
+        json.dumps(
+            identity_industry_core, sort_keys=True, separators=(",", ":")
+        ).encode()
+        + b"\n"
+    ).hexdigest()
+    identity_packet_core = {
+        key: value
+        for key, value in identity_payload.items()
+        if key != "result_identity_sha256"
+    }
+    identity_payload["result_identity_sha256"] = hashlib.sha256(
+        json.dumps(identity_packet_core, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    ).hexdigest()
+    with pytest.raises(ValueError, match="semantics"):
+        CurrentResearchPacketV5.from_canonical_json_bytes(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
 
 
 @pytest.mark.parametrize(

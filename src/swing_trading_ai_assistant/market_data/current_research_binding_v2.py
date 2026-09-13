@@ -16,6 +16,7 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
     _research_binding_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
 )
 
+from .adjusted_daily.service_v3 import mapping_identity_v3
 from .bharatstock import BharatStockInstrument
 from .bharatstock_capture import selection_identity_v2
 from .catalog import DuckDBCatalog
@@ -32,10 +33,10 @@ from .storage_root_lease import StorageRootLease
 
 _CONTRACT: Final = "current-research-binding@v2"
 _SCHEMA_IDENTITY: Final = hashlib.sha256(
-    b"current-research-binding-schema@v2\n"
+    b"current-research-binding-schema@v3\n"
 ).hexdigest()
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
-    b"exact-retained-mapping-no-fallback@v2\n"
+    b"exact-retained-mapping-explicit-discovery-outcome-no-fallback@v3\n"
 ).hexdigest()
 
 
@@ -134,12 +135,23 @@ class CurrentResearchMappingMemberV2:
     mapping_valid_through: date | None
     mapping_identity_sha256: str
     provider_mapping_revision: str
-    discovery_source: str
-    discovery_observation_identity_sha256: str
-    discovery_retrieved_at: datetime
+    discovery_source: str | None
+    discovery_observation_identity_sha256: str | None
+    discovery_retrieved_at: datetime | None
+    discovery_failure_reasons: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        retrieved = _instant(self.discovery_retrieved_at)
+        retrieved = (
+            None
+            if self.discovery_retrieved_at is None
+            else _instant(self.discovery_retrieved_at)
+        )
+        discovery_observed = (
+            type(self.discovery_source) is str
+            and bool(self.discovery_source)
+            and _valid_digest(self.discovery_observation_identity_sha256)
+            and retrieved is not None
+        )
         if (
             type(self.isin) is not str
             or not 1 <= len(self.isin.encode()) <= 32
@@ -166,9 +178,31 @@ class CurrentResearchMappingMemberV2:
             or not _valid_digest(self.mapping_identity_sha256)
             or type(self.provider_mapping_revision) is not str
             or not 1 <= len(self.provider_mapping_revision.encode()) <= 256
-            or type(self.discovery_source) is not str
-            or not 1 <= len(self.discovery_source.encode()) <= 256
-            or not _valid_digest(self.discovery_observation_identity_sha256)
+            or (
+                self.discovery_source is not None
+                and (
+                    type(self.discovery_source) is not str
+                    or not 1 <= len(self.discovery_source.encode()) <= 256
+                )
+            )
+            or type(self.discovery_failure_reasons) is not tuple
+            or len(self.discovery_failure_reasons) > 32
+            or any(
+                type(reason) is not str or not 1 <= len(reason.encode()) <= 128
+                for reason in self.discovery_failure_reasons
+            )
+            or len(set(self.discovery_failure_reasons))
+            != len(self.discovery_failure_reasons)
+            or (discovery_observed and bool(self.discovery_failure_reasons))
+            or (
+                not discovery_observed
+                and not (
+                    self.discovery_source is None
+                    and self.discovery_observation_identity_sha256 is None
+                    and retrieved is None
+                    and bool(self.discovery_failure_reasons)
+                )
+            )
         ):
             raise ValueError("invalid current research mapping member")
         object.__setattr__(self, "discovery_retrieved_at", retrieved)
@@ -200,6 +234,9 @@ class CurrentResearchMappingProjectionV2:
 
     def __post_init__(self) -> None:
         selected = _instant(self.selected_at)
+        for member in self.members:
+            if type(member) is CurrentResearchMappingMemberV2:
+                member.__post_init__()
         cutoff = _instant(self.decision_cutoff)
         context_values = (
             self.context_identity_sha256,
@@ -207,6 +244,46 @@ class CurrentResearchMappingProjectionV2:
             self.context_receipt_identity_sha256,
             self.completion_marker_identity_sha256,
             self.retained_context_identity_sha256,
+        )
+        mapping_identities_valid = all(
+            item.mapping_identity_sha256
+            == (
+                _digest(
+                    {
+                        "contract_version": item.mapping_version,
+                        "isin": item.isin,
+                        "exchange": item.exchange,
+                        "effective_symbol": item.effective_symbol,
+                        "observation_identity_sha256": (
+                            item.discovery_observation_identity_sha256
+                        ),
+                    }
+                )
+                if self.origin == "RETAINED_INSTRUMENT_SNAPSHOT"
+                else mapping_identity_v3(
+                    isin=item.isin,
+                    exchange=item.exchange,
+                    instrument_type=item.instrument_type,
+                    segment=item.segment,
+                    effective_symbol=item.effective_symbol,
+                    provider_symbol=item.provider_symbol,
+                    mapping_valid_from=item.mapping_valid_from,
+                    mapping_valid_through=item.mapping_valid_through,
+                )
+            )
+            for item in self.members
+        )
+        discovery_sources_valid = all(
+            (
+                item.discovery_source == SNAPSHOT_SOURCE_V1
+                and not item.discovery_failure_reasons
+            )
+            if item.discovery_source is not None
+            else (
+                self.origin == "RETAINED_SAME_PASS_CONTEXT"
+                and bool(item.discovery_failure_reasons)
+            )
+            for item in self.members
         )
         if (
             self.contract_version != _CONTRACT
@@ -236,9 +313,14 @@ class CurrentResearchMappingProjectionV2:
                     item.mapping_valid_through is not None
                     and selected.date() > item.mapping_valid_through
                 )
-                or item.discovery_retrieved_at > cutoff
+                or (
+                    item.discovery_retrieved_at is not None
+                    and item.discovery_retrieved_at > cutoff
+                )
                 for item in self.members
             )
+            or not mapping_identities_valid
+            or not discovery_sources_valid
             or self.ordered_selection_identity_sha256
             != selection_identity_v2(tuple(item.instrument for item in self.members))
             or self.canonical_cohort_identity_sha256
@@ -329,6 +411,10 @@ def validate_current_research_binding_v2(
         raise ValueError("current research binding is not admitted")
     entry = _BINDINGS.get(id(value))
     seal = object.__getattribute__(value, "_seal")
+    try:
+        value.projection.__post_init__()
+    except (TypeError, ValueError):
+        raise ValueError("current research binding is not admitted") from None
     if (
         entry is None
         or entry[0]() is not value
@@ -337,7 +423,6 @@ def validate_current_research_binding_v2(
         or entry[3] is not seal
     ):
         raise ValueError("current research binding is not admitted")
-    value.projection.__post_init__()
     return value.projection
 
 
@@ -482,6 +567,7 @@ def resolve_current_research_binding_v2(
                     metadata.source,
                     metadata.observation_sha256,
                     metadata.retrieved_at,
+                    (),
                 )
             )
     return _admit(
@@ -514,14 +600,13 @@ def admit_retained_context_research_binding_v2(
     for item in cast(tuple[dict[str, object], ...], raw["members"]):
         receipt = receipts.get(cast(str, item["isin"]))
         observed_at = (
-            cast(datetime, receipt["known_at"])
-            if receipt is not None
-            else cast(datetime, raw["cohort_selected_at"])
+            cast(datetime, receipt["retrieved_at"]) if receipt is not None else None
         )
         observation_identity = (
-            cast(str, receipt["observation_sha256"])
-            if receipt is not None
-            else cast(str, item["mapping_identity"])
+            cast(str, receipt["observation_sha256"]) if receipt is not None else None
+        )
+        discovery_source = (
+            cast(str, receipt["snapshot_source"]) if receipt is not None else None
         )
         members.append(
             CurrentResearchMappingMemberV2(
@@ -540,9 +625,12 @@ def admit_retained_context_research_binding_v2(
                 else _date_value(item["mapping_valid_through"]),
                 cast(str, item["mapping_identity"]),
                 cast(str, item["provider_mapping_revision"]),
-                "retained-same-pass-mapping",
+                discovery_source,
                 observation_identity,
                 observed_at,
+                ()
+                if receipt is not None
+                else cast(tuple[str, ...], raw["mapping_failure_reasons"]),
             )
         )
     context = (

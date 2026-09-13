@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.message import Message
@@ -71,6 +72,10 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
 )
+from swing_trading_ai_assistant.market_structure.current_live import (
+    current_market_structure_identity_sha256_v1,
+)
+from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
 
 _NOW = datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
 
@@ -392,6 +397,41 @@ def test_v2_current_structure_with_21_official_sessions_is_ready(
     # comparison capture.
     assert len(prices.calls) == 1
 
+    tampered = copy.deepcopy(result.packet)
+    tampered_fact = tampered.members[0].features[0].fact
+    assert tampered_fact is not None
+    changed_identities = (
+        "b" * 64,
+        *tampered_fact.calculation.input_bar_identities_sha256[1:],
+    )
+    object.__setattr__(
+        tampered_fact.calculation,
+        "input_bar_identities_sha256",
+        changed_identities,
+    )
+    object.__setattr__(
+        tampered_fact.calculation,
+        "member_identity_sha256",
+        current_market_structure_identity_sha256_v1(
+            tampered_fact.calculation,
+            omit=frozenset({"member_identity_sha256"}),
+        ),
+    )
+    object.__setattr__(
+        tampered_fact, "adjusted_bar_identities_sha256", changed_identities
+    )
+    preimage = {
+        item.name: getattr(tampered, item.name)
+        for item in fields(tampered)
+        if item.name not in {"result_identity_sha256", "_admission_seal"}
+    }
+    object.__setattr__(
+        tampered,
+        "result_identity_sha256",
+        packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
+    )
+    assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(tampered)
+
 
 def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -405,11 +445,14 @@ def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
 
     def fail_two_sessions(
         *args: object, **kwargs: object
-    ) -> capture_api.CaptureResultV2:
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
         request = cast(capture_api.CaptureRequestV2, args[0])
         if len(request.sessions) == 2:
-            return capture_api.CaptureResultV2(
-                "INSUFFICIENT_EVIDENCE", None, "MISSING_HISTORY"
+            return (
+                capture_api.CaptureResultV2(
+                    "INSUFFICIENT_EVIDENCE", None, "MISSING_HISTORY"
+                ),
+                request,
             )
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
@@ -451,11 +494,14 @@ def test_v2_storage_failure_after_first_window_is_publication_fatal(
 
     def fail_second_window(
         *args: object, **kwargs: object
-    ) -> capture_api.CaptureResultV2:
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
         request = cast(capture_api.CaptureRequestV2, args[0])
         if len(request.sessions) == 2:
-            return capture_api.CaptureResultV2(
-                "STORE_UNAVAILABLE", None, "EVIDENCE_CONFLICT"
+            return (
+                capture_api.CaptureResultV2(
+                    "STORE_UNAVAILABLE", None, "EVIDENCE_CONFLICT"
+                ),
+                request,
             )
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
@@ -473,6 +519,100 @@ def test_v2_storage_failure_after_first_window_is_publication_fatal(
     assert result.status == "UNAVAILABLE"
     assert result.stage == "storage"
     assert result.packet is None
+
+
+@pytest.mark.parametrize("failure_effect", (1, 2, 3))
+def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
+    tmp_path: Path, failure_effect: int
+) -> None:
+    root = tmp_path / f"shared-stop-{failure_effect}"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    history = prices.history
+
+    def selective_failure(*args: object, **kwargs: object) -> BharatStockHistory:
+        if len(prices.calls) + 1 == failure_effect:
+            prices.failure = BharatStockError(
+                "AUTHENTICATION_FAILED", member_local=False
+            )
+        try:
+            return history(*args, **kwargs)  # type: ignore[arg-type]
+        finally:
+            prices.failure = None
+
+    prices.history = selective_failure  # type: ignore[method-assign]
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    assert result.packet.execution_state == "STOPPED"
+    assert result.packet.shared_stop_code == "AUTHENTICATION_FAILED"
+    assert (
+        result.packet.shared_stop_trigger_feature
+        == (
+            "CANDLE_GEOMETRY",
+            "PREVIOUS_CLOSE_COMPARISON",
+            "MARKET_STRUCTURE",
+        )[failure_effect - 1]
+    )
+    assert len(prices.calls) == failure_effect
+    assert all(
+        slot.state == "NOT_ATTEMPTED_SHARED_STOP"
+        for slot in result.packet.feature_slots[failure_effect:]
+    )
+
+
+@pytest.mark.parametrize("completed_effect", (1, 2, 3))
+def test_v2_finalization_deadline_preserves_prior_facts_and_effect_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completed_effect: int
+) -> None:
+    root = tmp_path / f"deadline-stop-{completed_effect}"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    original = workflow_v2._capture_window
+    completed = 0
+
+    def expire_after_capture(*args: object, **kwargs: object):
+        nonlocal completed
+        result = original(*args, **kwargs)  # type: ignore[arg-type]
+        completed += 1
+        if completed == completed_effect:
+            clock.value = _NOW + timedelta(minutes=31)
+        return result
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", expire_after_capture)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    assert result.packet.execution_state == "STOPPED"
+    assert result.packet.shared_stop_code == "DEADLINE_EXCEEDED"
+    assert result.packet.shared_stop_phase == "FINALIZATION"
+    assert len(prices.calls) == completed_effect
+    assert (
+        sum(slot.state == "RETAINED_REVISION" for slot in result.packet.feature_slots)
+        == completed_effect
+    )
 
 
 def test_v2_advancing_clock_retains_invocation_selection_time(tmp_path: Path) -> None:

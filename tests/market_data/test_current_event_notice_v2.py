@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import copy
 import gzip
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
 from swing_trading_ai_assistant.market_data import current_event_notice_v2 as event_v2
+from swing_trading_ai_assistant.market_data import (
+    current_research_binding_v2 as mapping_v2,
+)
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.current_event_notice import (
     EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
@@ -144,6 +150,12 @@ def test_retained_v2_local_duplicate_preserves_unaffected_member_and_retry(
         first = event_v2.retain_current_event_notices_v2(
             root, lease, _input(raw), raw, mapping
         )
+        # A retry is archive reconciliation, not a second logical acquisition.
+        monkeypatch.setattr(
+            event_v2,
+            "_trusted_utc_now",
+            lambda: datetime(2026, 8, 26, 9, 16, tzinfo=UTC),
+        )
         second = event_v2.retain_current_event_notices_v2(
             root, lease, _input(raw), raw, mapping
         )
@@ -160,6 +172,209 @@ def test_retained_v2_local_duplicate_preserves_unaffected_member_and_retry(
     assert b'"attachment_url"' not in serialized
     assert b'"source_company_name"' not in serialized
     assert event_v2.validate_retained_current_event_notice_v2(first) is first
+
+
+@pytest.mark.parametrize("interrupted_publish", (1, 2, 3, 4))
+def test_event_v2_recovers_every_valid_publication_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupted_publish: int,
+) -> None:
+    root = tmp_path / f"event-v2-interrupt-{interrupted_publish}"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    original = event_v2._publish_object  # pyright: ignore[reportPrivateUsage]
+    calls = 0
+
+    def interrupt(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == interrupted_publish:
+            raise RuntimeError("interrupted publication")
+        original(*args, **kwargs)  # type: ignore[arg-type]
+
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        monkeypatch.setattr(event_v2, "_publish_object", interrupt)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+        monkeypatch.setattr(event_v2, "_publish_object", original)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+    assert retained.known_at == _KNOWN
+    assert len(tuple((root / ".current-event-notice-v1").glob("v2-*"))) == 4
+
+
+def test_event_v2_corrupt_prefix_fails_before_any_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "event-v2-corrupt-prefix"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        directory = root / ".current-event-notice-v1"
+        for suffix in ("projection.json", "receipt.json", "complete.json"):
+            (directory / f"v2-{retained.archive_identity_sha256}.{suffix}").unlink()
+        raw_path = directory / f"v2-{retained.artifact_identity_sha256}.raw.csv"
+        raw_path.chmod(0o600)
+        raw_path.write_bytes(b"corrupt")
+        with pytest.raises(ValueError, match="immutable archive conflict"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+    assert not list(directory.glob("*.projection.json"))
+
+
+def test_event_v2_serializes_concurrent_identical_logical_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "event-v2-concurrent"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+
+        def retain(_: int):
+            return event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = tuple(pool.map(retain, range(2)))
+    assert results[0] == results[1]
+    assert len(tuple((root / ".current-event-notice-v1").glob("v2-*"))) == 4
+
+
+def test_event_and_mapping_semantics_reject_fully_rehashed_nested_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "event-v2-semantic-tampering"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+
+    malformed_mapping = copy.deepcopy(retained.mapping_projection)
+    object.__setattr__(
+        malformed_mapping.members[0], "mapping_identity_sha256", "b" * 64
+    )
+    mapping_preimage = {
+        item.name: getattr(malformed_mapping, item.name)
+        for item in fields(malformed_mapping)
+        if item.name != "mapping_projection_identity_sha256"
+    }
+    object.__setattr__(
+        malformed_mapping,
+        "mapping_projection_identity_sha256",
+        mapping_v2._digest(mapping_preimage),  # pyright: ignore[reportPrivateUsage]
+    )
+    with pytest.raises(ValueError, match="mapping projection"):
+        malformed_mapping.__post_init__()
+
+    malformed_notice = copy.deepcopy(retained)
+    object.__setattr__(
+        malformed_notice.members[1].notices[0],
+        "observation_identity_sha256",
+        "not-a-digest",
+    )
+    event_preimage = {
+        item.name: getattr(malformed_notice, item.name)
+        for item in fields(malformed_notice)
+        if item.name not in {"result_identity_sha256", "_seal"}
+    }
+    object.__setattr__(
+        malformed_notice,
+        "result_identity_sha256",
+        event_v2._digest(event_preimage),  # pyright: ignore[reportPrivateUsage]
+    )
+    assert not event_v2.current_event_notice_semantics_are_valid_v2(malformed_notice)
+
+    unauthorized = copy.deepcopy(retained)
+    object.__setattr__(unauthorized, "source_url", "https://example.invalid/events")
+    projection_core = {
+        item.name: getattr(unauthorized, item.name)
+        for item in fields(unauthorized)
+        if item.name
+        not in {
+            "snapshot_identity_sha256",
+            "archive_identity_sha256",
+            "receipt_identity_sha256",
+            "retained_identity_sha256",
+            "result_identity_sha256",
+            "_seal",
+        }
+    }
+    snapshot_identity = hashlib.sha256(
+        event_v2._canonical(projection_core)  # pyright: ignore[reportPrivateUsage]
+    ).hexdigest()
+    archive_identity = event_v2._v2_archive_identity(  # pyright: ignore[reportPrivateUsage]
+        projection_core
+    )
+    receipt_core = {
+        "protocol": "current-event-notice-v2-receipt@v2",
+        "archive_identity_sha256": archive_identity,
+        "artifact_identity_sha256": unauthorized.artifact_identity_sha256,
+        "snapshot_identity_sha256": snapshot_identity,
+        "runtime_code_identity_sha256": unauthorized.runtime_code_identity_sha256,
+        "known_at": unauthorized.known_at,
+        "attempt_history_identity_sha256": (
+            unauthorized.attempt_history_identity_sha256
+        ),
+    }
+    receipt_identity = event_v2._digest(  # pyright: ignore[reportPrivateUsage]
+        receipt_core
+    )
+    retained_identity = event_v2._digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            **receipt_core,
+            "receipt_identity_sha256": receipt_identity,
+            "mapping_projection_identity_sha256": (
+                unauthorized.mapping_projection.mapping_projection_identity_sha256
+            ),
+        }
+    )
+    for name, value in (
+        ("snapshot_identity_sha256", snapshot_identity),
+        ("archive_identity_sha256", archive_identity),
+        ("receipt_identity_sha256", receipt_identity),
+        ("retained_identity_sha256", retained_identity),
+    ):
+        object.__setattr__(unauthorized, name, value)
+    unauthorized_preimage = {
+        item.name: getattr(unauthorized, item.name)
+        for item in fields(unauthorized)
+        if item.name not in {"result_identity_sha256", "_seal"}
+    }
+    object.__setattr__(
+        unauthorized,
+        "result_identity_sha256",
+        event_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            unauthorized_preimage
+        ),
+    )
+    assert not event_v2.current_event_notice_semantics_are_valid_v2(unauthorized)
 
 
 def test_event_v2_post_admission_mutation_and_future_source_fail_closed(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -20,8 +21,10 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
     RetainedCurrentSamePassMarketContextV4,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
+    BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
     BharatStockResearchPacketV2,
+    BharatStockSharedStopInputV2,
     build_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 import (
@@ -379,6 +382,17 @@ def _capture_request(
     )
 
 
+def _request_provenance(
+    request: CaptureRequestV2,
+) -> BharatStockCaptureRequestProvenanceV2:
+    return BharatStockCaptureRequestProvenanceV2(
+        request.request_identity_sha256,
+        request.schedule_identity_sha256,
+        request.decision_cutoff,
+        request.sessions,
+    )
+
+
 def _capture_window(
     request: CaptureRequestV2,
     root: Path,
@@ -387,7 +401,8 @@ def _capture_window(
     price_client: BharatStockClient | None,
     *,
     refresh: bool,
-) -> CaptureResultV2:
+) -> tuple[CaptureResultV2, CaptureRequestV2]:
+    attempted: list[CaptureRequestV2] = []
     result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
         request,
         root,
@@ -396,8 +411,27 @@ def _capture_window(
         price_client,
         refresh=refresh,
         prior=None,
+        request_attempt_observer=attempted.append,
     )
-    return result
+    if not attempted:
+        raise ValueError("BharatStock V2 capture attempt was not observed")
+    return result, attempted[-1]
+
+
+def _observe_v2_time(
+    clock: legacy.CurrentStockResearchClockV1,
+    selection: datetime,
+    effect_guard: Callable[[], None],
+) -> datetime:
+    """Observe time without converting an expired V2 boundary into a terminal."""
+    try:
+        observed = legacy._now(clock)  # pyright: ignore[reportPrivateUsage]
+    except Exception as error:
+        raise legacy._ClockCallbackFailure(error) from error  # pyright: ignore[reportPrivateUsage]
+    if observed < selection:
+        raise legacy.CurrentStockResearchFailure("deadline", "CLOCK_PRECEDES_SELECTION")
+    effect_guard()
+    return observed
 
 
 def research_current_stock_v2(
@@ -525,20 +559,51 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 decision_cutoff=window.deadline,
                 schedule_identity_sha256=legacy.schedule_identity_v2(calendar.schedule),
             )
-            requests = tuple(
-                _capture_request(
+            requested_price = tuple(
+                feature for feature in _FEATURES[:3] if feature in required
+            )
+            feature_windows = {
+                "CANDLE_GEOMETRY": 1,
+                "PREVIOUS_CLOSE_COMPARISON": 2,
+                "MARKET_STRUCTURE": 21,
+            }
+            feature_by_window = {
+                count: feature for feature, count in feature_windows.items()
+            }
+            prepared_requests = {
+                count: _capture_request(
                     member=member,
                     sessions=completed_sessions[-count:],
                     deadline=window.deadline,
                     calendar=calendar,
                 )
-                for count in window_sizes
-            )
+                for count in {feature_windows[item] for item in requested_price}
+            }
             captures: dict[int, CaptureResultV2] = {}
-            shared_stop: str | None = None
-            for count, request in zip(window_sizes, requests, strict=True):
-                window.ensure_live()
-                capture = _capture_window(
+            submitted_requests: dict[int, CaptureRequestV2] = {}
+            execution_times: dict[int, datetime] = {}
+            shared_stop: BharatStockSharedStopInputV2 | None = None
+            for count in window_sizes:
+                request = prepared_requests[count]
+                boundary_time = _observe_v2_time(
+                    active_clock, selection, authority.ensure_live
+                )
+                if boundary_time > window.deadline:
+                    captures[count] = CaptureResultV2(
+                        "INSUFFICIENT_EVIDENCE",
+                        None,
+                        "ACQUISITION_DEADLINE_EXCEEDED",
+                    )
+                    execution_times[count] = boundary_time
+                    shared_stop = BharatStockSharedStopInputV2(
+                        "DEADLINE_EXCEEDED",
+                        boundary_time,
+                        feature_by_window[count],
+                        _request_provenance(request),
+                        "CAPTURE",
+                    )
+                    break
+                capture, submitted = _capture_window(
                     request,
                     root,
                     lease,
@@ -547,13 +612,15 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     refresh=refresh,
                 )
                 captures[count] = capture
+                submitted_requests[count] = submitted
+                completion_time = _observe_v2_time(
+                    active_clock, selection, authority.ensure_live
+                )
+                execution_times[count] = completion_time
                 revision = capture.revision
-                # Store/root authority failures are shared even when capture
-                # cannot mint a revision; later provider effects are forbidden.
+                # Store/root authority failures are publication-fatal even when
+                # an earlier independent feature was retained.
                 if capture.code == "STORE_UNAVAILABLE":
-                    # Loss of storage authority makes publication unsafe even
-                    # when an earlier feature was admitted.  Never compose or
-                    # expose a V5 packet after this terminal boundary.
                     return _terminal(
                         symbol,
                         question,
@@ -562,23 +629,43 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                         "storage",
                         capture.reason or capture.code,
                     )
+                trigger_request = submitted
                 if revision is not None and revision.shared_failure is not None:
-                    shared_stop = revision.shared_failure
+                    trigger_request = revision.request
+                    shared_stop = BharatStockSharedStopInputV2(
+                        revision.shared_failure,
+                        revision.observed_at,
+                        feature_by_window[count],
+                        _request_provenance(trigger_request),
+                        "CAPTURE",
+                    )
+                    break
+                if capture.reason == "ACQUISITION_DEADLINE_EXCEEDED":
+                    shared_stop = BharatStockSharedStopInputV2(
+                        "DEADLINE_EXCEEDED",
+                        completion_time,
+                        feature_by_window[count],
+                        _request_provenance(trigger_request),
+                        "CAPTURE",
+                    )
+                    break
+                if completion_time > window.deadline:
+                    shared_stop = BharatStockSharedStopInputV2(
+                        "DEADLINE_EXCEEDED",
+                        completion_time,
+                        feature_by_window[count],
+                        _request_provenance(
+                            revision.request
+                            if revision is not None
+                            else trigger_request
+                        ),
+                        "FINALIZATION",
+                    )
                     break
             admitted = {
                 count: capture.revision
                 for count, capture in captures.items()
                 if capture.revision is not None
-            }
-            # Every feature slot remains explicit.  A failed or unattempted
-            # window never borrows a larger retained revision.
-            requested_price = tuple(
-                feature for feature in _FEATURES[:3] if feature in required
-            )
-            feature_windows = {
-                "CANDLE_GEOMETRY": 1,
-                "PREVIOUS_CLOSE_COMPARISON": 2,
-                "MARKET_STRUCTURE": 21,
             }
             retained_bindings = {
                 count: read_bharatstock_capture_binding_v2(
@@ -588,7 +675,6 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 )
                 for count, revision in admitted.items()
             }
-            stop_time = window.now() if shared_stop is not None else None
             slots: list[BharatStockFeatureInputV2] = []
             for feature in _FEATURES[:3]:
                 count = feature_windows[feature]
@@ -598,26 +684,33 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 requested_sessions = completed_sessions[-count:]
                 binding = retained_bindings.get(count)
                 if binding is not None:
+                    revision = admitted[count]
                     slots.append(
                         BharatStockFeatureInputV2(
                             feature,
                             "RETAINED_REVISION",
                             requested_sessions,
                             binding,
+                            _request_provenance(revision.request),
                         )
                     )
                     continue
                 capture = captures.get(count)
+                prepared = submitted_requests.get(count, prepared_requests[count])
+                provenance = _request_provenance(prepared)
                 if shared_stop is not None and capture is None:
                     slots.append(
                         BharatStockFeatureInputV2(
                             feature,
                             "NOT_ATTEMPTED_SHARED_STOP",
                             requested_sessions,
+                            request_provenance=provenance,
                             failure_code="NOT_ATTEMPTED",
                             failure_reason="BLOCKED_BY_SHARED_FAILURE",
-                            executed_at=stop_time,
-                            stop_reference=shared_stop,
+                            executed_at=shared_stop.observed_at,
+                            stop_reference=(
+                                shared_stop.trigger_request.request_identity_sha256
+                            ),
                         )
                     )
                     continue
@@ -626,6 +719,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                         feature,
                         "ATTEMPTED_NO_REVISION",
                         requested_sessions,
+                        request_provenance=provenance,
                         failure_code=(
                             "INSUFFICIENT_COMPLETED_SESSIONS"
                             if capture is None
@@ -636,11 +730,11 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                             if capture is None
                             else capture.reason or capture.code
                         ),
-                        executed_at=window.now(),
+                        executed_at=execution_times.get(count, selection),
                     )
                 )
             price_packet = build_bharatstock_research_packet_v2(
-                tuple(slots), mapping_binding
+                tuple(slots), mapping_binding, shared_stop
             )
             known_values = [
                 source.known_at
@@ -651,12 +745,9 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 )
                 if source is not None
             ]
-            known_values.extend(
-                slot.executed_at
-                for slot in price_packet.feature_slots
-                if slot.executed_at is not None
-            )
-            known_at = max(known_values)
+            # Execution/stop observations are not source knowledge.  Retained
+            # source facts alone determine the result's evidence-known time.
+            known_at = max(known_values, default=selection)
             ready = (
                 price_packet.execution_state == "COMPLETED"
                 and all(

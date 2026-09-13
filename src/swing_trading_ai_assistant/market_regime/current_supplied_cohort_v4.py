@@ -4216,10 +4216,13 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             "decision_cutoff": request.decision_cutoff,
             "schedule_identity_sha256": request.schedule_identity_sha256,
             "members": tuple(item.value() for item in request.members),
+            "mapping_failure_reasons": context.raw_result.reasons,
             "mapping_receipts": tuple(
                 {
                     "isin": receipt.member.isin,
                     "mapping_identity": receipt.member.mapping_identity,
+                    "snapshot_source": receipt.snapshot_source,
+                    "snapshot_schema_version": receipt.snapshot_schema_version,
                     "observation_sha256": receipt.observation_sha256,
                     "observation_date": receipt.observation_date,
                     "retrieved_at": receipt.retrieved_at,
@@ -4260,6 +4263,15 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             ),
             "market_regime_evidence_state": (
                 context.market_regime_report.evidence_state
+            ),
+            "market_regime_decision_session": (
+                context.market_regime_report.decision_session
+            ),
+            "market_regime_comparison_session": (
+                context.market_regime_report.comparison_session
+            ),
+            "market_regime_decision_cutoff": (
+                context.market_regime_report.decision_cutoff
             ),
             "market_regime": context.market_regime_report.regime,
             "market_regime_advances": context.market_regime_report.advances,

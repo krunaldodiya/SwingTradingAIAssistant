@@ -29,6 +29,7 @@ from swing_trading_ai_assistant.market_data.bharatstock_capture import (
 )
 from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
     AdmittedCurrentResearchBindingV2,
+    CurrentResearchMappingProjectionV2,
     validate_current_research_binding_v2,
 )
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
@@ -57,10 +58,10 @@ from .bharatstock_v2_runtime_identity_manifest import (
 
 _CONTRACT: Final = "bharatstock-retained-research-packet@v2"
 _SCHEMA_IDENTITY: Final = hashlib.sha256(
-    b"bharatstock-retained-research-packet-schema@v2\n"
+    b"bharatstock-retained-research-packet-schema@v3\n"
 ).hexdigest()
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
-    b"independent-1-2-21-source-reported-member-local-comparability@v2\n"
+    b"independent-1-2-21-exact-mapping-member-local-comparability@v3\n"
 ).hexdigest()
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _FEATURES: Final = (
@@ -246,6 +247,51 @@ class BharatStockPreviousCloseComparisonFactV2:
 
 
 @dataclass(frozen=True, slots=True)
+class BharatStockCaptureRequestProvenanceV2:
+    """Exact prepared or submitted capture request for one V2 slot."""
+
+    request_identity_sha256: str
+    schedule_identity_sha256: str
+    decision_cutoff: datetime
+    requested_sessions: tuple[date, ...]
+
+    def __post_init__(self) -> None:
+        cutoff = _utc(self.decision_cutoff)
+        if (
+            not _valid_digest(self.request_identity_sha256)
+            or not _valid_digest(self.schedule_identity_sha256)
+            or type(self.requested_sessions) is not tuple
+            or not 1 <= len(self.requested_sessions) <= 21
+            or any(type(value) is not date for value in self.requested_sessions)
+            or self.requested_sessions != tuple(sorted(self.requested_sessions))
+            or len(set(self.requested_sessions)) != len(self.requested_sessions)
+        ):
+            raise ValueError("invalid BharatStock V2 request provenance")
+        object.__setattr__(self, "decision_cutoff", cutoff)
+
+
+@dataclass(frozen=True, slots=True)
+class BharatStockSharedStopInputV2:
+    code: str
+    observed_at: datetime
+    trigger_feature: str
+    trigger_request: BharatStockCaptureRequestProvenanceV2
+    phase: Literal["CAPTURE", "FINALIZATION"]
+
+    def __post_init__(self) -> None:
+        observed = _utc(self.observed_at)
+        if (
+            type(self.code) is not str
+            or not self.code
+            or self.trigger_feature not in _FEATURES
+            or type(self.trigger_request) is not BharatStockCaptureRequestProvenanceV2
+            or self.phase not in {"CAPTURE", "FINALIZATION"}
+        ):
+            raise ValueError("invalid BharatStock V2 shared stop")
+        object.__setattr__(self, "observed_at", observed)
+
+
+@dataclass(frozen=True, slots=True)
 class BharatStockFeatureInputV2:
     """One explicit retained, attempted, shared-stop, or unrequested input slot."""
 
@@ -260,6 +306,7 @@ class BharatStockFeatureInputV2:
     retained_capture: RetainedCaptureBindingV2 | None = field(
         default=None, repr=False, compare=False
     )
+    request_provenance: BharatStockCaptureRequestProvenanceV2 | None = None
     failure_code: str | None = None
     failure_reason: str | None = None
     executed_at: datetime | None = None
@@ -284,6 +331,7 @@ class BharatStockFeatureInputV2:
                 and (
                     self.requested_sessions
                     or self.retained_capture is not None
+                    or self.request_provenance is not None
                     or self.failure_code is not None
                     or self.failure_reason is not None
                     or self.executed_at is not None
@@ -303,6 +351,10 @@ class BharatStockFeatureInputV2:
                 self.state == "RETAINED_REVISION"
                 and (
                     type(self.retained_capture) is not RetainedCaptureBindingV2
+                    or type(self.request_provenance)
+                    is not BharatStockCaptureRequestProvenanceV2
+                    or self.request_provenance.requested_sessions
+                    != self.requested_sessions
                     or self.failure_code is not None
                     or self.failure_reason is not None
                     or self.executed_at is not None
@@ -313,6 +365,10 @@ class BharatStockFeatureInputV2:
                 self.state == "ATTEMPTED_NO_REVISION"
                 and (
                     self.retained_capture is not None
+                    or type(self.request_provenance)
+                    is not BharatStockCaptureRequestProvenanceV2
+                    or self.request_provenance.requested_sessions
+                    != self.requested_sessions
                     or type(self.failure_code) is not str
                     or not self.failure_code
                     or type(self.failure_reason) is not str
@@ -325,6 +381,10 @@ class BharatStockFeatureInputV2:
                 self.state == "NOT_ATTEMPTED_SHARED_STOP"
                 and (
                     self.retained_capture is not None
+                    or type(self.request_provenance)
+                    is not BharatStockCaptureRequestProvenanceV2
+                    or self.request_provenance.requested_sessions
+                    != self.requested_sessions
                     or self.failure_code != "NOT_ATTEMPTED"
                     or self.failure_reason != "BLOCKED_BY_SHARED_FAILURE"
                     or self.executed_at is None
@@ -429,6 +489,7 @@ class BharatStockFeatureSlotV2:
         "UNREQUESTED",
     ]
     requested_sessions: tuple[date, ...]
+    request_provenance: BharatStockCaptureRequestProvenanceV2 | None
     source: BharatStockFeatureSourceV2 | None
     failure_code: str | None
     failure_reason: str | None
@@ -451,6 +512,7 @@ class BharatStockFeatureSlotV2:
                 self.state == "UNREQUESTED"
                 and (
                     self.requested_sessions
+                    or self.request_provenance is not None
                     or self.source is not None
                     or self.failure_code is not None
                     or self.failure_reason is not None
@@ -466,6 +528,12 @@ class BharatStockFeatureSlotV2:
                     and self.failure_code == "INSUFFICIENT_COMPLETED_SESSIONS"
                     and len(self.requested_sessions) < _EXPECTED_SESSIONS[self.feature]
                 )
+            )
+            or (self.state == "UNREQUESTED") != (self.request_provenance is None)
+            or (
+                self.request_provenance is not None
+                and self.request_provenance.requested_sessions
+                != self.requested_sessions
             )
             or (self.state == "RETAINED_REVISION")
             != (type(self.source) is BharatStockFeatureSourceV2)
@@ -560,6 +628,7 @@ class BharatStockMemberFeatureV2:
     comparability: _Comparability
     reason: str | None
     fact: V2Fact | None
+    source_bars: tuple[BharatStockAdjustedBarV1, ...]
 
     def __post_init__(self) -> None:
         expected = {
@@ -594,6 +663,26 @@ class BharatStockMemberFeatureV2:
                 )
             )
             or (self.fact is not None and type(self.fact) is not expected)
+            or type(self.source_bars) is not tuple
+            or any(
+                type(item) is not BharatStockAdjustedBarV1 for item in self.source_bars
+            )
+            or (
+                self.availability == "OBSERVED"
+                and len(self.source_bars) != _EXPECTED_SESSIONS[self.feature]
+            )
+            or (
+                self.availability == "DEPENDENCY_BLOCKED"
+                and (
+                    self.support != "CONFLICTED"
+                    or self.comparability != "CONFLICTED"
+                    or len(self.source_bars) != _EXPECTED_SESSIONS[self.feature]
+                )
+            )
+            or (
+                self.availability not in {"OBSERVED", "DEPENDENCY_BLOCKED"}
+                and self.source_bars
+            )
         ):
             raise ValueError("invalid BharatStock V2 member feature")
 
@@ -665,9 +754,15 @@ class BharatStockResearchPacketV2:
     configuration_identity_sha256: str
     runtime_code_identity_sha256: str
     selection_identity_sha256: str
+    mapping_projection: CurrentResearchMappingProjectionV2
     execution_state: Literal["COMPLETED", "STOPPED"]
     shared_stop_code: str | None
     shared_stop_time: datetime | None
+    shared_stop_trigger_feature: str | None
+    shared_stop_request_identity_sha256: str | None
+    shared_stop_schedule_identity_sha256: str | None
+    shared_stop_decision_cutoff: datetime | None
+    shared_stop_phase: Literal["CAPTURE", "FINALIZATION"] | None
     feature_slots: tuple[BharatStockFeatureSlotV2, ...]
     coverage: tuple[BharatStockFeatureCoverageV2, ...]
     members: tuple[BharatStockResearchMemberV2, ...]
@@ -754,8 +849,147 @@ def _admission_digest(packet: BharatStockResearchPacketV2) -> str | None:
     return hashlib.sha256(entry[1]).hexdigest()
 
 
-def _validate_packet(packet: BharatStockResearchPacketV2) -> bool:
+def _bar_semantics_are_valid_v2(value: object) -> bool:
+    if type(value) is not BharatStockAdjustedBarV1:
+        return False
+    bar = value
+    return (
+        type(bar.session) is date
+        and all(
+            type(item) is Decimal
+            and item.is_finite()
+            and item > 0
+            and _decimal_text_size(item) <= 258
+            for item in (bar.open, bar.high, bar.low, bar.close)
+        )
+        and bar.low <= bar.open <= bar.high
+        and bar.low <= bar.close <= bar.high
+        and type(bar.volume) is int
+        and 0 <= bar.volume <= 2**63 - 1
+        and _valid_digest(bar.source_row_identity_sha256)
+    )
+
+
+def _projected_comparability_v2(
+    feature: str,
+    by_feature: dict[str, BharatStockMemberFeatureV2],
+    retained_feature_count: int,
+) -> _Comparability:
+    current = by_feature[feature]
+    if not current.source_bars:
+        return "NOT_ESTABLISHED"
+    if feature == "CANDLE_GEOMETRY":
+        return "SUPPORTED"
+    required_sessions = {item.session for item in current.source_bars}
+    if feature == "PREVIOUS_CLOSE_COMPARISON":
+        required_sessions = {item.session for item in current.source_bars[-2:]}
+    compared = False
+    for other_feature, other in by_feature.items():
+        if other_feature == feature or not other.source_bars:
+            continue
+        other_by_session = {item.session: item for item in other.source_bars}
+        for bar in current.source_bars:
+            if bar.session not in required_sessions:
+                continue
+            overlap = other_by_session.get(bar.session)
+            if overlap is None:
+                continue
+            compared = True
+            if _semantic_bar_value(bar) != _semantic_bar_value(overlap):
+                return "CONFLICTED"
+    return "SUPPORTED" if compared or retained_feature_count == 1 else "NOT_ESTABLISHED"
+
+
+def _member_semantics_are_valid_v2(  # noqa: C901 - closed feature matrix
+    member: BharatStockResearchMemberV2,
+    slots: tuple[BharatStockFeatureSlotV2, ...],
+) -> bool:
+    by_feature = {item.feature: item for item in member.features}
+    retained_count = sum(item.state == "RETAINED_REVISION" for item in slots)
+    if tuple(by_feature) != tuple(
+        item.feature for item in slots if item.state != "UNREQUESTED"
+    ):
+        return False
+    for slot in slots:
+        if slot.state == "UNREQUESTED":
+            continue
+        feature = by_feature[slot.feature]
+        bars = feature.source_bars
+        if any(not _bar_semantics_are_valid_v2(item) for item in bars) or tuple(
+            item.session for item in bars
+        ) != (() if not bars else slot.requested_sessions):
+            return False
+        if slot.state != "RETAINED_REVISION":
+            expected_availability = (
+                "NOT_ATTEMPTED"
+                if slot.state == "NOT_ATTEMPTED_SHARED_STOP"
+                else "INSUFFICIENT_EVIDENCE"
+            )
+            if (
+                feature.availability != expected_availability
+                or feature.support != "NOT_ESTABLISHED"
+                or feature.comparability != "NOT_ESTABLISHED"
+                or feature.fact is not None
+                or bars
+            ):
+                return False
+            continue
+        if not bars:
+            if (
+                feature.availability not in {"INSUFFICIENT_EVIDENCE", "NOT_ATTEMPTED"}
+                or feature.support != "NOT_ESTABLISHED"
+                or feature.comparability != "NOT_ESTABLISHED"
+                or feature.fact is not None
+            ):
+                return False
+            continue
+        expected_comparability = _projected_comparability_v2(
+            slot.feature, by_feature, retained_count
+        )
+        if expected_comparability == "CONFLICTED" and slot.feature != "CANDLE_GEOMETRY":
+            if (
+                feature.availability != "DEPENDENCY_BLOCKED"
+                or feature.support != "CONFLICTED"
+                or feature.comparability != "CONFLICTED"
+                or feature.reason != "CROSS_SESSION_COMPARABILITY_CONFLICT"
+                or feature.fact is not None
+            ):
+                return False
+            continue
+        if (
+            feature.availability != "OBSERVED"
+            or feature.support != "SUPPORTED"
+            or feature.comparability != expected_comparability
+            or feature.reason is not None
+            or member.price_basis is None
+        ):
+            return False
+        expected_fact: V2Fact
+        if slot.feature == "CANDLE_GEOMETRY":
+            expected_fact = _geometry(bars[-1])
+        elif slot.feature == "PREVIOUS_CLOSE_COMPARISON":
+            expected_fact = _comparison(bars)
+        else:
+            expected_fact = _market_structure(member.member, bars, member.price_basis)
+        if feature.fact != expected_fact:
+            return False
+    return True
+
+
+def _validate_packet(  # noqa: C901 - closed packet/stop matrix
+    packet: BharatStockResearchPacketV2,
+) -> bool:
     requested = packet.requested_features
+    stop_values = (
+        packet.shared_stop_code,
+        packet.shared_stop_time,
+        packet.shared_stop_trigger_feature,
+        packet.shared_stop_request_identity_sha256,
+        packet.shared_stop_schedule_identity_sha256,
+        packet.shared_stop_decision_cutoff,
+        packet.shared_stop_phase,
+    )
+    stop_present = all(item is not None for item in stop_values)
     if (
         packet.contract_version != _CONTRACT
         or packet.schema_identity_sha256 != _SCHEMA_IDENTITY
@@ -763,34 +997,122 @@ def _validate_packet(packet: BharatStockResearchPacketV2) -> bool:
         or packet.runtime_code_identity_sha256
         != bharatstock_research_runtime_code_identity_v2()
         or tuple(slot.feature for slot in packet.feature_slots) != _FEATURES
-        or len(packet.members) < 1
-        or tuple(item.member for item in packet.members)
+        or not 1 <= len(packet.members) <= 100
+        or len({item.member for item in packet.members}) != len(packet.members)
+        or type(packet.mapping_projection) is not CurrentResearchMappingProjectionV2
+        or packet.mapping_projection.ordered_selection_identity_sha256
+        != packet.selection_identity_sha256
+        or tuple(item.instrument for item in packet.mapping_projection.members)
         != tuple(item.member for item in packet.members)
         or packet.selection_identity_sha256
         != selection_identity_v2(tuple(item.member for item in packet.members))
+        or requested
+        != tuple(
+            item.feature for item in packet.feature_slots if item.state != "UNREQUESTED"
+        )
         or tuple(item.feature for item in packet.coverage) != requested
         or any(
             tuple(feature.feature for feature in member.features) != requested
             for member in packet.members
         )
-        or packet.execution_state
-        != (
-            "STOPPED"
-            if any(
-                slot.state == "NOT_ATTEMPTED_SHARED_STOP"
-                for slot in packet.feature_slots
-            )
-            else "COMPLETED"
+        or any(item is not None for item in stop_values) != stop_present
+        or packet.execution_state != ("STOPPED" if stop_present else "COMPLETED")
+        or (
+            packet.shared_stop_request_identity_sha256 is not None
+            and not _valid_digest(packet.shared_stop_request_identity_sha256)
         )
-        or (packet.execution_state == "STOPPED")
-        != (packet.shared_stop_code is not None and packet.shared_stop_time is not None)
+        or (
+            packet.shared_stop_schedule_identity_sha256 is not None
+            and not _valid_digest(packet.shared_stop_schedule_identity_sha256)
+        )
+        or (
+            packet.shared_stop_phase is not None
+            and packet.shared_stop_phase not in {"CAPTURE", "FINALIZATION"}
+        )
     ):
         return False
-    if packet.shared_stop_time is not None:
-        try:
+    try:
+        packet.mapping_projection.__post_init__()
+        for member in packet.members:
+            member.__post_init__()
+            for feature in member.features:
+                feature.__post_init__()
+                if feature.fact is not None:
+                    feature.fact.__post_init__()
+        for coverage in packet.coverage:
+            coverage.__post_init__()
+        for slot in packet.feature_slots:
+            slot.__post_init__()
+            provenance = slot.request_provenance
+            if provenance is not None:
+                provenance.__post_init__()
+                if (
+                    provenance.schedule_identity_sha256
+                    != packet.mapping_projection.schedule_identity_sha256
+                    or provenance.decision_cutoff
+                    != packet.mapping_projection.decision_cutoff
+                ):
+                    return False
+            if slot.source is not None:
+                slot.source.__post_init__()
+                if (
+                    provenance is None
+                    or provenance.request_identity_sha256
+                    != slot.source.capture_request_identity_sha256
+                    or provenance.schedule_identity_sha256
+                    != slot.source.schedule_identity_sha256
+                    or provenance.decision_cutoff != slot.source.decision_cutoff
+                    or slot.source.known_at > packet.mapping_projection.decision_cutoff
+                    or slot.source.requested_sessions != slot.requested_sessions
+                ):
+                    return False
+        if packet.shared_stop_time is not None:
             _utc(packet.shared_stop_time)
-        except ValueError:
+        if packet.shared_stop_decision_cutoff is not None:
+            _utc(packet.shared_stop_decision_cutoff)
+    except ValueError:
+        return False
+    if stop_present:
+        trigger = next(
+            (
+                item
+                for item in packet.feature_slots
+                if item.feature == packet.shared_stop_trigger_feature
+            ),
+            None,
+        )
+        trigger_position = packet.feature_slots.index(trigger) if trigger else -1
+        if (
+            trigger is None
+            or trigger.request_provenance is None
+            or trigger.request_provenance.request_identity_sha256
+            != packet.shared_stop_request_identity_sha256
+            or trigger.request_provenance.schedule_identity_sha256
+            != packet.shared_stop_schedule_identity_sha256
+            or trigger.request_provenance.decision_cutoff
+            != packet.shared_stop_decision_cutoff
+            or any(
+                item.stop_reference != packet.shared_stop_request_identity_sha256
+                or item.executed_at != packet.shared_stop_time
+                for item in packet.feature_slots
+                if item.state == "NOT_ATTEMPTED_SHARED_STOP"
+            )
+            or any(
+                item.state == "NOT_ATTEMPTED_SHARED_STOP"
+                for item in packet.feature_slots[:trigger_position]
+            )
+            or any(
+                item.state != "NOT_ATTEMPTED_SHARED_STOP"
+                for item in packet.feature_slots[trigger_position + 1 :]
+                if item.state != "UNREQUESTED"
+            )
+        ):
             return False
+    if any(
+        not _member_semantics_are_valid_v2(member, packet.feature_slots)
+        for member in packet.members
+    ):
+        return False
     expected_coverage = tuple(
         _coverage(feature, packet.members) for feature in requested
     )
@@ -809,6 +1131,7 @@ def bharatstock_research_packet_semantics_are_valid_v2(packet: object) -> bool:
     if type(packet) is not BharatStockResearchPacketV2:
         return False
     try:
+        packet.mapping_projection.__post_init__()
         for slot in packet.feature_slots:
             slot.__post_init__()
             if slot.source is not None:
@@ -998,6 +1321,7 @@ def _slot(input: BharatStockFeatureInputV2, runtime: str) -> BharatStockFeatureS
         "feature": input.feature,
         "state": input.state,
         "requested_sessions": input.requested_sessions,
+        "request_provenance": input.request_provenance,
         "source": source,
         "failure_code": input.failure_code,
         "failure_reason": input.failure_reason,
@@ -1008,6 +1332,7 @@ def _slot(input: BharatStockFeatureInputV2, runtime: str) -> BharatStockFeatureS
         input.feature,
         input.state,
         input.requested_sessions,
+        input.request_provenance,
         source,
         input.failure_code,
         input.failure_reason,
@@ -1046,6 +1371,7 @@ def _failure_member_feature(
             "NOT_ESTABLISHED",
             "BLOCKED_BY_SHARED_FAILURE",
             None,
+            (),
         )
     return BharatStockMemberFeatureV2(
         slot.feature,
@@ -1054,12 +1380,14 @@ def _failure_member_feature(
         "NOT_ESTABLISHED",
         slot.failure_reason or slot.failure_code or "PRICE_EVIDENCE_UNAVAILABLE",
         None,
+        (),
     )
 
 
 def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
     inputs: tuple[BharatStockFeatureInputV2, ...],
     mapping_binding: AdmittedCurrentResearchBindingV2,
+    shared_stop: BharatStockSharedStopInputV2 | None = None,
 ) -> BharatStockResearchPacketV2:
     """Build one admitted packet from explicit archive-bound feature slots."""
     if (
@@ -1073,6 +1401,12 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
     expected_members = tuple(item.instrument for item in mapping.members)
     retained: dict[str, RetainedCaptureRevisionV2] = {}
     for item in inputs:
+        provenance = item.request_provenance
+        if provenance is not None and (
+            provenance.schedule_identity_sha256 != mapping.schedule_identity_sha256
+            or provenance.decision_cutoff != mapping.decision_cutoff
+        ):
+            raise ValueError("BharatStock V2 feature request substitution")
         if item.state == "RETAINED_REVISION":
             revision = validate_retained_capture_binding_v2(item.retained_capture)
             if (
@@ -1083,6 +1417,13 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
                 or revision.request.schedule_identity_sha256
                 != mapping.schedule_identity_sha256
                 or revision.request.decision_cutoff != mapping.decision_cutoff
+                or item.request_provenance
+                != BharatStockCaptureRequestProvenanceV2(
+                    revision.request.request_identity_sha256,
+                    revision.request.schedule_identity_sha256,
+                    revision.request.decision_cutoff,
+                    revision.request.sessions,
+                )
             ):
                 raise ValueError("BharatStock V2 feature window substitution")
             retained[item.feature] = revision
@@ -1101,13 +1442,64 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
             or revision.source_profile != first.source_profile
         ):
             raise ValueError("BharatStock V2 feature revision substitution")
-    shared_inputs = [
+    shared_inputs = tuple(
         item for item in inputs if item.state == "NOT_ATTEMPTED_SHARED_STOP"
-    ]
-    stop_references = {item.stop_reference for item in shared_inputs}
-    stop_times = {item.executed_at for item in shared_inputs}
-    if len(stop_references) > 1 or len(stop_times) > 1:
+    )
+    retained_stops = tuple(
+        (feature, revision)
+        for feature, revision in retained.items()
+        if revision.shared_failure is not None
+    )
+    if shared_stop is not None:
+        shared_stop.__post_init__()
+    if (shared_inputs or retained_stops) and shared_stop is None:
         raise ValueError("BharatStock V2 shared-stop substitution")
+    if shared_stop is not None:
+        trigger_position = _FEATURES.index(shared_stop.trigger_feature)
+        trigger = inputs[trigger_position]
+        trigger_provenance = trigger.request_provenance
+        if (
+            trigger_provenance != shared_stop.trigger_request
+            or trigger_provenance is None
+            or trigger_provenance.schedule_identity_sha256
+            != mapping.schedule_identity_sha256
+            or trigger_provenance.decision_cutoff != mapping.decision_cutoff
+            or any(
+                item.state != "NOT_ATTEMPTED_SHARED_STOP"
+                or item.stop_reference
+                != shared_stop.trigger_request.request_identity_sha256
+                or item.executed_at != shared_stop.observed_at
+                for item in inputs[trigger_position + 1 :]
+                if item.state != "UNREQUESTED"
+            )
+            or any(
+                item.state == "NOT_ATTEMPTED_SHARED_STOP"
+                for item in inputs[: trigger_position + 1]
+            )
+            or (
+                shared_stop.code == "DEADLINE_EXCEEDED"
+                and shared_stop.phase == "CAPTURE"
+                and (
+                    trigger.state != "ATTEMPTED_NO_REVISION"
+                    or trigger.failure_reason != "ACQUISITION_DEADLINE_EXCEEDED"
+                )
+            )
+            or (
+                shared_stop.code != "DEADLINE_EXCEEDED"
+                and (
+                    shared_stop.phase != "CAPTURE"
+                    or len(retained_stops) != 1
+                    or retained_stops[0][0] != shared_stop.trigger_feature
+                    or retained_stops[0][1].shared_failure != shared_stop.code
+                    or retained_stops[0][1].observed_at != shared_stop.observed_at
+                )
+            )
+            or (
+                shared_stop.phase == "FINALIZATION"
+                and trigger.state not in {"RETAINED_REVISION", "ATTEMPTED_NO_REVISION"}
+            )
+        ):
+            raise ValueError("BharatStock V2 shared-stop substitution")
     runtime = bharatstock_research_runtime_code_identity_v2()
     slots = tuple(_slot(item, runtime) for item in inputs)
     requested = tuple(slot.feature for slot in slots if slot.state != "UNREQUESTED")
@@ -1139,6 +1531,7 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
                             "NOT_ESTABLISHED",
                             result.reason or "PRICE_EVIDENCE_UNAVAILABLE",
                             None,
+                            (),
                         )
                     )
                     continue
@@ -1151,6 +1544,7 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
                             "CONFLICTED",
                             "CROSS_SESSION_COMPARABILITY_CONFLICT",
                             None,
+                            bars,
                         )
                     )
                     continue
@@ -1173,6 +1567,7 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
                         comparison,
                         None,
                         fact,
+                        bars,
                     )
                 )
             projected.append(
@@ -1186,18 +1581,32 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
             )
     members = tuple(projected)
     coverage = tuple(_coverage(feature, members) for feature in requested)
-    stopped = bool(shared_inputs)
-    stop_code = next(iter(stop_references)) if stopped else None
-    stop_time = next(iter(stop_times)) if stopped else None
+    stopped = shared_stop is not None
+    stop_code = None if shared_stop is None else shared_stop.code
+    stop_time = None if shared_stop is None else shared_stop.observed_at
     preimage = {
         "contract_version": _CONTRACT,
         "schema_identity_sha256": _SCHEMA_IDENTITY,
         "configuration_identity_sha256": _CONFIGURATION_IDENTITY,
         "runtime_code_identity_sha256": runtime,
         "selection_identity_sha256": mapping.ordered_selection_identity_sha256,
+        "mapping_projection": mapping,
         "execution_state": "STOPPED" if stopped else "COMPLETED",
         "shared_stop_code": stop_code,
         "shared_stop_time": stop_time,
+        "shared_stop_trigger_feature": None
+        if shared_stop is None
+        else shared_stop.trigger_feature,
+        "shared_stop_request_identity_sha256": None
+        if shared_stop is None
+        else shared_stop.trigger_request.request_identity_sha256,
+        "shared_stop_schedule_identity_sha256": None
+        if shared_stop is None
+        else shared_stop.trigger_request.schedule_identity_sha256,
+        "shared_stop_decision_cutoff": None
+        if shared_stop is None
+        else shared_stop.trigger_request.decision_cutoff,
+        "shared_stop_phase": None if shared_stop is None else shared_stop.phase,
         "feature_slots": slots,
         "coverage": coverage,
         "members": members,
