@@ -311,7 +311,7 @@ def _request(scenario, screen):
             "EQ",
             member.symbol,
             screen._S0,
-            screen._S20,
+            _CUTOFF.date(),
             member.symbol,
             "bharatstock-isin-exchange-mapping@v1",
             screen._S0,

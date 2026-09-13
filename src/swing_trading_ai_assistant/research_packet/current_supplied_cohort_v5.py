@@ -338,6 +338,7 @@ class CurrentResearchV5ContextSection:
     completion_marker_identity_sha256: str
     retained_context_identity_sha256: str
     canonical_cohort_identity_sha256: str
+    retained_context_canonical_cohort_identity_sha256: str
     cohort_size: int
     raw_result_identity_sha256: str
     raw_grid_identity_sha256: str | None
@@ -375,6 +376,7 @@ class CurrentResearchV5ContextSection:
             self.completion_marker_identity_sha256,
             self.retained_context_identity_sha256,
             self.canonical_cohort_identity_sha256,
+            self.retained_context_canonical_cohort_identity_sha256,
             self.raw_result_identity_sha256,
             self.adjusted_component_identity_sha256,
             self.market_data_report_identity_sha256,
@@ -727,7 +729,12 @@ def _context_section(
         "context_receipt_identity_sha256": raw["context_receipt_identity_sha256"],
         "completion_marker_identity_sha256": raw["completion_marker_identity_sha256"],
         "retained_context_identity_sha256": raw["retained_context_identity_sha256"],
-        "canonical_cohort_identity_sha256": raw["canonical_cohort_identity_sha256"],
+        # V4's internal cohort hash has a producer-specific representation;
+        # the V5 public envelope binds the canonical mapping identity directly.
+        "canonical_cohort_identity_sha256": mapping.canonical_cohort_identity_sha256,
+        "retained_context_canonical_cohort_identity_sha256": raw[
+            "canonical_cohort_identity_sha256"
+        ],
         "cohort_size": len(mapping.members),
         "raw_result_identity_sha256": raw["raw_result_identity_sha256"],
         "raw_grid_identity_sha256": raw_packet["raw_grid_identity_sha256"],
@@ -771,6 +778,7 @@ def _context_section(
         cast(str, values["completion_marker_identity_sha256"]),
         cast(str, values["retained_context_identity_sha256"]),
         cast(str, values["canonical_cohort_identity_sha256"]),
+        cast(str, values["retained_context_canonical_cohort_identity_sha256"]),
         len(mapping.members),
         cast(str, values["raw_result_identity_sha256"]),
         cast(str | None, values["raw_grid_identity_sha256"]),
@@ -877,7 +885,7 @@ def _industry_semantics_are_valid_v5(
                 and value.market_regime_report_identity_sha256
                 == context.market_regime_report_identity_sha256
                 and value.canonical_cohort_identity_sha256
-                == context.canonical_cohort_identity_sha256
+                == context.retained_context_canonical_cohort_identity_sha256
                 and value.cohort_size == context.cohort_size
                 and value.decision_session == context.market_regime_decision_session
                 and value.comparison_session == context.market_regime_comparison_session
@@ -920,7 +928,7 @@ def _industry_semantics_are_valid_v5(
                     value.canonical_json_bytes(include_identity=False)
                 ).hexdigest()
                 and value.canonical_cohort_identity_sha256
-                == context.canonical_cohort_identity_sha256
+                == context.retained_context_canonical_cohort_identity_sha256
                 and value.cohort_size == context.cohort_size
                 and value.decision_session == context.market_regime_decision_session
                 and value.decision_cutoff == context.market_regime_decision_cutoff

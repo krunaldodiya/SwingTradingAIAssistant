@@ -377,6 +377,22 @@ def test_event_and_mapping_semantics_reject_fully_rehashed_nested_tampering(
     assert not event_v2.current_event_notice_semantics_are_valid_v2(unauthorized)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b"[]",
+        b'{"projection":1,"projection":2}',
+        b'{"projection":' + b"[" * 17 + b"]" * 17 + b"}",
+        b'{"projection":"' + b"x" * 4097 + b'"}',
+    ),
+)
+def test_event_v2_bounded_prefix_decoder_rejects_malformed_shapes(raw: bytes) -> None:
+    with pytest.raises(ValueError, match="immutable archive conflict"):
+        event_v2._decode_stored_projection_v2(  # pyright: ignore[reportPrivateUsage]
+            raw, {"projection"}
+        )
+
+
 def test_event_v2_post_admission_mutation_and_future_source_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
