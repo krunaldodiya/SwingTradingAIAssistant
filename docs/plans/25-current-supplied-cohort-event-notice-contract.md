@@ -648,7 +648,11 @@ Every finding is triaged against the FIRST_WORKING_SLICE. Optional hardening, br
 
 ## Issue #187 successor crosswalk
 
-V5 uses a redacted event projection only after retained V1 evidence admission.
-It retains source knowledge time and artifact identities, exposes no notice body
-or private row, and makes event unavailability member-local where the admitted
-artifact permits it. This Plan's retention and source-use boundary is unchanged.
+V5 uses a bounded redacted event projection only after exact V1 archive
+revalidation/adoption or owner-retained Event V2 admission. The fixed-purpose
+V2 successor retains one authorized artifact and its ordered member-local
+outcomes, so a duplicate/conflict for one member does not suppress unaffected
+members. It retains source knowledge time plus artifact/snapshot/archive/receipt
+identities and exposes no notice body, attachment reference, company-name field,
+or unrestricted private source row. This Plan's historical V1 bytes and
+source-use boundary are unchanged.

@@ -432,8 +432,12 @@ def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
         "INSUFFICIENT_EVIDENCE",
         "OBSERVED",
     ]
-    assert features[1].provenance is not None
-    assert features[1].provenance.sessions == ()
+    failed_slot = result.packet.feature_slots[1]
+    assert failed_slot.state == "ATTEMPTED_NO_REVISION"
+    assert failed_slot.source is None
+    assert len(failed_slot.requested_sessions) == 2
+    assert failed_slot.failure_reason == "MISSING_HISTORY"
+    assert failed_slot.executed_at is not None
 
 
 def test_v2_storage_failure_after_first_window_is_publication_fatal(

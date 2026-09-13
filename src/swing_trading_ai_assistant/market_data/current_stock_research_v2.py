@@ -16,24 +16,43 @@ from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 from zoneinfo import ZoneInfo
 
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    RetainedCurrentSamePassMarketContextV4,
+)
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
+    BharatStockFeatureInputV2,
+    BharatStockResearchPacketV2,
     build_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 import (
-    CurrentSuppliedCohortResearchPacketRequestV5,
-    CurrentSuppliedCohortResearchPacketV5,
-    build_current_supplied_cohort_research_packet_v5,
+    CurrentResearchPacketV5,
+    CurrentResearchV5Request,
+    build_current_research_packet_v5,
+)
+from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
+    CurrentIndustryParticipationFailureV4,
+    CurrentIndustryParticipationReportV4,
 )
 
 from . import capture_forward_adjusted_ohlcv as private_store
 from . import current_stock_research as legacy
 from .bharatstock import BharatStockClient
-from .bharatstock_capture import CaptureRequestV2, CaptureResultV2
+from .bharatstock_capture import (
+    CaptureRequestV2,
+    CaptureResultV2,
+    read_bharatstock_capture_binding_v2,
+)
 from .catalog import CatalogError
+from .current_event_notice_v2 import RetainedCurrentEventNoticeProjectionV2
 from .current_evidence_acquisition import (
     BoundedOfficialHttpSessionV1,
     CurrentEvidenceAcquisitionError,
     acquire_current_calendar_evidence_v1,
+)
+from .current_research_binding_v2 import (
+    AdmittedCurrentResearchBindingV2,
+    resolve_current_research_binding_v2,
+    validate_current_research_binding_v2,
 )
 from .current_stock_research_runtime_identity_manifest import (
     CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
@@ -105,7 +124,7 @@ class CurrentStockResearchResultV2:
     data_selection_time: datetime
     acquisition_deadline: datetime
     runtime_code_identity_sha256: str
-    packet: CurrentSuppliedCohortResearchPacketV5 | None
+    packet: BharatStockResearchPacketV2 | CurrentResearchPacketV5 | None
     limitations: tuple[str, ...]
     evidence_known_at: datetime | None = None
 
@@ -136,7 +155,6 @@ class CurrentStockResearchResultV2:
                 and (
                     type(self.evidence_known_at) is not datetime
                     or self.evidence_known_at.tzinfo is None
-                    or self.evidence_known_at < self.data_selection_time
                     or self.evidence_known_at > self.acquisition_deadline
                 )
             )
@@ -146,14 +164,35 @@ class CurrentStockResearchResultV2:
             or any(type(item) is not str or not item for item in self.limitations)
             or (self.packet is None) == (self.status in {"READY", "NOT_READY"})
             or (
-                self.packet is not None
-                and (
-                    type(self.packet) is not CurrentSuppliedCohortResearchPacketV5
-                    or self.packet.readiness != self.status
-                    or self.packet.request.question != self.question
-                    or self.packet.request.data_selection_time
-                    != self.data_selection_time
+                type(self.packet) is BharatStockResearchPacketV2
+                and self.status
+                != (
+                    "READY"
+                    if self.packet.execution_state == "COMPLETED"
+                    and all(
+                        coverage.observed == coverage.requested
+                        for coverage in self.packet.coverage
+                    )
+                    and self.question != "INTEGRATED_CURRENT_RESEARCH"
+                    else "NOT_READY"
                 )
+            )
+            or (
+                type(self.packet) is CurrentResearchPacketV5
+                and (
+                    self.question != "INTEGRATED_CURRENT_RESEARCH"
+                    or self.status
+                    != (
+                        "READY"
+                        if self.packet.execution_state == "RESEARCH_READY"
+                        else "NOT_READY"
+                    )
+                )
+            )
+            or (
+                self.packet is not None
+                and type(self.packet)
+                not in {BharatStockResearchPacketV2, CurrentResearchPacketV5}
             )
         ):
             raise ValueError("invalid current-stock V2 result")
@@ -184,7 +223,11 @@ def _wire(value: object) -> object:
     if type(value) is date:
         return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):
-        return {item.name: _wire(getattr(value, item.name)) for item in fields(value)}
+        return {
+            item.name: _wire(getattr(value, item.name))
+            for item in fields(value)
+            if not item.name.startswith("_")
+        }
     if type(value) is tuple:
         return [_wire(item) for item in cast(tuple[object, ...], value)]
     if type(value) is dict:
@@ -223,6 +266,69 @@ def _runtime_identity() -> str:
             raise ValueError("current research V2 runtime source identity invalid")
         observed[relative] = actual
     return _digest(observed)
+
+
+def compose_retained_integrated_current_research_v2(
+    symbol: str,
+    request: CurrentResearchV5Request,
+    mapping_binding: AdmittedCurrentResearchBindingV2,
+    price: BharatStockResearchPacketV2,
+    retained_context: RetainedCurrentSamePassMarketContextV4,
+    event: RetainedCurrentEventNoticeProjectionV2,
+    industry: CurrentIndustryParticipationReportV4
+    | CurrentIndustryParticipationFailureV4,
+) -> CurrentStockResearchResultV2:
+    """Compose the integrated question only from admitted retained producers."""
+    mapping = validate_current_research_binding_v2(mapping_binding)
+    if (
+        type(symbol) is not str
+        or symbol != symbol.strip().upper()
+        or len(mapping.members) != 1
+        or mapping.members[0].effective_symbol != symbol
+    ):
+        raise legacy.CurrentStockResearchInputError("integrated mapping mismatch")
+    packet = build_current_research_packet_v5(
+        request,
+        mapping_binding,
+        price,
+        retained_context,
+        event,
+        industry,
+    )
+    known_values = [event.known_at]
+    known_values.extend(
+        source.known_at
+        for source in (
+            price.geometry_source,
+            price.comparison_source,
+            price.structure_source,
+        )
+        if source is not None
+    )
+    known_values.extend(
+        item.known_at for item in packet.context.components if item.known_at is not None
+    )
+    if industry.known_at is not None:
+        known_values.append(industry.known_at)
+    ready = packet.execution_state == "RESEARCH_READY"
+    return CurrentStockResearchResultV2(
+        CONTRACT_VERSION_V2,
+        "READY" if ready else "NOT_READY",
+        "complete",
+        "QUESTION_READY" if ready else "QUESTION_NOT_READY",
+        "INTEGRATED_CURRENT_RESEARCH",
+        symbol,
+        request.selected_at,
+        request.decision_cutoff,
+        _runtime_identity(),
+        packet,
+        tuple(
+            item
+            for item in _LIMITATIONS
+            if item != "context_evidence_not_acquired_by_this_command"
+        ),
+        max(known_values),
+    )
 
 
 def _terminal(
@@ -375,10 +481,10 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     "storage", "SCHEDULE_EVIDENCE_CONFLICT"
                 )
             required = _REQUIRED[question]
-            window_sizes = (
+            requested_window_sizes = (
                 (1, 2, 21)
                 if question == "INTEGRATED_CURRENT_RESEARCH"
-                else (2,)
+                else (1, 2)
                 if question == "PRICE_BEHAVIOR"
                 else (21,)
                 if question == "CURRENT_STRUCTURE"
@@ -389,7 +495,15 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 for item in calendar.schedule.sessions
                 if item.close_at <= selection
             )
-            if len(completed_sessions) < max(window_sizes):
+            # Calendar insufficiency is local to the wider requirement.  Do not
+            # suppress a valid one- or two-session capture merely because the
+            # schedule cannot yet support the 21-session Structure claim.
+            window_sizes = tuple(
+                count
+                for count in requested_window_sizes
+                if count <= len(completed_sessions)
+            )
+            if not window_sizes:
                 return _terminal(
                     symbol,
                     question,
@@ -403,6 +517,14 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 root, lease, symbol, window, snapshot_transport
             )
             member = legacy._member(mapping)  # pyright: ignore[reportPrivateUsage]
+            mapping_binding = resolve_current_research_binding_v2(
+                root,
+                lease,
+                mapping,
+                selected_at=selection,
+                decision_cutoff=window.deadline,
+                schedule_identity_sha256=legacy.schedule_identity_v2(calendar.schedule),
+            )
             requests = tuple(
                 _capture_request(
                     member=member,
@@ -448,120 +570,111 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 for count, capture in captures.items()
                 if capture.revision is not None
             }
-            if not admitted:
-                failed = next(iter(captures.values()))
-                return _terminal(
-                    symbol,
-                    question,
-                    window,
-                    runtime,
-                    "storage" if failed.code == "STORE_UNAVAILABLE" else "provider",
-                    failed.reason or failed.code,
-                    insufficient=failed.code == "INSUFFICIENT_EVIDENCE",
-                )
-            # A shared stop preserves already admitted independent facts, but no
-            # question can become ready because every later requested slot is
-            # retained as NOT_ATTEMPTED/insufficient by the V2 projection.
-            primary = admitted.get(1) or admitted.get(2) or admitted.get(21)
-            if primary is None:
-                raise RuntimeError("admitted capture selection is unexpectedly empty")
-            comparison_capture = captures.get(2)
-            structure_capture = captures.get(21)
-            price_packet = build_bharatstock_research_packet_v2(
-                primary,
-                comparison_revision=(
-                    comparison_capture.revision
-                    if comparison_capture is not None
-                    and comparison_capture.revision is not None
-                    else primary
-                ),
-                structure_revision=(
-                    structure_capture.revision
-                    if structure_capture is not None
-                    and structure_capture.revision is not None
-                    else primary
-                ),
-                comparison_failure=(
-                    shared_stop
-                    if comparison_capture is None and shared_stop is not None
-                    else None
-                    if comparison_capture is None
-                    or comparison_capture.revision is not None
-                    else comparison_capture.reason or comparison_capture.code
-                ),
-                structure_failure=(
-                    shared_stop
-                    if structure_capture is None and shared_stop is not None
-                    else None
-                    if structure_capture is None
-                    or structure_capture.revision is not None
-                    else structure_capture.reason or structure_capture.code
-                ),
-                shared_failure=shared_stop,
+            # Every feature slot remains explicit.  A failed or unattempted
+            # window never borrows a larger retained revision.
+            requested_price = tuple(
+                feature for feature in _FEATURES[:3] if feature in required
             )
-            known_at = max(
-                source.observed_at
+            feature_windows = {
+                "CANDLE_GEOMETRY": 1,
+                "PREVIOUS_CLOSE_COMPARISON": 2,
+                "MARKET_STRUCTURE": 21,
+            }
+            retained_bindings = {
+                count: read_bharatstock_capture_binding_v2(
+                    root,
+                    revision.revision_identity_sha256,
+                    lease=lease,
+                )
+                for count, revision in admitted.items()
+            }
+            stop_time = window.now() if shared_stop is not None else None
+            slots: list[BharatStockFeatureInputV2] = []
+            for feature in _FEATURES[:3]:
+                count = feature_windows[feature]
+                if feature not in requested_price:
+                    slots.append(BharatStockFeatureInputV2(feature, "UNREQUESTED", ()))
+                    continue
+                requested_sessions = completed_sessions[-count:]
+                binding = retained_bindings.get(count)
+                if binding is not None:
+                    slots.append(
+                        BharatStockFeatureInputV2(
+                            feature,
+                            "RETAINED_REVISION",
+                            requested_sessions,
+                            binding,
+                        )
+                    )
+                    continue
+                capture = captures.get(count)
+                if shared_stop is not None and capture is None:
+                    slots.append(
+                        BharatStockFeatureInputV2(
+                            feature,
+                            "NOT_ATTEMPTED_SHARED_STOP",
+                            requested_sessions,
+                            failure_code="NOT_ATTEMPTED",
+                            failure_reason="BLOCKED_BY_SHARED_FAILURE",
+                            executed_at=stop_time,
+                            stop_reference=shared_stop,
+                        )
+                    )
+                    continue
+                slots.append(
+                    BharatStockFeatureInputV2(
+                        feature,
+                        "ATTEMPTED_NO_REVISION",
+                        requested_sessions,
+                        failure_code=(
+                            "INSUFFICIENT_COMPLETED_SESSIONS"
+                            if capture is None
+                            else capture.code
+                        ),
+                        failure_reason=(
+                            "INSUFFICIENT_COMPLETED_SESSIONS"
+                            if capture is None
+                            else capture.reason or capture.code
+                        ),
+                        executed_at=window.now(),
+                    )
+                )
+            price_packet = build_bharatstock_research_packet_v2(
+                tuple(slots), mapping_binding
+            )
+            known_values = [
+                source.known_at
                 for source in (
                     price_packet.geometry_source,
                     price_packet.comparison_source,
                     price_packet.structure_source,
                 )
+                if source is not None
+            ]
+            known_values.extend(
+                slot.executed_at
+                for slot in price_packet.feature_slots
+                if slot.executed_at is not None
             )
-            optional: tuple[str, ...] = ()
-            final_request = primary.request
-            cohort_identity = _digest(
-                {
-                    "members": (member,),
-                    "selection_identity_sha256": final_request.selection_identity_sha256,
-                }
+            known_at = max(known_values)
+            ready = (
+                price_packet.execution_state == "COMPLETED"
+                and all(
+                    item.observed == item.requested for item in price_packet.coverage
+                )
+                and question != "INTEGRATED_CURRENT_RESEARCH"
             )
-            packet_request = CurrentSuppliedCohortResearchPacketRequestV5(
-                members=(member,),
-                data_selection_time=selection,
-                decision_cutoff=window.deadline,
-                schedule_identity_sha256=final_request.schedule_identity_sha256,
-                mapping_identity_sha256=mapping.metadata.observation_sha256,
-                source_policy_identity_sha256=final_request.configuration_identity_sha256,
-                price_basis="BHARATSTOCK_SOURCE_REPORTED_OHLC",
-                geometry_sessions=price_packet.geometry_source.sessions,
-                comparison_sessions=(
-                    price_packet.comparison_source.sessions
-                    if "PREVIOUS_CLOSE_COMPARISON" in required
-                    and comparison_capture is not None
-                    and comparison_capture.revision is not None
-                    else ()
-                ),
-                structure_sessions=(
-                    price_packet.structure_source.sessions
-                    if "MARKET_STRUCTURE" in required
-                    and structure_capture is not None
-                    and structure_capture.revision is not None
-                    else ()
-                ),
-                event_cohort_identity_sha256=cohort_identity,
-                regime_cohort_identity_sha256=cohort_identity,
-                industry_cohort_identity_sha256=cohort_identity,
-                question=question,
-                required_features=required,
-                optional_features=optional,
-            )
-            packet = build_current_supplied_cohort_research_packet_v5(
-                packet_request, price_packet
-            )
-            window.ensure_live()
             return CurrentStockResearchResultV2(
                 CONTRACT_VERSION_V2,
-                cast(StatusV2, packet.readiness),
+                "READY" if ready else "NOT_READY",
                 "complete",
-                "QUESTION_READY"
-                if packet.readiness == "READY"
-                else "QUESTION_NOT_READY",
+                "QUESTION_READY" if ready else "QUESTION_NOT_READY",
                 question,
                 symbol,
                 selection,
                 window.deadline,
                 runtime,
-                packet,
+                price_packet,
                 _LIMITATIONS,
                 known_at,
             )

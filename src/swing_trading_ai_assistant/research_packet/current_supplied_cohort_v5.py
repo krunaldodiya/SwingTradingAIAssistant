@@ -1,105 +1,70 @@
-"""Pure V5 composition over sealed V2 price and retained legacy evidence.
-
-V5 deliberately keeps member facts separate from whole-cohort legacy results.  It
-never accepts a caller-minted ``(feature, outcome)`` tuple and never deserializes
-untyped dictionaries as facts.
-"""
+"""Complete retained same-pass V5 research envelope for Issue #187."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
+import types
+import weakref
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, cast
-from zoneinfo import ZoneInfo
+from pathlib import Path
+from typing import Final, Literal, Union, cast, get_args, get_origin, get_type_hints
 
-from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
-from swing_trading_ai_assistant.market_data.bharatstock_capture import (
-    selection_identity_v2,
-)
-from swing_trading_ai_assistant.market_data.current_event_notice import (
-    CurrentEventNoticeFailureV1,
-    RetainedCurrentEventNoticeSnapshotV1,
-)
 from swing_trading_ai_assistant.market_data.current_event_notice_v2 import (
-    AdmittedCurrentEventNoticeEvidenceV2,
-    validate_admitted_current_event_notice_evidence_v2,
+    CurrentEventMemberProjectionV2,
+    RetainedCurrentEventNoticeProjectionV2,
+    current_event_notice_semantics_are_valid_v2,
+    validate_retained_current_event_notice_v2,
+)
+from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
+    AdmittedCurrentResearchBindingV2,
+    CurrentResearchMappingMemberV2,
+    CurrentResearchMappingProjectionV2,
+    validate_current_research_binding_v2,
+)
+from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
+    runtime_source_sha256,
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
-    CurrentSamePassMarketRegimeReportV4,
     RetainedCurrentSamePassMarketContextV4,
-    validate_retained_current_same_pass_market_context_v4,
-)
-from swing_trading_ai_assistant.research_packet.bharatstock import (
-    BharatStockAdjustedMarketStructureFactV1,
+    _research_binding_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
-    BharatStockCandleGeometryFactV2,
-    BharatStockFeatureSourceV2,
-    BharatStockPreviousCloseComparisonFactV2,
-    BharatStockResearchMemberV2,
+    BharatStockFeatureCoverageV2,
+    BharatStockMemberFeatureV2,
     BharatStockResearchPacketV2,
+    bharatstock_research_packet_semantics_are_valid_v2,
     validate_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
     CurrentIndustryParticipationFailureV4,
     CurrentIndustryParticipationReportV4,
     current_industry_participation_is_exact_valid_v4,
+    current_industry_participation_runtime_code_identity_v4,
 )
 
-_CONTRACT = "current-supplied-cohort-research-packet@v5"
-_IST = ZoneInfo("Asia/Kolkata")
-_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_MEMBER_FEATURES = frozenset(
-    {
-        "CANDLE_GEOMETRY",
-        "PREVIOUS_CLOSE_COMPARISON",
-        "MARKET_STRUCTURE",
-        "EVENT_NOTICES",
-    }
+from .current_supplied_cohort_v5_runtime_identity_manifest import (
+    CURRENT_RESEARCH_PACKET_RUNTIME_SOURCE_SHA256_V5,
 )
-_COHORT_FEATURES = frozenset({"MARKET_REGIME", "INDUSTRY_PARTICIPATION"})
-_FEATURES = _MEMBER_FEATURES | _COHORT_FEATURES
-_MAX_PACKET_BYTES = 1_048_576
-_MAX_JSON_DEPTH = 16
-_MAX_JSON_NODES = 50_000
-_MAX_STRING_BYTES = 4_096
-_MAX_MEMBERS = 100
-_MAX_FEATURES = len(_FEATURES)
-_MAX_MEMBER_FEATURES = len(_MEMBER_FEATURES)
-_MAX_COHORT_FEATURES = len(_COHORT_FEATURES)
-_MAX_EVENT_NOTICES = 10_000
-_QUESTION_REQUIRED: dict[str, tuple[str, ...]] = {
-    "LATEST_COMPLETED_CANDLE": ("CANDLE_GEOMETRY",),
-    "PRICE_BEHAVIOR": ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON"),
-    "CURRENT_STRUCTURE": ("MARKET_STRUCTURE",),
-    "INTEGRATED_CURRENT_RESEARCH": (
-        "CANDLE_GEOMETRY",
-        "PREVIOUS_CLOSE_COMPARISON",
-        "MARKET_STRUCTURE",
-        "EVENT_NOTICES",
-        "MARKET_REGIME",
-        "INDUSTRY_PARTICIPATION",
-    ),
-}
-Availability = Literal[
-    "OBSERVED",
-    "UNSUPPORTED_CAPABILITY",
-    "DEPENDENCY_BLOCKED",
-    "INSUFFICIENT_EVIDENCE",
-    "NOT_ATTEMPTED",
-]
-Support = Literal["SUPPORTED", "UNSUPPORTED", "CONFLICTED", "NOT_ESTABLISHED"]
-Readiness = Literal["READY", "NOT_READY", "NOT_EVALUATED"]
+
+_CONTRACT: Final = "current-supplied-cohort-research-packet@v5"
+_SCHEMA_IDENTITY: Final = hashlib.sha256(
+    b"current-supplied-cohort-research-packet-schema@v5\n"
+).hexdigest()
+_CONFIGURATION_IDENTITY: Final = hashlib.sha256(
+    b"retained-price-event-regime-industry-mapping-complete@v5\n"
+).hexdigest()
+_FEATURE_ORDER: Final = (
+    "CANDLE_GEOMETRY",
+    "PREVIOUS_CLOSE_COMPARISON",
+    "MARKET_STRUCTURE",
+)
 
 
 def _wire(value: object) -> object:
-    if type(value) is Decimal:
-        return format(value, "f")
     if type(value) is datetime:
         return (
             value.astimezone(UTC)
@@ -124,7 +89,7 @@ def _wire(value: object) -> object:
     return value
 
 
-def _canonical(value: object) -> bytes:
+def _canonical_bytes(value: object) -> bytes:
     return (
         json.dumps(
             _wire(value), sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -134,11 +99,15 @@ def _canonical(value: object) -> bytes:
 
 
 def _digest(value: object) -> str:
-    return hashlib.sha256(_canonical(value)).hexdigest()
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
 def _valid_digest(value: object) -> bool:
-    return type(value) is str and _DIGEST.fullmatch(value) is not None
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _instant(value: object) -> datetime:
@@ -147,1902 +116,962 @@ def _instant(value: object) -> datetime:
         or value.tzinfo is None
         or value.utcoffset() != UTC.utcoffset(None)
     ):
-        raise ValueError("invalid V5 timestamp")
+        raise ValueError("invalid current V5 timestamp")
     return value.astimezone(UTC)
 
 
-def _availability(value: object) -> Availability:
-    if value not in {
-        "OBSERVED",
-        "UNSUPPORTED_CAPABILITY",
-        "DEPENDENCY_BLOCKED",
-        "INSUFFICIENT_EVIDENCE",
-        "NOT_ATTEMPTED",
-    }:
-        raise ValueError("invalid V5 availability")
-    return cast(Availability, value)
-
-
-def _support(value: object) -> Support:
-    if value not in {"SUPPORTED", "UNSUPPORTED", "CONFLICTED", "NOT_ESTABLISHED"}:
-        raise ValueError("invalid V5 support")
-    return cast(Support, value)
-
-
-def _readiness(value: object) -> Readiness:
-    if value not in {"READY", "NOT_READY", "NOT_EVALUATED"}:
-        raise ValueError("invalid V5 readiness")
-    return cast(Readiness, value)
+def current_research_packet_runtime_code_identity_v5() -> str:
+    root = Path(__file__).parent.parent
+    observed: dict[str, str] = {}
+    for relative, expected in CURRENT_RESEARCH_PACKET_RUNTIME_SOURCE_SHA256_V5.items():
+        module = ".".join(Path(relative).with_suffix("").parts[1:])
+        actual = runtime_source_sha256(module, root, relative)
+        if actual != expected:
+            raise ValueError("current V5 runtime identity invalid")
+        observed[relative] = actual
+    return _digest(observed)
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentSuppliedCohortResearchPacketRequestV5:
-    members: tuple[BharatStockInstrument, ...]
-    data_selection_time: datetime
+class CurrentResearchV5Request:
+    selected_at: datetime
     decision_cutoff: datetime
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
     schedule_identity_sha256: str
-    mapping_identity_sha256: str
-    source_policy_identity_sha256: str
-    price_basis: Literal["BHARATSTOCK_SOURCE_REPORTED_OHLC"]
-    geometry_sessions: tuple[date, ...]
-    comparison_sessions: tuple[date, ...]
-    structure_sessions: tuple[date, ...]
-    event_cohort_identity_sha256: str
-    regime_cohort_identity_sha256: str
-    industry_cohort_identity_sha256: str
-    question: Literal[
-        "LATEST_COMPLETED_CANDLE",
-        "PRICE_BEHAVIOR",
-        "CURRENT_STRUCTURE",
-        "INTEGRATED_CURRENT_RESEARCH",
-    ]
-    required_features: tuple[str, ...]
-    optional_features: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        selected, cutoff = (
-            _instant(self.data_selection_time),
-            _instant(self.decision_cutoff),
-        )
+        selected = _instant(self.selected_at)
+        cutoff = _instant(self.decision_cutoff)
         if (
-            type(self.members) is not tuple
-            or not 1 <= len(self.members) <= 100
-            or any(type(member) is not BharatStockInstrument for member in self.members)
-            or len({(member.isin, member.exchange) for member in self.members})
-            != len(self.members)
-            or selected > cutoff
-            or not all(
-                _valid_digest(value)
+            selected > cutoff
+            or any(
+                not _valid_digest(value)
                 for value in (
+                    self.schedule_evidence_sha256,
                     self.schedule_identity_sha256,
-                    self.mapping_identity_sha256,
-                    self.source_policy_identity_sha256,
-                    self.event_cohort_identity_sha256,
-                    self.regime_cohort_identity_sha256,
-                    self.industry_cohort_identity_sha256,
                 )
             )
-            or self.price_basis != "BHARATSTOCK_SOURCE_REPORTED_OHLC"
-            or type(self.geometry_sessions) is not tuple
-            or len(self.geometry_sessions) != 1
-            or any(type(item) is not date for item in self.geometry_sessions)
-            or type(self.comparison_sessions) is not tuple
-            or len(self.comparison_sessions) not in {0, 2}
-            or any(type(item) is not date for item in self.comparison_sessions)
-            or self.comparison_sessions != tuple(sorted(self.comparison_sessions))
-            or type(self.structure_sessions) is not tuple
-            or len(self.structure_sessions) not in {0, 21}
-            or any(type(item) is not date for item in self.structure_sessions)
-            or self.structure_sessions != tuple(sorted(self.structure_sessions))
-            or len(set(self.structure_sessions)) != len(self.structure_sessions)
-            # An empty window records a feature-local capture failure. It is
-            # valid only when the feature remains in the ledger as a non-observed
-            # slot; it never permits a shorter window to masquerade as evidence.
-            or (self.comparison_sessions and len(self.comparison_sessions) != 2)
-            or (self.structure_sessions and len(self.structure_sessions) != 21)
-            or (
-                self.comparison_sessions
-                and self.geometry_sessions != self.comparison_sessions[-1:]
-            )
-            or (
-                self.structure_sessions
-                and self.comparison_sessions
-                and self.comparison_sessions != self.structure_sessions[-2:]
-            )
-            or self.question
-            not in {
-                "LATEST_COMPLETED_CANDLE",
-                "PRICE_BEHAVIOR",
-                "CURRENT_STRUCTURE",
-                "INTEGRATED_CURRENT_RESEARCH",
-            }
-            or type(self.required_features) is not tuple
-            or type(self.optional_features) is not tuple
-            or not set(self.required_features).issuperset(
-                _QUESTION_REQUIRED.get(self.question, ())
-            )
-            or set(self.required_features) - _FEATURES
-            or set(self.optional_features) - _FEATURES
-            or len(set(self.required_features)) != len(self.required_features)
-            or len(set(self.optional_features)) != len(self.optional_features)
-            or set(self.required_features) & set(self.optional_features)
+            or type(self.schedule_source) is not str
+            or not 1 <= len(self.schedule_source.encode()) <= 256
+            or type(self.schedule_source_release) is not str
+            or not 1 <= len(self.schedule_source_release.encode()) <= 256
         ):
-            raise ValueError("invalid V5 request")
-        object.__setattr__(self, "data_selection_time", selected)
+            raise ValueError("invalid current V5 request")
+        object.__setattr__(self, "selected_at", selected)
         object.__setattr__(self, "decision_cutoff", cutoff)
 
-    @property
-    def selection_identity_sha256(self) -> str:
-        return selection_identity_v2(self.members)
-
-    @property
-    def canonical_cohort_identity_sha256(self) -> str:
-        return _digest(
-            tuple(
-                sorted(
-                    self.members,
-                    key=lambda item: (item.isin, item.exchange, item.symbol),
-                )
-            )
-        )
-
-    @property
-    def request_identity_sha256(self) -> str:
-        return _digest(self)
-
 
 @dataclass(frozen=True, slots=True)
-class CurrentResearchStructureProjectionV5:
-    """Typed redacted Structure fact; it never leaks the underlying bar history."""
-
-    price_basis: str
-    adjusted_bar_identities_sha256: tuple[str, ...]
-    structure_state: Literal["CONFIRMED", "INSUFFICIENT_STRUCTURE"]
-    trend: Literal[
-        "INSUFFICIENT_STRUCTURE", "RANGE_OR_TRANSITION", "UPTREND", "DOWNTREND"
-    ]
-    pivot_identities_sha256: tuple[str, ...]
-    event_identities_sha256: tuple[str, ...]
-    calculation_member_identity_sha256: str
+class CurrentResearchV5BoundRequest:
+    request: CurrentResearchV5Request
+    mapping: CurrentResearchMappingProjectionV2
+    request_identity_sha256: str
 
     def __post_init__(self) -> None:
         if (
-            self.price_basis != "BHARATSTOCK_SOURCE_REPORTED_OHLC"
-            or type(self.adjusted_bar_identities_sha256) is not tuple
-            or type(self.pivot_identities_sha256) is not tuple
-            or type(self.event_identities_sha256) is not tuple
-            or len(self.adjusted_bar_identities_sha256) != 21
-            or len(self.pivot_identities_sha256) > 17
-            or len(self.event_identities_sha256) > 19
-            or self.structure_state not in {"CONFIRMED", "INSUFFICIENT_STRUCTURE"}
-            or self.trend
-            not in {
-                "INSUFFICIENT_STRUCTURE",
-                "RANGE_OR_TRANSITION",
-                "UPTREND",
-                "DOWNTREND",
-            }
-            or (self.structure_state == "INSUFFICIENT_STRUCTURE")
-            != (self.trend == "INSUFFICIENT_STRUCTURE")
-            or any(
-                not _valid_digest(item)
-                for item in self.adjusted_bar_identities_sha256
-                + self.pivot_identities_sha256
-                + self.event_identities_sha256
-                + (self.calculation_member_identity_sha256,)
-            )
-        ):
-            raise ValueError("invalid V5 Structure projection")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchRedactedEventNoticeV5:
-    observation_identity_sha256: str
-    deduplication_identity_sha256: str
-
-    def __post_init__(self) -> None:
-        if not _valid_digest(self.observation_identity_sha256) or not _valid_digest(
-            self.deduplication_identity_sha256
-        ):
-            raise ValueError("invalid V5 redacted event notice")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchEventOutcomeV5:
-    outcome: Literal["NOTICES_ADMITTED", "NO_MATCHING_NOTICE_IN_SNAPSHOT"]
-    notices: tuple[CurrentResearchRedactedEventNoticeV5, ...]
-
-    def __post_init__(self) -> None:
-        if (
-            self.outcome not in {"NOTICES_ADMITTED", "NO_MATCHING_NOTICE_IN_SNAPSHOT"}
-            or len(self.notices) > 10_000
-            or (self.outcome == "NOTICES_ADMITTED" and not self.notices)
-            or (self.outcome == "NO_MATCHING_NOTICE_IN_SNAPSHOT" and self.notices)
-        ):
-            raise ValueError("invalid V5 event outcome")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchRegimeProjectionV5:
-    regime: Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"]
-    advances: int
-    declines: int
-    unchanged: int
-    cohort_identity_sha256: str
-    denominator: int
-    report_identity_sha256: str
-
-    def __post_init__(self) -> None:
-        if (
-            self.regime not in {"BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"}
-            or not _valid_digest(self.cohort_identity_sha256)
-            or not _valid_digest(self.report_identity_sha256)
-            or type(self.denominator) is not int
-            or not 1 <= self.denominator <= 50
-            or any(
-                type(value) is not int or value < 0
-                for value in (self.advances, self.declines, self.unchanged)
-            )
-            or self.advances + self.declines + self.unchanged != self.denominator
-            or (
-                self.regime == "BROAD_ADVANCE"
-                and self.advances * 100 < self.denominator * 60
-            )
-            or (
-                self.regime == "BROAD_DECLINE"
-                and self.declines * 100 < self.denominator * 60
-            )
-            or (
-                self.regime == "MIXED_PARTICIPATION"
-                and (
-                    self.advances * 100 >= self.denominator * 60
-                    or self.declines * 100 >= self.denominator * 60
-                )
-            )
-        ):
-            raise ValueError("invalid V5 regime projection")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchIndustryRowV5:
-    """Bounded redacted Industry participation fact from the retained V4 row."""
-
-    industry: str
-    member_count: int
-    advances: int
-    declines: int
-    unchanged: int
-    row_identity_sha256: str
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.industry) is not str
-            or not 1 <= len(self.industry.encode()) <= 512
-            or type(self.member_count) is not int
-            or not 1 <= self.member_count <= 50
-            or any(
-                type(item) is not int or item < 0
-                for item in (self.advances, self.declines, self.unchanged)
-            )
-            or self.member_count != self.advances + self.declines + self.unchanged
-            or self.row_identity_sha256
+            type(self.request) is not CurrentResearchV5Request
+            or type(self.mapping) is not CurrentResearchMappingProjectionV2
+            or self.request.selected_at != self.mapping.selected_at
+            or self.request.decision_cutoff != self.mapping.decision_cutoff
+            or self.request.schedule_identity_sha256
+            != self.mapping.schedule_identity_sha256
+            or not _valid_digest(self.request_identity_sha256)
+            or self.request_identity_sha256
             != _digest(
                 {
-                    "industry": self.industry,
-                    "member_count": self.member_count,
-                    "advances": self.advances,
-                    "declines": self.declines,
-                    "unchanged": self.unchanged,
+                    "request": self.request,
+                    "mapping_projection_identity_sha256": (
+                        self.mapping.mapping_projection_identity_sha256
+                    ),
+                    "ordered_selection_identity_sha256": (
+                        self.mapping.ordered_selection_identity_sha256
+                    ),
+                    "canonical_cohort_identity_sha256": (
+                        self.mapping.canonical_cohort_identity_sha256
+                    ),
                 }
             )
         ):
-            raise ValueError("invalid V5 Industry row")
+            raise ValueError("invalid current V5 bound request")
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentResearchIndustryProjectionV5:
-    cohort_identity_sha256: str
-    denominator: int
-    report_identity_sha256: str
-    classification_identity_sha256: str
-    rows: tuple[CurrentResearchIndustryRowV5, ...]
+class CurrentResearchV5Component:
+    position: int
+    component: str
+    contract_version: str
+    evidence_state: str
+    schema_identity_sha256: str | None
+    runtime_code_identity_sha256: str | None
+    primary_identity_sha256: str
+    known_at: datetime | None
+    reasons: tuple[str, ...]
+    ledger_row_identity_sha256: str
 
     def __post_init__(self) -> None:
+        known = None if self.known_at is None else _instant(self.known_at)
         if (
-            not all(
-                _valid_digest(item)
-                for item in (
-                    self.cohort_identity_sha256,
-                    self.report_identity_sha256,
-                    self.classification_identity_sha256,
-                )
+            type(self.position) is not int
+            or not 0 <= self.position <= 3
+            or type(self.component) is not str
+            or not self.component
+            or type(self.contract_version) is not str
+            or not self.contract_version
+            or type(self.evidence_state) is not str
+            or not self.evidence_state
+            or (
+                self.schema_identity_sha256 is not None
+                and not _valid_digest(self.schema_identity_sha256)
             )
-            or type(self.denominator) is not int
-            or not 1 <= self.denominator <= 50
-            or type(self.rows) is not tuple
-            or not 1 <= len(self.rows) <= 50
-            or any(type(row) is not CurrentResearchIndustryRowV5 for row in self.rows)
-            or tuple(sorted(row.industry for row in self.rows))
-            != tuple(row.industry for row in self.rows)
-            or len({row.industry for row in self.rows}) != len(self.rows)
-            or sum(row.member_count for row in self.rows) != self.denominator
+            or (
+                self.runtime_code_identity_sha256 is not None
+                and not _valid_digest(self.runtime_code_identity_sha256)
+            )
+            or not _valid_digest(self.primary_identity_sha256)
+            or not _valid_digest(self.ledger_row_identity_sha256)
+            or self.ledger_row_identity_sha256
+            != _digest(
+                {
+                    item.name: getattr(self, item.name)
+                    for item in fields(self)
+                    if item.name != "ledger_row_identity_sha256"
+                }
+            )
+            or type(self.reasons) is not tuple
+            or any(
+                type(reason) is not str or not 1 <= len(reason.encode()) <= 4096
+                for reason in self.reasons
+            )
         ):
-            raise ValueError("invalid V5 Industry projection")
+            raise ValueError("invalid current V5 context component")
+        object.__setattr__(self, "known_at", known)
 
 
-V5Fact = (
-    BharatStockCandleGeometryFactV2
-    | BharatStockPreviousCloseComparisonFactV2
-    | CurrentResearchStructureProjectionV5
-    | CurrentResearchEventOutcomeV5
-    | CurrentResearchRegimeProjectionV5
-    | CurrentResearchIndustryProjectionV5
-)
+def _regime_semantics_are_exact(
+    evidence_state: object,
+    regime: object,
+    advances: object,
+    declines: object,
+    unchanged: object,
+    reasons: object,
+    cohort_size: int,
+) -> bool:
+    if evidence_state == "INSUFFICIENT_EVIDENCE":
+        return (
+            regime is None
+            and advances is None
+            and declines is None
+            and unchanged is None
+            and type(reasons) is tuple
+            and len(cast(tuple[object, ...], reasons)) > 0
+        )
+    if evidence_state != "OBSERVED" or type(reasons) is not tuple or reasons:
+        return False
+    if not all(type(value) is int for value in (advances, declines, unchanged)):
+        return False
+    observed = cast(tuple[int, int, int], (advances, declines, unchanged))
+    if any(value < 0 for value in observed) or sum(observed) != cohort_size:
+        return False
+    expected = (
+        "BROAD_ADVANCE"
+        if observed[0] * 5 >= cohort_size * 3
+        else (
+            "BROAD_DECLINE"
+            if observed[1] * 5 >= cohort_size * 3
+            else "MIXED_PARTICIPATION"
+        )
+    )
+    return regime == expected
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentResearchFeatureProvenanceV5:
-    """Bounded producer/source identity for one requested feature slot."""
+class CurrentResearchV5ContextSection:
+    completion_status: Literal["READY", "FAILED"]
+    context_identity_sha256: str
+    context_object_sha256: str
+    context_receipt_identity_sha256: str
+    completion_marker_identity_sha256: str
+    retained_context_identity_sha256: str
+    canonical_cohort_identity_sha256: str
+    cohort_size: int
+    raw_result_identity_sha256: str
+    market_data_report_identity_sha256: str
+    market_regime_report_identity_sha256: str | None
+    market_regime_schema_identity_sha256: str
+    market_regime_calculation_identity_sha256: str
+    market_regime_runtime_code_identity_sha256: str
+    market_regime_evidence_state: Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"]
+    market_regime: (
+        Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"] | None
+    )
+    market_regime_advances: int | None
+    market_regime_declines: int | None
+    market_regime_unchanged: int | None
+    market_regime_reasons: tuple[str, ...]
+    industry_report_identity_sha256: str | None
+    components: tuple[CurrentResearchV5Component, ...]
+    mapping_receipt_count: int
+    context_projection_identity_sha256: str
 
-    producer_contract_version: str
+    def __post_init__(self) -> None:
+        required = (
+            self.context_identity_sha256,
+            self.context_object_sha256,
+            self.context_receipt_identity_sha256,
+            self.completion_marker_identity_sha256,
+            self.retained_context_identity_sha256,
+            self.canonical_cohort_identity_sha256,
+            self.raw_result_identity_sha256,
+            self.market_data_report_identity_sha256,
+            self.context_projection_identity_sha256,
+        )
+        optional = (
+            self.market_regime_report_identity_sha256,
+            self.industry_report_identity_sha256,
+        )
+        regime_digests = (
+            self.market_regime_schema_identity_sha256,
+            self.market_regime_calculation_identity_sha256,
+            self.market_regime_runtime_code_identity_sha256,
+        )
+        if (
+            self.completion_status not in {"READY", "FAILED"}
+            or any(not _valid_digest(value) for value in required)
+            or any(value is not None and not _valid_digest(value) for value in optional)
+            or any(not _valid_digest(value) for value in regime_digests)
+            or type(self.cohort_size) is not int
+            or not 1 <= self.cohort_size <= 100
+            or type(self.market_regime_reasons) is not tuple
+            or any(
+                type(reason) is not str or not 1 <= len(reason.encode()) <= 128
+                for reason in self.market_regime_reasons
+            )
+            or not _regime_semantics_are_exact(
+                self.market_regime_evidence_state,
+                self.market_regime,
+                self.market_regime_advances,
+                self.market_regime_declines,
+                self.market_regime_unchanged,
+                self.market_regime_reasons,
+                self.cohort_size,
+            )
+            or type(self.components) is not tuple
+            or len(self.components) != 4
+            or any(
+                type(item) is not CurrentResearchV5Component for item in self.components
+            )
+            or tuple(item.position for item in self.components) != (0, 1, 2, 3)
+            or tuple(item.component for item in self.components)
+            != (
+                "RAW_GRID_V1",
+                "CORPORATE_ACTION_SCREEN_V1",
+                "ADJUSTED_DAILY_CLOSE_V2",
+                "MARKET_REGIME_V4",
+            )
+            or type(self.mapping_receipt_count) is not int
+            or not 0 <= self.mapping_receipt_count <= 100
+        ):
+            raise ValueError("invalid current V5 context section")
+        expected = _digest(
+            {
+                item.name: getattr(self, item.name)
+                for item in fields(self)
+                if item.name != "context_projection_identity_sha256"
+            }
+        )
+        if self.context_projection_identity_sha256 != expected:
+            raise ValueError("invalid current V5 context section")
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentResearchV5Member:
+    mapping: CurrentResearchMappingMemberV2
+    candle_geometry: BharatStockMemberFeatureV2 | None
+    previous_close_comparison: BharatStockMemberFeatureV2 | None
+    market_structure: BharatStockMemberFeatureV2 | None
+    event_notice: CurrentEventMemberProjectionV2
+
+    def __post_init__(self) -> None:
+        features = (
+            ("CANDLE_GEOMETRY", self.candle_geometry),
+            ("PREVIOUS_CLOSE_COMPARISON", self.previous_close_comparison),
+            ("MARKET_STRUCTURE", self.market_structure),
+        )
+        if (
+            type(self.mapping) is not CurrentResearchMappingMemberV2
+            or any(
+                item is not None
+                and (
+                    type(item) is not BharatStockMemberFeatureV2
+                    or item.feature != feature
+                )
+                for feature, item in features
+            )
+            or type(self.event_notice) is not CurrentEventMemberProjectionV2
+            or self.event_notice.mapping != self.mapping
+        ):
+            raise ValueError("invalid current V5 member")
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, weakref_slot=True)
+class CurrentResearchPacketV5:
+    contract_version: Literal["current-supplied-cohort-research-packet@v5"]
     schema_identity_sha256: str
     configuration_identity_sha256: str
     runtime_code_identity_sha256: str
-    evidence_identity_sha256: str
-    source_identity_sha256: str
-    known_at: datetime
-    dependencies_sha256: tuple[str, ...]
-    sessions: tuple[date, ...]
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.producer_contract_version) is not str
-            or not self.producer_contract_version
-            or not all(
-                _valid_digest(value)
-                for value in (
-                    self.schema_identity_sha256,
-                    self.configuration_identity_sha256,
-                    self.runtime_code_identity_sha256,
-                    self.evidence_identity_sha256,
-                    self.source_identity_sha256,
-                )
-            )
-            or type(self.dependencies_sha256) is not tuple
-            or any(not _valid_digest(item) for item in self.dependencies_sha256)
-            or type(self.sessions) is not tuple
-            or any(type(item) is not date for item in self.sessions)
-            or self.sessions != tuple(sorted(self.sessions))
-            or len(set(self.sessions)) != len(self.sessions)
-        ):
-            raise ValueError("invalid V5 feature provenance")
-        object.__setattr__(self, "known_at", _instant(self.known_at))
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchFeatureEvidenceV5:
-    feature: str
-    availability: Availability
-    support: Support
-    reason: str | None
-    fact: V5Fact | None
-    provenance: CurrentResearchFeatureProvenanceV5 | None = None
-
-    def __post_init__(self) -> None:
-        if (
-            self.feature not in _FEATURES
-            or self.availability != _availability(self.availability)
-            or self.support != _support(self.support)
-            or (self.availability == "OBSERVED") != (self.fact is not None)
-            or (
-                self.availability == "OBSERVED"
-                and (self.reason is not None or self.support != "SUPPORTED")
-            )
-            or (
-                self.availability != "OBSERVED"
-                and (
-                    self.fact is not None
-                    or type(self.reason) is not str
-                    or not self.reason
-                )
-            )
-        ):
-            raise ValueError("invalid V5 feature evidence")
-        expected = {
-            "CANDLE_GEOMETRY": BharatStockCandleGeometryFactV2,
-            "PREVIOUS_CLOSE_COMPARISON": BharatStockPreviousCloseComparisonFactV2,
-            "MARKET_STRUCTURE": CurrentResearchStructureProjectionV5,
-            "EVENT_NOTICES": CurrentResearchEventOutcomeV5,
-            "MARKET_REGIME": CurrentResearchRegimeProjectionV5,
-            "INDUSTRY_PARTICIPATION": CurrentResearchIndustryProjectionV5,
-        }[self.feature]
-        if self.fact is not None and type(self.fact) is not expected:
-            raise ValueError("invalid V5 fact type")
-        if (
-            self.provenance is not None
-            and type(self.provenance) is not CurrentResearchFeatureProvenanceV5
-        ):
-            raise ValueError("invalid V5 feature provenance")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchMemberV5:
-    position: int
-    member: BharatStockInstrument
-    features: tuple[CurrentResearchFeatureEvidenceV5, ...]
-    readiness: Readiness
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.position) is not int
-            or not 0 <= self.position < 100
-            or type(self.member) is not BharatStockInstrument
-            or type(self.features) is not tuple
-            or len(self.features) > len(_MEMBER_FEATURES)
-            or any(
-                type(item) is not CurrentResearchFeatureEvidenceV5
-                or item.feature not in _MEMBER_FEATURES
-                for item in self.features
-            )
-            or len({item.feature for item in self.features}) != len(self.features)
-            or self.readiness != _readiness(self.readiness)
-        ):
-            raise ValueError("invalid V5 member")
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentResearchFeatureCoverageV5:
-    feature: str
-    requested: int
-    observed: int
-    unsupported: int
-    dependency_blocked: int
-    insufficient: int
-    not_attempted: int
-
-    def __post_init__(self) -> None:
-        if (
-            self.feature not in _MEMBER_FEATURES
-            or any(
-                type(value) is not int or value < 0
-                for value in (
-                    self.requested,
-                    self.observed,
-                    self.unsupported,
-                    self.dependency_blocked,
-                    self.insufficient,
-                    self.not_attempted,
-                )
-            )
-            or self.requested
-            != self.observed
-            + self.unsupported
-            + self.dependency_blocked
-            + self.insufficient
-            + self.not_attempted
-        ):
-            raise ValueError("invalid V5 feature coverage")
-
-
-@dataclass(frozen=True, slots=True)
-class V5ContextEvidence:
-    """Validated legacy component inputs, not public caller-minted feature rows."""
-
-    event_notices: (
-        RetainedCurrentEventNoticeSnapshotV1
-        | AdmittedCurrentEventNoticeEvidenceV2
-        | CurrentEventNoticeFailureV1
-        | None
-    ) = None
-    market_regime: CurrentSamePassMarketRegimeReportV4 | None = None
-    retained_market_context: RetainedCurrentSamePassMarketContextV4 | None = None
-    industry_participation: (
-        CurrentIndustryParticipationReportV4
-        | CurrentIndustryParticipationFailureV4
-        | None
-    ) = None
-    industry_market_context: object | None = None
-
-
-def _provenance(
-    feature: str,
-    *,
-    known_at: datetime,
-    source_identity: str,
-    configuration_identity: str | None = None,
-    runtime_identity: str | None = None,
-    dependencies: tuple[str, ...] = (),
-    sessions: tuple[date, ...] = (),
-    producer: str = _CONTRACT,
-) -> CurrentResearchFeatureProvenanceV5:
-    # Every field is an identity, including V5's own fixed producer schema.
-    schema = _digest({"contract": producer, "feature": feature, "schema": "v5"})
-    config = configuration_identity or _digest(
-        {"contract": producer, "feature": feature}
+    execution_state: Literal["RESEARCH_READY", "NON_READY"]
+    bound_request: CurrentResearchV5BoundRequest
+    price_evidence: BharatStockResearchPacketV2
+    event_evidence: RetainedCurrentEventNoticeProjectionV2
+    industry_evidence: (
+        CurrentIndustryParticipationReportV4 | CurrentIndustryParticipationFailureV4
     )
-    runtime = runtime_identity or _digest({"contract": producer, "runtime": "v5"})
-    evidence = _digest(
-        {
-            "feature": feature,
-            "source": source_identity,
-            "dependencies": dependencies,
-            "sessions": sessions,
-        }
-    )
-    return CurrentResearchFeatureProvenanceV5(
-        producer,
-        schema,
-        config,
-        runtime,
-        evidence,
-        source_identity,
-        known_at,
-        dependencies,
-        sessions,
-    )
-
-
-def _failure_evidence(
-    feature: str, state: Availability, support: Support, reason: str
-) -> CurrentResearchFeatureEvidenceV5:
-    source = _digest({"feature": feature, "state": state, "reason": reason})
-    return CurrentResearchFeatureEvidenceV5(
-        feature,
-        state,
-        support,
-        reason,
-        None,
-        _provenance(
-            feature, known_at=datetime(1970, 1, 1, tzinfo=UTC), source_identity=source
-        ),
-    )
-
-
-def _preflight_event_notice_budget(
-    evidence: (
-        RetainedCurrentEventNoticeSnapshotV1
-        | AdmittedCurrentEventNoticeEvidenceV2
-        | CurrentEventNoticeFailureV1
-        | None
-    ),
-) -> None:
-    """Reject aggregate notice amplification before building V5 copies/JSON.
-
-    A 10,000 per-member producer allowance cannot override V5's 50,000-node
-    and 1 MiB envelope limits.  Four thousand redacted two-digest notices is a
-    conservative upper bound that leaves space for the fixed ledger.
-    """
-    if type(evidence) not in (
-        RetainedCurrentEventNoticeSnapshotV1,
-        AdmittedCurrentEventNoticeEvidenceV2,
-    ):
-        return
-    members = cast(tuple[object, ...], getattr(evidence, "members", ()))
-    if len(members) > _MAX_MEMBERS:
-        raise ValueError("V5 event evidence exceeds member bound")
-    total = 0
-    for member in members:
-        notices = cast(tuple[object, ...], getattr(member, "notices", ()))
-        total += len(notices)
-        if total > 4_000:
-            raise ValueError("V5 event evidence exceeds aggregate budget")
-
-
-def adapt_event_notices_v1(  # noqa: C901 - two sealed evidence versions stay explicit.
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-    evidence: (
-        RetainedCurrentEventNoticeSnapshotV1
-        | AdmittedCurrentEventNoticeEvidenceV2
-        | CurrentEventNoticeFailureV1
-        | None
-    ),
-) -> tuple[CurrentResearchFeatureEvidenceV5, ...]:
-    if evidence is None:
-        return tuple(
-            _failure_evidence(
-                "EVENT_NOTICES",
-                "DEPENDENCY_BLOCKED",
-                "NOT_ESTABLISHED",
-                "EVENT_CONTEXT_NOT_SUPPLIED",
-            )
-            for _ in request.members
-        )
-    if type(evidence) is CurrentEventNoticeFailureV1:
-        state: Availability = (
-            "UNSUPPORTED_CAPABILITY"
-            if evidence.evidence_state == "UNSUPPORTED_CAPABILITY"
-            else "INSUFFICIENT_EVIDENCE"
-        )
-        support: Support = (
-            "UNSUPPORTED"
-            if state == "UNSUPPORTED_CAPABILITY"
-            else "CONFLICTED"
-            if evidence.evidence_state == "CONFLICTED_EVIDENCE"
-            else "NOT_ESTABLISHED"
-        )
-        reason = evidence.reasons[0]
-        return tuple(
-            _failure_evidence("EVENT_NOTICES", state, support, reason)
-            for _ in request.members
-        )
-    if type(evidence) is AdmittedCurrentEventNoticeEvidenceV2:
-        try:
-            validate_admitted_current_event_notice_evidence_v2(evidence)
-        except ValueError:
-            return tuple(
-                _failure_evidence(
-                    "EVENT_NOTICES",
-                    "DEPENDENCY_BLOCKED",
-                    "NOT_ESTABLISHED",
-                    "EVENT_EVIDENCE_NOT_ADMITTED",
-                )
-                for _ in request.members
-            )
-        if (
-            evidence.cohort_identity_sha256 != request.event_cohort_identity_sha256
-            or evidence.known_at > request.decision_cutoff
-            or evidence.known_at.astimezone(_IST).date()
-            != request.data_selection_time.astimezone(_IST).date()
-            or tuple(
-                BharatStockInstrument(
-                    item.member.isin, item.member.exchange, item.member.symbol
-                )
-                for item in evidence.members
-            )
-            != request.members
-        ):
-            return tuple(
-                _failure_evidence(
-                    "EVENT_NOTICES",
-                    "DEPENDENCY_BLOCKED",
-                    "NOT_ESTABLISHED",
-                    "EVENT_EVIDENCE_INVALID_OR_FUTURE",
-                )
-                for _ in request.members
-            )
-        indexed = {
-            (item.member.isin, item.member.exchange, item.member.symbol): item
-            for item in evidence.members
-        }
-        projected: list[CurrentResearchFeatureEvidenceV5] = []
-        for member in request.members:
-            item = indexed.get((member.isin, member.exchange, member.symbol))
-            if item is None:
-                projected.append(
-                    _failure_evidence(
-                        "EVENT_NOTICES",
-                        "UNSUPPORTED_CAPABILITY",
-                        "UNSUPPORTED",
-                        "EVENT_MEMBER_NOT_IN_RETAINED_COHORT",
-                    )
-                )
-            elif item.availability != "OBSERVED":
-                projected.append(
-                    _failure_evidence(
-                        "EVENT_NOTICES",
-                        item.availability,
-                        item.support,
-                        item.reason or "EVENT_EVIDENCE_CONFLICT",
-                    )
-                )
-            else:
-                projected.append(
-                    CurrentResearchFeatureEvidenceV5(
-                        "EVENT_NOTICES",
-                        "OBSERVED",
-                        "SUPPORTED",
-                        None,
-                        CurrentResearchEventOutcomeV5(
-                            cast(
-                                Literal[
-                                    "NOTICES_ADMITTED",
-                                    "NO_MATCHING_NOTICE_IN_SNAPSHOT",
-                                ],
-                                item.outcome,
-                            ),
-                            tuple(
-                                CurrentResearchRedactedEventNoticeV5(
-                                    notice.observation_identity_sha256,
-                                    notice.deduplication_identity_sha256,
-                                )
-                                for notice in item.notices
-                            ),
-                        ),
-                    )
-                )
-        return tuple(projected)
-    if (
-        type(evidence) is not RetainedCurrentEventNoticeSnapshotV1
-        or evidence.cohort_identity_sha256 != request.event_cohort_identity_sha256
-        or evidence.known_at > request.decision_cutoff
-        or evidence.known_at.astimezone(_IST).date()
-        != request.data_selection_time.astimezone(_IST).date()
-        or tuple(
-            BharatStockInstrument(
-                item.member.isin, item.member.exchange, item.member.symbol
-            )
-            for item in evidence.members
-        )
-        != request.members
-    ):
-        return tuple(
-            _failure_evidence(
-                "EVENT_NOTICES",
-                "DEPENDENCY_BLOCKED",
-                "NOT_ESTABLISHED",
-                "EVENT_EVIDENCE_INVALID_OR_FUTURE",
-            )
-            for _ in request.members
-        )
-    indexed = {
-        (item.member.isin, item.member.exchange, item.member.symbol): item
-        for item in evidence.members
-    }
-    result: list[CurrentResearchFeatureEvidenceV5] = []
-    for member in request.members:
-        item = indexed.get((member.isin, member.exchange, member.symbol))
-        if item is None:
-            result.append(
-                _failure_evidence(
-                    "EVENT_NOTICES",
-                    "UNSUPPORTED_CAPABILITY",
-                    "UNSUPPORTED",
-                    "EVENT_MEMBER_NOT_IN_RETAINED_COHORT",
-                )
-            )
-        else:
-            notices = tuple(
-                CurrentResearchRedactedEventNoticeV5(
-                    notice.observation_identity_sha256,
-                    notice.deduplication_identity_sha256,
-                )
-                for notice in item.notices
-            )
-            result.append(
-                CurrentResearchFeatureEvidenceV5(
-                    "EVENT_NOTICES",
-                    "OBSERVED",
-                    "SUPPORTED",
-                    None,
-                    CurrentResearchEventOutcomeV5(item.outcome, notices),
-                )
-            )
-    return tuple(result)
-
-
-def adapt_market_regime_v4(
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-    evidence: CurrentSamePassMarketRegimeReportV4 | None,
-) -> CurrentResearchFeatureEvidenceV5:
-    if evidence is None:
-        return _failure_evidence(
-            "MARKET_REGIME",
-            "DEPENDENCY_BLOCKED",
-            "NOT_ESTABLISHED",
-            "MARKET_REGIME_CONTEXT_NOT_SUPPLIED",
-        )
-    if (
-        type(evidence) is not CurrentSamePassMarketRegimeReportV4
-        or evidence.canonical_cohort_identity_sha256
-        != request.regime_cohort_identity_sha256
-        or evidence.decision_cutoff != request.decision_cutoff
-        or evidence.cohort_size != len(request.members)
-    ):
-        return _failure_evidence(
-            "MARKET_REGIME",
-            "DEPENDENCY_BLOCKED",
-            "NOT_ESTABLISHED",
-            "MARKET_REGIME_COHORT_OR_CUTOFF_MISMATCH",
-        )
-    if evidence.evidence_state != "OBSERVED" or None in (
-        evidence.regime,
-        evidence.advances,
-        evidence.declines,
-        evidence.unchanged,
-    ):
-        return _failure_evidence(
-            "MARKET_REGIME",
-            "INSUFFICIENT_EVIDENCE",
-            "NOT_ESTABLISHED",
-            evidence.reasons[0],
-        )
-    return CurrentResearchFeatureEvidenceV5(
-        "MARKET_REGIME",
-        "OBSERVED",
-        "SUPPORTED",
-        None,
-        CurrentResearchRegimeProjectionV5(
-            cast(
-                Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"],
-                evidence.regime,
-            ),
-            cast(int, evidence.advances),
-            cast(int, evidence.declines),
-            cast(int, evidence.unchanged),
-            evidence.canonical_cohort_identity_sha256,
-            evidence.cohort_size,
-            evidence.report_identity_sha256,
-        ),
-    )
-
-
-def adapt_industry_participation_v4(
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-    evidence: CurrentIndustryParticipationReportV4
-    | CurrentIndustryParticipationFailureV4
-    | None,
-    *,
-    market_context: object | None = None,
-) -> CurrentResearchFeatureEvidenceV5:
-    if evidence is None:
-        return _failure_evidence(
-            "INDUSTRY_PARTICIPATION",
-            "DEPENDENCY_BLOCKED",
-            "NOT_ESTABLISHED",
-            "INDUSTRY_CONTEXT_NOT_SUPPLIED",
-        )
-    if type(evidence) is CurrentIndustryParticipationFailureV4:
-        if (
-            evidence.canonical_cohort_identity_sha256
-            != request.industry_cohort_identity_sha256
-            or evidence.decision_cutoff != request.decision_cutoff
-            or evidence.cohort_size != len(request.members)
-        ):
-            return _failure_evidence(
-                "INDUSTRY_PARTICIPATION",
-                "DEPENDENCY_BLOCKED",
-                "NOT_ESTABLISHED",
-                "INDUSTRY_COHORT_OR_CUTOFF_MISMATCH",
-            )
-        state: Availability = (
-            "UNSUPPORTED_CAPABILITY"
-            if evidence.evidence_state == "UNSUPPORTED_CAPABILITY"
-            else "INSUFFICIENT_EVIDENCE"
-        )
-        return _failure_evidence(
-            "INDUSTRY_PARTICIPATION",
-            state,
-            "UNSUPPORTED" if state == "UNSUPPORTED_CAPABILITY" else "NOT_ESTABLISHED",
-            evidence.reasons[0],
-        )
-    if (
-        type(evidence) is not CurrentIndustryParticipationReportV4
-        or market_context is None
-    ):
-        return _failure_evidence(
-            "INDUSTRY_PARTICIPATION",
-            "DEPENDENCY_BLOCKED",
-            "NOT_ESTABLISHED",
-            "INDUSTRY_CONTEXT_NOT_SUPPLIED_OR_INVALID",
-        )
-    exact = cast(
-        Callable[[object, object], bool],
-        current_industry_participation_is_exact_valid_v4,
-    )
-    if (
-        not exact(evidence, market_context)
-        or evidence.canonical_cohort_identity_sha256
-        != request.industry_cohort_identity_sha256
-        or evidence.decision_cutoff != request.decision_cutoff
-        or evidence.cohort_size != len(request.members)
-    ):
-        return _failure_evidence(
-            "INDUSTRY_PARTICIPATION",
-            "DEPENDENCY_BLOCKED",
-            "NOT_ESTABLISHED",
-            "INDUSTRY_COHORT_OR_CUTOFF_MISMATCH",
-        )
-    return CurrentResearchFeatureEvidenceV5(
-        "INDUSTRY_PARTICIPATION",
-        "OBSERVED",
-        "SUPPORTED",
-        None,
-        CurrentResearchIndustryProjectionV5(
-            evidence.canonical_cohort_identity_sha256,
-            evidence.cohort_size,
-            evidence.report_identity_sha256,
-            evidence.retained_classification_identity_sha256,
-            tuple(
-                CurrentResearchIndustryRowV5(
-                    row.industry,
-                    row.member_count,
-                    row.advances,
-                    row.declines,
-                    row.unchanged,
-                    row.row_identity_sha256,
-                )
-                for row in evidence.industries
-            ),
-        ),
-    )
-
-
-def _structure_fact(
-    fact: BharatStockAdjustedMarketStructureFactV1,
-) -> CurrentResearchStructureProjectionV5:
-    calculation = fact.calculation
-    return CurrentResearchStructureProjectionV5(
-        fact.price_basis,
-        fact.adjusted_bar_identities_sha256,
-        calculation.structure_state,
-        calculation.trend,
-        tuple(item.pivot_identity_sha256 for item in calculation.pivots),
-        tuple(item.event_identity_sha256 for item in calculation.events),
-        calculation.member_identity_sha256,
-    )
-
-
-def _price_evidence(
-    member: BharatStockResearchMemberV2,
-    feature: str,
-    source: BharatStockFeatureSourceV2,
-) -> CurrentResearchFeatureEvidenceV5:
-    source_identity = source.revision_identity_sha256
-    provenance = _provenance(
-        feature,
-        known_at=source.observed_at,
-        source_identity=source_identity,
-        configuration_identity=source.configuration_identity_sha256,
-        runtime_identity=source.runtime_code_identity_sha256,
-        dependencies=(source.request_identity_sha256,),
-        sessions=source.sessions,
-        producer="bharatstock-retained-research-packet@v2",
-    )
-    if feature == "CANDLE_GEOMETRY":
-        return CurrentResearchFeatureEvidenceV5(
-            feature,
-            member.geometry_availability,
-            member.geometry_support,
-            member.geometry_reason,
-            member.geometry,
-            provenance,
-        )
-    if feature == "PREVIOUS_CLOSE_COMPARISON":
-        return CurrentResearchFeatureEvidenceV5(
-            feature,
-            member.comparison_availability,
-            member.comparison_support,
-            member.comparison_reason,
-            member.comparison,
-            provenance,
-        )
-    fact = None if member.structure is None else _structure_fact(member.structure)
-    return CurrentResearchFeatureEvidenceV5(
-        feature,
-        member.structure_availability,
-        member.structure_support,
-        member.structure_reason,
-        fact,
-        provenance,
-    )
-
-
-def _ensure_provenance(
-    evidence: CurrentResearchFeatureEvidenceV5,
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-) -> CurrentResearchFeatureEvidenceV5:
-    if evidence.provenance is not None:
-        return evidence
-    return CurrentResearchFeatureEvidenceV5(
-        evidence.feature,
-        evidence.availability,
-        evidence.support,
-        evidence.reason,
-        evidence.fact,
-        _provenance(
-            evidence.feature,
-            known_at=request.data_selection_time,
-            source_identity=_digest(
-                evidence.fact if evidence.fact is not None else evidence.reason
-            ),
-            configuration_identity=request.source_policy_identity_sha256,
-            runtime_identity=request.request_identity_sha256,
-            dependencies=(
-                request.request_identity_sha256,
-                request.mapping_identity_sha256,
-            ),
-        ),
-    )
-
-
-def _coverage(
-    feature: str, members: tuple[CurrentResearchMemberV5, ...]
-) -> CurrentResearchFeatureCoverageV5:
-    states = [
-        next(item.availability for item in member.features if item.feature == feature)
-        for member in members
-    ]
-    return CurrentResearchFeatureCoverageV5(
-        feature,
-        len(states),
-        states.count("OBSERVED"),
-        states.count("UNSUPPORTED_CAPABILITY"),
-        states.count("DEPENDENCY_BLOCKED"),
-        states.count("INSUFFICIENT_EVIDENCE"),
-        states.count("NOT_ATTEMPTED"),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentSuppliedCohortResearchPacketV5:
-    contract_version: Literal["current-supplied-cohort-research-packet@v5"]
-    request: CurrentSuppliedCohortResearchPacketRequestV5
-    price_packet_identity_sha256: str
-    members: tuple[CurrentResearchMemberV5, ...]
-    coverage: tuple[CurrentResearchFeatureCoverageV5, ...]
-    cohort_features: tuple[CurrentResearchFeatureEvidenceV5, ...]
-    ready_member_count: int
-    readiness: Readiness
+    context: CurrentResearchV5ContextSection
+    coverage: tuple[BharatStockFeatureCoverageV2, ...]
+    members: tuple[CurrentResearchV5Member, ...]
     result_identity_sha256: str
+    _seal: object = field(repr=False, compare=False, hash=False)
 
-    def __post_init__(self) -> None:
-        if (
-            self.contract_version != _CONTRACT
-            or type(self.request) is not CurrentSuppliedCohortResearchPacketRequestV5
-            or not _valid_digest(self.price_packet_identity_sha256)
-            or not _valid_digest(self.result_identity_sha256)
-            or self.readiness != _readiness(self.readiness)
-            or type(self.ready_member_count) is not int
-            or not 0 <= self.ready_member_count <= len(self.request.members)
-            or not _packet_ledger_is_consistent(self)
-        ):
-            raise ValueError("invalid V5 packet")
-        expected = {
-            "contract_version": _CONTRACT,
-            "request": self.request,
-            "price_packet_identity_sha256": self.price_packet_identity_sha256,
-            "members": self.members,
-            "coverage": self.coverage,
-            "cohort_features": self.cohort_features,
-            "ready_member_count": self.ready_member_count,
-            "readiness": self.readiness,
-        }
-        if self.result_identity_sha256 != _digest(expected):
-            raise ValueError("invalid V5 packet")
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("current V5 packets are producer-minted only")
 
     def canonical_json_bytes(self) -> bytes:
-        value = _wire(self)
-        _validate_json_shape(value)
-        raw = _canonical(self)
-        if len(raw) > _MAX_PACKET_BYTES:
-            raise ValueError("V5 packet exceeds publication bound")
-        return raw
+        return _canonical_bytes(self)
 
     @classmethod
-    def from_canonical_json_bytes(
-        cls, raw: bytes
-    ) -> CurrentSuppliedCohortResearchPacketV5:
-        """Parse bounded canonical bytes into only V5-owned typed facts."""
-        if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_PACKET_BYTES:
-            raise ValueError("invalid V5 packet bytes")
+    def from_canonical_json_bytes(cls, raw: bytes) -> CurrentResearchPacketV5:
+        """Decode bounded canonical bytes without minting retained admission."""
+        return _read_current_research_packet_v5(raw)
 
-        def unique(items: list[tuple[str, object]]) -> dict[str, object]:
-            result: dict[str, object] = {}
-            for key, item in items:
-                if key in result:
-                    raise ValueError("duplicate V5 key")
-                result[key] = item
-            return result
+    @property
+    def admitted(self) -> bool:
+        return _admission_digest(self) is not None
 
-        try:
-            decoded = json.loads(raw, object_pairs_hook=unique)
-            _validate_json_shape(decoded)
-            value = _object(decoded)
-            if (
-                set(value)
-                != {
-                    "contract_version",
-                    "request",
-                    "price_packet_identity_sha256",
-                    "members",
-                    "coverage",
-                    "cohort_features",
-                    "ready_member_count",
-                    "readiness",
-                    "result_identity_sha256",
-                }
-                or value["contract_version"] != _CONTRACT
-                or _canonical(value) != raw
-            ):
-                raise ValueError
-            request = _request_from_value(_object(value["request"]))
-            members = tuple(
-                _member_from_value(item)
-                for item in _list(value["members"], max_items=_MAX_MEMBERS)
-            )
-            coverage = tuple(
-                _coverage_from_value(item)
-                for item in _list(value["coverage"], max_items=_MAX_MEMBER_FEATURES)
-            )
-            cohort = tuple(
-                _feature_from_value(item)
-                for item in _list(
-                    value["cohort_features"], max_items=_MAX_COHORT_FEATURES
-                )
-            )
-            result = cls(
-                _CONTRACT,
-                request,
-                _string(value["price_packet_identity_sha256"]),
-                members,
-                coverage,
-                cohort,
-                _integer(value["ready_member_count"]),
-                _readiness(_string(value["readiness"])),
-                _string(value["result_identity_sha256"]),
-            )
-        except (
-            TypeError,
-            ValueError,
-            KeyError,
-            ArithmeticError,
-            json.JSONDecodeError,
-            RecursionError,
-        ) as error:
-            raise ValueError("invalid V5 packet bytes") from error
-        if (
-            not _valid_digest(result.price_packet_identity_sha256)
-            or not _valid_digest(result.result_identity_sha256)
-            or not _packet_ledger_is_consistent(result)
-            or result.canonical_json_bytes() != raw
-        ):
-            raise ValueError("invalid V5 packet bytes")
-        expected = {
-            "contract_version": _CONTRACT,
-            "request": result.request,
-            "price_packet_identity_sha256": result.price_packet_identity_sha256,
-            "members": result.members,
-            "coverage": result.coverage,
-            "cohort_features": result.cohort_features,
-            "ready_member_count": result.ready_member_count,
-            "readiness": result.readiness,
-        }
-        if result.result_identity_sha256 != _digest(expected):
-            raise ValueError("invalid V5 packet bytes")
+    @property
+    def admission_identity_sha256(self) -> str:
+        result = _admission_digest(self)
+        if result is None:
+            raise ValueError("current V5 packet is not admitted evidence")
         return result
 
 
-def _validate_json_shape(  # noqa: C901 - closed JSON node walk is explicit.
-    value: object,
-) -> None:
-    """Bound aggregate parser work before constructing any typed V5 fact."""
-    nodes = 0
-
-    def visit(item: object, depth: int) -> None:
-        nonlocal nodes
-        nodes += 1
-        if depth > _MAX_JSON_DEPTH or nodes > _MAX_JSON_NODES:
-            raise ValueError
-        if type(item) is str:
-            if len(item.encode()) > _MAX_STRING_BYTES:
-                raise ValueError
-            return
-        if type(item) is list:
-            values = cast(list[object], item)
-            if len(values) > _MAX_EVENT_NOTICES:
-                raise ValueError
-            for child in values:
-                visit(child, depth + 1)
-            return
-        if type(item) is dict:
-            values = cast(dict[object, object], item)
-            for key, child in values.items():
-                if type(key) is not str or len(key.encode()) > _MAX_STRING_BYTES:
-                    raise ValueError
-                visit(child, depth + 1)
-
-    visit(value, 0)
+_ADMISSIONS: dict[
+    int, tuple[weakref.ReferenceType[CurrentResearchPacketV5], bytes, object]
+] = {}
 
 
-def _packet_ledger_is_consistent(  # noqa: C901 - exact feature/window ledger is closed.
-    result: CurrentSuppliedCohortResearchPacketV5,
-) -> bool:
-    requested = result.request.required_features + result.request.optional_features
-    member_features = tuple(item for item in requested if item in _MEMBER_FEATURES)
-    cohort_features = tuple(item for item in requested if item in _COHORT_FEATURES)
+def _admit(packet: CurrentResearchPacketV5) -> None:
+    packet_id = id(packet)
+    seal = object.__getattribute__(packet, "_seal")
+
+    def discard(reference: weakref.ReferenceType[CurrentResearchPacketV5]) -> None:
+        entry = _ADMISSIONS.get(packet_id)
+        if entry is not None and entry[0] is reference:
+            _ADMISSIONS.pop(packet_id, None)
+
+    _ADMISSIONS[packet_id] = (
+        weakref.ref(packet, discard),
+        packet.canonical_json_bytes(),
+        seal,
+    )
+
+
+def _admission_digest(packet: CurrentResearchPacketV5) -> str | None:
+    entry = _ADMISSIONS.get(id(packet))
     if (
-        len(result.members) != len(result.request.members)
-        or tuple(item.member for item in result.members) != result.request.members
-        or tuple(item.position for item in result.members)
-        != tuple(range(len(result.members)))
-        or tuple(item.feature for item in result.coverage) != member_features
-        or tuple(item.feature for item in result.cohort_features) != cohort_features
-        or any(item.provenance is None for item in result.cohort_features)
+        entry is None
+        or entry[0]() is not packet
+        or entry[1] != packet.canonical_json_bytes()
+        or entry[2] is not object.__getattribute__(packet, "_seal")
     ):
-        return False
-    for member in result.members:
-        if tuple(item.feature for item in member.features) != member_features or any(
-            item.provenance is None for item in member.features
-        ):
-            return False
-        expected = (
-            "READY"
-            if all(
-                item.availability == "OBSERVED"
-                for item in member.features
-                if item.feature in result.request.required_features
-            )
-            else "NOT_READY"
+        return None
+    return hashlib.sha256(entry[1]).hexdigest()
+
+
+def _context_section(
+    retained: RetainedCurrentSamePassMarketContextV4,
+    mapping: CurrentResearchMappingProjectionV2,
+    industry: CurrentIndustryParticipationReportV4
+    | CurrentIndustryParticipationFailureV4,
+) -> CurrentResearchV5ContextSection:
+    accessor = cast(
+        Callable[[object], dict[str, object] | None],
+        _research_binding_projection_from_retained_context_v4,
+    )
+    raw = accessor(retained)
+    if type(raw) is not dict:
+        raise ValueError("current V5 retained context invalid")
+    if (
+        mapping.origin != "RETAINED_SAME_PASS_CONTEXT"
+        or mapping.context_identity_sha256 != raw["context_identity_sha256"]
+        or mapping.context_object_sha256 != raw["context_object_sha256"]
+        or mapping.context_receipt_identity_sha256
+        != raw["context_receipt_identity_sha256"]
+        or mapping.completion_marker_identity_sha256
+        != raw["completion_marker_identity_sha256"]
+        or mapping.retained_context_identity_sha256
+        != raw["retained_context_identity_sha256"]
+    ):
+        raise ValueError("current V5 context/mapping substitution")
+    components = tuple(
+        CurrentResearchV5Component(
+            cast(int, item["position"]),
+            cast(str, item["component"]),
+            cast(str, item["contract_version"]),
+            cast(str, item["evidence_state"]),
+            cast(str | None, item["schema_identity_sha256"]),
+            cast(str | None, item["runtime_code_identity_sha256"]),
+            cast(str, item["primary_identity_sha256"]),
+            cast(datetime | None, item["known_at"]),
+            cast(tuple[str, ...], item["reasons"]),
+            cast(str, item["ledger_row_identity_sha256"]),
         )
-        if member.readiness != expected:
-            return False
-        for item in member.features:
-            provenance = item.provenance
-            if (
-                provenance is None
-                or provenance.known_at > result.request.decision_cutoff
-            ):
-                return False
-            expected_sessions = (
-                result.request.geometry_sessions
-                if item.feature == "CANDLE_GEOMETRY"
-                else result.request.comparison_sessions
-                if item.feature == "PREVIOUS_CLOSE_COMPARISON"
-                else result.request.structure_sessions
-                if item.feature == "MARKET_STRUCTURE"
-                else ()
-            )
-            if (
-                item.feature
-                in {"CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE"}
-                and provenance.sessions != expected_sessions
-            ):
-                return False
-            if item.feature == "CANDLE_GEOMETRY" and item.fact is not None:
-                if not expected_sessions:
-                    return False
-                geometry = cast(BharatStockCandleGeometryFactV2, item.fact)
-                if geometry.session != expected_sessions[-1]:
-                    return False
-            if item.feature == "PREVIOUS_CLOSE_COMPARISON" and item.fact is not None:
-                comparison = cast(BharatStockPreviousCloseComparisonFactV2, item.fact)
-                if (
-                    comparison.previous_session,
-                    comparison.session,
-                ) != expected_sessions:
-                    return False
-    if result.coverage != tuple(
-        _coverage(feature, result.members) for feature in member_features
-    ):
-        return False
-    if result.ready_member_count != sum(
-        member.readiness == "READY" for member in result.members
-    ):
-        return False
-    expected_readiness = (
+        for item in cast(tuple[dict[str, object], ...], raw["component_ledger"])
+    )
+    receipts = cast(tuple[dict[str, object], ...], raw["mapping_receipts"])
+    completion_status: Literal["READY", "FAILED"] = (
         "READY"
-        if all(member.readiness == "READY" for member in result.members)
-        and all(
-            item.availability == "OBSERVED"
-            for item in result.cohort_features
-            if item.feature in result.request.required_features
-        )
-        else "NOT_READY"
+        if tuple(item.evidence_state for item in components)
+        == ("OBSERVED", "SCREENED", "SUCCESS", "OBSERVED")
+        else "FAILED"
     )
-    return result.readiness == expected_readiness
-
-
-def _object(value: object) -> dict[str, object]:
-    if type(value) is not dict:
-        raise ValueError
-    return cast(dict[str, object], value)
-
-
-def _list(value: object, *, max_items: int = _MAX_EVENT_NOTICES) -> list[object]:
-    if type(value) is not list:
-        raise ValueError
-    result = cast(list[object], value)
-    if len(result) > max_items:
-        raise ValueError
-    return result
-
-
-def _string(value: object) -> str:
-    if type(value) is not str or len(value.encode()) > _MAX_STRING_BYTES:
-        raise ValueError
-    return value
-
-
-def _date(value: object) -> date:
-    text = _string(value)
-    parsed = date.fromisoformat(text)
-    if parsed.isoformat() != text:
-        raise ValueError
-    return parsed
-
-
-def _decimal(value: object) -> Decimal:
-    text = _string(value)
-    if len(text) > 258:
-        raise ValueError
-    parsed = Decimal(text)
-    exponent = parsed.as_tuple().exponent
-    if (
-        not parsed.is_finite()
-        or not isinstance(exponent, int)
-        or not -256 <= exponent <= 256
-        or format(parsed, "f") != text
-    ):
-        raise ValueError
-    return parsed
-
-
-def _instrument(value: object) -> BharatStockInstrument:
-    raw = _object(value)
-    if set(raw) != {"isin", "exchange", "symbol"}:
-        raise ValueError
-    return BharatStockInstrument(
-        _string(raw["isin"]), _string(raw["exchange"]), _string(raw["symbol"])
+    industry_identity = (
+        industry.report_identity_sha256
+        if isinstance(industry, CurrentIndustryParticipationReportV4)
+        else industry.failure_identity_sha256
     )
-
-
-def _request_from_value(
-    raw: dict[str, object],
-) -> CurrentSuppliedCohortResearchPacketRequestV5:
-    if set(raw) != {
-        "members",
-        "data_selection_time",
-        "decision_cutoff",
-        "schedule_identity_sha256",
-        "mapping_identity_sha256",
-        "source_policy_identity_sha256",
-        "price_basis",
-        "geometry_sessions",
-        "comparison_sessions",
-        "structure_sessions",
-        "event_cohort_identity_sha256",
-        "regime_cohort_identity_sha256",
-        "industry_cohort_identity_sha256",
-        "question",
-        "required_features",
-        "optional_features",
-    }:
-        raise ValueError
-    return CurrentSuppliedCohortResearchPacketRequestV5(
-        tuple(
-            _instrument(item) for item in _list(raw["members"], max_items=_MAX_MEMBERS)
-        ),
-        _instant(
-            datetime.fromisoformat(
-                _string(raw["data_selection_time"]).replace("Z", "+00:00")
-            )
-        ),
-        _instant(
-            datetime.fromisoformat(
-                _string(raw["decision_cutoff"]).replace("Z", "+00:00")
-            )
-        ),
-        _string(raw["schedule_identity_sha256"]),
-        _string(raw["mapping_identity_sha256"]),
-        _string(raw["source_policy_identity_sha256"]),
-        cast(Literal["BHARATSTOCK_SOURCE_REPORTED_OHLC"], _string(raw["price_basis"])),
-        tuple(_date(item) for item in _list(raw["geometry_sessions"])),
-        tuple(_date(item) for item in _list(raw["comparison_sessions"])),
-        tuple(_date(item) for item in _list(raw["structure_sessions"])),
-        _string(raw["event_cohort_identity_sha256"]),
-        _string(raw["regime_cohort_identity_sha256"]),
-        _string(raw["industry_cohort_identity_sha256"]),
-        cast(
-            Literal[
-                "LATEST_COMPLETED_CANDLE",
-                "PRICE_BEHAVIOR",
-                "CURRENT_STRUCTURE",
-                "INTEGRATED_CURRENT_RESEARCH",
-            ],
-            _string(raw["question"]),
-        ),
-        tuple(
-            _string(item)
-            for item in _list(raw["required_features"], max_items=_MAX_FEATURES)
-        ),
-        tuple(
-            _string(item)
-            for item in _list(raw["optional_features"], max_items=_MAX_FEATURES)
-        ),
-    )
-
-
-def _feature_from_value(value: object) -> CurrentResearchFeatureEvidenceV5:
-    raw = _object(value)
-    if set(raw) != {
-        "feature",
-        "availability",
-        "support",
-        "reason",
-        "fact",
-        "provenance",
-    }:
-        raise ValueError
-    feature, availability, support = (
-        _string(raw["feature"]),
-        _availability(_string(raw["availability"])),
-        _support(_string(raw["support"])),
-    )
-    reason = raw["reason"] if raw["reason"] is None else _string(raw["reason"])
-    return CurrentResearchFeatureEvidenceV5(
-        feature,
-        availability,
-        support,
-        reason,
-        None
-        if raw["fact"] is None
-        else _fact_from_value(feature, _object(raw["fact"])),
-        _provenance_from_value(_object(raw["provenance"])),
-    )
-
-
-def _provenance_from_value(
-    value: dict[str, object],
-) -> CurrentResearchFeatureProvenanceV5:
-    if set(value) != {
-        "producer_contract_version",
-        "schema_identity_sha256",
-        "configuration_identity_sha256",
-        "runtime_code_identity_sha256",
-        "evidence_identity_sha256",
-        "source_identity_sha256",
-        "known_at",
-        "dependencies_sha256",
-        "sessions",
-    }:
-        raise ValueError
-    return CurrentResearchFeatureProvenanceV5(
-        _string(value["producer_contract_version"]),
-        _string(value["schema_identity_sha256"]),
-        _string(value["configuration_identity_sha256"]),
-        _string(value["runtime_code_identity_sha256"]),
-        _string(value["evidence_identity_sha256"]),
-        _string(value["source_identity_sha256"]),
-        _instant(
-            datetime.fromisoformat(_string(value["known_at"]).replace("Z", "+00:00"))
-        ),
-        tuple(
-            _string(item) for item in _list(value["dependencies_sha256"], max_items=16)
-        ),
-        tuple(_date(item) for item in _list(value["sessions"], max_items=21)),
-    )
-
-
-def _fact_from_value(  # noqa: C901 - closed fact-kind parser is deliberately flat.
-    feature: str, raw: dict[str, object]
-) -> V5Fact:
-    if feature == "CANDLE_GEOMETRY":
-        if set(raw) != {
-            "session",
-            "candle_direction",
-            "session_range_state",
-            "range_size",
-            "body_size",
-            "upper_wick_size",
-            "lower_wick_size",
-            "source_bar_identity_sha256",
-        }:
-            raise ValueError
-        return BharatStockCandleGeometryFactV2(
-            _date(raw["session"]),
-            cast(Literal["UP", "DOWN", "UNCHANGED"], _string(raw["candle_direction"])),
-            cast(Literal["FLAT", "NON_FLAT"], _string(raw["session_range_state"])),
-            _decimal(raw["range_size"]),
-            _decimal(raw["body_size"]),
-            _decimal(raw["upper_wick_size"]),
-            _decimal(raw["lower_wick_size"]),
-            _string(raw["source_bar_identity_sha256"]),
-        )
-    if feature == "PREVIOUS_CLOSE_COMPARISON":
-        if set(raw) != {
-            "previous_session",
-            "session",
-            "open_vs_previous_close",
-            "open_to_previous_close_distance",
-            "close_vs_previous_close",
-            "close_to_previous_close_distance",
-            "source_bar_identities_sha256",
-        }:
-            raise ValueError
-        ids = tuple(
-            _string(item) for item in _list(raw["source_bar_identities_sha256"])
-        )
-        if len(ids) != 2:
-            raise ValueError
-        return BharatStockPreviousCloseComparisonFactV2(
-            _date(raw["previous_session"]),
-            _date(raw["session"]),
-            cast(
-                Literal["UP", "DOWN", "UNCHANGED"],
-                _string(raw["open_vs_previous_close"]),
-            ),
-            _decimal(raw["open_to_previous_close_distance"]),
-            cast(
-                Literal["UP", "DOWN", "UNCHANGED"],
-                _string(raw["close_vs_previous_close"]),
-            ),
-            _decimal(raw["close_to_previous_close_distance"]),
-            ids,
-        )
-    if feature == "MARKET_STRUCTURE":
-        if set(raw) != {
-            "price_basis",
-            "adjusted_bar_identities_sha256",
-            "structure_state",
-            "trend",
-            "pivot_identities_sha256",
-            "event_identities_sha256",
-            "calculation_member_identity_sha256",
-        }:
-            raise ValueError
-        return CurrentResearchStructureProjectionV5(
-            _string(raw["price_basis"]),
-            tuple(
-                _string(item) for item in _list(raw["adjusted_bar_identities_sha256"])
-            ),
-            cast(
-                Literal["CONFIRMED", "INSUFFICIENT_STRUCTURE"],
-                _string(raw["structure_state"]),
-            ),
-            cast(
-                Literal[
-                    "INSUFFICIENT_STRUCTURE",
-                    "RANGE_OR_TRANSITION",
-                    "UPTREND",
-                    "DOWNTREND",
-                ],
-                _string(raw["trend"]),
-            ),
-            tuple(_string(item) for item in _list(raw["pivot_identities_sha256"])),
-            tuple(_string(item) for item in _list(raw["event_identities_sha256"])),
-            _string(raw["calculation_member_identity_sha256"]),
-        )
-    if feature == "EVENT_NOTICES":
-        if set(raw) != {"outcome", "notices"}:
-            raise ValueError
-        notices: list[CurrentResearchRedactedEventNoticeV5] = []
-        for item in _list(raw["notices"], max_items=_MAX_EVENT_NOTICES):
-            notice = _object(item)
-            if set(notice) != {
-                "observation_identity_sha256",
-                "deduplication_identity_sha256",
-            }:
-                raise ValueError
-            notices.append(
-                CurrentResearchRedactedEventNoticeV5(
-                    _string(notice["observation_identity_sha256"]),
-                    _string(notice["deduplication_identity_sha256"]),
-                )
-            )
-        return CurrentResearchEventOutcomeV5(
-            cast(
-                Literal["NOTICES_ADMITTED", "NO_MATCHING_NOTICE_IN_SNAPSHOT"],
-                _string(raw["outcome"]),
-            ),
-            tuple(notices),
-        )
-    if feature == "MARKET_REGIME":
-        if set(raw) != {
-            "regime",
-            "advances",
-            "declines",
-            "unchanged",
-            "cohort_identity_sha256",
-            "denominator",
-            "report_identity_sha256",
-        }:
-            raise ValueError
-        return CurrentResearchRegimeProjectionV5(
-            cast(
-                Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"],
-                _string(raw["regime"]),
-            ),
-            _integer(raw["advances"]),
-            _integer(raw["declines"]),
-            _integer(raw["unchanged"]),
-            _string(raw["cohort_identity_sha256"]),
-            _integer(raw["denominator"]),
-            _string(raw["report_identity_sha256"]),
-        )
-    if feature == "INDUSTRY_PARTICIPATION":
-        if set(raw) != {
-            "cohort_identity_sha256",
-            "denominator",
-            "report_identity_sha256",
-            "classification_identity_sha256",
-            "rows",
-        }:
-            raise ValueError
-        rows = tuple(
-            _industry_row_from_value(item) for item in _list(raw["rows"], max_items=50)
-        )
-        return CurrentResearchIndustryProjectionV5(
-            _string(raw["cohort_identity_sha256"]),
-            _integer(raw["denominator"]),
-            _string(raw["report_identity_sha256"]),
-            _string(raw["classification_identity_sha256"]),
-            rows,
-        )
-    raise ValueError
-
-
-def _industry_row_from_value(value: object) -> CurrentResearchIndustryRowV5:
-    raw = _object(value)
-    if set(raw) != {
-        "industry",
-        "member_count",
-        "advances",
-        "declines",
-        "unchanged",
-        "row_identity_sha256",
-    }:
-        raise ValueError
-    return CurrentResearchIndustryRowV5(
-        _string(raw["industry"]),
-        _integer(raw["member_count"]),
-        _integer(raw["advances"]),
-        _integer(raw["declines"]),
-        _integer(raw["unchanged"]),
-        _string(raw["row_identity_sha256"]),
-    )
-
-
-def _integer(value: object) -> int:
-    if type(value) is not int or value < 0:
-        raise ValueError
-    return value
-
-
-def _member_from_value(value: object) -> CurrentResearchMemberV5:
-    raw = _object(value)
-    if set(raw) != {"position", "member", "features", "readiness"}:
-        raise ValueError
-    return CurrentResearchMemberV5(
-        _integer(raw["position"]),
-        _instrument(raw["member"]),
-        tuple(
-            _feature_from_value(item)
-            for item in _list(raw["features"], max_items=_MAX_MEMBER_FEATURES)
-        ),
-        _readiness(_string(raw["readiness"])),
-    )
-
-
-def _coverage_from_value(value: object) -> CurrentResearchFeatureCoverageV5:
-    raw = _object(value)
-    if set(raw) != {
-        "feature",
-        "requested",
-        "observed",
-        "unsupported",
-        "dependency_blocked",
-        "insufficient",
-        "not_attempted",
-    }:
-        raise ValueError
-    return CurrentResearchFeatureCoverageV5(
-        _string(raw["feature"]),
-        *(
-            _integer(raw[key])
-            for key in (
-                "requested",
-                "observed",
-                "unsupported",
-                "dependency_blocked",
-                "insufficient",
-                "not_attempted",
-            )
-        ),
-    )
-
-
-def _validate_price_binding(
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-    price_packet: BharatStockResearchPacketV2,
-) -> None:
-    requested = set(request.required_features + request.optional_features)
-    sources = (
-        price_packet.geometry_source,
-        price_packet.comparison_source,
-        price_packet.structure_source,
-    )
-    if (
-        price_packet.revision_identity_sha256
-        != price_packet.geometry_source.revision_identity_sha256
-        or any(source.decision_cutoff != request.decision_cutoff for source in sources)
-        or any(
-            source.schedule_identity_sha256 != request.schedule_identity_sha256
-            for source in sources
-        )
-        or any(
-            source.configuration_identity_sha256
-            != request.source_policy_identity_sha256
-            for source in sources
-        )
-        or any(source.price_basis != request.price_basis for source in sources)
-        or price_packet.comparability_assessment.policy_identity_sha256
-        != request.source_policy_identity_sha256
-        or price_packet.comparability_assessment.assessed_at > request.decision_cutoff
-        or any(source.observed_at > request.decision_cutoff for source in sources)
-        or price_packet.price_basis != request.price_basis
-        or price_packet.geometry_source.sessions != request.geometry_sessions
-        or (
-            "PREVIOUS_CLOSE_COMPARISON" in requested
-            and request.comparison_sessions
-            and price_packet.comparison_source.sessions != request.comparison_sessions
-        )
-        or (
-            "MARKET_STRUCTURE" in requested
-            and request.structure_sessions
-            and price_packet.structure_source.sessions != request.structure_sessions
-        )
-        or (
-            "PREVIOUS_CLOSE_COMPARISON" in requested
-            and not request.comparison_sessions
-            and any(
-                member.comparison_availability == "OBSERVED"
-                for member in price_packet.members
-            )
-        )
-        or (
-            "MARKET_STRUCTURE" in requested
-            and not request.structure_sessions
-            and any(
-                member.structure_availability == "OBSERVED"
-                for member in price_packet.members
-            )
-        )
-        or len(
-            {
-                (
-                    source.provider_source,
-                    source.source_profile,
-                    source.price_basis,
-                    source.volume_basis,
-                )
-                for source in sources
-            }
-        )
-        != 1
-    ):
-        raise ValueError("V5 price evidence binding mismatch")
-
-
-def build_current_supplied_cohort_research_packet_v5(  # noqa: C901 - closed composition ledger.
-    request: CurrentSuppliedCohortResearchPacketRequestV5,
-    price_packet: BharatStockResearchPacketV2,
-    *,
-    components: V5ContextEvidence | None = None,
-) -> CurrentSuppliedCohortResearchPacketV5:
-    """Compose sealed price evidence with narrow retained-component adapters."""
-    if type(request) is not CurrentSuppliedCohortResearchPacketRequestV5:
-        raise ValueError("invalid V5 packet input")
-    price_packet = validate_bharatstock_research_packet_v2(price_packet)
-    if (
-        price_packet.selection_identity_sha256 != request.selection_identity_sha256
-        or tuple(item.member for item in price_packet.members) != request.members
-    ):
-        raise ValueError("V5 price selection substitution")
-    _validate_price_binding(request, price_packet)
-    if components is not None and type(components) is not V5ContextEvidence:
-        raise ValueError("invalid V5 component evidence")
-    components = V5ContextEvidence() if components is None else components
-    # V4 reports are public projections, not admission seals. Composition only
-    # accepts them when a retained same-pass context proves exact request ISINs.
-    context = components.retained_market_context
-    if context is not None:
-        if (
-            type(context) is not RetainedCurrentSamePassMarketContextV4
-            or not cast(
-                Callable[[object], bool],
-                validate_retained_current_same_pass_market_context_v4,
-            )(context)
-            or components.market_regime is not context.market_regime_report
-            or context.market_data_report.rows is None
-            or tuple(row.isin for row in context.market_data_report.rows)
-            != tuple(member.isin for member in request.members)
-        ):
-            raise ValueError("V5 retained context/member binding mismatch")
-    elif (
-        components.market_regime is not None
-        or components.industry_participation is not None
-    ):
-        raise ValueError("V5 retained same-pass context is required")
-    if (
-        components.industry_market_context is not None
-        and components.industry_market_context is not context
-    ):
-        raise ValueError("V5 Industry evidence must use the retained market context")
-    requested = request.required_features + request.optional_features
-    _preflight_event_notice_budget(components.event_notices)
-    events = (
-        adapt_event_notices_v1(request, components.event_notices)
-        if "EVENT_NOTICES" in requested
-        else ()
-    )
-    rows: list[CurrentResearchMemberV5] = []
-    for position, price_member in enumerate(price_packet.members):
-        facts: list[CurrentResearchFeatureEvidenceV5] = []
-        for feature in requested:
-            if feature in {
-                "CANDLE_GEOMETRY",
-                "PREVIOUS_CLOSE_COMPARISON",
-                "MARKET_STRUCTURE",
-            }:
-                facts.append(
-                    _price_evidence(
-                        price_member,
-                        feature,
-                        price_packet.geometry_source
-                        if feature == "CANDLE_GEOMETRY"
-                        else price_packet.comparison_source
-                        if feature == "PREVIOUS_CLOSE_COMPARISON"
-                        else price_packet.structure_source,
-                    )
-                )
-            elif feature == "EVENT_NOTICES":
-                facts.append(_ensure_provenance(events[position], request))
-        ready: Readiness = (
-            "READY"
-            if all(
-                item.availability == "OBSERVED"
-                for item in facts
-                if item.feature in request.required_features
-            )
-            else "NOT_READY"
-        )
-        rows.append(
-            CurrentResearchMemberV5(position, price_member.member, tuple(facts), ready)
-        )
-    members = tuple(rows)
-    coverage = tuple(
-        _coverage(feature, members)
-        for feature in requested
-        if feature in _MEMBER_FEATURES
-    )
-    cohort = tuple(
-        _ensure_provenance(
-            adapt_market_regime_v4(request, components.market_regime)
-            if feature == "MARKET_REGIME"
-            else adapt_industry_participation_v4(
-                request,
-                components.industry_participation,
-                market_context=components.industry_market_context,
-            ),
-            request,
-        )
-        for feature in requested
-        if feature in _COHORT_FEATURES
-    )
-    ready_member_count = sum(member.readiness == "READY" for member in members)
-    readiness: Readiness = (
-        "READY"
-        if all(member.readiness == "READY" for member in members)
-        and all(
-            item.availability == "OBSERVED"
-            for item in cohort
-            if item.feature in request.required_features
-        )
-        else "NOT_READY"
-    )
-    preliminary = {
-        "contract_version": _CONTRACT,
-        "request": request,
-        "price_packet_identity_sha256": _digest(price_packet),
-        "members": members,
-        "coverage": coverage,
-        "cohort_features": cohort,
-        "ready_member_count": ready_member_count,
-        "readiness": readiness,
+    values: dict[str, object] = {
+        "completion_status": completion_status,
+        "context_identity_sha256": raw["context_identity_sha256"],
+        "context_object_sha256": raw["context_object_sha256"],
+        "context_receipt_identity_sha256": raw["context_receipt_identity_sha256"],
+        "completion_marker_identity_sha256": raw["completion_marker_identity_sha256"],
+        "retained_context_identity_sha256": raw["retained_context_identity_sha256"],
+        "canonical_cohort_identity_sha256": raw["canonical_cohort_identity_sha256"],
+        "cohort_size": len(mapping.members),
+        "raw_result_identity_sha256": raw["raw_result_identity_sha256"],
+        "market_data_report_identity_sha256": raw["market_data_report_identity_sha256"],
+        "market_regime_report_identity_sha256": raw[
+            "market_regime_report_identity_sha256"
+        ],
+        "market_regime_schema_identity_sha256": raw[
+            "market_regime_schema_identity_sha256"
+        ],
+        "market_regime_calculation_identity_sha256": raw[
+            "market_regime_calculation_identity_sha256"
+        ],
+        "market_regime_runtime_code_identity_sha256": raw[
+            "market_regime_runtime_code_identity_sha256"
+        ],
+        "market_regime_evidence_state": raw["market_regime_evidence_state"],
+        "market_regime": raw["market_regime"],
+        "market_regime_advances": raw["market_regime_advances"],
+        "market_regime_declines": raw["market_regime_declines"],
+        "market_regime_unchanged": raw["market_regime_unchanged"],
+        "market_regime_reasons": raw["market_regime_reasons"],
+        "industry_report_identity_sha256": industry_identity,
+        "components": components,
+        "mapping_receipt_count": len(receipts),
     }
-    packet = CurrentSuppliedCohortResearchPacketV5(
-        _CONTRACT,
-        request,
-        _digest(price_packet),
-        members,
-        coverage,
-        cohort,
-        ready_member_count,
-        readiness,
-        _digest(preliminary),
+    return CurrentResearchV5ContextSection(
+        cast(Literal["READY", "FAILED"], values["completion_status"]),
+        cast(str, values["context_identity_sha256"]),
+        cast(str, values["context_object_sha256"]),
+        cast(str, values["context_receipt_identity_sha256"]),
+        cast(str, values["completion_marker_identity_sha256"]),
+        cast(str, values["retained_context_identity_sha256"]),
+        cast(str, values["canonical_cohort_identity_sha256"]),
+        len(mapping.members),
+        cast(str, values["raw_result_identity_sha256"]),
+        cast(str, values["market_data_report_identity_sha256"]),
+        cast(str | None, values["market_regime_report_identity_sha256"]),
+        cast(str, values["market_regime_schema_identity_sha256"]),
+        cast(str, values["market_regime_calculation_identity_sha256"]),
+        cast(str, values["market_regime_runtime_code_identity_sha256"]),
+        cast(
+            Literal["OBSERVED", "INSUFFICIENT_EVIDENCE"],
+            values["market_regime_evidence_state"],
+        ),
+        cast(
+            Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"] | None,
+            values["market_regime"],
+        ),
+        cast(int | None, values["market_regime_advances"]),
+        cast(int | None, values["market_regime_declines"]),
+        cast(int | None, values["market_regime_unchanged"]),
+        cast(tuple[str, ...], values["market_regime_reasons"]),
+        cast(str | None, values["industry_report_identity_sha256"]),
+        components,
+        len(receipts),
+        _digest(values),
     )
-    # Writer and reader share the exact same resource bound. Validate before
-    # returning so a caller can never publish a packet its canonical reader
-    # must reject.
-    packet.canonical_json_bytes()
+
+
+def _bound_request(
+    request: CurrentResearchV5Request,
+    mapping: CurrentResearchMappingProjectionV2,
+) -> CurrentResearchV5BoundRequest:
+    return CurrentResearchV5BoundRequest(
+        request,
+        mapping,
+        _digest(
+            {
+                "request": request,
+                "mapping_projection_identity_sha256": (
+                    mapping.mapping_projection_identity_sha256
+                ),
+                "ordered_selection_identity_sha256": (
+                    mapping.ordered_selection_identity_sha256
+                ),
+                "canonical_cohort_identity_sha256": (
+                    mapping.canonical_cohort_identity_sha256
+                ),
+            }
+        ),
+    )
+
+
+def _member(
+    mapping: CurrentResearchMappingMemberV2,
+    price: BharatStockResearchPacketV2,
+    event: RetainedCurrentEventNoticeProjectionV2,
+    position: int,
+) -> CurrentResearchV5Member:
+    price_member = price.members[position]
+    event_member = event.members[position]
+    by_feature = {item.feature: item for item in price_member.features}
+    return CurrentResearchV5Member(
+        mapping,
+        by_feature.get("CANDLE_GEOMETRY"),
+        by_feature.get("PREVIOUS_CLOSE_COMPARISON"),
+        by_feature.get("MARKET_STRUCTURE"),
+        event_member,
+    )
+
+
+def _industry_semantics_are_valid_v5(
+    value: object, context: CurrentResearchV5ContextSection
+) -> bool:
+    try:
+        if type(value) is CurrentIndustryParticipationReportV4:
+            for row in value.industries:
+                row.__post_init__()
+            return (
+                value.runtime_code_identity_sha256
+                == current_industry_participation_runtime_code_identity_v4()
+                and value.report_identity_sha256
+                == hashlib.sha256(
+                    value.canonical_json_bytes(include_identity=False)
+                ).hexdigest()
+                and value.market_regime_report_identity_sha256
+                == context.market_regime_report_identity_sha256
+                and value.canonical_cohort_identity_sha256
+                == context.canonical_cohort_identity_sha256
+                and value.cohort_size == context.cohort_size
+                and sum(row.member_count for row in value.industries)
+                == value.cohort_size
+                and sum(
+                    row.advances + row.declines + row.unchanged
+                    for row in value.industries
+                )
+                == value.cohort_size
+                and context.market_regime_evidence_state == "OBSERVED"
+                and sum(row.advances for row in value.industries)
+                == context.market_regime_advances
+                and sum(row.declines for row in value.industries)
+                == context.market_regime_declines
+                and sum(row.unchanged for row in value.industries)
+                == context.market_regime_unchanged
+                and tuple(row.industry for row in value.industries)
+                == tuple(sorted({row.industry for row in value.industries}))
+                and value.known_at <= value.decision_cutoff
+            )
+        if type(value) is CurrentIndustryParticipationFailureV4:
+            return (
+                value.failure_identity_sha256
+                == hashlib.sha256(
+                    value.canonical_json_bytes(include_identity=False)
+                ).hexdigest()
+                and value.canonical_cohort_identity_sha256
+                == context.canonical_cohort_identity_sha256
+                and value.cohort_size == context.cohort_size
+                and (value.known_at is None or value.known_at <= value.decision_cutoff)
+            )
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+    return False
+
+
+def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
+    try:
+        packet.bound_request.request.__post_init__()
+        packet.bound_request.mapping.__post_init__()
+        packet.bound_request.__post_init__()
+        packet.context.__post_init__()
+        for coverage in packet.coverage:
+            coverage.__post_init__()
+        for member in packet.members:
+            member.__post_init__()
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+    mapping = packet.bound_request.mapping
+    if (
+        packet.contract_version != _CONTRACT
+        or packet.schema_identity_sha256 != _SCHEMA_IDENTITY
+        or packet.configuration_identity_sha256 != _CONFIGURATION_IDENTITY
+        or packet.runtime_code_identity_sha256
+        != current_research_packet_runtime_code_identity_v5()
+        or tuple(item.mapping for item in packet.members) != mapping.members
+        or packet.bound_request.request.selected_at != mapping.selected_at
+        or packet.bound_request.request.decision_cutoff != mapping.decision_cutoff
+        or packet.price_evidence.selection_identity_sha256
+        != mapping.ordered_selection_identity_sha256
+        or tuple(item.member for item in packet.price_evidence.members)
+        != tuple(item.instrument for item in mapping.members)
+        or packet.event_evidence.mapping_projection != mapping
+        or packet.event_evidence.decision_cutoff != mapping.decision_cutoff
+        or not _industry_semantics_are_valid_v5(
+            packet.industry_evidence, packet.context
+        )
+        or packet.context.context_identity_sha256 != mapping.context_identity_sha256
+        or packet.context.context_object_sha256 != mapping.context_object_sha256
+        or packet.context.context_receipt_identity_sha256
+        != mapping.context_receipt_identity_sha256
+        or packet.context.completion_marker_identity_sha256
+        != mapping.completion_marker_identity_sha256
+        or packet.context.retained_context_identity_sha256
+        != mapping.retained_context_identity_sha256
+        or packet.coverage != packet.price_evidence.coverage
+        or not bharatstock_research_packet_semantics_are_valid_v2(packet.price_evidence)
+        or not current_event_notice_semantics_are_valid_v2(packet.event_evidence)
+        or packet.members
+        != tuple(
+            _member(item, packet.price_evidence, packet.event_evidence, position)
+            for position, item in enumerate(mapping.members)
+        )
+        or packet.execution_state
+        != (
+            "RESEARCH_READY"
+            if packet.price_evidence.execution_state == "COMPLETED"
+            and all(
+                item.observed == item.requested
+                for item in packet.price_evidence.coverage
+            )
+            and packet.context.completion_status == "READY"
+            and type(packet.industry_evidence) is CurrentIndustryParticipationReportV4
+            and all(
+                item.event_notice.support == "SUPPORTED"
+                and item.event_notice.availability != "NOT_ESTABLISHED"
+                for item in packet.members
+            )
+            else "NON_READY"
+        )
+    ):
+        return False
+    preimage = {
+        item.name: getattr(packet, item.name)
+        for item in fields(packet)
+        if item.name not in {"result_identity_sha256", "_seal"}
+    }
+    return packet.result_identity_sha256 == _digest(preimage)
+
+
+def _bounded_json_value(
+    value: object, depth: int = 0, nodes: list[int] | None = None
+) -> None:
+    if nodes is None:
+        nodes = [0]
+    nodes[0] += 1
+    if nodes[0] > 50_000 or depth > 16:
+        raise ValueError("current V5 JSON bounds")
+    if type(value) is str:
+        if len(value.encode()) > 4_096:
+            raise ValueError("current V5 string bounds")
+        return
+    if value is None or type(value) in {bool, int}:
+        return
+    if type(value) is list:
+        for item in cast(list[object], value):
+            _bounded_json_value(item, depth + 1, nodes)
+        return
+    if type(value) is dict:
+        for key, item in cast(dict[str, object], value).items():
+            _bounded_json_value(key, depth + 1, nodes)
+            _bounded_json_value(item, depth + 1, nodes)
+        return
+    raise ValueError("current V5 JSON type")
+
+
+def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin is Literal:
+        if value not in arguments or type(value) not in {
+            type(item) for item in arguments
+        }:
+            raise ValueError("current V5 literal")
+        return value
+    if origin in {Union, types.UnionType}:
+        matches: list[object] = []
+        for argument in arguments:
+            try:
+                matches.append(_decode_typed(argument, value))
+            except (TypeError, ValueError):
+                continue
+        if len(matches) != 1:
+            raise ValueError("current V5 union")
+        return matches[0]
+    if origin is tuple:
+        if type(value) is not list:
+            raise ValueError("current V5 tuple")
+        raw_items = cast(list[object], value)
+        if len(arguments) == 2 and arguments[1] is Ellipsis:
+            return tuple(_decode_typed(arguments[0], item) for item in raw_items)
+        if len(raw_items) != len(arguments):
+            raise ValueError("current V5 fixed tuple")
+        return tuple(
+            _decode_typed(expected, item)
+            for expected, item in zip(arguments, raw_items, strict=True)
+        )
+    if annotation is datetime:
+        if type(value) is not str:
+            raise ValueError("current V5 datetime")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("current V5 datetime") from None
+        return _instant(parsed)
+    if annotation is date:
+        if type(value) is not str:
+            raise ValueError("current V5 date")
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("current V5 date") from None
+    if annotation is Decimal:
+        if type(value) is not str:
+            raise ValueError("current V5 decimal")
+        try:
+            return Decimal(value)
+        except ArithmeticError:
+            raise ValueError("current V5 decimal") from None
+    if annotation is type(None):
+        if value is not None:
+            raise ValueError("current V5 null")
+        return None
+    if annotation is str:
+        if type(value) is not str:
+            raise ValueError("current V5 scalar")
+        return value
+    if annotation is int:
+        if type(value) is not int:
+            raise ValueError("current V5 scalar")
+        return value
+    if annotation is bool:
+        if type(value) is not bool:
+            raise ValueError("current V5 scalar")
+        return value
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        if type(value) is not dict:
+            raise ValueError("current V5 object")
+        raw = cast(dict[str, object], value)
+        public_fields = tuple(
+            item for item in fields(annotation) if not item.name.startswith("_")
+        )
+        if set(raw) != {item.name for item in public_fields}:
+            raise ValueError("current V5 object keys")
+        hints = get_type_hints(annotation)
+        result = object.__new__(annotation)
+        for item in public_fields:
+            object.__setattr__(
+                result, item.name, _decode_typed(hints[item.name], raw[item.name])
+            )
+        for item in fields(annotation):
+            if item.name.startswith("_"):
+                object.__setattr__(result, item.name, object())
+        return result
+    raise ValueError("current V5 unsupported type")
+
+
+def _read_current_research_packet_v5(raw: bytes) -> CurrentResearchPacketV5:
+    if (
+        type(raw) is not bytes
+        or not 1 <= len(raw) <= 1024 * 1024
+        or not raw.endswith(b"\n")
+    ):
+        raise ValueError("current V5 packet bytes")
+
+    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("current V5 duplicate key")
+            result[key] = value
+        return result
+
+    try:
+        decoded = json.loads(raw, object_pairs_hook=pairs)
+    except (TypeError, ValueError):
+        raise ValueError("current V5 packet JSON") from None
+    _bounded_json_value(decoded)
+    packet = _decode_typed(CurrentResearchPacketV5, decoded)
+    if (
+        type(packet) is not CurrentResearchPacketV5
+        or packet.canonical_json_bytes() != raw
+        or not _validate_packet(packet)
+    ):
+        raise ValueError("current V5 packet semantics")
     return packet
+
+
+def validate_current_research_packet_v5(packet: object) -> CurrentResearchPacketV5:
+    if (
+        type(packet) is not CurrentResearchPacketV5
+        or not _validate_packet(packet)
+        or _admission_digest(packet) is None
+    ):
+        raise ValueError("current V5 packet is not admitted evidence")
+    return packet
+
+
+def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
+    stack = [(value, 0) for value in roots]
+    nodes = 0
+    estimated_bytes = 0
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        if nodes > 50_000 or depth > 16:
+            raise ValueError("current V5 typed bounds")
+        if type(value) is str:
+            size = len(value.encode())
+            if size > 4_096:
+                raise ValueError("current V5 string bounds")
+            estimated_bytes += size + 3
+        elif type(value) is Decimal:
+            sign, digits, exponent = value.as_tuple()
+            if (
+                not value.is_finite()
+                or not isinstance(exponent, int)
+                or not -256 <= exponent <= 256
+                or len(digits) > 256
+            ):
+                raise ValueError("current V5 decimal bounds")
+            estimated_bytes += len(digits) + abs(exponent) + int(bool(sign)) + 3
+        elif type(value) is tuple:
+            items = cast(tuple[object, ...], value)
+            if len(items) > 10_000:
+                raise ValueError("current V5 cardinality bounds")
+            estimated_bytes += len(items) + 2
+            stack.extend((item, depth + 1) for item in items)
+        elif is_dataclass(value) and not isinstance(value, type):
+            public = tuple(
+                item for item in fields(value) if not item.name.startswith("_")
+            )
+            estimated_bytes += sum(len(item.name) + 4 for item in public)
+            stack.extend((getattr(value, item.name), depth + 1) for item in public)
+        elif value is None or type(value) in {bool, int, date, datetime}:
+            estimated_bytes += 40
+        else:
+            raise ValueError("current V5 typed value")
+        if estimated_bytes > 1024 * 1024:
+            raise ValueError("current V5 encoded bounds")
+
+
+def build_current_research_packet_v5(
+    request: CurrentResearchV5Request,
+    mapping_binding: AdmittedCurrentResearchBindingV2,
+    price: BharatStockResearchPacketV2,
+    retained_context: RetainedCurrentSamePassMarketContextV4,
+    event: RetainedCurrentEventNoticeProjectionV2,
+    industry: CurrentIndustryParticipationReportV4
+    | CurrentIndustryParticipationFailureV4,
+) -> CurrentResearchPacketV5:
+    """Build one complete retained price/event/regime/industry V5 envelope."""
+    if (
+        type(request) is not CurrentResearchV5Request
+        or type(retained_context) is not RetainedCurrentSamePassMarketContextV4
+    ):
+        raise ValueError("invalid current V5 build input")
+    _preflight_typed_writer_v5(request, price, retained_context, event, industry)
+    if len(price.members) > 100 or len(event.members) > 100:
+        raise ValueError("invalid current V5 build input")
+    mapping = validate_current_research_binding_v2(mapping_binding)
+    price = validate_bharatstock_research_packet_v2(price)
+    event = validate_retained_current_event_notice_v2(event)
+    industry_validator = cast(
+        Callable[[object, object], bool],
+        current_industry_participation_is_exact_valid_v4,
+    )
+    if not industry_validator(industry, retained_context):
+        raise ValueError("current V5 Industry evidence is not admitted")
+    context = _context_section(retained_context, mapping, industry)
+    expected_instruments = tuple(item.instrument for item in mapping.members)
+    if (
+        request.selected_at != mapping.selected_at
+        or request.decision_cutoff != mapping.decision_cutoff
+        or request.schedule_identity_sha256 != mapping.schedule_identity_sha256
+        or tuple(item.member for item in price.members) != expected_instruments
+        or price.selection_identity_sha256 != mapping.ordered_selection_identity_sha256
+        or event.mapping_projection != mapping
+        or event.decision_cutoff != request.decision_cutoff
+    ):
+        raise ValueError("current V5 cross-component substitution")
+    bound = _bound_request(request, mapping)
+    members = tuple(
+        _member(item, price, event, position)
+        for position, item in enumerate(mapping.members)
+    )
+    execution_state: Literal["RESEARCH_READY", "NON_READY"] = (
+        "RESEARCH_READY"
+        if price.execution_state == "COMPLETED"
+        and all(item.observed == item.requested for item in price.coverage)
+        and context.completion_status == "READY"
+        and type(industry) is CurrentIndustryParticipationReportV4
+        and all(
+            item.support == "SUPPORTED" and item.availability != "NOT_ESTABLISHED"
+            for item in event.members
+        )
+        else "NON_READY"
+    )
+    runtime = current_research_packet_runtime_code_identity_v5()
+    preimage = {
+        "contract_version": _CONTRACT,
+        "schema_identity_sha256": _SCHEMA_IDENTITY,
+        "configuration_identity_sha256": _CONFIGURATION_IDENTITY,
+        "runtime_code_identity_sha256": runtime,
+        "execution_state": execution_state,
+        "bound_request": bound,
+        "price_evidence": price,
+        "event_evidence": event,
+        "industry_evidence": industry,
+        "context": context,
+        "coverage": price.coverage,
+        "members": members,
+    }
+    packet = object.__new__(CurrentResearchPacketV5)
+    for name, value in {
+        **preimage,
+        "result_identity_sha256": _digest(preimage),
+        "_seal": object(),
+    }.items():
+        object.__setattr__(packet, name, value)
+    if not _validate_packet(packet) or len(packet.canonical_json_bytes()) > 1024 * 1024:
+        raise ValueError("invalid current V5 packet")
+    _admit(packet)
+    return packet
+
+
+__all__ = [
+    "CurrentResearchPacketV5",
+    "CurrentResearchV5BoundRequest",
+    "CurrentResearchV5Component",
+    "CurrentResearchV5ContextSection",
+    "CurrentResearchV5Member",
+    "CurrentResearchV5Request",
+    "build_current_research_packet_v5",
+    "current_research_packet_runtime_code_identity_v5",
+    "validate_current_research_packet_v5",
+]

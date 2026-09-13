@@ -25,7 +25,7 @@ from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
-    BharatStockComparabilityAssessmentV2,
+    BharatStockFeatureInputV2,
     build_bharatstock_research_packet_v2,
 )
 
@@ -277,108 +277,14 @@ def test_one_session_withholds_both_feature_facts_explicitly() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("session_count", "expected_availability"),
-    (
-        (1, ("OBSERVED", "INSUFFICIENT_EVIDENCE", "INSUFFICIENT_EVIDENCE")),
-        (2, ("OBSERVED", "OBSERVED", "INSUFFICIENT_EVIDENCE")),
-        (21, ("OBSERVED", "OBSERVED", "OBSERVED")),
-    ),
-)
-def test_v2_independently_admits_geometry_comparisons_and_structure_windows(
-    session_count: int, expected_availability: tuple[str, str, str]
-) -> None:
-    member = build_bharatstock_research_packet_v2(
-        _revision_with_history(session_count)
-    ).members[0]
-
-    assert (
-        member.geometry_availability,
-        member.comparison_availability,
-        member.structure_availability,
-    ) == expected_availability
-
-
-def test_v2_member_coverage_and_exact_geometry_are_feature_local() -> None:
-    packet = build_bharatstock_research_packet_v2(
-        _revision(*(("OBSERVED",) * 97 + ("INSUFFICIENT_EVIDENCE",) * 3))
-    )
-
-    assert (
-        packet.geometry_coverage.requested,
-        packet.geometry_coverage.observed,
-        packet.geometry_coverage.insufficient,
-    ) == (100, 97, 3)
-    assert packet.comparison_coverage == packet.geometry_coverage
-    assert packet.structure_coverage == packet.geometry_coverage
-    geometry = packet.members[0].geometry
-    comparison = packet.members[0].comparison
-    assert geometry is not None and comparison is not None
-    assert (geometry.range_size, geometry.body_size) == (Decimal("3"), Decimal("1"))
-    assert comparison.open_to_previous_close_distance == Decimal("0")
-
-
-@pytest.mark.parametrize("member_count", (1, 50, 51, 100))
-def test_v2_supports_the_capture_contracts_one_to_hundred_member_bound(
-    member_count: int,
-) -> None:
-    packet = build_bharatstock_research_packet_v2(
-        _revision(*(("OBSERVED",) * member_count))
-    )
-
-    assert (
-        packet.geometry_coverage
-        == packet.comparison_coverage
-        == packet.structure_coverage
-    )
-    assert packet.geometry_coverage.requested == member_count
-    assert tuple(member.member for member in packet.members) == tuple(
-        _instrument(index) for index in range(member_count)
-    )
-
-
-def test_v2_recoverable_missing_21_session_window_does_not_suppress_geometry() -> None:
-    packet = build_bharatstock_research_packet_v2(
-        _revision_with_history(1),
-        structure_revision=_revision("INSUFFICIENT_EVIDENCE"),
-    )
-    member = packet.members[0]
-
-    assert member.geometry_availability == "OBSERVED"
-    assert member.comparison_availability == "INSUFFICIENT_EVIDENCE"
-    assert member.structure_availability == "INSUFFICIENT_EVIDENCE"
-    assert member.structure_reason == "EXPECTED_OFFICIAL_SESSION_MISSING_RECOVERABLE"
-    assert packet.geometry_coverage.observed == 1
-    assert packet.structure_coverage.insufficient == 1
-
-
-def test_v2_comparability_conflict_blocks_only_cross_session_features() -> None:
-    revision = _revision_with_history(21)
-    assessment = BharatStockComparabilityAssessmentV2(
-        "CONFLICTED",
-        "CROSS_SESSION_COMPARABILITY_CONFLICT",
-        revision.request.configuration_identity_sha256,
-        "f" * 64,
-        _CUTOFF,
-    )
-
-    # A caller cannot force a conflict (or forged SUPPORTED result) over the
-    # producer-derived semantic overlap assessment.
-    with pytest.raises(ValueError, match="comparability assessment substitution"):
-        build_bharatstock_research_packet_v2(
-            revision, comparability_assessment=assessment
-        )
-
-
-def test_v2_one_bar_geometry_does_not_reinterpret_v1() -> None:
+def test_v2_rejects_constructed_capture_without_owner_mapping_binding() -> None:
     revision = _revision_with_history(1)
-
-    v1_member = build_bharatstock_research_packet_v1(revision).members[0]
-    v2_member = build_bharatstock_research_packet_v2(revision).members[0]
-
-    assert v1_member.price_action is v1_member.market_structure is None
-    assert v1_member.price_action_evidence_state == "INSUFFICIENT_EVIDENCE"
-    assert v2_member.geometry_availability == "OBSERVED"
+    with pytest.raises(ValueError, match="input slot"):
+        BharatStockFeatureInputV2(
+            "CANDLE_GEOMETRY", "RETAINED_REVISION", revision.request.sessions, None
+        )
+    with pytest.raises(TypeError):
+        build_bharatstock_research_packet_v2(())  # type: ignore[call-arg]
 
 
 def test_admitted_facts_ignore_the_callers_decimal_context() -> None:

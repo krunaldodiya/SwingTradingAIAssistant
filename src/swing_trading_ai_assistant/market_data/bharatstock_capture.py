@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import weakref
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
@@ -670,6 +671,71 @@ def retained_capture_ohlc_v2(
 
 
 RetainedCaptureRevisionV2: TypeAlias = CaptureRevisionV2 | _PredecessorCaptureRevisionV2
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False, weakref_slot=True)
+class RetainedCaptureBindingV2:
+    """Closure-minted handle proving a revision was read from its admitted chain."""
+
+    revision: RetainedCaptureRevisionV2
+    _seal: object = field(repr=False, compare=False, hash=False)
+
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("retained capture bindings are reader-minted only")
+
+
+_CAPTURE_BINDINGS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[RetainedCaptureBindingV2],
+        RetainedCaptureRevisionV2,
+        bytes,
+        object,
+    ],
+] = {}
+
+
+def _bind_retained_capture_revision_v2(
+    revision: RetainedCaptureRevisionV2,
+) -> RetainedCaptureBindingV2:
+    binding = object.__new__(RetainedCaptureBindingV2)
+    seal = object()
+    object.__setattr__(binding, "revision", revision)
+    object.__setattr__(binding, "_seal", seal)
+    binding_id = id(binding)
+
+    def discard(reference: weakref.ReferenceType[RetainedCaptureBindingV2]) -> None:
+        entry = _CAPTURE_BINDINGS.get(binding_id)
+        if entry is not None and entry[0] is reference:
+            _CAPTURE_BINDINGS.pop(binding_id, None)
+
+    _CAPTURE_BINDINGS[binding_id] = (
+        weakref.ref(binding, discard),
+        revision,
+        revision.canonical_json_bytes(),
+        seal,
+    )
+    return binding
+
+
+def validate_retained_capture_binding_v2(
+    value: object,
+) -> RetainedCaptureRevisionV2:
+    """Return the exact unchanged archive-read revision behind ``value``."""
+
+    if type(value) is not RetainedCaptureBindingV2:
+        raise ValueError("BharatStock capture binding is not admitted")
+    entry = _CAPTURE_BINDINGS.get(id(value))
+    if (
+        entry is None
+        or entry[0]() is not value
+        or entry[1] is not value.revision
+        or entry[2] != value.revision.canonical_json_bytes()
+        or entry[3] is not object.__getattribute__(value, "_seal")
+    ):
+        raise ValueError("BharatStock capture binding is not admitted")
+    validate_capture_revision_v2(value.revision)
+    return value.revision
 
 
 @dataclass(frozen=True, slots=True)
@@ -1697,6 +1763,20 @@ def read_bharatstock_capture_revision_v2(
         raise CaptureRevisionUnavailableV2(
             "BharatStock capture revision unavailable"
         ) from error
+
+
+def read_bharatstock_capture_binding_v2(
+    store_root: Path,
+    revision_sha256: str,
+    *,
+    lease: StorageRootLease | None = None,
+) -> RetainedCaptureBindingV2:
+    """Read and closure-bind one exact admitted revision under the current lease."""
+
+    revision = read_bharatstock_capture_revision_v2(
+        store_root, revision_sha256, lease=lease
+    )
+    return _bind_retained_capture_revision_v2(revision)
 
 
 def parse_bharatstock_capture_request_v2(raw: bytes) -> CaptureRequestV2:

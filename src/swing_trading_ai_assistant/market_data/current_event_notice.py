@@ -2014,3 +2014,111 @@ class FileCurrentEventNoticeArchiveV1:
             return _failure(error.reason, cohort_size)
         except Exception:
             return _failure("EVENT_ARCHIVE_FAILED", cohort_size)
+
+
+def validate_retained_current_event_notice_v1(
+    root: Path,
+    lease: StorageRootLease,
+    retained: RetainedCurrentEventNoticeSnapshotV1,
+) -> RetainedCurrentEventNoticeSnapshotV1:
+    """Re-read archive objects and re-parse the retained projection exactly."""
+    if (
+        not root.is_absolute()
+        or type(lease) is not StorageRootLease
+        or type(retained) is not RetainedCurrentEventNoticeSnapshotV1
+        or retained.evidence_state != "RETAINED"
+    ):
+        raise ValueError("retained event notice invalid")
+    raw_name = f"{retained.artifact_identity_sha256}.raw.csv"
+    snapshot_name = f"{retained.snapshot_identity_sha256}.snapshot.json"
+    receipt_name = f"{retained.archive_identity_sha256}.receipt.json"
+    marker_name = f"{retained.archive_identity_sha256}.complete.json"
+    with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
+        directory = _open_archive(operation.descriptor)
+        try:
+            raw_entry = _read_stable_private_object(
+                directory, raw_name, _MAX_ARTIFACT_BYTES
+            )
+            snapshot_entry = _read_stable_private_object(
+                directory, snapshot_name, _MAX_ARCHIVE_SNAPSHOT_BYTES
+            )
+            receipt_entry = _read_stable_private_object(
+                directory, receipt_name, _MAX_ARCHIVE_RECEIPT_BYTES
+            )
+            marker_entry = _read_stable_private_object(
+                directory, marker_name, _MAX_ARCHIVE_MARKER_BYTES
+            )
+        finally:
+            os.close(directory)
+    if any(
+        item is None
+        for item in (raw_entry, snapshot_entry, receipt_entry, marker_entry)
+    ):
+        raise ValueError("retained event notice archive incomplete")
+    raw = cast(tuple[bytes, os.stat_result], raw_entry)[0]
+    snapshot_raw = cast(tuple[bytes, os.stat_result], snapshot_entry)[0]
+    receipt_raw = cast(tuple[bytes, os.stat_result], receipt_entry)[0]
+    marker_raw = cast(tuple[bytes, os.stat_result], marker_entry)[0]
+    event_input = CurrentEventNoticeInputV1(
+        schema_identity_sha256=retained.schema_identity_sha256,
+        source_url=retained.source_url,
+        source_segment=retained.source_segment,
+        source_window=retained.source_window,
+        source_filename=retained.source_filename,
+        artifact_identity_sha256=retained.artifact_identity_sha256,
+        acquisition_method=retained.acquisition_method,
+        licence_policy_identity=retained.licence_policy_identity,
+        source_encoding=retained.source_encoding,
+        source_has_bom=retained.source_has_bom,
+    )
+    parsed = parse_current_event_notice_artifact_v1(event_input, raw)
+    if isinstance(parsed, CurrentEventNoticeFailureV1):
+        raise ValueError("retained event notice raw artifact invalid")
+    projected = project_current_supplied_cohort_event_notices_v1(
+        parsed, tuple(item.member for item in retained.members)
+    )
+    if isinstance(projected, CurrentEventNoticeFailureV1):
+        raise ValueError("retained event notice projection invalid")
+    if retained.schema_identity_sha256 == LEGACY_EVENT_NOTICE_SCHEMA_IDENTITY_SHA256:
+        expected_snapshot = _canonical(_legacy_snapshot_value(projected))
+        adopted = _adopt_delivered_legacy_archive(root, lease, projected, raw)
+        if adopted != retained:
+            raise ValueError("retained legacy event notice invalid")
+    else:
+        expected_snapshot = projected.canonical_json_bytes()
+        if (
+            _validated_snapshot(event_input, raw, projected) is not None
+            or projected.snapshot_identity_sha256 != retained.snapshot_identity_sha256
+            or _archive_identity(projected) != retained.archive_identity_sha256
+        ):
+            raise ValueError("retained event notice projection invalid")
+        known_at, known_text, receipt_identity, retained_identity = _receipt_value(
+            receipt_raw,
+            projected,
+            retained.archive_identity_sha256,
+            retained.runtime_code_identity_sha256,
+        )
+        if (
+            known_at != retained.known_at
+            or receipt_identity != retained.receipt_identity_sha256
+            or retained_identity != retained.retained_identity_sha256
+            or marker_raw
+            != _marker_bytes(
+                retained.archive_identity_sha256,
+                receipt_identity,
+                known_text,
+                retained_identity,
+            )
+        ):
+            raise ValueError("retained event notice receipt invalid")
+    if (
+        _sha(raw) != retained.artifact_identity_sha256
+        or _sha(snapshot_raw) != retained.snapshot_identity_sha256
+        or snapshot_raw != expected_snapshot
+        or projected.members != retained.members
+        or _cohort_identity(projected.members) != retained.cohort_identity_sha256
+        or retained.cohort_size != len(retained.members)
+        or retained.member_count != len(retained.members)
+    ):
+        raise ValueError("retained event notice bytes invalid")
+    return retained
