@@ -7,6 +7,7 @@ Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/
 Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/170)
 Review-efficiency revision: [#174](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/174)
 Decision-retention revision: [#179](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/179)
+Interactive-responsiveness revision: [#194](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/194)
 
 This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
@@ -71,6 +72,16 @@ Stop at the scope-expansion circuit breaker before adding an unplanned subsystem
 Use any available AI agent harness that can satisfy the task's controls, including Pi, Oh My Pi, Codex, or OpenCode. No harness, provider, terminal manager, model family, plugin, or global configuration file is mandatory. Follow [the portable agent workflow](agent-workflow.md) for capability selection, assignment, coordination, and review mechanics. Herdr is one optional implementation described in [its adapter](herdr-multi-agent-workflow.md).
 
 One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them. Native delegated agents, separate sessions, and qualified human reviewers are acceptable when identity, assignment, independence, complete results, and candidate immutability can be established. A writer's second pass is not independent review.
+
+An interactive coordinator MUST keep the foreground conversation responsive.
+Long-running delegated work is submitted asynchronously, after which the
+coordinator returns control instead of occupying the foreground with a lifecycle
+wait. Completion or attention is consumed through a supported host event or
+notification and then verified from authoritative lifecycle state and complete
+result evidence. Do not sleep, poll, inject synthetic user messages, or require a
+child to prompt the coordinator as a callback. A synchronous wait is allowed only
+in headless/non-interactive execution or for a bounded same-turn dependency that
+cannot delay user input.
 
 Personal use is not grounds to lower a change's risk tier, remove delivered or
 accepted future capabilities, weaken security or research integrity, or relax
@@ -186,6 +197,7 @@ These active owner instructions exist beyond the six execution controls.
 ### Communication and task tracking
 
 - Explain progress, blockers, failures, and bottlenecks in plain language. Translate necessary engineering or market jargon immediately; lead with the concrete effect.
+- Keep one active delivery outcome per coordinator until it is completed or explicitly paused, stopped, or reordered. Parallel agents MAY work within that same outcome when ownership and independence require it; an unrelated product, tooling, or process task MUST NOT be started alongside it merely because another tab or executor is available. Urgent work explicitly displaces the prior outcome and updates live tracker status rather than silently increasing WIP.
 - Keep general discussion out of sprint delivery todos. Only work needed to build, test, review, publish, or close the active delivery belongs there.
 - When a discussion becomes authorized delivery, create or update its own governed Issue and delivery tasks at that point.
 - Keep session context scoped to the active sprint or bounded task. At a new sprint, use a fresh session or equivalent explicit context reset; preserve an evidence-bearing handoff before compaction, session changes, or switching harnesses. No slash command or proprietary session format is required.
