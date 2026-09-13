@@ -119,11 +119,13 @@ def _mapping_valid_on_source_date(
 
 
 def _verify_final_archive_binding(operation: object, directory: int) -> None:
-    root = getattr(operation, "descriptor", None)
-    ensure_live = getattr(operation, "ensure_live", None)
-    if type(root) is not int or not callable(ensure_live):
-        raise ValueError("current event V2 archive authority invalid")
     try:
+        # Descriptor access itself re-establishes root liveness and can fail
+        # after a root replacement. Normalize that final lease failure too.
+        root = getattr(operation, "descriptor", None)
+        ensure_live = getattr(operation, "ensure_live", None)
+        if type(root) is not int or not callable(ensure_live):
+            raise ValueError("current event V2 archive authority invalid")
         # Reuse the V1 authority contract immediately before success: type,
         # owner UID, exact private mode and descriptor/name inode binding.
         _validate_archive_directory(root, directory)
@@ -522,7 +524,11 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
             {
                 "isin": member.mapping.isin,
                 "exchange": member.mapping.exchange,
-                "listed_equity_segment": "NSE_EQ",
+                "listed_equity_segment": (
+                    "EQUITY"
+                    if value.retention_origin == "ADOPTED_EVENT_V1"
+                    else "NSE_EQ"
+                ),
                 "symbol": member.mapping.effective_symbol,
                 "effective_from": member.mapping.valid_from,
                 "effective_through": member.mapping.valid_through,
@@ -573,7 +579,14 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
                 value.retained_identity_sha256,
             )
         )
-        or value.source_contract_version != "current-event-notice@v1"
+        or (
+            value.source_contract_version
+            != (
+                "current-supplied-cohort-event-notice@v1"
+                if value.retention_origin == "ADOPTED_EVENT_V1"
+                else "current-event-notice@v1"
+            )
+        )
         or value.source_runtime_code_identity_sha256
         != current_event_notice_runtime_code_identity_v1()
         or _input_failure(source_input) is not None

@@ -883,6 +883,8 @@ def _industry_semantics_are_valid_v5(
                 == hashlib.sha256(
                     value.canonical_json_bytes(include_identity=False)
                 ).hexdigest()
+                and value.report_identity_sha256
+                == context.industry_report_identity_sha256
                 and value.market_regime_report_identity_sha256
                 == context.market_regime_report_identity_sha256
                 and value.canonical_cohort_identity_sha256
@@ -928,6 +930,8 @@ def _industry_semantics_are_valid_v5(
                 == hashlib.sha256(
                     value.canonical_json_bytes(include_identity=False)
                 ).hexdigest()
+                and value.failure_identity_sha256
+                == context.industry_report_identity_sha256
                 and value.canonical_cohort_identity_sha256
                 == context.retained_context_canonical_cohort_identity_sha256
                 and value.cohort_size == context.cohort_size

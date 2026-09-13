@@ -7,12 +7,14 @@ import gzip
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from swing_trading_ai_assistant.market_data import current_event_notice as event_v1
 from swing_trading_ai_assistant.market_data import current_event_notice_v2 as event_v2
 from swing_trading_ai_assistant.market_data import (
     current_research_binding_v2 as mapping_v2,
@@ -34,6 +36,7 @@ from swing_trading_ai_assistant.market_data.instruments import InstrumentCatalog
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 _KNOWN = datetime(2026, 8, 26, 9, tzinfo=UTC)
+_SOURCE_DATE = date(2026, 8, 26)
 _CUTOFF = datetime(2026, 8, 26, 9, 5, tzinfo=UTC)
 _HEADER = (
     "SYMBOL,COMPANY NAME,SUBJECT,DETAILS,BROADCAST DATE/TIME,RECEIPT,"
@@ -61,28 +64,32 @@ _INSTRUMENTS = [
 ]
 
 
-def _artifact() -> bytes:
+def _artifact(
+    source_date: date = _SOURCE_DATE, *, symbols: tuple[str, str] = ("ALPHA", "PNB")
+) -> bytes:
+    event_date = source_date.strftime("%d-%b-%Y")
+    receipt_date = source_date.isoformat()
     rows = [
         (
-            "ALPHA,Alpha Limited,Board update,Duplicate disclosure,"
-            "26-Aug-2026 14:00:00,2026-08-26 13:59:00,"
-            "26-Aug-2026 14:00:01,00:00:01,-"
+            f"{symbols[0]},Alpha Limited,Board update,Duplicate disclosure,"
+            f"{event_date} 14:00:00,{receipt_date} 13:59:00,"
+            f"{event_date} 14:00:01,00:00:01,-"
         ),
         (
-            "ALPHA,Alpha Limited,Board update,Duplicate disclosure,"
-            "26-Aug-2026 14:00:00,2026-08-26 13:59:00,"
-            "26-Aug-2026 14:00:01,00:00:01,-"
+            f"{symbols[0]},Alpha Limited,Board update,Duplicate disclosure,"
+            f"{event_date} 14:00:00,{receipt_date} 13:59:00,"
+            f"{event_date} 14:00:01,00:00:01,-"
         ),
         (
-            "PNB,Punjab National Bank,Board meeting,Quarterly update,"
-            "26-Aug-2026 14:00:00,2026-08-26 13:59:00,"
-            "26-Aug-2026 14:00:01,00:00:01,-"
+            f"{symbols[1]},Punjab National Bank,Board meeting,Quarterly update,"
+            f"{event_date} 14:00:00,{receipt_date} 13:59:00,"
+            f"{event_date} 14:00:01,00:00:01,-"
         ),
     ]
     return ("\ufeff" + "\n".join((_HEADER, *rows)) + "\n").encode()
 
 
-def _input(raw: bytes) -> CurrentEventNoticeInputV1:
+def _input(raw: bytes, source_date: date = _SOURCE_DATE) -> CurrentEventNoticeInputV1:
     return CurrentEventNoticeInputV1(
         schema_identity_sha256=EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
         source_url=(
@@ -91,7 +98,10 @@ def _input(raw: bytes) -> CurrentEventNoticeInputV1:
         ),
         source_segment="Equity",
         source_window="1D",
-        source_filename="CF-AN-equities-25-08-2026-to-26-08-2026.csv",
+        source_filename=(
+            f"CF-AN-equities-{(source_date.fromordinal(source_date.toordinal() - 1)).strftime('%d-%m-%Y')}"
+            f"-to-{source_date.strftime('%d-%m-%Y')}.csv"
+        ),
         artifact_identity_sha256=hashlib.sha256(raw).hexdigest(),
         acquisition_method="BOUNDED_OFFICIAL_FETCH",
         licence_policy_identity="nse-bounded-official-fetch-owner-private-v1",
@@ -424,3 +434,282 @@ def test_event_v2_post_admission_mutation_and_future_source_fail_closed(
             event_v2.retain_current_event_notices_v2(
                 later, lease, _input(raw), raw, mapping
             )
+
+
+def _binding_with_origin(mapping: Any, origin: str) -> Any:
+    """Mint a fully rehashed accepted mapping for each public V2 origin."""
+    projection = mapping_v2.validate_current_research_binding_v2(mapping)
+    if origin == "RETAINED_INSTRUMENT_SNAPSHOT":
+        return mapping
+    members = tuple(
+        replace(
+            member,
+            mapping_identity_sha256=mapping_v2.mapping_identity_v3(
+                isin=member.isin,
+                exchange=member.exchange,
+                instrument_type=member.instrument_type,
+                segment=member.segment,
+                effective_symbol=member.effective_symbol,
+                provider_symbol=member.provider_symbol,
+                mapping_valid_from=member.mapping_valid_from,
+                mapping_valid_through=member.mapping_valid_through,
+            ),
+            discovery_source=None,
+            discovery_observation_identity_sha256=None,
+            discovery_retrieved_at=None,
+            discovery_failure_reasons=("RAW_MAPPING_MISSING",),
+        )
+        for member in projection.members
+    )
+    return mapping_v2._admit(  # pyright: ignore[reportPrivateUsage]
+        mapping_v2._projection(  # pyright: ignore[reportPrivateUsage]
+            origin="RETAINED_SAME_PASS_CONTEXT",
+            selected_at=projection.selected_at,
+            decision_cutoff=projection.decision_cutoff,
+            schedule_identity_sha256=projection.schedule_identity_sha256,
+            members=members,
+            context=("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("origin", "symbols"),
+    (
+        ("RETAINED_INSTRUMENT_SNAPSHOT", ("ALPHA", "PNB")),
+        ("RETAINED_INSTRUMENT_SNAPSHOT", ("OUTSIDE", "UNLISTED")),
+        ("RETAINED_SAME_PASS_CONTEXT", ("ALPHA", "PNB")),
+        ("RETAINED_SAME_PASS_CONTEXT", ("OUTSIDE", "UNLISTED")),
+    ),
+)
+def test_event_v2_rejects_fully_rehashed_mapping_expired_on_source_date_before_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    origin: str,
+    symbols: tuple[str, str],
+) -> None:
+    root = tmp_path / f"event-source-date-{origin}-{symbols[0]}"
+    root.mkdir(mode=0o700)
+    source_date = date(2026, 8, 27)
+    raw = _artifact(source_date, symbols=symbols)
+    monkeypatch.setattr(
+        event_v2, "_trusted_utc_now", lambda: datetime(2026, 8, 27, 9, tzinfo=UTC)
+    )
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        mapping = _binding_with_origin(_mapping(root, lease), origin)
+        with pytest.raises(ValueError, match="source-time integrity invalid"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw, source_date), raw, mapping
+            )
+    assert not (root / ".current-event-notice-v1").exists()
+
+
+@pytest.mark.parametrize("interleaving", ("root", "archive", "archive-mode"))
+def test_event_v2_final_authority_interleavings_reject_before_successful_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interleaving: str
+) -> None:
+    root = tmp_path / f"event-final-authority-{interleaving}"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    original = event_v2._verify_final_archive_binding  # pyright: ignore[reportPrivateUsage]
+
+    def replace_immediately_before_return(operation: object, directory: int) -> None:
+        archive = root / ".current-event-notice-v1"
+        if interleaving == "root":
+            root.rename(root.with_name(f"{root.name}-replaced"))
+            root.mkdir(mode=0o700)
+            root.chmod(0o700)
+        elif interleaving == "archive":
+            archive.rename(root / ".replaced-event-archive")
+            archive.mkdir(mode=0o700)
+            archive.chmod(0o700)
+        else:
+            archive.chmod(0o755)
+        original(operation, directory)
+
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        monkeypatch.setattr(
+            event_v2,
+            "_verify_final_archive_binding",
+            replace_immediately_before_return,
+        )
+        with pytest.raises(ValueError, match="archive authority invalid"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+
+
+def _adopted_v1_projection(
+    root: Path, lease: StorageRootLease, mapping: Any, raw: bytes
+) -> Any:
+    projection = mapping_v2.validate_current_research_binding_v2(mapping)
+    event_input = _input(raw)
+    parsed = event_v1.parse_current_event_notice_artifact_v1(event_input, raw)
+    assert not isinstance(parsed, event_v1.CurrentEventNoticeFailureV1)
+    cohort = tuple(
+        event_v1.CurrentEventCohortMemberV1(
+            member.isin,
+            member.exchange,
+            "EQUITY",
+            member.effective_symbol,
+            member.valid_from,
+            member.valid_through,
+            member.provider_mapping_revision,
+        )
+        for member in projection.members
+    )
+    snapshot = cast(
+        Any, event_v1.project_current_supplied_cohort_event_notices_v1(parsed, cohort)
+    )
+    retained = cast(
+        Any,
+        event_v1.FileCurrentEventNoticeArchiveV1(root).archive_exact(
+            event_input, raw, snapshot, lease
+        ),
+    )
+    return event_v2.project_retained_current_event_notices_v2(
+        root, lease, retained, mapping
+    )
+
+
+def _rehash_adopted_v1_identity(value: Any, replaced: str) -> None:
+    """Rehash every V1-derived identity available from V2's redacted projection."""
+    snapshot = value.snapshot_identity_sha256
+    archive = value.archive_identity_sha256
+    receipt = value.receipt_identity_sha256
+    retained = value.retained_identity_sha256
+    if replaced == "archive_identity_sha256":
+        archive = "f" * 64
+    receipt_core = {
+        "version": "retained-current-event-notice-receipt@v1",
+        "artifact_identity_sha256": value.artifact_identity_sha256,
+        "snapshot_identity_sha256": snapshot,
+        "archive_identity_sha256": archive,
+        "runtime_code_identity_sha256": value.source_runtime_code_identity_sha256,
+        "known_at": event_v2._wire(value.known_at),  # pyright: ignore[reportPrivateUsage]
+        "acquisition_method": value.acquisition_method,
+        "licence_policy_identity": value.licence_policy_identity,
+        "source_filename": value.source_filename,
+        "source_encoding": value.source_encoding,
+        "source_has_bom": value.source_has_bom,
+    }
+    if replaced == "receipt_identity_sha256":
+        receipt = "e" * 64
+    else:
+        receipt = event_v2._digest(receipt_core)  # pyright: ignore[reportPrivateUsage]
+    if replaced == "retained_identity_sha256":
+        retained = "d" * 64
+    else:
+        retained = event_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {**receipt_core, "receipt_identity_sha256": receipt}
+        )
+    for name, item in (
+        ("archive_identity_sha256", archive),
+        ("receipt_identity_sha256", receipt),
+        ("retained_identity_sha256", retained),
+    ):
+        object.__setattr__(value, name, item)
+    preimage = {
+        item.name: getattr(value, item.name)
+        for item in fields(value)
+        if item.name not in {"result_identity_sha256", "_seal"}
+    }
+    object.__setattr__(
+        value,
+        "result_identity_sha256",
+        event_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+@pytest.mark.parametrize(
+    "replaced",
+    ("archive_identity_sha256", "receipt_identity_sha256", "retained_identity_sha256"),
+)
+def test_adopted_event_v1_rejects_fully_rehashed_available_identity_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replaced: str
+) -> None:
+    root = tmp_path / f"event-v1-adoption-{replaced}"
+    root.mkdir(mode=0o700)
+    artifact_lines = _artifact().splitlines()
+    raw = b"\n".join((artifact_lines[0], artifact_lines[1], artifact_lines[3])) + b"\n"
+    monkeypatch.setattr(event_v1, "_trusted_utc_now", lambda: _KNOWN)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        adopted = _adopted_v1_projection(root, lease, _mapping(root, lease), raw)
+    substituted = copy.deepcopy(adopted)
+    _rehash_adopted_v1_identity(substituted, replaced)
+    assert not event_v2.current_event_notice_semantics_are_valid_v2(substituted)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "wrong-field-type",
+        "excessive-depth",
+        "excessive-nodes",
+        "excessive-token",
+        "excessive-string",
+        "decoder-recursion",
+        "future-known-at",
+        "wrong-source-date",
+    ),
+)
+def test_event_v2_stored_prefix_admission_rejects_malformed_evidence_before_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    root = tmp_path / f"event-prefix-{case}"
+    root.mkdir(mode=0o700)
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        archive = root / ".current-event-notice-v1"
+        projection = archive / f"v2-{retained.archive_identity_sha256}.projection.json"
+        for suffix in ("receipt.json", "complete.json"):
+            (archive / f"v2-{retained.archive_identity_sha256}.{suffix}").unlink()
+        if case == "decoder-recursion":
+            malformed = b'{"known_at":' + b"[" * 1_100 + b"0" + b"]" * 1_100 + b"}"
+        else:
+            payload = json.loads(projection.read_bytes())
+            if case == "wrong-field-type":
+                payload["known_at"] = False
+            elif case == "excessive-depth":
+                nested: object = 0
+                for _ in range(17):
+                    nested = [nested]
+                payload["known_at"] = nested
+            elif case == "excessive-nodes":
+                payload["known_at"] = [0] * 50_000
+            elif case == "excessive-token":
+                payload["known_at"] = int("9" * 259)
+            elif case == "excessive-string":
+                payload["known_at"] = "x" * 4_097
+            elif case == "future-known-at":
+                payload["known_at"] = "2026-08-26T09:06:00.000000Z"
+            else:
+                payload["known_at"] = "2026-08-25T09:00:00.000000Z"
+            malformed = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode()
+        projection.write_bytes(malformed)
+        with pytest.raises(ValueError, match="immutable archive conflict"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+        assert {path.name for path in archive.iterdir()} == {
+            f"v2-{retained.artifact_identity_sha256}.raw.csv",
+            f"v2-{retained.archive_identity_sha256}.projection.json",
+        }

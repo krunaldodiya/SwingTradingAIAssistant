@@ -160,9 +160,11 @@ def test_v5_incremental_json_node_limit_stops_before_limit_plus_one_allocation()
 ):
     exact = b"[" + b",".join([b"0"] * 49_999) + b"]\n"
     plus_one = b"[" + b",".join([b"0"] * 50_000) + b"]\n"
-    exact_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()
+    exact_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()  # pyright: ignore[reportPrivateUsage]
     assert (
-        current_supplied_cohort_v5._parse_bounded_json_v5(exact, exact_stats)
+        current_supplied_cohort_v5._parse_bounded_json_v5(  # pyright: ignore[reportPrivateUsage]
+            exact, exact_stats
+        )
         == [0] * 49_999
     )
     assert (
@@ -171,9 +173,11 @@ def test_v5_incremental_json_node_limit_stops_before_limit_plus_one_allocation()
         == exact_stats.nodes_attached
         == 50_000
     )
-    overflow_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()
+    overflow_stats = current_supplied_cohort_v5._BoundedJsonStatsV5()  # pyright: ignore[reportPrivateUsage]
     with pytest.raises(ValueError, match="JSON bounds"):
-        current_supplied_cohort_v5._parse_bounded_json_v5(plus_one, overflow_stats)
+        current_supplied_cohort_v5._parse_bounded_json_v5(  # pyright: ignore[reportPrivateUsage]
+            plus_one, overflow_stats
+        )
     assert overflow_stats.nodes_admitted <= 50_000
     assert overflow_stats.nodes_allocated <= 50_000
     assert overflow_stats.nodes_attached <= 50_000
@@ -279,7 +283,7 @@ def test_failed_context_mapping_provenance_is_explicitly_absent(
 
 
 @pytest.mark.parametrize("failed_context", (False, True))
-def test_v5_composes_retained_failed_price_with_real_context_and_event(
+def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa: C901 - end-to-end V5 boundary table
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failed_context: bool,
@@ -474,6 +478,96 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         ).hexdigest()
 
+    # The direct exact-limit preflight test above is paired with this public
+    # builder test: successful public construction crosses preflight before
+    # final attachment/hash/wire work, while a limit-plus-one preflight cannot.
+    original_preflight = current_supplied_cohort_v5._preflight_typed_writer_v5  # pyright: ignore[reportPrivateUsage]
+    original_digest = current_supplied_cohort_v5._digest  # pyright: ignore[reportPrivateUsage]
+    original_wire = current_supplied_cohort_v5._wire  # pyright: ignore[reportPrivateUsage]
+    original_member = current_supplied_cohort_v5._member  # pyright: ignore[reportPrivateUsage]
+    exact_events: list[str] = []
+    exact_armed = False
+
+    def exact_preflight(fields_to_write: object) -> None:
+        nonlocal exact_armed
+        exact_events.append("preflight")
+        original_preflight(cast(Any, fields_to_write))
+        exact_armed = True
+
+    def exact_digest(value: object) -> str:
+        if exact_armed:
+            exact_events.append("digest")
+        return original_digest(value)
+
+    def exact_wire(value: object) -> object:
+        if exact_armed:
+            exact_events.append("wire")
+        return original_wire(value)
+
+    def exact_member(*args: object) -> object:
+        if exact_armed:
+            exact_events.append("member")
+        return original_member(*cast(Any, args))
+
+    with pytest.MonkeyPatch.context() as writer_patch:
+        writer_patch.setattr(
+            current_supplied_cohort_v5, "_preflight_typed_writer_v5", exact_preflight
+        )
+        writer_patch.setattr(current_supplied_cohort_v5, "_digest", exact_digest)
+        writer_patch.setattr(current_supplied_cohort_v5, "_wire", exact_wire)
+        writer_patch.setattr(current_supplied_cohort_v5, "_member", exact_member)
+        assert (
+            build_current_research_packet_v5(
+                request, mapping_binding, price, context, event, industry
+            ).result_identity_sha256
+            == packet.result_identity_sha256
+        )
+    assert exact_events[0] == "preflight"
+    assert {"digest", "wire", "member"} <= set(exact_events)
+
+    overflow_events: list[str] = []
+    overflow_armed = False
+
+    def overflow_preflight(fields_to_write: object) -> None:
+        nonlocal overflow_armed
+        overflow_armed = True
+        original_preflight(
+            (
+                *cast(tuple[tuple[str, object], ...], fields_to_write),
+                *((f"overflow-{index}", 0) for index in range(25_000)),
+            )
+        )
+
+    def overflow_digest(value: object) -> str:
+        if overflow_armed:
+            overflow_events.append("digest")
+        return original_digest(value)
+
+    def overflow_wire(value: object) -> object:
+        if overflow_armed:
+            overflow_events.append("wire")
+        return original_wire(value)
+
+    def overflow_member(*args: object) -> object:
+        if overflow_armed:
+            overflow_events.append("member")
+        return original_member(*cast(Any, args))
+
+    with pytest.MonkeyPatch.context() as writer_patch:
+        writer_patch.setattr(
+            current_supplied_cohort_v5,
+            "_preflight_typed_writer_v5",
+            overflow_preflight,
+        )
+        writer_patch.setattr(current_supplied_cohort_v5, "_digest", overflow_digest)
+        writer_patch.setattr(current_supplied_cohort_v5, "_wire", overflow_wire)
+        writer_patch.setattr(current_supplied_cohort_v5, "_member", overflow_member)
+        with pytest.raises(ValueError, match="typed bounds"):
+            build_current_research_packet_v5(
+                request, mapping_binding, price, context, event, industry
+            )
+    assert overflow_events == []
+
     # Fully rehash the outer context and packet: V5's public canonical cohort
     # and size are the admitted mapping values, not caller-substitutable values.
     for field_name, replacement in (
@@ -505,18 +599,43 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
                 + b"\n"
             )
 
-    # Fully rehash the nested ledger and outer packet: each semantic
-    # substitution must still fail canonical reader admission.
+    # Fully rehash the nested ledger and outer packet: the fixed component
+    # table, closed states, nullability and producer identity equations are
+    # all reader obligations, not merely producer construction details.
     for position, field_name, replacement in (
+        (0, "component", "RAW_GRID_V0"),
+        (0, "contract_version", "substituted-contract@v1"),
+        (1, "contract_version", "substituted-contract@v1"),
+        (2, "contract_version", "substituted-contract@v1"),
         (3, "contract_version", "substituted-contract@v1"),
         (0, "evidence_state", "INVENTED"),
+        (1, "evidence_state", "INVENTED"),
+        (2, "evidence_state", "INVENTED"),
+        (3, "evidence_state", "INVENTED"),
         (0, "reasons", ["INVENTED_REASON"]),
+        (1, "reasons", ["INVENTED_REASON"]),
+        (2, "reasons", ["INVENTED_REASON"]),
+        (3, "reasons", ["INVENTED_REASON"]),
+        (0, "schema_identity_sha256", None),
+        (0, "runtime_code_identity_sha256", None),
+        (1, "schema_identity_sha256", None),
+        (1, "runtime_code_identity_sha256", None),
+        (2, "schema_identity_sha256", "a" * 64),
+        (2, "runtime_code_identity_sha256", "a" * 64),
+        (3, "schema_identity_sha256", None),
+        (3, "runtime_code_identity_sha256", None),
+        (0, "primary_identity_sha256", "a" * 64),
+        (2, "primary_identity_sha256", "a" * 64),
         (3, "primary_identity_sha256", "a" * 64),
+        (0, "evidence_state", "INSUFFICIENT_EVIDENCE"),
     ):
         ledger_payload = json.loads(packet.canonical_json_bytes())
+        ledger_payload["execution_state"] = "RESEARCH_READY"
         context_payload = ledger_payload["context"]
         component = context_payload["components"][position]
         component[field_name] = replacement
+        if position == 0 and field_name == "evidence_state":
+            component["reasons"] = ["RAW_GRID_MISSING"]
         component["ledger_row_identity_sha256"] = digest_json(
             {
                 key: value
@@ -610,34 +729,42 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
     with pytest.raises(ValueError, match="semantics"):
         CurrentResearchPacketV5.from_canonical_json_bytes(tampered)
 
-    identity_payload = json.loads(packet.canonical_json_bytes())
-    identity_industry = identity_payload["industry_evidence"]
-    identity_industry["schema_identity_sha256"] = "d" * 64
-    identity_industry_core = {
-        key: value
-        for key, value in identity_industry.items()
-        if key != "report_identity_sha256"
-    }
-    identity_industry["report_identity_sha256"] = hashlib.sha256(
-        json.dumps(
-            identity_industry_core, sort_keys=True, separators=(",", ":")
-        ).encode()
-        + b"\n"
-    ).hexdigest()
-    identity_packet_core = {
-        key: value
-        for key, value in identity_payload.items()
-        if key != "result_identity_sha256"
-    }
-    identity_payload["result_identity_sha256"] = hashlib.sha256(
-        json.dumps(identity_packet_core, sort_keys=True, separators=(",", ":")).encode()
-        + b"\n"
-    ).hexdigest()
-    with pytest.raises(ValueError, match="semantics"):
-        CurrentResearchPacketV5.from_canonical_json_bytes(
-            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
-            + b"\n"
-        )
+    # Every non-null top-level Industry digest is immutable relative to the
+    # context-held report identity even after its nested and outer hashes are
+    # recomputed. This is a local consistency equation, not new attestation.
+    industry_payload = json.loads(packet.canonical_json_bytes())["industry_evidence"]
+    industry_digest_fields = tuple(
+        key
+        for key, value in industry_payload.items()
+        if key.endswith("_sha256") and value is not None
+    )
+    assert industry_digest_fields
+    for field_name in industry_digest_fields:
+        identity_payload = json.loads(packet.canonical_json_bytes())
+        identity_industry = identity_payload["industry_evidence"]
+        identity_industry[field_name] = "d" * 64
+        if field_name != "report_identity_sha256":
+            identity_industry_core = {
+                key: value
+                for key, value in identity_industry.items()
+                if key != "report_identity_sha256"
+            }
+            identity_industry["report_identity_sha256"] = digest_json(
+                identity_industry_core
+            )
+        identity_packet_core = {
+            key: value
+            for key, value in identity_payload.items()
+            if key != "result_identity_sha256"
+        }
+        identity_payload["result_identity_sha256"] = digest_json(identity_packet_core)
+        with pytest.raises(ValueError, match="semantics"):
+            CurrentResearchPacketV5.from_canonical_json_bytes(
+                json.dumps(
+                    identity_payload, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
 
 
 @pytest.mark.parametrize(
