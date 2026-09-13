@@ -300,6 +300,7 @@ class BharatStockFeatureInputV2:
         "RETAINED_REVISION",
         "ATTEMPTED_NO_REVISION",
         "NOT_ATTEMPTED_SHARED_STOP",
+        "NOT_ATTEMPTED_PREREQUISITE",
         "UNREQUESTED",
     ]
     requested_sessions: tuple[date, ...]
@@ -317,6 +318,7 @@ class BharatStockFeatureInputV2:
             "RETAINED_REVISION",
             "ATTEMPTED_NO_REVISION",
             "NOT_ATTEMPTED_SHARED_STOP",
+            "NOT_ATTEMPTED_PREREQUISITE",
             "UNREQUESTED",
         }:
             raise ValueError("invalid BharatStock V2 input slot")
@@ -342,7 +344,7 @@ class BharatStockFeatureInputV2:
                 self.state != "UNREQUESTED"
                 and len(self.requested_sessions) != expected
                 and not (
-                    self.state == "ATTEMPTED_NO_REVISION"
+                    self.state == "NOT_ATTEMPTED_PREREQUISITE"
                     and self.failure_code == "INSUFFICIENT_COMPLETED_SESSIONS"
                     and len(self.requested_sessions) < expected
                 )
@@ -374,6 +376,17 @@ class BharatStockFeatureInputV2:
                     or type(self.failure_reason) is not str
                     or not self.failure_reason
                     or self.executed_at is None
+                    or self.stop_reference is not None
+                )
+            )
+            or (
+                self.state == "NOT_ATTEMPTED_PREREQUISITE"
+                and (
+                    self.retained_capture is not None
+                    or self.request_provenance is not None
+                    or self.failure_code != "INSUFFICIENT_COMPLETED_SESSIONS"
+                    or self.failure_reason != "INSUFFICIENT_COMPLETED_SESSIONS"
+                    or self.executed_at is not None
                     or self.stop_reference is not None
                 )
             )
@@ -466,6 +479,17 @@ class BharatStockFeatureSourceV2:
             )
         ):
             raise ValueError("invalid BharatStock V2 feature source")
+        expected_source_identity = _digest(
+            {
+                "provider_source": self.provider_source,
+                "source_profile": self.source_profile,
+                "revision_identity_sha256": self.capture_revision_identity_sha256,
+                "price_basis": self.price_basis,
+                "volume_basis": self.volume_basis,
+            }
+        )
+        if self.source_identity_sha256 != expected_source_identity:
+            raise ValueError("invalid BharatStock V2 source identity")
         expected = _digest(
             {
                 item.name: getattr(self, item.name)
@@ -486,6 +510,7 @@ class BharatStockFeatureSlotV2:
         "RETAINED_REVISION",
         "ATTEMPTED_NO_REVISION",
         "NOT_ATTEMPTED_SHARED_STOP",
+        "NOT_ATTEMPTED_PREREQUISITE",
         "UNREQUESTED",
     ]
     requested_sessions: tuple[date, ...]
@@ -524,7 +549,7 @@ class BharatStockFeatureSlotV2:
                 self.state != "UNREQUESTED"
                 and len(self.requested_sessions) != _EXPECTED_SESSIONS[self.feature]
                 and not (
-                    self.state == "ATTEMPTED_NO_REVISION"
+                    self.state == "NOT_ATTEMPTED_PREREQUISITE"
                     and self.failure_code == "INSUFFICIENT_COMPLETED_SESSIONS"
                     and len(self.requested_sessions) < _EXPECTED_SESSIONS[self.feature]
                 )
@@ -545,6 +570,17 @@ class BharatStockFeatureSlotV2:
                     or type(self.failure_reason) is not str
                     or not self.failure_reason
                     or self.executed_at is None
+                    or self.stop_reference is not None
+                )
+            )
+            or (
+                self.state == "NOT_ATTEMPTED_PREREQUISITE"
+                and (
+                    self.request_provenance is not None
+                    or self.source is not None
+                    or self.failure_code != "INSUFFICIENT_COMPLETED_SESSIONS"
+                    or self.failure_reason != "INSUFFICIENT_COMPLETED_SESSIONS"
+                    or self.executed_at is not None
                     or self.stop_reference is not None
                 )
             )

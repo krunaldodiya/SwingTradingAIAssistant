@@ -696,6 +696,17 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     )
                     continue
                 capture = captures.get(count)
+                if capture is None and len(requested_sessions) < count:
+                    slots.append(
+                        BharatStockFeatureInputV2(
+                            feature,
+                            "NOT_ATTEMPTED_PREREQUISITE",
+                            requested_sessions,
+                            failure_code="INSUFFICIENT_COMPLETED_SESSIONS",
+                            failure_reason="INSUFFICIENT_COMPLETED_SESSIONS",
+                        )
+                    )
+                    continue
                 prepared = submitted_requests.get(count, prepared_requests[count])
                 provenance = _request_provenance(prepared)
                 if shared_stop is not None and capture is None:

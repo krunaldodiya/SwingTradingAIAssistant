@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -14,6 +15,7 @@ from typing import Final, Literal, cast
 from zoneinfo import ZoneInfo
 
 from .current_event_notice import (
+    _ARCHIVE_DIRECTORY,  # pyright: ignore[reportPrivateUsage]
     _ARCHIVE_LOCK,  # pyright: ignore[reportPrivateUsage]
     CurrentEventCohortMemberV1,
     CurrentEventNoticeFailureV1,
@@ -101,6 +103,36 @@ def _valid_digest(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _mapping_valid_on_source_date(
+    member: CurrentResearchMappingMemberV2, source_date: date
+) -> bool:
+    return (
+        member.valid_from <= source_date <= member.valid_through
+        and member.mapping_valid_from <= source_date
+        and (
+            member.mapping_valid_through is None
+            or source_date <= member.mapping_valid_through
+        )
+    )
+
+
+def _verify_final_archive_binding(operation: object, directory: int) -> None:
+    root = getattr(operation, "descriptor", None)
+    ensure_live = getattr(operation, "ensure_live", None)
+    if type(root) is not int or not callable(ensure_live):
+        raise ValueError("current event V2 archive authority invalid")
+    opened = os.fstat(directory)
+    named = os.stat(_ARCHIVE_DIRECTORY, dir_fd=root, follow_symlinks=False)
+    root_info = os.fstat(root)
+    if not stat.S_ISDIR(opened.st_mode):
+        raise ValueError("current event V2 archive authority invalid")
+    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        raise ValueError("current event V2 archive authority invalid")
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise ValueError("current event V2 archive authority invalid")
+    ensure_live()
 
 
 def _instant(value: object) -> datetime:
@@ -466,6 +498,13 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
         or cutoff != mapping.decision_cutoff
         or source_range is None
         or source_range[1] != known.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        or (
+            mapping.origin == "RETAINED_INSTRUMENT_SNAPSHOT"
+            and any(
+                not _mapping_valid_on_source_date(item, source_range[1])
+                for item in mapping.members
+            )
+        )
         or not notice_dates_valid
         or len({item.observation_identity_sha256 for item in notices}) != len(notices)
         or len({item.deduplication_identity_sha256 for item in notices}) != len(notices)
@@ -632,6 +671,10 @@ def project_retained_current_event_notices_v2(
         retained.known_at > cutoff
         or source_date is None
         or source_date != retained.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        or any(
+            not _mapping_valid_on_source_date(item, source_date)
+            for item in mapping.members
+        )
     ):
         raise ValueError("current event V2 source-time integrity invalid")
     runtime = current_event_notice_runtime_code_identity_v2()
@@ -724,6 +767,11 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
     if (
         source_date is None
         or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+    ):
+        raise ValueError("current event V2 source-time integrity invalid")
+    if mapping.origin == "RETAINED_INSTRUMENT_SNAPSHOT" and any(
+        not _mapping_valid_on_source_date(member, source_date)
+        for member in mapping.members
     ):
         raise ValueError("current event V2 source-time integrity invalid")
     attempts = (_retained_attempt(known_at, event_input.artifact_identity_sha256),)
@@ -928,6 +976,25 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                     (f"v2-{archive_identity}.receipt.json", receipt_raw, 64 * 1024),
                     (f"v2-{archive_identity}.complete.json", marker_raw, 64 * 1024),
                 )
+            # A stored projection is an untrusted recovery prefix. Validate its
+            # time/date/attempt equation and deterministic projection before any
+            # missing receipt or marker is published.
+            if stored is not None:
+                source_date = _parse_filename(event_input.source_filename)
+                if (
+                    source_date is None
+                    or known_at > mapping.decision_cutoff
+                    or source_date
+                    != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                    or not _validate_attempts(
+                        attempts,
+                        event_input.artifact_identity_sha256,
+                        known_at,
+                        mapping.decision_cutoff,
+                    )
+                    or stored[0] != projection_raw
+                ):
+                    raise ValueError("current event V2 immutable archive conflict")
             # Validate the complete observed prefix before publishing its next
             # object. A corrupt receipt or marker must never cause repair of an
             # earlier missing/conflicting object.
@@ -946,6 +1013,7 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                 if observed is None or observed[0] != expected:
                     raise ValueError("current event V2 stable readback invalid")
             os.fsync(directory)
+            _verify_final_archive_binding(operation, directory)
         finally:
             os.close(directory)
     attempts = (_retained_attempt(known_at, event_input.artifact_identity_sha256),)

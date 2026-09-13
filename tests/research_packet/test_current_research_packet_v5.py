@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -251,7 +252,7 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
 
     event_root = tmp_path / "event"
     event_root.mkdir(mode=0o700)
-    source_date = selected.astimezone().date()
+    source_date = selected.astimezone(ZoneInfo("Asia/Kolkata")).date()
     raw = _event_artifact(source_date)
     event_input = CurrentEventNoticeInputV1(
         schema_identity_sha256=EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,

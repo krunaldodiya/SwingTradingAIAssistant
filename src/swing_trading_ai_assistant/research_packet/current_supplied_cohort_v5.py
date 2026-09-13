@@ -12,7 +12,16 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, Literal, Union, cast, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Final,
+    Literal,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from swing_trading_ai_assistant.market_data.current_event_notice_v2 import (
     CurrentEventMemberProjectionV2,
@@ -408,6 +417,13 @@ class CurrentResearchV5ContextSection:
                 "ADJUSTED_DAILY_CLOSE_V2",
                 "MARKET_REGIME_V4",
             )
+            or self.completion_status
+            != (
+                "READY"
+                if tuple(item.evidence_state for item in self.components)
+                == ("OBSERVED", "SCREENED", "SUCCESS", "OBSERVED")
+                else "FAILED"
+            )
             or type(self.mapping_receipt_count) is not int
             or not 0 <= self.mapping_receipt_count <= 100
         ):
@@ -700,6 +716,13 @@ def _industry_semantics_are_valid_v5(
     value: object, context: CurrentResearchV5ContextSection
 ) -> bool:
     try:
+        if any(
+            getattr(value, item.name) is not None
+            and not _valid_digest(getattr(value, item.name))
+            for item in fields(cast(Any, value))
+            if item.name.endswith("_sha256")
+        ):
+            return False
         if type(value) is CurrentIndustryParticipationReportV4:
             for row in value.industries:
                 row.__post_init__()
@@ -1431,11 +1454,14 @@ def build_current_research_packet_v5(
         "coverage": price.coverage,
         "members": members,
     }
-    _preflight_typed_writer_v5(preimage)
+    result_identity = _digest(preimage)
+    # The result identity is a final public field; preflight its complete graph
+    # before allocating the canonical packet representation.
+    _preflight_typed_writer_v5({**preimage, "result_identity_sha256": result_identity})
     packet = object.__new__(CurrentResearchPacketV5)
     for name, value in {
         **preimage,
-        "result_identity_sha256": _digest(preimage),
+        "result_identity_sha256": result_identity,
         "_seal": object(),
     }.items():
         object.__setattr__(packet, name, value)
