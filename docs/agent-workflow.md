@@ -30,6 +30,10 @@ harnesses can use the same procedure.
    where the canonical policy requires it.
 5. Select available capabilities below and record material limits. Do not install
    a preferred harness or change global settings by default.
+6. Confirm the coordinator's WIP contains one active delivery outcome. Parallel
+   assignments may serve that same outcome, but unrelated work starts only after
+   the active outcome is completed or explicitly paused, stopped, or reordered
+   in its authoritative tracker.
 
 ## Capability mapping
 
@@ -80,10 +84,32 @@ Serialize dependent or shared-file work; never assign concurrent writers to one
 file. Workers run focused owned checks; the coordinator owns integration and
 final repository-wide gates.
 
+Parallel capacity does not authorize unrelated WIP. Multiple workers or
+reviewers may operate concurrently only inside the same active delivery outcome,
+unless the owner explicitly displaces, pauses, or authorizes a bounded WIP
+breach. A waiting review, external prerequisite, or available spare tab is still
+WIP and is not a reason to start a separate product or tooling task.
+
 Send each bounded assignment once. Resolve questions within scope through the
 coordinator. Changed scope or ownership requires an explicit new assignment at a
 safe boundary. Inspect state after command failure or timeout before resending,
 so work is not duplicated.
+
+## Keep interactive foregrounds responsive
+
+An interactive coordinator submits long-running delegated work asynchronously
+and returns control immediately. It MUST NOT occupy the conversational foreground
+with a long task wait when the user may send another message. Use a supported
+host completion or attention event to resume result capture; if the host offers
+only a user-facing notification, surface that limitation and inspect on the next
+active turn. Do not add a sleep loop, status polling, synthetic user input, or a
+child-to-parent prompt callback to imitate event delivery.
+
+A synchronous wait is appropriate only for headless or non-interactive execution,
+or for a short, bounded same-turn dependency whose wait cannot delay user input.
+A request for progress or a new user message takes precedence over optional
+orchestration inspection; report the last verified state and continue the same
+active outcome afterward.
 
 ## Observe, capture, and release
 

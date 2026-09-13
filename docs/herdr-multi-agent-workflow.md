@@ -24,8 +24,8 @@ required control blocks dependent work.
 | Create visible resources | `herdr tab create`; retain returned tab and pane IDs. |
 | Start assigned runtime | `herdr agent start`; use its supported kind and runtime-specific options. |
 | Verify configuration | `herdr agent get` and runtime metadata, not an assumed OMP log schema. |
-| Submit assignments | `herdr agent prompt`; submit independent work before waiting. |
-| Wait and inspect | `herdr agent wait`, then `herdr agent get`; inspect after timeouts too. |
+| Submit assignments | `herdr agent prompt` without `--wait` in an interactive coordinator; submit an independent same-outcome wave before returning control. |
+| Wait and inspect | Use `herdr agent wait` only in headless/non-interactive execution or for a short same-turn dependency that cannot delay user input; otherwise inspect after a supported notification or on the next active turn. |
 | Diagnose state | `herdr agent get`, `herdr agent read`, and `herdr agent explain`. |
 | Capture full result | `herdr agent read`; use export or portable result recovery if truncated. |
 | Release completed resources | `herdr tab close` for the captured, completed task-owned tab only. |
@@ -33,6 +33,44 @@ required control blocks dependent work.
 Do not derive IDs from labels or sidebar order. Use stable unique agent names.
 Tabs in one checkout share files; select explicit worktree paths for isolation.
 Apply portable ownership and review identity checks to those actual paths.
+
+## Preserve the interactive foreground
+
+For an interactive Pi/Herdr session, launch and prompt delegated work without a
+foreground wait:
+
+```bash
+herdr agent prompt "$AGENT_NAME" "$COMPLETE_PROMPT"
+```
+
+Then return control to the conversation. Do not immediately run `herdr agent
+wait`, do not poll `agent get` or `agent list`, and do not sleep until the task
+finishes. Herdr 0.8.0 exposes user-facing notifications but no coordinator event
+subscription. When supported, the assignment MUST end by showing a bounded
+notification that contains no result payload or secret:
+
+```bash
+herdr notification show "Agent task settled" \
+  --body "Inspect $AGENT_NAME when convenient" --sound done
+```
+
+Use `--sound request` for attention that genuinely needs input. The notification
+is a signal to inspect authoritative lifecycle state; it is not evidence of
+success. Notification delivery is configuration-dependent: a response containing
+`"shown": false` or `"reason": "disabled"` means the path is unavailable and
+MUST NOT be described as a delivered wake-up. Do not use `herdr agent prompt
+<coordinator>` or send keys to the coordinator as a child callback: that injects
+synthetic conversational input and can reorder or obscure real user messages. If
+notifications are unavailable, leave the dedicated task tab visible, disclose
+that result capture resumes on the next active coordinator turn, and do not
+invent polling or another orchestration surface.
+
+A synchronous `herdr agent prompt ... --wait` or `herdr agent wait` remains
+permitted for headless/non-interactive execution and a short, bounded same-turn
+dependency that cannot delay user input. It is prohibited for long-running work
+in an interactive coordinator. Parallel Herdr tabs are capacity within one
+active delivery outcome, not permission to start unrelated product and tooling
+tasks together.
 
 `working`, `blocked`, and `unknown` do not permit cleanup. `idle` or `done` permits
 result capture but does not override an active or paused underlying goal. Default
