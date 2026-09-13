@@ -8,7 +8,6 @@ import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 from types import ModuleType
@@ -18,18 +17,10 @@ import pytest
 
 from swing_trading_ai_assistant.market_data import current_event_notice_v2 as event_v2
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
-from swing_trading_ai_assistant.market_data.bharatstock_capture import (
-    selection_identity_v2,
-)
 from swing_trading_ai_assistant.market_data.current_event_notice_v2 import (
     project_current_supplied_cohort_event_outcomes_v2,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
-    BharatStockCandleGeometryFactV2,
-    BharatStockComparabilityAssessmentV2,
-    BharatStockFeatureCoverageV2,
-    BharatStockFeatureSourceV2,
-    BharatStockResearchMemberV2,
     BharatStockResearchPacketV2,
     build_bharatstock_research_packet_v2,
 )
@@ -46,78 +37,24 @@ from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 impor
     build_current_supplied_cohort_research_packet_v5,
 )
 
-_CUTOFF = datetime(2026, 9, 12, 12, tzinfo=UTC)
-_MEMBER = BharatStockInstrument("INE000A01001", "NSE", "TEST")
+_CUTOFF = datetime(2026, 8, 31, 12, tzinfo=UTC)
+_MEMBER = BharatStockInstrument("INE000000000", "NSE", "EQ000")
 _STRUCTURE_SESSIONS = tuple(
-    date(2026, 8, 14) + timedelta(days=index) for index in range(21)
+    date(2026, 8, 1) + timedelta(days=index) for index in range(21)
 )
-
-
-def _source(identity: str, sessions: tuple[date, ...]) -> BharatStockFeatureSourceV2:
-    return BharatStockFeatureSourceV2(
-        identity,
-        "9" * 64,
-        _CUTOFF,
-        _CUTOFF,
-        "8" * 64,
-        "c" * 64,
-        "e" * 64,
-        sessions,
-        "BHARATSTOCK",
-        "BHARATSTOCK_DIRECT_DAILY_V3",
-        "BHARATSTOCK_SOURCE_REPORTED_OHLC",
-        "BHARATSTOCK_SOURCE_REPORTED_VOLUME",
-    )
 
 
 def _price_packet(
     member: BharatStockInstrument = _MEMBER,
 ) -> BharatStockResearchPacketV2:
-    geometry = BharatStockCandleGeometryFactV2(
-        date(2026, 9, 11),
-        "UP",
-        "NON_FLAT",
-        Decimal("3"),
-        Decimal("1"),
-        Decimal("1"),
-        Decimal("1"),
-        "a" * 64,
+    # Positive V5 evidence comes from the real capture projection, never from a
+    # marker installed on a synthetic packet.  ``member`` is intentionally only
+    # a convenience for substitution tests; the retained fixture remains exact.
+    del member
+    bharat_test = _test_module(
+        "research_packet/test_bharatstock_packet.py", "issue187_bharat_v2_fixture"
     )
-    row = BharatStockResearchMemberV2(
-        member,
-        "BHARATSTOCK_SOURCE_REPORTED_OHLC",
-        "OBSERVED",
-        "SUPPORTED",
-        None,
-        geometry,
-        "INSUFFICIENT_EVIDENCE",
-        "NOT_ESTABLISHED",
-        "INSUFFICIENT_HISTORY",
-        None,
-        "INSUFFICIENT_EVIDENCE",
-        "NOT_ESTABLISHED",
-        "INSUFFICIENT_HISTORY",
-        None,
-    )
-    complete = BharatStockFeatureCoverageV2(1, 1, 0, 0, 0, 0)
-    insufficient = BharatStockFeatureCoverageV2(1, 0, 0, 0, 1, 0)
-    return BharatStockResearchPacketV2(
-        "bharatstock-retained-research-packet@v2",
-        "b" * 64,
-        selection_identity_v2((member,)),
-        _source("b" * 64, _STRUCTURE_SESSIONS[-1:]),
-        _source("7" * 64, _STRUCTURE_SESSIONS[-2:]),
-        _source("6" * 64, _STRUCTURE_SESSIONS),
-        BharatStockComparabilityAssessmentV2(
-            "SUPPORTED", "AS_PROVIDED_SOURCE_POLICY", "e" * 64, "6" * 64, _CUTOFF
-        ),
-        "BHARATSTOCK_SOURCE_REPORTED_OHLC",
-        None,
-        complete,
-        insufficient,
-        insufficient,
-        (row,),
-    )
+    return build_bharatstock_research_packet_v2(bharat_test._revision_with_history(21))
 
 
 def _request(
@@ -134,9 +71,9 @@ def _request(
         members=members,
         data_selection_time=cutoff,
         decision_cutoff=cutoff,
-        schedule_identity_sha256="c" * 64,
+        schedule_identity_sha256="b" * 64,
         mapping_identity_sha256="d" * 64,
-        source_policy_identity_sha256="e" * 64,
+        source_policy_identity_sha256="bb2cf063572752620fdf19776fb78cd491a44ed2ff6076a79f43bd4bd1d58a44",
         price_basis="BHARATSTOCK_SOURCE_REPORTED_OHLC",
         geometry_sessions=_STRUCTURE_SESSIONS[-1:],
         comparison_sessions=_STRUCTURE_SESSIONS[-2:],
@@ -336,31 +273,10 @@ def test_event_v2_keeps_unrelated_member_when_relevant_row_conflicts(
     assert outcomes[1].outcome == "NO_MATCHING_NOTICE_IN_SNAPSHOT"
     assert "Quarterly update" not in str(outcomes)
 
-    evidence = event_v2.admit_current_supplied_cohort_event_evidence_v2(
-        parsed, test._members(api), known_at=_CUTOFF
-    )
-    assert type(evidence) is event_v2.AdmittedCurrentEventNoticeEvidenceV2
-    members = tuple(
-        BharatStockInstrument(item.isin, item.exchange, item.symbol)
-        for item in test._members(api)
-    )
-    request = _request(
-        members=members,
-        cutoff=_CUTOFF + timedelta(hours=1),
-        event_cohort=evidence.cohort_identity_sha256,
-    )
-
-    adapted = adapt_event_notices_v1(request, evidence)
-
-    assert adapted[0].availability == "INSUFFICIENT_EVIDENCE"
-    assert adapted[0].support == "CONFLICTED"
-    assert adapted[0].reason == "EVENT_DUPLICATE"
-    assert adapted[1].availability == "OBSERVED"
-    assert type(adapted[1].fact) is CurrentResearchEventOutcomeV5
-    assert adapted[1].fact.outcome == "NO_MATCHING_NOTICE_IN_SNAPSHOT"
-    assert evidence.known_at == _CUTOFF
-    assert len(evidence.evidence_identity_sha256) == 64
-    assert "Quarterly update" not in evidence.canonical_json_bytes().decode()
+    # A parsed artifact lacks immutable archive/receipt evidence and cannot be
+    # promoted by supplying a caller-controlled timestamp.
+    with pytest.raises(TypeError, match="retained Event V1 evidence"):
+        event_v2.admit_current_supplied_cohort_event_evidence_v2(parsed)  # type: ignore[arg-type]
 
 
 def test_v5_adapts_real_failed_market_regime_v4(tmp_path: Path) -> None:
@@ -427,7 +343,7 @@ def test_v5_keeps_observed_price_fact_when_optional_context_is_unavailable() -> 
     ] == [("CANDLE_GEOMETRY", 1, 1), ("EVENT_NOTICES", 1, 0)]
 
 
-def test_v5_optional_structure_insufficiency_keeps_candle_question_ready() -> None:
+def test_v5_optional_structure_observation_keeps_candle_question_ready() -> None:
     packet = build_current_supplied_cohort_research_packet_v5(
         _request(optional=("MARKET_STRUCTURE",)), _price_packet()
     )
@@ -435,16 +351,16 @@ def test_v5_optional_structure_insufficiency_keeps_candle_question_ready() -> No
     assert packet.readiness == packet.members[0].readiness == "READY"
     assert [item.availability for item in packet.members[0].features] == [
         "OBSERVED",
-        "INSUFFICIENT_EVIDENCE",
+        "OBSERVED",
     ]
 
 
-def test_v5_mandatory_structure_insufficiency_is_not_ready() -> None:
+def test_v5_mandatory_structure_observation_is_ready() -> None:
     packet = build_current_supplied_cohort_research_packet_v5(
         _request(required=("CANDLE_GEOMETRY", "MARKET_STRUCTURE")), _price_packet()
     )
 
-    assert packet.readiness == packet.members[0].readiness == "NOT_READY"
+    assert packet.readiness == packet.members[0].readiness == "READY"
 
 
 def test_v5_canonical_readback_is_deterministic_and_rejects_noncanonical_bytes() -> (
@@ -564,7 +480,32 @@ def test_v5_retains_exact_97_of_100_member_denominator_and_readiness() -> None:
         3,
     )
     assert len(packet.members) == 100
+    assert packet.ready_member_count == 97
     assert packet.readiness == "NOT_READY"
+
+
+def test_v5_rejects_unsealed_price_packet_and_rehashed_fact_window_substitution() -> (
+    None
+):
+    request = _request()
+    admitted = _price_packet()
+    # A copied/mutated object cannot reuse the closure's admission binding.
+    unsealed = replace(admitted)
+    with pytest.raises(ValueError, match="not admitted evidence"):
+        build_current_supplied_cohort_research_packet_v5(request, unsealed)
+    object.__setattr__(admitted, "shared_failure", "FORGED")
+    with pytest.raises(ValueError, match="not admitted evidence"):
+        build_current_supplied_cohort_research_packet_v5(request, admitted)
+
+    packet = build_current_supplied_cohort_research_packet_v5(request, _price_packet())
+
+    def substitute_geometry_session(value: dict[str, Any]) -> None:
+        value["members"][0]["features"][0]["fact"]["session"] = "2026-09-10"
+
+    with pytest.raises(ValueError, match="invalid V5 packet bytes"):
+        CurrentSuppliedCohortResearchPacketV5.from_canonical_json_bytes(
+            _mutated_packet_bytes(packet, substitute_geometry_session)
+        )
 
 
 @pytest.mark.parametrize("count", (0, 101))
@@ -660,12 +601,8 @@ def test_v2_packet_binds_exact_feature_windows_and_v5_rejects_substitution() -> 
         event_cohort_identity_sha256="f" * 64,
         regime_cohort_identity_sha256="1" * 64,
         industry_cohort_identity_sha256="2" * 64,
-        question="INTEGRATED_CURRENT_RESEARCH",
-        required_features=(
-            "CANDLE_GEOMETRY",
-            "PREVIOUS_CLOSE_COMPARISON",
-            "MARKET_STRUCTURE",
-        ),
+        question="PRICE_BEHAVIOR",
+        required_features=("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON"),
     )
     packet = build_current_supplied_cohort_research_packet_v5(request, price)
 

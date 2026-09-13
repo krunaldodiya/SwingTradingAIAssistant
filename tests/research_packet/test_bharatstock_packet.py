@@ -362,22 +362,12 @@ def test_v2_comparability_conflict_blocks_only_cross_session_features() -> None:
         _CUTOFF,
     )
 
-    packet = build_bharatstock_research_packet_v2(
-        revision, comparability_assessment=assessment
-    )
-    member = packet.members[0]
-
-    assert packet.comparability_assessment == assessment
-    assert member.geometry_availability == "OBSERVED"
-    assert member.geometry is not None
-    assert member.comparison_availability == "DEPENDENCY_BLOCKED"
-    assert member.comparison_support == "CONFLICTED"
-    assert member.comparison_reason == "CROSS_SESSION_COMPARABILITY_CONFLICT"
-    assert member.comparison is None
-    assert member.structure_availability == "DEPENDENCY_BLOCKED"
-    assert member.structure_support == "CONFLICTED"
-    assert member.structure_reason == "CROSS_SESSION_COMPARABILITY_CONFLICT"
-    assert member.structure is None
+    # A caller cannot force a conflict (or forged SUPPORTED result) over the
+    # producer-derived semantic overlap assessment.
+    with pytest.raises(ValueError, match="comparability assessment substitution"):
+        build_bharatstock_research_packet_v2(
+            revision, comparability_assessment=assessment
+        )
 
 
 def test_v2_one_bar_geometry_does_not_reinterpret_v1() -> None:

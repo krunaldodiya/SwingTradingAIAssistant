@@ -8,6 +8,7 @@ without exposing notice bodies or private rows.
 from __future__ import annotations
 
 import json
+import weakref
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime
 from hashlib import sha256
@@ -17,6 +18,7 @@ from .current_event_notice import (
     CurrentEventCohortMemberV1,
     CurrentEventNoticeFailureV1,
     ParsedCurrentEventNoticeArtifactV1,
+    RetainedCurrentEventNoticeSnapshotV1,
     _identity,  # pyright: ignore[reportPrivateUsage]
     _member_result,  # pyright: ignore[reportPrivateUsage]
     _projection_failure,  # pyright: ignore[reportPrivateUsage]
@@ -49,13 +51,15 @@ class CurrentEventNoticeMemberOutcomeV2:
             raise ValueError("invalid Event V2 member outcome")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class AdmittedCurrentEventNoticeEvidenceV2:
     """Redacted projection with a trusted, non-backdated admission time."""
 
     contract_version: Literal["current-event-notice-evidence@v2"]
     schema_identity_sha256: str
     artifact_identity_sha256: str
+    archive_identity_sha256: str
+    receipt_identity_sha256: str
     cohort_identity_sha256: str
     known_at: datetime
     members: tuple[CurrentEventNoticeMemberOutcomeV2, ...]
@@ -71,6 +75,8 @@ class AdmittedCurrentEventNoticeEvidenceV2:
                 for value in (
                     self.schema_identity_sha256,
                     self.artifact_identity_sha256,
+                    self.archive_identity_sha256,
+                    self.receipt_identity_sha256,
                     self.cohort_identity_sha256,
                 )
             )
@@ -102,6 +108,45 @@ class AdmittedCurrentEventNoticeEvidenceV2:
             ).encode()
             + b"\n"
         )
+
+
+# Event V2 projections are capabilities minted by this module, not a property of
+# a caller-constructed dataclass.  The weak registry is removed with its object;
+# copying an object or changing its content cannot retain the admission.
+_EVENT_ADMISSIONS: dict[
+    int, tuple[weakref.ReferenceType[AdmittedCurrentEventNoticeEvidenceV2], str]
+] = {}
+
+
+def _admit(evidence: AdmittedCurrentEventNoticeEvidenceV2) -> None:
+    evidence_id = id(evidence)
+
+    def discard(
+        reference: weakref.ReferenceType[AdmittedCurrentEventNoticeEvidenceV2],
+    ) -> None:
+        entry = _EVENT_ADMISSIONS.get(evidence_id)
+        if entry is not None and entry[0] is reference:
+            _EVENT_ADMISSIONS.pop(evidence_id, None)
+
+    _EVENT_ADMISSIONS[evidence_id] = (
+        weakref.ref(evidence, discard),
+        evidence.evidence_identity_sha256,
+    )
+
+
+def validate_admitted_current_event_notice_evidence_v2(
+    evidence: object,
+) -> AdmittedCurrentEventNoticeEvidenceV2:
+    if type(evidence) is not AdmittedCurrentEventNoticeEvidenceV2:
+        raise ValueError("Event V2 evidence is not admitted")
+    entry = _EVENT_ADMISSIONS.get(id(evidence))
+    if (
+        entry is None
+        or entry[0]() is not evidence
+        or entry[1] != evidence.evidence_identity_sha256
+    ):
+        raise ValueError("Event V2 evidence is not admitted")
+    return evidence
 
 
 def _member_value(member: CurrentEventCohortMemberV1) -> dict[str, object]:
@@ -191,31 +236,42 @@ def project_current_supplied_cohort_event_outcomes_v2(
 
 
 def admit_current_supplied_cohort_event_evidence_v2(
-    parsed: ParsedCurrentEventNoticeArtifactV1,
-    members: tuple[CurrentEventCohortMemberV1, ...],
-    *,
-    known_at: datetime,
-) -> AdmittedCurrentEventNoticeEvidenceV2 | CurrentEventNoticeFailureV1:
-    """Bind redacted V2 outcomes to the caller's retained evidence time.
+    retained: RetainedCurrentEventNoticeSnapshotV1,
+) -> AdmittedCurrentEventNoticeEvidenceV2:
+    """Project only owner-retained evidence; never accept a caller clock.
 
-    This boundary deliberately refuses to mint a fresh clock timestamp for an
-    older parsed artifact. Callers must carry forward the immutable retention
-    time established by their evidence owner.
+    A parsed CSV has no immutable publication receipt and is therefore not
+    current evidence. The retained V1 object is the sole admission boundary
+    for this additive projection and supplies its original known-at time.
     """
-    if (
-        type(known_at) is not datetime
-        or known_at.tzinfo is None
-        or known_at.utcoffset() != UTC.utcoffset(None)
-    ):
-        raise ValueError("invalid Event V2 known_at")
-    projected = project_current_supplied_cohort_event_outcomes_v2(parsed, members)
-    if isinstance(projected, CurrentEventNoticeFailureV1):
-        return projected
-    return AdmittedCurrentEventNoticeEvidenceV2(
-        "current-event-notice-evidence@v2",
-        parsed.schema_identity_sha256,
-        parsed.artifact_identity_sha256,
-        _event_cohort_identity(members),
-        known_at,
-        projected,
+    if type(retained) is not RetainedCurrentEventNoticeSnapshotV1:
+        raise TypeError("retained Event V1 evidence is required")
+    outcomes = tuple(
+        CurrentEventNoticeMemberOutcomeV2(
+            item.member,
+            "OBSERVED",
+            "SUPPORTED",
+            None,
+            item.outcome,
+            tuple(
+                CurrentEventNoticeRedactedObservationV2(
+                    notice.observation_identity_sha256,
+                    notice.deduplication_identity_sha256,
+                )
+                for notice in item.notices
+            ),
+        )
+        for item in retained.members
     )
+    evidence = AdmittedCurrentEventNoticeEvidenceV2(
+        "current-event-notice-evidence@v2",
+        retained.schema_identity_sha256,
+        retained.artifact_identity_sha256,
+        retained.archive_identity_sha256,
+        retained.receipt_identity_sha256,
+        retained.cohort_identity_sha256,
+        retained.known_at,
+        outcomes,
+    )
+    _admit(evidence)
+    return evidence

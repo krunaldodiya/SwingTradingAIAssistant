@@ -26,6 +26,9 @@ from swing_trading_ai_assistant.market_data import catalog as catalog_api
 from swing_trading_ai_assistant.market_data import (
     current_stock_research as workflow,
 )
+from swing_trading_ai_assistant.market_data import (
+    current_stock_research_v2 as workflow_v2,
+)
 from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
@@ -47,6 +50,7 @@ from swing_trading_ai_assistant.market_data.current_stock_research import (
 )
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
+    research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
@@ -183,6 +187,7 @@ class _Prices:
         self.failure: Exception | None = None
         self.after_history: Callable[[], None] | None = None
         self.missing_last = False
+        self.full_history = False
 
     def history(
         self,
@@ -210,7 +215,15 @@ class _Prices:
                     adjusted_close=None,
                     adjustment_factor=None,
                 )
-                for day in (start, end)
+                for day in (
+                    tuple(
+                        start + timedelta(days=index)
+                        for index in range((end - start).days + 1)
+                        if (start + timedelta(days=index)).weekday() < 5
+                    )
+                    if self.full_history
+                    else tuple(dict.fromkeys((start, end)))
+                )
                 if not self.missing_last or day != end
             ),
             retrieved_at=self.clock.now(),
@@ -313,6 +326,232 @@ def test_v2_cli_is_explicit_and_preserves_unversioned_v1_admission(
         == 2
     )
     assert capsys.readouterr().err == "request_invalid\n"
+
+
+def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
+    tmp_path: Path,
+) -> None:
+    expected = {
+        "LATEST_COMPLETED_CANDLE": "READY",
+        "PRICE_BEHAVIOR": "READY",
+        "CURRENT_STRUCTURE": "NOT_READY",
+        "INTEGRATED_CURRENT_RESEARCH": "NOT_READY",
+    }
+    for question, status in expected.items():
+        clock, sources = _Clock(), _OfficialSources()
+        root = tmp_path / question
+        root.mkdir(mode=0o700)
+        result = research_current_stock_v2(
+            "PNB",
+            root,
+            question=cast(
+                Literal[
+                    "LATEST_COMPLETED_CANDLE",
+                    "PRICE_BEHAVIOR",
+                    "CURRENT_STRUCTURE",
+                    "INTEGRATED_CURRENT_RESEARCH",
+                ],
+                question,
+            ),
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, _Prices(clock)),
+        )
+        assert result.status == status, (result.stage, result.code)
+        assert result.packet is not None
+        assert result.data_selection_time == _NOW
+        assert result.evidence_known_at == _NOW
+
+
+def test_v2_current_structure_with_21_official_sessions_is_ready(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "structure-ready"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="CURRENT_STRUCTURE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "READY", (result.stage, result.code)
+    assert result.packet is not None
+    structure = result.packet.members[0].features[0]
+    assert structure.feature == "MARKET_STRUCTURE"
+    assert structure.availability == "OBSERVED"
+    # CURRENT_STRUCTURE does not acquire or require an unrequested two-session
+    # comparison capture.
+    assert len(prices.calls) == 1
+
+
+def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "local-two-session-failure"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    original = workflow_v2._capture_window
+
+    def fail_two_sessions(
+        *args: object, **kwargs: object
+    ) -> capture_api.CaptureResultV2:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        if len(request.sessions) == 2:
+            return capture_api.CaptureResultV2(
+                "INSUFFICIENT_EVIDENCE", None, "MISSING_HISTORY"
+            )
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", fail_two_sessions)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    features = result.packet.members[0].features
+    assert [item.availability for item in features[:3]] == [
+        "OBSERVED",
+        "INSUFFICIENT_EVIDENCE",
+        "OBSERVED",
+    ]
+    assert features[1].provenance is not None
+    assert features[1].provenance.sessions == ()
+
+
+def test_v2_storage_failure_after_first_window_is_publication_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "storage-failure"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    original = workflow_v2._capture_window
+
+    def fail_second_window(
+        *args: object, **kwargs: object
+    ) -> capture_api.CaptureResultV2:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        if len(request.sessions) == 2:
+            return capture_api.CaptureResultV2(
+                "STORE_UNAVAILABLE", None, "EVIDENCE_CONFLICT"
+            )
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", fail_second_window)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "UNAVAILABLE"
+    assert result.stage == "storage"
+    assert result.packet is None
+
+
+def test_v2_advancing_clock_retains_invocation_selection_time(tmp_path: Path) -> None:
+    root = tmp_path / "advancing"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.after_history = lambda: setattr(clock, "value", _NOW + timedelta(minutes=1))
+
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "READY"
+    assert result.data_selection_time == _NOW
+    assert result.evidence_known_at == _NOW + timedelta(minutes=1)
+
+
+def test_v2_cli_runs_each_closed_question_against_the_real_service(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for question in (
+        "LATEST_COMPLETED_CANDLE",
+        "PRICE_BEHAVIOR",
+        "CURRENT_STRUCTURE",
+        "INTEGRATED_CURRENT_RESEARCH",
+    ):
+        root = tmp_path / question
+        root.mkdir(mode=0o700)
+        clock, sources = _Clock(), _OfficialSources()
+
+        def v2(
+            symbol: str,
+            storage_root: Path,
+            *,
+            question: Literal[
+                "LATEST_COMPLETED_CANDLE",
+                "PRICE_BEHAVIOR",
+                "CURRENT_STRUCTURE",
+                "INTEGRATED_CURRENT_RESEARCH",
+            ],
+            refresh: bool = False,
+            _root: Path = root,
+            _clock: _Clock = clock,
+            _sources: _OfficialSources = sources,
+        ) -> CurrentStockResearchResultV2:
+            del storage_root
+            return research_current_stock_v2(
+                symbol,
+                _root,
+                question=question,
+                refresh=refresh,
+                clock=_clock,
+                calendar_transport=_sources,
+                snapshot_transport=_sources,
+                price_client=cast(BharatStockClient, _Prices(_clock)),
+            )
+
+        assert main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(root),
+                "--contract-version",
+                "v2",
+                "--question",
+                question,
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=v2,
+        ) == (0 if question in {"LATEST_COMPLETED_CANDLE", "PRICE_BEHAVIOR"} else 1)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["question"] == question
+        assert payload["status"] in {"READY", "NOT_READY"}
 
 
 def test_cold_research_computes_two_completed_session_fact_and_sanitized_cli(

@@ -98,6 +98,23 @@ event context are not acquired by this command; #188, #189 and #190 retain their
 independent price-context, refresh and efficiency scope. This does not claim a
 live PNB result, completed #172, new analytical modules or better trading returns.
 
+Use V2 only with an explicit closed question:
+
+```bash
+market-data research-current --symbol PNB \
+  --storage-root /absolute/private/research-root \
+  --contract-version v2 --question PRICE_BEHAVIOR --output json
+```
+
+`LATEST_COMPLETED_CANDLE` requires one completed official session;
+`PRICE_BEHAVIOR` requires geometry plus two consecutive completed official
+sessions; `CURRENT_STRUCTURE` requires exactly 21 completed official sessions;
+and `INTEGRATED_CURRENT_RESEARCH` requires all of those price facts plus
+independently retained Event, Market Regime, and Industry evidence. Missing
+context or a local long-window failure makes only its dependent question/fact
+not ready. V2 emits readiness facts, not a recommendation; it preserves the
+invocation selection time separately from later evidence acquisition time.
+
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:
 

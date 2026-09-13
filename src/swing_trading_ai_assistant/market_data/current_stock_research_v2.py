@@ -28,7 +28,7 @@ from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 impor
 from . import capture_forward_adjusted_ohlcv as private_store
 from . import current_stock_research as legacy
 from .bharatstock import BharatStockClient
-from .bharatstock_capture import CaptureRequestV2, CaptureRevisionV2
+from .bharatstock_capture import CaptureRequestV2, CaptureResultV2
 from .catalog import CatalogError
 from .current_evidence_acquisition import (
     BoundedOfficialHttpSessionV1,
@@ -55,7 +55,9 @@ from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
 _IST: Final = ZoneInfo("Asia/Kolkata")
-_LOOKBACK_DAYS: Final = 64
+# The shared official-calendar admission boundary permits at most 32 calendar
+# days, which still contains the required 21 completed weekday sessions.
+_LOOKBACK_DAYS: Final = 32
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -81,6 +83,9 @@ _FEATURES: Final = (
     "MARKET_REGIME",
     "INDUSTRY_PARTICIPATION",
 )
+# Closed public profiles deliberately request only the facts each question needs.
+# Context facts are not silently substituted as optional evidence for a narrow price
+# question, and therefore do not force acquisition of unrelated price windows.
 _REQUIRED: Final[dict[QuestionV2, tuple[str, ...]]] = {
     "LATEST_COMPLETED_CANDLE": ("CANDLE_GEOMETRY",),
     "PRICE_BEHAVIOR": ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON"),
@@ -102,6 +107,7 @@ class CurrentStockResearchResultV2:
     runtime_code_identity_sha256: str
     packet: CurrentSuppliedCohortResearchPacketV5 | None
     limitations: tuple[str, ...]
+    evidence_known_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -125,6 +131,16 @@ class CurrentStockResearchResultV2:
                 item not in "0123456789abcdef"
                 for item in self.runtime_code_identity_sha256
             )
+            or (
+                self.evidence_known_at is not None
+                and (
+                    type(self.evidence_known_at) is not datetime
+                    or self.evidence_known_at.tzinfo is None
+                    or self.evidence_known_at < self.data_selection_time
+                    or self.evidence_known_at > self.acquisition_deadline
+                )
+            )
+            or (self.packet is not None and self.evidence_known_at is None)
             or type(self.limitations) is not tuple
             or not self.limitations
             or any(type(item) is not str or not item for item in self.limitations)
@@ -147,6 +163,10 @@ class CurrentStockResearchResultV2:
         object.__setattr__(
             self, "acquisition_deadline", self.acquisition_deadline.astimezone(UTC)
         )
+        if self.evidence_known_at is not None:
+            object.__setattr__(
+                self, "evidence_known_at", self.evidence_known_at.astimezone(UTC)
+            )
 
     def canonical_json_bytes(self) -> bytes:
         return _canonical(self)
@@ -261,7 +281,7 @@ def _capture_window(
     price_client: BharatStockClient | None,
     *,
     refresh: bool,
-) -> CaptureRevisionV2 | None:
+) -> CaptureResultV2:
     result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
         request,
         root,
@@ -271,7 +291,7 @@ def _capture_window(
         refresh=refresh,
         prior=None,
     )
-    return result.revision
+    return result
 
 
 def research_current_stock_v2(
@@ -392,10 +412,11 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 )
                 for count in window_sizes
             )
-            revisions: list[CaptureRevisionV2] = []
-            for request in requests:
+            captures: dict[int, CaptureResultV2] = {}
+            shared_stop: str | None = None
+            for count, request in zip(window_sizes, requests, strict=True):
                 window.ensure_live()
-                revision = _capture_window(
+                capture = _capture_window(
                     request,
                     root,
                     lease,
@@ -403,26 +424,90 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     price_client,
                     refresh=refresh,
                 )
-                if revision is None:
+                captures[count] = capture
+                revision = capture.revision
+                # Store/root authority failures are shared even when capture
+                # cannot mint a revision; later provider effects are forbidden.
+                if capture.code == "STORE_UNAVAILABLE":
+                    # Loss of storage authority makes publication unsafe even
+                    # when an earlier feature was admitted.  Never compose or
+                    # expose a V5 packet after this terminal boundary.
                     return _terminal(
                         symbol,
                         question,
                         window,
                         runtime,
-                        "provider",
-                        "PRICE_EVIDENCE_UNAVAILABLE",
-                        insufficient=True,
+                        "storage",
+                        capture.reason or capture.code,
                     )
-                revisions.append(revision)
-            by_size = dict(zip(window_sizes, revisions, strict=True))
-            primary = by_size[max(window_sizes)]
+                if revision is not None and revision.shared_failure is not None:
+                    shared_stop = revision.shared_failure
+                    break
+            admitted = {
+                count: capture.revision
+                for count, capture in captures.items()
+                if capture.revision is not None
+            }
+            if not admitted:
+                failed = next(iter(captures.values()))
+                return _terminal(
+                    symbol,
+                    question,
+                    window,
+                    runtime,
+                    "storage" if failed.code == "STORE_UNAVAILABLE" else "provider",
+                    failed.reason or failed.code,
+                    insufficient=failed.code == "INSUFFICIENT_EVIDENCE",
+                )
+            # A shared stop preserves already admitted independent facts, but no
+            # question can become ready because every later requested slot is
+            # retained as NOT_ATTEMPTED/insufficient by the V2 projection.
+            primary = admitted.get(1) or admitted.get(2) or admitted.get(21)
+            if primary is None:
+                raise RuntimeError("admitted capture selection is unexpectedly empty")
+            comparison_capture = captures.get(2)
+            structure_capture = captures.get(21)
             price_packet = build_bharatstock_research_packet_v2(
-                by_size.get(1, primary),
-                comparison_revision=by_size.get(2, primary),
-                structure_revision=by_size.get(21, primary),
+                primary,
+                comparison_revision=(
+                    comparison_capture.revision
+                    if comparison_capture is not None
+                    and comparison_capture.revision is not None
+                    else primary
+                ),
+                structure_revision=(
+                    structure_capture.revision
+                    if structure_capture is not None
+                    and structure_capture.revision is not None
+                    else primary
+                ),
+                comparison_failure=(
+                    shared_stop
+                    if comparison_capture is None and shared_stop is not None
+                    else None
+                    if comparison_capture is None
+                    or comparison_capture.revision is not None
+                    else comparison_capture.reason or comparison_capture.code
+                ),
+                structure_failure=(
+                    shared_stop
+                    if structure_capture is None and shared_stop is not None
+                    else None
+                    if structure_capture is None
+                    or structure_capture.revision is not None
+                    else structure_capture.reason or structure_capture.code
+                ),
+                shared_failure=shared_stop,
             )
-            known_at = window.now()
-            optional = tuple(item for item in _FEATURES if item not in required)
+            known_at = max(
+                source.observed_at
+                for source in (
+                    price_packet.geometry_source,
+                    price_packet.comparison_source,
+                    price_packet.structure_source,
+                )
+            )
+            optional: tuple[str, ...] = ()
             final_request = primary.request
             cohort_identity = _digest(
                 {
@@ -442,11 +527,15 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 comparison_sessions=(
                     price_packet.comparison_source.sessions
                     if "PREVIOUS_CLOSE_COMPARISON" in required
+                    and comparison_capture is not None
+                    and comparison_capture.revision is not None
                     else ()
                 ),
                 structure_sessions=(
                     price_packet.structure_source.sessions
                     if "MARKET_STRUCTURE" in required
+                    and structure_capture is not None
+                    and structure_capture.revision is not None
                     else ()
                 ),
                 event_cohort_identity_sha256=cohort_identity,
@@ -469,11 +558,12 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 else "QUESTION_NOT_READY",
                 question,
                 symbol,
-                known_at,
+                selection,
                 window.deadline,
                 runtime,
                 packet,
                 _LIMITATIONS,
+                known_at,
             )
     except (
         legacy.CurrentStockResearchFailure,
