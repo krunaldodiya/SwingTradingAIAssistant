@@ -5,14 +5,21 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-from datetime import UTC, date, datetime
+from dataclasses import fields
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from swing_trading_ai_assistant.market_data import current_research_binding_v2
+from swing_trading_ai_assistant.market_data.adjusted_daily.service_v3 import (
+    mapping_identity_v3,
+)
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
     AdmittedCurrentResearchBindingV2,
+    CurrentResearchMappingMemberV2,
+    CurrentResearchMappingProjectionV2,
     resolve_current_research_binding_v2,
     validate_current_research_binding_v2,
 )
@@ -94,6 +101,160 @@ def test_mapping_successor_revalidates_retained_snapshot_and_exact_fields(
         member.mapping_valid_from == member.mapping_valid_through == date(2026, 8, 26)
     )
     assert member.discovery_retrieved_at == datetime(2026, 8, 26, 8, tzinfo=UTC)
+
+
+def _same_pass_member(
+    member: CurrentResearchMappingMemberV2,
+) -> CurrentResearchMappingMemberV2:
+    return CurrentResearchMappingMemberV2(
+        member.isin,
+        member.exchange,
+        member.effective_symbol,
+        member.instrument_type,
+        member.segment,
+        member.valid_from,
+        member.valid_through,
+        member.provider_symbol,
+        member.mapping_version,
+        member.mapping_valid_from,
+        member.mapping_valid_through,
+        mapping_identity_v3(
+            isin=member.isin,
+            exchange=member.exchange,
+            instrument_type=member.instrument_type,
+            segment=member.segment,
+            effective_symbol=member.effective_symbol,
+            provider_symbol=member.provider_symbol,
+            mapping_valid_from=member.mapping_valid_from,
+            mapping_valid_through=member.mapping_valid_through,
+        ),
+        member.provider_mapping_revision,
+        None,
+        None,
+        None,
+        ("RAW_MAPPING_MISSING",),
+    )
+
+
+def _fully_rehashed_projection(
+    projection: CurrentResearchMappingProjectionV2,
+    member: CurrentResearchMappingMemberV2,
+) -> CurrentResearchMappingProjectionV2:
+    values = {
+        item.name: getattr(projection, item.name)
+        for item in fields(CurrentResearchMappingProjectionV2)
+    }
+    values["members"] = (member,)
+    values["mapping_projection_identity_sha256"] = current_research_binding_v2._digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            name: value
+            for name, value in values.items()
+            if name != "mapping_projection_identity_sha256"
+        }
+    )
+    return CurrentResearchMappingProjectionV2(**values)
+
+
+@pytest.mark.parametrize(
+    "origin", ("RETAINED_INSTRUMENT_SNAPSHOT", "RETAINED_SAME_PASS_CONTEXT")
+)
+@pytest.mark.parametrize("interval", ("canonical", "provider"))
+def test_mapping_projection_rejects_fully_rehashed_selected_date_interval_substitution(
+    tmp_path: Path, origin: str, interval: str
+) -> None:
+    root = tmp_path / "mapping-interval-negative"
+    root.mkdir(mode=0o700)
+    snapshot = validate_current_research_binding_v2(_binding(root))
+    if origin == "RETAINED_INSTRUMENT_SNAPSHOT":
+        projection = snapshot
+        member = snapshot.members[0]
+    else:
+        base = _same_pass_member(snapshot.members[0])
+        values = {
+            item.name: getattr(snapshot, item.name)
+            for item in fields(CurrentResearchMappingProjectionV2)
+        }
+        values.update(
+            origin=origin,
+            members=(base,),
+            context_identity_sha256="b" * 64,
+            context_object_sha256="c" * 64,
+            context_receipt_identity_sha256="d" * 64,
+            completion_marker_identity_sha256="e" * 64,
+            retained_context_identity_sha256="f" * 64,
+            canonical_cohort_identity_sha256=current_research_binding_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                (base,)
+            ),
+        )
+        values["mapping_projection_identity_sha256"] = (
+            current_research_binding_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    name: value
+                    for name, value in values.items()
+                    if name != "mapping_projection_identity_sha256"
+                }
+            )
+        )
+        projection = CurrentResearchMappingProjectionV2(**values)
+        member = base
+    selected = projection.selected_at.date()
+    if interval == "canonical":
+        substituted = CurrentResearchMappingMemberV2(
+            member.isin,
+            member.exchange,
+            member.effective_symbol,
+            member.instrument_type,
+            member.segment,
+            selected + timedelta(days=1),
+            selected + timedelta(days=2),
+            member.provider_symbol,
+            member.mapping_version,
+            member.mapping_valid_from,
+            member.mapping_valid_through,
+            member.mapping_identity_sha256,
+            member.provider_mapping_revision,
+            member.discovery_source,
+            member.discovery_observation_identity_sha256,
+            member.discovery_retrieved_at,
+            member.discovery_failure_reasons,
+        )
+    else:
+        mapping_valid_from = selected + timedelta(days=1)
+        mapping_identity = (
+            member.mapping_identity_sha256
+            if origin == "RETAINED_INSTRUMENT_SNAPSHOT"
+            else mapping_identity_v3(
+                isin=member.isin,
+                exchange=member.exchange,
+                instrument_type=member.instrument_type,
+                segment=member.segment,
+                effective_symbol=member.effective_symbol,
+                provider_symbol=member.provider_symbol,
+                mapping_valid_from=mapping_valid_from,
+                mapping_valid_through=None,
+            )
+        )
+        substituted = CurrentResearchMappingMemberV2(
+            member.isin,
+            member.exchange,
+            member.effective_symbol,
+            member.instrument_type,
+            member.segment,
+            member.valid_from,
+            member.valid_through,
+            member.provider_symbol,
+            member.mapping_version,
+            mapping_valid_from,
+            None,
+            mapping_identity,
+            member.provider_mapping_revision,
+            member.discovery_source,
+            member.discovery_observation_identity_sha256,
+            member.discovery_retrieved_at,
+            member.discovery_failure_reasons,
+        )
+    with pytest.raises(ValueError, match="mapping projection"):
+        _fully_rehashed_projection(projection, substituted)
 
 
 def test_mapping_binding_rejects_constructed_copied_and_mutated_values(

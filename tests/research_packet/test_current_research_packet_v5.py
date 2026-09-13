@@ -8,8 +8,8 @@ import json
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,11 +28,13 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.research_packet import (
+    bharatstock_v2,
     current_supplied_cohort_v5,
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
+    BharatStockFeatureSourceV2,
     build_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 import (
@@ -61,6 +63,95 @@ def test_v5_request_has_frozen_schedule_and_time_bounds() -> None:
             request.schedule_source,
             request.schedule_source_release,
             request.schedule_identity_sha256,
+        )
+
+
+def _fully_rehashed_price_source(
+    schedule_evidence_sha256: str,
+    schedule_source: str,
+    schedule_source_release: str,
+) -> BharatStockFeatureSourceV2:
+    source_identity = bharatstock_v2._digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            "provider_source": "bharatstock-api@v1",
+            "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+            "revision_identity_sha256": "d" * 64,
+            "schedule_evidence_sha256": schedule_evidence_sha256,
+            "schedule_source": schedule_source,
+            "schedule_source_release": schedule_source_release,
+            "price_basis": "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+            "volume_basis": "SOURCE_REPORTED",
+        }
+    )
+    values = {
+        "feature": "CANDLE_GEOMETRY",
+        "capture_contract_version": "bharatstock-capture@v3",
+        "capture_schema_identity_sha256": "a" * 64,
+        "capture_configuration_identity_sha256": "b" * 64,
+        "capture_runtime_code_identity_sha256": "c" * 64,
+        "capture_request_identity_sha256": "e" * 64,
+        "capture_revision_identity_sha256": "d" * 64,
+        "projection_contract_version": "bharatstock-retained-research-packet@v2",
+        "projection_schema_identity_sha256": bharatstock_v2._SCHEMA_IDENTITY,  # pyright: ignore[reportPrivateUsage]
+        "projection_configuration_identity_sha256": bharatstock_v2._CONFIGURATION_IDENTITY,  # pyright: ignore[reportPrivateUsage]
+        "projection_runtime_code_identity_sha256": "1" * 64,
+        "schedule_evidence_sha256": schedule_evidence_sha256,
+        "schedule_source": schedule_source,
+        "schedule_source_release": schedule_source_release,
+        "schedule_identity_sha256": "2" * 64,
+        "selection_identity_sha256": "3" * 64,
+        "requested_sessions": (date(2026, 8, 25),),
+        "admitted_sessions": (date(2026, 8, 25),),
+        "provider_source": "bharatstock-api@v1",
+        "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+        "price_basis": "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+        "volume_basis": "SOURCE_REPORTED",
+        "known_at": datetime(2026, 8, 26, 9, tzinfo=UTC),
+        "decision_cutoff": datetime(2026, 8, 26, 9, 5, tzinfo=UTC),
+        "source_identity_sha256": source_identity,
+    }
+    return BharatStockFeatureSourceV2(
+        **cast(Any, values),
+        source_projection_identity_sha256=bharatstock_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            values
+        ),
+    )
+
+
+def test_v5_schedule_provenance_rejects_fully_rehashed_price_substitutions() -> None:
+    schedule_evidence = "4" * 64
+    schedule_source = "nse-upstox-composed-calendar"
+    schedule_release = "composed-calendar@v1=" + "5" * 64
+    request = CurrentResearchV5Request(
+        datetime(2026, 8, 26, 9, tzinfo=UTC),
+        datetime(2026, 8, 26, 9, 5, tzinfo=UTC),
+        schedule_evidence,
+        schedule_source,
+        schedule_release,
+        "2" * 64,
+    )
+    context = SimpleNamespace(
+        schedule_evidence_sha256=schedule_evidence,
+        schedule_source=schedule_source,
+        schedule_source_release=schedule_release,
+    )
+    assert current_supplied_cohort_v5._schedule_provenance_is_valid_v5(  # pyright: ignore[reportPrivateUsage]
+        (
+            _fully_rehashed_price_source(
+                schedule_evidence, schedule_source, schedule_release
+            ),
+        ),
+        request,
+        context,
+    )
+    for evidence, source, release in (
+        ("6" * 64, schedule_source, schedule_release),
+        (schedule_evidence, schedule_source, "composed-calendar@v1=" + "6" * 64),
+    ):
+        assert not current_supplied_cohort_v5._schedule_provenance_is_valid_v5(  # pyright: ignore[reportPrivateUsage]
+            (_fully_rehashed_price_source(evidence, source, release),),
+            request,
+            context,
         )
 
 
@@ -383,6 +474,37 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         ).hexdigest()
 
+    # Fully rehash the outer context and packet: V5's public canonical cohort
+    # and size are the admitted mapping values, not caller-substitutable values.
+    for field_name, replacement in (
+        ("canonical_cohort_identity_sha256", "a" * 64),
+        ("cohort_size", packet.context.cohort_size + 1),
+    ):
+        cohort_payload = json.loads(packet.canonical_json_bytes())
+        cohort_context = cohort_payload["context"]
+        cohort_context[field_name] = replacement
+        cohort_context["context_projection_identity_sha256"] = digest_json(
+            {
+                key: value
+                for key, value in cohort_context.items()
+                if key != "context_projection_identity_sha256"
+            }
+        )
+        cohort_payload["result_identity_sha256"] = digest_json(
+            {
+                key: value
+                for key, value in cohort_payload.items()
+                if key != "result_identity_sha256"
+            }
+        )
+        with pytest.raises(ValueError, match="semantics"):
+            CurrentResearchPacketV5.from_canonical_json_bytes(
+                json.dumps(
+                    cohort_payload, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
+
     # Fully rehash the nested ledger and outer packet: each semantic
     # substitution must still fail canonical reader admission.
     for position, field_name, replacement in (
@@ -534,7 +656,35 @@ def test_v5_reader_rejects_duplicate_keys_and_preallocation_limit_overruns(
         CurrentResearchPacketV5.from_canonical_json_bytes(raw)
 
 
-def test_v5_runtime_closure_is_verified_and_stable() -> None:
-    identity = current_research_packet_runtime_code_identity_v5()
-    assert len(identity) == 64
-    assert identity == current_research_packet_runtime_code_identity_v5()
+def test_price_and_v5_runtime_closure_reject_market_structure_manifest_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relative = (
+        "src/swing_trading_ai_assistant/market_structure/"
+        "current_live_runtime_identity_manifest.py"
+    )
+    price_verifier = bharatstock_v2.runtime_source_sha256
+
+    def substituted_price_manifest(module: str, root: Path, path: str) -> str:
+        if path == relative:
+            return "0" * 64
+        return price_verifier(module, root, path)
+
+    monkeypatch.setattr(
+        bharatstock_v2, "runtime_source_sha256", substituted_price_manifest
+    )
+    with pytest.raises(ValueError, match="runtime identity invalid"):
+        bharatstock_v2.bharatstock_research_runtime_code_identity_v2()
+
+    v5_verifier = current_supplied_cohort_v5.runtime_source_sha256
+
+    def substituted_v5_manifest(module: str, root: Path, path: str) -> str:
+        if path == relative:
+            return "0" * 64
+        return v5_verifier(module, root, path)
+
+    monkeypatch.setattr(
+        current_supplied_cohort_v5, "runtime_source_sha256", substituted_v5_manifest
+    )
+    with pytest.raises(ValueError, match="runtime identity invalid"):
+        current_research_packet_runtime_code_identity_v5()

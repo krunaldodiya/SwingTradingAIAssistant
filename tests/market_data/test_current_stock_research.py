@@ -369,6 +369,160 @@ def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
         assert result.evidence_known_at == _NOW
 
 
+@pytest.mark.parametrize("available", (1, 2, 10, 20))
+def test_v2_integrated_short_calendar_retains_independent_windows_without_structure_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, available: int
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    completed = [
+        clock.value.date() - timedelta(days=offset)
+        for offset in range(1, 32)
+        if (clock.value.date() - timedelta(days=offset)).weekday() < 5
+    ]
+    retained_sessions = set(completed[:available])
+    _declare_closures(
+        sources,
+        [
+            clock.value.date() - timedelta(days=offset)
+            for offset in range(32)
+            if clock.value.date() - timedelta(days=offset) not in retained_sessions
+        ],
+    )
+    attempted_windows: list[tuple[date, ...]] = []
+    original_capture = workflow_v2._capture_window
+
+    def capture_and_record(
+        *args: object, **kwargs: object
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        attempted_windows.append(request.sessions)
+        return original_capture(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", capture_and_record)
+    root = tmp_path / f"short-calendar-{available}"
+    root.mkdir(mode=0o700)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert type(result) is CurrentStockResearchResultV2
+    assert result.status == "NOT_READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    slots = result.packet.feature_slots
+    features = result.packet.members[0].features
+    assert slots[0].state == "RETAINED_REVISION"
+    assert features[0].availability == "OBSERVED"
+    if available == 1:
+        assert slots[1].state == "NOT_ATTEMPTED_PREREQUISITE"
+        assert features[1].availability == "INSUFFICIENT_EVIDENCE"
+    else:
+        assert slots[1].state == "RETAINED_REVISION"
+        assert features[1].availability == "OBSERVED"
+    assert slots[2].state == "NOT_ATTEMPTED_PREREQUISITE"
+    assert slots[2].request_provenance is None
+    assert slots[2].source is None
+    assert features[2].availability == "INSUFFICIENT_EVIDENCE"
+    assert all(len(window) != 21 for window in attempted_windows)
+    assert sum(len(window) == 21 for window in attempted_windows) == 0
+
+
+def test_v2_price_source_rejects_fully_rehashed_provenance_substitutions(
+    tmp_path: Path,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    root = tmp_path / "price-source-negative"
+    root.mkdir(mode=0o700)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+
+    for replacement in (
+        {"provider_source": "substituted-provider@v1"},
+        {"source_profile": "SUBSTITUTED_SOURCE_PROFILE"},
+        {"selection_identity_sha256": "0" * 64},
+        {
+            "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
+            "price_basis": "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+            "volume_basis": "SOURCE_REPORTED_UNADJUSTED",
+        },
+        {"volume_basis": "SOURCE_REPORTED_UNADJUSTED"},
+    ):
+        tampered = copy.deepcopy(result.packet)
+        slot = tampered.feature_slots[0]
+        assert slot.source is not None
+        source = slot.source
+        for name, value in replacement.items():
+            object.__setattr__(source, name, value)
+        object.__setattr__(
+            source,
+            "source_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    "provider_source": source.provider_source,
+                    "source_profile": source.source_profile,
+                    "revision_identity_sha256": source.capture_revision_identity_sha256,
+                    "schedule_evidence_sha256": source.schedule_evidence_sha256,
+                    "schedule_source": source.schedule_source,
+                    "schedule_source_release": source.schedule_source_release,
+                    "price_basis": source.price_basis,
+                    "volume_basis": source.volume_basis,
+                }
+            ),
+        )
+        object.__setattr__(
+            source,
+            "source_projection_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(source, item.name)
+                    for item in fields(source)
+                    if item.name != "source_projection_identity_sha256"
+                }
+            ),
+        )
+        object.__setattr__(
+            slot,
+            "slot_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(slot, item.name)
+                    for item in fields(slot)
+                    if item.name != "slot_identity_sha256"
+                }
+            ),
+        )
+        object.__setattr__(
+            tampered,
+            "result_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(tampered, item.name)
+                    for item in fields(tampered)
+                    if item.name not in {"result_identity_sha256", "_admission_seal"}
+                }
+            ),
+        )
+        assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(
+            tampered
+        )
+
+
 def test_v2_current_structure_with_21_official_sessions_is_ready(
     tmp_path: Path,
 ) -> None:

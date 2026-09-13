@@ -35,6 +35,9 @@ from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    exact_nse_schedule_source_release_pair_v1,
+)
 from swing_trading_ai_assistant.market_structure.current_live import (
     CALCULATION_IDENTITY_SHA256_V1 as STRUCTURE_CALCULATION_IDENTITY_SHA256_V1,
 )
@@ -425,6 +428,8 @@ class BharatStockFeatureSourceV2:
     projection_configuration_identity_sha256: str
     projection_runtime_code_identity_sha256: str
     schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
     schedule_identity_sha256: str
     selection_identity_sha256: str
     requested_sessions: tuple[date, ...]
@@ -485,6 +490,9 @@ class BharatStockFeatureSourceV2:
                     "SOURCE_REPORTED_UNADJUSTED",
                 ),
             }
+            or not exact_nse_schedule_source_release_pair_v1(
+                self.schedule_source, self.schedule_source_release
+            )
             or type(self.requested_sessions) is not tuple
             or len(self.requested_sessions) != _EXPECTED_SESSIONS[self.feature]
             or self.admitted_sessions != self.requested_sessions
@@ -505,6 +513,9 @@ class BharatStockFeatureSourceV2:
                 "provider_source": self.provider_source,
                 "source_profile": self.source_profile,
                 "revision_identity_sha256": self.capture_revision_identity_sha256,
+                "schedule_evidence_sha256": self.schedule_evidence_sha256,
+                "schedule_source": self.schedule_source,
+                "schedule_source_release": self.schedule_source_release,
                 "price_basis": self.price_basis,
                 "volume_basis": self.volume_basis,
             }
@@ -1319,6 +1330,9 @@ def _source(
             "provider_source": revision.provider_source,
             "source_profile": revision.source_profile,
             "revision_identity_sha256": revision.revision_identity_sha256,
+            "schedule_evidence_sha256": request.schedule_evidence_sha256,
+            "schedule_source": request.schedule_source,
+            "schedule_source_release": request.schedule_source_release,
             "price_basis": revision.price_basis,
             "volume_basis": revision.volume_basis,
         }
@@ -1336,6 +1350,8 @@ def _source(
         "projection_configuration_identity_sha256": _CONFIGURATION_IDENTITY,
         "projection_runtime_code_identity_sha256": runtime,
         "schedule_evidence_sha256": request.schedule_evidence_sha256,
+        "schedule_source": request.schedule_source,
+        "schedule_source_release": request.schedule_source_release,
         "schedule_identity_sha256": request.schedule_identity_sha256,
         "selection_identity_sha256": request.selection_identity_sha256,
         "requested_sessions": request.sessions,
@@ -1361,6 +1377,8 @@ def _source(
         _CONFIGURATION_IDENTITY,
         runtime,
         request.schedule_evidence_sha256,
+        request.schedule_source,
+        request.schedule_source_release,
         request.schedule_identity_sha256,
         request.selection_identity_sha256,
         request.sessions,

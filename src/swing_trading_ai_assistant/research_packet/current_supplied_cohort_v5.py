@@ -53,6 +53,7 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockFeatureCoverageV2,
+    BharatStockFeatureSourceV2,
     BharatStockMemberFeatureV2,
     BharatStockResearchMemberV2,
     BharatStockResearchPacketV2,
@@ -999,6 +1000,26 @@ def _integrated_price_is_ready_v5(price: BharatStockResearchPacketV2) -> bool:
     )
 
 
+def _schedule_provenance_is_valid_v5(
+    sources: tuple[BharatStockFeatureSourceV2, ...],
+    request: CurrentResearchV5Request,
+    context: object,
+) -> bool:
+    retained = cast(Any, context)
+    return (
+        retained.schedule_evidence_sha256 == request.schedule_evidence_sha256
+        and retained.schedule_source == request.schedule_source
+        and retained.schedule_source_release == request.schedule_source_release
+        and all(
+            source.schedule_evidence_sha256 == request.schedule_evidence_sha256
+            and source.schedule_source == request.schedule_source
+            and source.schedule_source_release == request.schedule_source_release
+            and source.schedule_identity_sha256 == request.schedule_identity_sha256
+            for source in sources
+        )
+    )
+
+
 def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
     try:
         packet.bound_request.request.__post_init__()
@@ -1047,18 +1068,17 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         or packet.context.cohort_size != len(mapping.members)
         or packet.context.market_regime_decision_cutoff
         != packet.bound_request.request.decision_cutoff
-        or packet.context.schedule_evidence_sha256
-        != packet.bound_request.request.schedule_evidence_sha256
-        or packet.context.schedule_source
-        != packet.bound_request.request.schedule_source
-        or packet.context.schedule_source_release
-        != packet.bound_request.request.schedule_source_release
+        or not _schedule_provenance_is_valid_v5(
+            tuple(
+                source
+                for slot in packet.price_evidence.feature_slots
+                if (source := slot.source) is not None
+            ),
+            packet.bound_request.request,
+            packet.context,
+        )
         or any(
-            source.schedule_evidence_sha256
-            != packet.bound_request.request.schedule_evidence_sha256
-            or source.schedule_identity_sha256
-            != packet.bound_request.request.schedule_identity_sha256
-            or source.selection_identity_sha256
+            source.selection_identity_sha256
             != mapping.ordered_selection_identity_sha256
             or source.price_basis != packet.price_evidence.price_basis
             for source in (
@@ -1690,13 +1710,17 @@ def build_current_research_packet_v5(
         or context.canonical_cohort_identity_sha256
         != mapping.canonical_cohort_identity_sha256
         or context.cohort_size != len(mapping.members)
-        or context.schedule_evidence_sha256 != request.schedule_evidence_sha256
-        or context.schedule_source != request.schedule_source
-        or context.schedule_source_release != request.schedule_source_release
+        or not _schedule_provenance_is_valid_v5(
+            tuple(
+                source
+                for slot in price.feature_slots
+                if (source := slot.source) is not None
+            ),
+            request,
+            context,
+        )
         or any(
-            source.schedule_evidence_sha256 != request.schedule_evidence_sha256
-            or source.schedule_identity_sha256 != request.schedule_identity_sha256
-            or source.selection_identity_sha256
+            source.selection_identity_sha256
             != mapping.ordered_selection_identity_sha256
             or source.price_basis != price.price_basis
             for source in (
