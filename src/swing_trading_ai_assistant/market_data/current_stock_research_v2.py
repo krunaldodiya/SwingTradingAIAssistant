@@ -161,7 +161,6 @@ class CurrentStockResearchResultV2:
                     or self.evidence_known_at > self.acquisition_deadline
                 )
             )
-            or (self.packet is not None and self.evidence_known_at is None)
             or type(self.limitations) is not tuple
             or not self.limitations
             or any(type(item) is not str or not item for item in self.limitations)
@@ -749,16 +748,24 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
             )
             known_values = [
                 source.known_at
-                for source in (
-                    price_packet.geometry_source,
-                    price_packet.comparison_source,
-                    price_packet.structure_source,
+                for slot, source in zip(
+                    price_packet.feature_slots,
+                    (
+                        price_packet.geometry_source,
+                        price_packet.comparison_source,
+                        price_packet.structure_source,
+                    ),
+                    strict=True,
                 )
                 if source is not None
+                and any(
+                    coverage.feature == slot.feature and coverage.observed > 0
+                    for coverage in price_packet.coverage
+                )
             ]
             # Execution/stop observations are not source knowledge.  Retained
             # source facts alone determine the result's evidence-known time.
-            known_at = max(known_values, default=selection)
+            known_at = max(known_values) if known_values else None
             ready = (
                 price_packet.execution_state == "COMPLETED"
                 and all(

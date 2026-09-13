@@ -3,7 +3,7 @@
 from typing import Final
 
 CURRENT_EVENT_NOTICE_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/current_event_notice_v2.py": "c3aa20cf81a0c8849f37f84aadaf53676eb8da1c4b2c074f042e9b8123133e6a",
+    "src/swing_trading_ai_assistant/market_data/current_event_notice_v2.py": "ca36f57c914340c5bc3b88f8da35426dcaa272adeb87e65fa8380b3629da1552",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "897ad00369a15d0e4d6bd6990a55a74b2247fd056d9328a98abdb487947cd1c2",
     "src/swing_trading_ai_assistant/market_data/current_event_notice_runtime_identity_manifest.py": "b3fada4810161583d11857fab1ec8dfc15fb193450bc4e274702fcfa4a4fe9c6",
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "69c4a9eb406a8903f9814d1161777e7201bc7aa16b7f2c4b63364fd61556ecea",

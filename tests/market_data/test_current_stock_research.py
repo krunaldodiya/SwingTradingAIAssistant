@@ -366,7 +366,9 @@ def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
         assert result.status == status, (result.stage, result.code)
         assert result.packet is not None
         assert result.data_selection_time == _NOW
-        assert result.evidence_known_at == _NOW
+        assert result.evidence_known_at == (
+            None if question == "CURRENT_STRUCTURE" else _NOW
+        )
 
 
 @pytest.mark.parametrize("available", (1, 2, 10, 20))
@@ -453,6 +455,10 @@ def test_v2_price_source_rejects_fully_rehashed_provenance_substitutions(
     assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
 
     for replacement in (
+        {"projection_runtime_code_identity_sha256": "0" * 64},
+        {"capture_schema_identity_sha256": "0" * 64},
+        {"capture_configuration_identity_sha256": "0" * 64},
+        {"capture_runtime_code_identity_sha256": "0" * 64},
         {"provider_source": "substituted-provider@v1"},
         {"source_profile": "SUBSTITUTED_SOURCE_PROFILE"},
         {"selection_identity_sha256": "0" * 64},
@@ -724,6 +730,8 @@ def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
         slot.state == "NOT_ATTEMPTED_SHARED_STOP"
         for slot in result.packet.feature_slots[failure_effect:]
     )
+    if failure_effect == 1:
+        assert result.evidence_known_at is None
 
 
 @pytest.mark.parametrize("completed_effect", (1, 2, 3))

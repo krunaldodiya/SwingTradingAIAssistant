@@ -57,6 +57,15 @@ def test_v5_request_has_frozen_schedule_and_time_bounds() -> None:
     assert request.selected_at < request.decision_cutoff
     with pytest.raises(ValueError, match="request"):
         CurrentResearchV5Request(
+            request.selected_at,
+            request.decision_cutoff,
+            request.schedule_evidence_sha256,
+            "unrecognized-calendar",
+            request.schedule_source_release,
+            request.schedule_identity_sha256,
+        )
+    with pytest.raises(ValueError, match="request"):
+        CurrentResearchV5Request(
             request.decision_cutoff,
             request.selected_at,
             request.schedule_evidence_sha256,
@@ -86,15 +95,15 @@ def _fully_rehashed_price_source(
     values = {
         "feature": "CANDLE_GEOMETRY",
         "capture_contract_version": "bharatstock-capture@v3",
-        "capture_schema_identity_sha256": "a" * 64,
-        "capture_configuration_identity_sha256": "b" * 64,
-        "capture_runtime_code_identity_sha256": "c" * 64,
+        "capture_schema_identity_sha256": bharatstock_v2._capture_schema_identity(),  # pyright: ignore[reportPrivateUsage]
+        "capture_configuration_identity_sha256": bharatstock_v2._capture_configuration_identity(),  # pyright: ignore[reportPrivateUsage]
+        "capture_runtime_code_identity_sha256": bharatstock_v2._capture_runtime_identity(),  # pyright: ignore[reportPrivateUsage]
         "capture_request_identity_sha256": "e" * 64,
         "capture_revision_identity_sha256": "d" * 64,
         "projection_contract_version": "bharatstock-retained-research-packet@v2",
         "projection_schema_identity_sha256": bharatstock_v2._SCHEMA_IDENTITY,  # pyright: ignore[reportPrivateUsage]
         "projection_configuration_identity_sha256": bharatstock_v2._CONFIGURATION_IDENTITY,  # pyright: ignore[reportPrivateUsage]
-        "projection_runtime_code_identity_sha256": "1" * 64,
+        "projection_runtime_code_identity_sha256": bharatstock_v2.bharatstock_research_runtime_code_identity_v2(),
         "schedule_evidence_sha256": schedule_evidence_sha256,
         "schedule_source": schedule_source,
         "schedule_source_release": schedule_source_release,
@@ -471,6 +480,46 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
         )
 
     if failed_context:
+
+        def failed_digest(value: object) -> str:
+            return hashlib.sha256(
+                json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            ).hexdigest()
+
+        failed_payload = json.loads(packet.canonical_json_bytes())
+        failed_context_payload = failed_payload["context"]
+        failed_context_payload["market_regime_reasons"] = ["INVENTED_REASON"]
+        failed_component = failed_context_payload["components"][3]
+        failed_component["reasons"] = ["INVENTED_REASON"]
+        failed_component["ledger_row_identity_sha256"] = failed_digest(
+            {
+                key: value
+                for key, value in failed_component.items()
+                if key != "ledger_row_identity_sha256"
+            }
+        )
+        failed_context_payload["context_projection_identity_sha256"] = failed_digest(
+            {
+                key: value
+                for key, value in failed_context_payload.items()
+                if key != "context_projection_identity_sha256"
+            }
+        )
+        failed_payload["result_identity_sha256"] = failed_digest(
+            {
+                key: value
+                for key, value in failed_payload.items()
+                if key != "result_identity_sha256"
+            }
+        )
+        with pytest.raises(ValueError, match="semantics"):
+            CurrentResearchPacketV5.from_canonical_json_bytes(
+                json.dumps(
+                    failed_payload, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
         return
 
     def digest_json(value: object) -> str:
@@ -617,9 +666,14 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
         (2, "reasons", ["INVENTED_REASON"]),
         (3, "reasons", ["INVENTED_REASON"]),
         (0, "schema_identity_sha256", None),
+        (0, "schema_identity_sha256", "a" * 64),
         (0, "runtime_code_identity_sha256", None),
+        (0, "runtime_code_identity_sha256", "a" * 64),
         (1, "schema_identity_sha256", None),
+        (1, "schema_identity_sha256", "a" * 64),
         (1, "runtime_code_identity_sha256", None),
+        (1, "runtime_code_identity_sha256", "a" * 64),
+        (0, "known_at", "2100-01-01T00:00:00.000000Z"),
         (2, "schema_identity_sha256", "a" * 64),
         (2, "runtime_code_identity_sha256", "a" * 64),
         (3, "schema_identity_sha256", None),
@@ -630,7 +684,6 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
         (0, "evidence_state", "INSUFFICIENT_EVIDENCE"),
     ):
         ledger_payload = json.loads(packet.canonical_json_bytes())
-        ledger_payload["execution_state"] = "RESEARCH_READY"
         context_payload = ledger_payload["context"]
         component = context_payload["components"][position]
         component[field_name] = replacement
@@ -729,29 +782,37 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     with pytest.raises(ValueError, match="semantics"):
         CurrentResearchPacketV5.from_canonical_json_bytes(tampered)
 
-    # Every non-null top-level Industry digest is immutable relative to the
-    # context-held report identity even after its nested and outer hashes are
-    # recomputed. This is a local consistency equation, not new attestation.
+    # Coherent Industry tampering updates the nested report, duplicated context
+    # identity, context projection, and outer identity.  Each rejection must
+    # therefore be caused by the targeted producer equation, not a stale copy.
     industry_payload = json.loads(packet.canonical_json_bytes())["industry_evidence"]
-    industry_digest_fields = tuple(
-        key
-        for key, value in industry_payload.items()
-        if key.endswith("_sha256") and value is not None
+    industry_digest_fields = (
+        "archive_identity_sha256",
+        "archive_receipt_identity_sha256",
     )
-    assert industry_digest_fields
     for field_name in industry_digest_fields:
         identity_payload = json.loads(packet.canonical_json_bytes())
         identity_industry = identity_payload["industry_evidence"]
         identity_industry[field_name] = "d" * 64
-        if field_name != "report_identity_sha256":
-            identity_industry_core = {
+        identity_industry_core = {
+            key: value
+            for key, value in identity_industry.items()
+            if key != "report_identity_sha256"
+        }
+        identity_industry["report_identity_sha256"] = digest_json(
+            identity_industry_core
+        )
+        identity_context = identity_payload["context"]
+        identity_context["industry_report_identity_sha256"] = identity_industry[
+            "report_identity_sha256"
+        ]
+        identity_context["context_projection_identity_sha256"] = digest_json(
+            {
                 key: value
-                for key, value in identity_industry.items()
-                if key != "report_identity_sha256"
+                for key, value in identity_context.items()
+                if key != "context_projection_identity_sha256"
             }
-            identity_industry["report_identity_sha256"] = digest_json(
-                identity_industry_core
-            )
+        )
         identity_packet_core = {
             key: value
             for key, value in identity_payload.items()

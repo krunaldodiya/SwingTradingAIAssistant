@@ -22,10 +22,23 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockPriceBasis,
 )
 from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    _PREDECESSOR_CONFIGURATION_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
+    _PREDECESSOR_RUNTIME_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
+    _PREDECESSOR_SCHEMA_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
+    _READ_ONLY_RUNTIME_IDENTITY_V3,  # pyright: ignore[reportPrivateUsage]
     RetainedCaptureBindingV2,
     RetainedCaptureRevisionV2,
     selection_identity_v2,
     validate_retained_capture_binding_v2,
+)
+from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    _configuration_identity as _capture_configuration_identity,  # pyright: ignore[reportPrivateUsage]
+)
+from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    _runtime_identity as _capture_runtime_identity,  # pyright: ignore[reportPrivateUsage]
+)
+from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    _schema_identity as _capture_schema_identity,  # pyright: ignore[reportPrivateUsage]
 )
 from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
     AdmittedCurrentResearchBindingV2,
@@ -467,8 +480,13 @@ class BharatStockFeatureSourceV2:
                     self.source_projection_identity_sha256,
                 )
             )
+            or self.projection_runtime_code_identity_sha256
+            != bharatstock_research_runtime_code_identity_v2()
             or (
                 self.capture_contract_version,
+                self.capture_schema_identity_sha256,
+                self.capture_configuration_identity_sha256,
+                self.capture_runtime_code_identity_sha256,
                 self.provider_source,
                 self.source_profile,
                 self.price_basis,
@@ -477,6 +495,19 @@ class BharatStockFeatureSourceV2:
             not in {
                 (
                     "bharatstock-capture@v3",
+                    _capture_schema_identity(),
+                    _capture_configuration_identity(),
+                    _capture_runtime_identity(),
+                    "bharatstock-api@v1",
+                    "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+                    "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+                    "SOURCE_REPORTED",
+                ),
+                (
+                    "bharatstock-capture@v3",
+                    _capture_schema_identity(),
+                    _capture_configuration_identity(),
+                    _READ_ONLY_RUNTIME_IDENTITY_V3,
                     "bharatstock-api@v1",
                     "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
                     "BHARATSTOCK_SOURCE_REPORTED_OHLC",
@@ -484,6 +515,9 @@ class BharatStockFeatureSourceV2:
                 ),
                 (
                     "bharatstock-capture@v2",
+                    _PREDECESSOR_SCHEMA_IDENTITY_V2,
+                    _PREDECESSOR_CONFIGURATION_IDENTITY_V2,
+                    _PREDECESSOR_RUNTIME_IDENTITY_V2,
                     "bharatstock-api@v1",
                     "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
                     "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",

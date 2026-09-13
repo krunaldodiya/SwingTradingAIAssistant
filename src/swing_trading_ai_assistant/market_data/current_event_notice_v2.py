@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import stat
 import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import Final, Literal, NoReturn, cast
 from zoneinfo import ZoneInfo
 
 from .current_event_notice import (
@@ -129,68 +131,226 @@ def _verify_final_archive_binding(operation: object, directory: int) -> None:
         # Reuse the V1 authority contract immediately before success: type,
         # owner UID, exact private mode and descriptor/name inode binding.
         _validate_archive_directory(root, directory)
+        root_metadata = os.fstat(root)
+        if (
+            not stat.S_ISDIR(root_metadata.st_mode)
+            or root_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(root_metadata.st_mode) != 0o700
+        ):
+            raise ValueError("current event V2 archive authority invalid")
         _validate_archive_root(root)
         ensure_live()
     except (OSError, ValueError, RuntimeError):
         raise ValueError("current event V2 archive authority invalid") from None
 
 
+@dataclass(slots=True)
+class _BoundedJsonStatsV2:
+    nodes_admitted: int = 0
+    nodes_allocated: int = 0
+    nodes_attached: int = 0
+    nodes_rejected_before_allocation: int = 0
+    decoded_string_bytes: int = 0
+
+
 def _decode_stored_projection_v2(  # noqa: C901 - bounded closed decoder
-    raw: bytes, expected_keys: set[str]
+    raw: bytes,
+    expected_keys: set[str],
+    stats: _BoundedJsonStatsV2 | None = None,
 ) -> dict[str, object]:
-    """Decode an untrusted recovery prefix before any suffix publication."""
+    """Decode an untrusted prefix without attaching over-limit values."""
     if type(raw) is not bytes or not 1 <= len(raw) <= 1024 * 1024:
         raise ValueError("current event V2 immutable archive conflict")
+    counters = stats if stats is not None else _BoundedJsonStatsV2()
+    index, total = 0, len(raw)
 
-    def pairs(items: list[tuple[object, object]]) -> dict[str, object]:
-        if any(type(key) is not str for key, _ in items):
-            raise ValueError("current event V2 immutable archive conflict")
-        result: dict[str, object] = {cast(str, key): value for key, value in items}
-        if len(result) != len(items):
-            raise ValueError("current event V2 immutable archive conflict")
+    def fail() -> NoReturn:
+        raise ValueError("current event V2 immutable archive conflict")
+
+    def whitespace() -> None:
+        nonlocal index
+        while index < total and raw[index] in b" \t\r\n":
+            index += 1
+
+    def admit(depth: int) -> None:
+        if depth > 16 or counters.nodes_admitted >= 50_000:
+            counters.nodes_rejected_before_allocation += 1
+            fail()
+        counters.nodes_admitted += 1
+        counters.nodes_allocated += 1
+
+    def string() -> str:  # noqa: C901
+        nonlocal index
+        if index >= total or raw[index] != ord('"'):
+            fail()
+        start = index
+        index += 1
+        decoded_bytes = 0
+        while index < total:
+            character = raw[index]
+            if character == ord('"'):
+                index += 1
+                if (
+                    decoded_bytes > 4_096
+                    or counters.decoded_string_bytes + decoded_bytes > 1024 * 1024
+                ):
+                    fail()
+                value: object = None
+                try:
+                    value = json.loads(raw[start:index])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    fail()
+                if type(value) is not str or len(value.encode()) != decoded_bytes:
+                    fail()
+                counters.decoded_string_bytes += decoded_bytes
+                return value
+            if character < 0x20:
+                fail()
+            if character == ord("\\"):
+                index += 1
+                if index >= total:
+                    fail()
+                escaped = raw[index]
+                if escaped in b'"\\/bfnrt':
+                    decoded_bytes += 1
+                    index += 1
+                    continue
+                if escaped != ord("u") or index + 4 >= total:
+                    fail()
+                codepoint = 0
+                try:
+                    codepoint = int(raw[index + 1 : index + 5], 16)
+                except ValueError:
+                    fail()
+                index += 5
+                if 0xD800 <= codepoint <= 0xDBFF:
+                    if raw[index : index + 2] != b"\\u" or index + 6 > total:
+                        fail()
+                    low = 0
+                    try:
+                        low = int(raw[index + 2 : index + 6], 16)
+                    except ValueError:
+                        fail()
+                    if not 0xDC00 <= low <= 0xDFFF:
+                        fail()
+                    decoded_bytes += 4
+                    index += 6
+                elif 0xDC00 <= codepoint <= 0xDFFF:
+                    fail()
+                else:
+                    decoded_bytes += len(chr(codepoint).encode())
+                continue
+            width = 1
+            if character >= 0x80:
+                width = (
+                    2
+                    if character & 0xE0 == 0xC0
+                    else 3
+                    if character & 0xF0 == 0xE0
+                    else 4
+                    if character & 0xF8 == 0xF0
+                    else 0
+                )
+                if not width:
+                    fail()
+                try:
+                    raw[index : index + width].decode("utf-8")
+                except UnicodeDecodeError:
+                    fail()
+            decoded_bytes += width
+            index += width
+        fail()
+        raise AssertionError("unreachable")
+
+    def value(depth: int) -> object:  # noqa: C901
+        nonlocal index
+        whitespace()
+        if index >= total:
+            fail()
+        result: object = None
+        admit(depth)
+        marker = raw[index]
+        if marker == ord('"'):
+            result: object = string()
+        elif marker == ord("["):
+            index += 1
+            result_list: list[object] = []
+            whitespace()
+            if index < total and raw[index] == ord("]"):
+                index += 1
+            else:
+                while True:
+                    result_list.append(value(depth + 1))
+                    whitespace()
+                    if index < total and raw[index] == ord(","):
+                        index += 1
+                        continue
+                    if index < total and raw[index] == ord("]"):
+                        index += 1
+                        break
+                    fail()
+            result = result_list
+        elif marker == ord("{"):
+            index += 1
+            result_dict: dict[str, object] = {}
+            whitespace()
+            if index < total and raw[index] == ord("}"):
+                index += 1
+            else:
+                while True:
+                    whitespace()
+                    admit(depth + 1)
+                    key = string()
+                    if key in result_dict:
+                        fail()
+                    whitespace()
+                    if index >= total or raw[index] != ord(":"):
+                        fail()
+                    index += 1
+                    result_dict[key] = value(depth + 1)
+                    counters.nodes_attached += 1
+                    whitespace()
+                    if index < total and raw[index] == ord(","):
+                        index += 1
+                        continue
+                    if index < total and raw[index] == ord("}"):
+                        index += 1
+                        break
+                    fail()
+            result = result_dict
+        else:
+            start = index
+            while index < total and raw[index] not in b" \t\r\n,]}":
+                index += 1
+                if index - start > 258:
+                    fail()
+            token = raw[start:index]
+            if token == b"true":
+                result = True
+            elif token == b"false":
+                result = False
+            elif token == b"null":
+                result = None
+            else:
+                try:
+                    text = token.decode("ascii")
+                    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", text) is None:
+                        fail()
+                    result = int(text)
+                except (UnicodeDecodeError, ValueError):
+                    fail()
+        counters.nodes_attached += 1
         return result
 
-    def integer(token: str) -> int:
-        if len(token) > 258:
-            raise ValueError("current event V2 immutable archive conflict")
-        return int(token)
-
-    try:
-        decoded: object = json.loads(raw, object_pairs_hook=pairs, parse_int=integer)
-    except (RecursionError, TypeError, ValueError, json.JSONDecodeError):
-        raise ValueError("current event V2 immutable archive conflict") from None
-    if type(decoded) is not dict:
-        raise ValueError("current event V2 immutable archive conflict")
-    projection = {
-        cast(str, key): value
-        for key, value in cast(dict[object, object], decoded).items()
-    }
-    if set(projection) != expected_keys:
-        raise ValueError("current event V2 immutable archive conflict")
-    # Iterative bounds keep malformed retained JSON from consuming recursive
-    # semantic validation or becoming a repair trigger.
-    stack: list[tuple[object, int]] = [(projection, 0)]
-    nodes = 0
-    string_bytes = 0
-    while stack:
-        value, depth = stack.pop()
-        nodes += 1
-        if nodes > 50_000 or depth > 16:
-            raise ValueError("current event V2 immutable archive conflict")
-        if type(value) is str:
-            string_bytes += len(value.encode())
-            if len(value.encode()) > 4_096 or string_bytes > 1024 * 1024:
-                raise ValueError("current event V2 immutable archive conflict")
-        elif type(value) is list:
-            items = cast(list[object], value)
-            stack.extend([(item, depth + 1) for item in items])
-        elif type(value) is dict:
-            items = cast(dict[str, object], value)
-            stack.extend([(item, depth + 1) for item in items.values()])
-            stack.extend([(key, depth + 1) for key in items])
-        elif value is not None and type(value) not in {bool, int}:
-            raise ValueError("current event V2 immutable archive conflict")
-    return projection
+    decoded = value(0)
+    whitespace()
+    if (
+        index != total
+        or type(decoded) is not dict
+        or set(cast(dict[object, object], decoded)) != expected_keys
+    ):
+        fail()
+    return cast(dict[str, object], decoded)
 
 
 def _instant(value: object) -> datetime:
@@ -820,6 +980,14 @@ def project_retained_current_event_notices_v2(
         object.__setattr__(value, name, item)
     if not _validate_projection(value):
         raise ValueError("current event V2 projection invalid")
+    # V1 validation finished its own operation before semantic projection.
+    # Re-open the leased root and archive immediately before public admission.
+    with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
+        directory = _open_archive(operation.descriptor)
+        try:
+            _verify_final_archive_binding(operation, directory)
+        finally:
+            os.close(directory)
     _admit(value)
     return value
 
@@ -866,16 +1034,6 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
     source_runtime = current_event_notice_runtime_code_identity_v1()
     known_at = _instant(_trusted_utc_now())
     source_date = _parse_filename(event_input.source_filename)
-    if (
-        source_date is None
-        or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
-    ):
-        raise ValueError("current event V2 source-time integrity invalid")
-    if any(
-        not _mapping_valid_on_source_date(member, source_date)
-        for member in mapping.members
-    ):
-        raise ValueError("current event V2 source-time integrity invalid")
     attempts = (_retained_attempt(known_at, event_input.artifact_identity_sha256),)
     attempt_history_identity = _attempt_history_identity(attempts)
     local_members: list[CurrentEventMemberProjectionV2] = []
@@ -991,8 +1149,28 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
         (f"v2-{archive_identity}.complete.json", marker_raw, 64 * 1024),
     )
     # V1 and V2 share deterministic pending names in the private archive.
-    # Hold the archive owner lock across discovery, publication and readback.
+    # Discover whether a prefix exists under the archive lock without creating
+    # an archive for a rejected new acquisition.
     with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
+        try:
+            os.stat(
+                ".current-event-notice-v1",
+                dir_fd=operation.descriptor,
+                follow_symlinks=False,
+            )
+            prefix_exists = True
+        except FileNotFoundError:
+            prefix_exists = False
+        if not prefix_exists and (
+            known_at > mapping.decision_cutoff
+            or source_date is None
+            or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+            or any(
+                not _mapping_valid_on_source_date(member, source_date)
+                for member in mapping.members
+            )
+        ):
+            raise ValueError("current event V2 source-time integrity invalid")
         directory = _open_archive(operation.descriptor)
         try:
             existing_objects = tuple(
@@ -1009,8 +1187,20 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             }:
                 raise ValueError("current event V2 immutable archive conflict")
             stored = existing_objects[1]
-            if stored is None and known_at > mapping.decision_cutoff:
-                raise ValueError("current event retention exceeded decision cutoff")
+            # Discover a durable projection prefix before applying the fresh
+            # clock's source-date/cutoff admission.  A valid prefix owns its
+            # original source knowledge time across IST rollover; only a new
+            # acquisition must satisfy the fresh clock relationship.
+            if stored is None and (
+                known_at > mapping.decision_cutoff
+                or source_date is None
+                or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                or any(
+                    not _mapping_valid_on_source_date(member, source_date)
+                    for member in mapping.members
+                )
+            ):
+                raise ValueError("current event V2 source-time integrity invalid")
             if stored is not None:
                 try:
                     stored_core = _decode_stored_projection_v2(
@@ -1093,6 +1283,10 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                     or known_at > mapping.decision_cutoff
                     or source_date
                     != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                    or any(
+                        not _mapping_valid_on_source_date(member, source_date)
+                        for member in mapping.members
+                    )
                     or not _validate_attempts(
                         attempts,
                         event_input.artifact_identity_sha256,

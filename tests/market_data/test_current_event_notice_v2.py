@@ -221,6 +221,45 @@ def test_event_v2_recovers_every_valid_publication_prefix(
     assert len(tuple((root / ".current-event-notice-v1").glob("v2-*"))) == 4
 
 
+def test_event_v2_recovers_projection_prefix_across_ist_rollover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "event-v2-rollover"
+    root.mkdir(mode=0o700)
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    original = event_v2._publish_object  # pyright: ignore[reportPrivateUsage]
+    calls = 0
+
+    def interrupt_after_projection(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("interrupted publication")
+        original(*args, **kwargs)  # type: ignore[arg-type]
+
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        monkeypatch.setattr(event_v2, "_publish_object", interrupt_after_projection)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+        monkeypatch.setattr(
+            event_v2,
+            "_trusted_utc_now",
+            lambda: datetime(2026, 8, 27, 9, tzinfo=UTC),
+        )
+        monkeypatch.setattr(event_v2, "_publish_object", original)
+        recovered = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+    assert recovered.known_at == _KNOWN
+    assert len(tuple((root / ".current-event-notice-v1").glob("v2-*"))) == 4
+
+
 def test_event_v2_corrupt_prefix_fails_before_any_repair(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -403,6 +442,24 @@ def test_event_v2_bounded_prefix_decoder_rejects_malformed_shapes(raw: bytes) ->
         )
 
 
+def test_event_v2_bounded_prefix_decoder_rejects_before_over_limit_attachment() -> None:
+    exact = b'{"x":[' + b",".join([b"0"] * 49_997) + b"]}"
+    exact_stats = event_v2._BoundedJsonStatsV2()  # pyright: ignore[reportPrivateUsage]
+    assert event_v2._decode_stored_projection_v2(  # pyright: ignore[reportPrivateUsage]
+        exact, {"x"}, exact_stats
+    ) == {"x": [0] * 49_997}
+    assert exact_stats.nodes_admitted == exact_stats.nodes_allocated == 50_000
+    overflow = b'{"x":[' + b",".join([b"0"] * 49_998) + b"]}"
+    overflow_stats = event_v2._BoundedJsonStatsV2()  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ValueError, match="immutable archive conflict"):
+        event_v2._decode_stored_projection_v2(  # pyright: ignore[reportPrivateUsage]
+            overflow, {"x"}, overflow_stats
+        )
+    assert overflow_stats.nodes_admitted == overflow_stats.nodes_allocated == 50_000
+    assert overflow_stats.nodes_attached <= 50_000
+    assert overflow_stats.nodes_rejected_before_allocation == 1
+
+
 def test_event_v2_post_admission_mutation_and_future_source_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -577,6 +634,42 @@ def _adopted_v1_projection(
     return event_v2.project_retained_current_event_notices_v2(
         root, lease, retained, mapping
     )
+
+
+@pytest.mark.parametrize("interleaving", ("root", "archive", "archive-mode"))
+def test_adopted_event_v1_final_authority_interleavings_reject_before_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interleaving: str
+) -> None:
+    root = tmp_path / f"event-v1-final-authority-{interleaving}"
+    root.mkdir(mode=0o700)
+    artifact_lines = _artifact().splitlines()
+    raw = b"\n".join((artifact_lines[0], artifact_lines[1], artifact_lines[3])) + b"\n"
+    monkeypatch.setattr(event_v1, "_trusted_utc_now", lambda: _KNOWN)
+    original = event_v2._verify_final_archive_binding  # pyright: ignore[reportPrivateUsage]
+
+    def replace_before_adopted_return(operation: object, directory: int) -> None:
+        archive = root / ".current-event-notice-v1"
+        if interleaving == "root":
+            root.rename(root.with_name(f"{root.name}-replaced"))
+            root.mkdir(mode=0o700)
+            root.chmod(0o700)
+        elif interleaving == "archive":
+            archive.rename(root / ".replaced-event-archive")
+            archive.mkdir(mode=0o700)
+            archive.chmod(0o700)
+        else:
+            archive.chmod(0o755)
+        original(operation, directory)
+
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        monkeypatch.setattr(
+            event_v2, "_verify_final_archive_binding", replace_before_adopted_return
+        )
+        with pytest.raises(ValueError, match="archive authority invalid"):
+            _adopted_v1_projection(root, lease, mapping, raw)
 
 
 def _rehash_adopted_v1_identity(value: Any, replaced: str) -> None:

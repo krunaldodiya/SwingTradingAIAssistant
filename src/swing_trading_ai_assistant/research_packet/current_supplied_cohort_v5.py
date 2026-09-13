@@ -23,6 +23,10 @@ from typing import (
     get_type_hints,
 )
 
+from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
+    CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1,
+    current_corporate_action_screen_runtime_code_identity_v1,
+)
 from swing_trading_ai_assistant.market_data.current_event_notice_v2 import (
     CurrentEventMemberProjectionV2,
     RetainedCurrentEventNoticeProjectionV2,
@@ -35,8 +39,15 @@ from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
     CurrentResearchMappingProjectionV2,
     validate_current_research_binding_v2,
 )
+from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
+    current_same_pass_raw_daily_runtime_code_identity_v4,
+    current_same_pass_raw_daily_schema_identity_v4,
+)
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
+)
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    exact_nse_schedule_source_release_pair_v1,
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     _ADJUSTED_FAILURE_PAIRS,  # pyright: ignore[reportPrivateUsage]
@@ -47,6 +58,9 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     _calculation_identity as _regime_calculation_identity,  # pyright: ignore[reportPrivateUsage]
+)
+from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    _ordered_reasons as _ordered_regime_reasons,  # pyright: ignore[reportPrivateUsage]
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     _schema_identity as _regime_schema_identity,  # pyright: ignore[reportPrivateUsage]
@@ -191,10 +205,9 @@ class CurrentResearchV5Request:
                     self.schedule_identity_sha256,
                 )
             )
-            or type(self.schedule_source) is not str
-            or not 1 <= len(self.schedule_source.encode()) <= 256
-            or type(self.schedule_source_release) is not str
-            or not 1 <= len(self.schedule_source_release.encode()) <= 256
+            or not exact_nse_schedule_source_release_pair_v1(
+                self.schedule_source, self.schedule_source_release
+            )
         ):
             raise ValueError("invalid current V5 request")
         object.__setattr__(self, "selected_at", selected)
@@ -414,10 +427,9 @@ class CurrentResearchV5ContextSection:
             or type(self.cohort_size) is not int
             or not 1 <= self.cohort_size <= 100
             or type(self.market_regime_reasons) is not tuple
-            or type(self.schedule_source) is not str
-            or not 1 <= len(self.schedule_source.encode()) <= 256
-            or type(self.schedule_source_release) is not str
-            or not 1 <= len(self.schedule_source_release.encode()) <= 256
+            or not exact_nse_schedule_source_release_pair_v1(
+                self.schedule_source, self.schedule_source_release
+            )
             or any(
                 type(reason) is not str or not 1 <= len(reason.encode()) <= 128
                 for reason in self.market_regime_reasons
@@ -488,8 +500,9 @@ def _component_ledger_is_valid_impl(
         return False
     raw, screen, adjusted, regime = components
     if (
-        raw.schema_identity_sha256 is None
-        or raw.runtime_code_identity_sha256 is None
+        raw.schema_identity_sha256 != current_same_pass_raw_daily_schema_identity_v4()
+        or raw.runtime_code_identity_sha256
+        != current_same_pass_raw_daily_runtime_code_identity_v4()
         or raw.evidence_state not in {"OBSERVED", "INSUFFICIENT_EVIDENCE"}
         or (raw.evidence_state == "OBSERVED")
         != (
@@ -500,17 +513,21 @@ def _component_ledger_is_valid_impl(
         or (raw.evidence_state == "INSUFFICIENT_EVIDENCE")
         != (
             bool(raw.reasons)
+            and _ordered_regime_reasons(raw.reasons, raw=True) == raw.reasons
             and context.raw_grid_identity_sha256 is None
             and raw.primary_identity_sha256 == context.raw_result_identity_sha256
         )
     ):
         return False
     if (
-        screen.schema_identity_sha256 is None
-        or screen.runtime_code_identity_sha256 is None
+        screen.schema_identity_sha256
+        != CURRENT_CORPORATE_ACTION_SCREEN_SCHEMA_IDENTITY_SHA256_V1
+        or screen.runtime_code_identity_sha256
+        != current_corporate_action_screen_runtime_code_identity_v1()
         or screen.evidence_state not in {"SCREENED", "INSUFFICIENT_EVIDENCE"}
         or (screen.evidence_state == "SCREENED") != (screen.reasons == ())
-        or (screen.evidence_state == "INSUFFICIENT_EVIDENCE") != bool(screen.reasons)
+        or (screen.evidence_state == "INSUFFICIENT_EVIDENCE")
+        != (screen.reasons == ("CORPORATE_ACTION_SCREEN_INSUFFICIENT",))
     ):
         return False
     if (
@@ -541,8 +558,19 @@ def _component_ledger_is_valid_impl(
         )
     ):
         return False
+    available_component_times = tuple(
+        item.known_at for item in (raw, screen, adjusted) if item.known_at is not None
+    )
     return (
-        regime.schema_identity_sha256 == context.market_regime_schema_identity_sha256
+        all(
+            item.known_at is None
+            or item.known_at <= context.market_regime_decision_cutoff
+            for item in components
+        )
+        and regime.known_at
+        == (max(available_component_times) if available_component_times else None)
+        and regime.schema_identity_sha256
+        == context.market_regime_schema_identity_sha256
         and regime.runtime_code_identity_sha256
         == context.market_regime_runtime_code_identity_sha256
         and regime.primary_identity_sha256
@@ -554,6 +582,7 @@ def _component_ledger_is_valid_impl(
                 regime.evidence_state == "INSUFFICIENT_EVIDENCE"
                 and regime.reasons == context.market_regime_reasons
                 and bool(regime.reasons)
+                and _ordered_regime_reasons(regime.reasons) == regime.reasons
             )
         )
     )
@@ -901,6 +930,23 @@ def _industry_semantics_are_valid_v5(
                 and value.source_attribution == "NSE_INDICES"
                 and value.classification_tier == "INDUSTRY"
                 and value.artifact_revision == f"sha256:{value.artifact_sha256}"
+                and value.archive_identity_sha256
+                == _digest(
+                    {
+                        "raw_artifact_sha256": value.artifact_sha256,
+                        "snapshot_identity_sha256": value.snapshot_identity_sha256,
+                    }
+                )
+                and value.archive_receipt_identity_sha256
+                == _digest(
+                    {
+                        "archive_identity_sha256": value.archive_identity_sha256,
+                        "artifact_sha256": value.artifact_sha256,
+                        "input_identity_sha256": value.classification_input_identity_sha256,
+                        "known_at": value.known_at,
+                        "snapshot_identity_sha256": value.snapshot_identity_sha256,
+                    }
+                )
                 and value.publisher_published_at is None
                 and value.publisher_effective_from is None
                 and value.publisher_effective_through is None
@@ -1011,7 +1057,13 @@ def _schedule_provenance_is_valid_v5(
 ) -> bool:
     retained = cast(Any, context)
     return (
-        retained.schedule_evidence_sha256 == request.schedule_evidence_sha256
+        exact_nse_schedule_source_release_pair_v1(
+            request.schedule_source, request.schedule_source_release
+        )
+        and exact_nse_schedule_source_release_pair_v1(
+            retained.schedule_source, retained.schedule_source_release
+        )
+        and retained.schedule_evidence_sha256 == request.schedule_evidence_sha256
         and retained.schedule_source == request.schedule_source
         and retained.schedule_source_release == request.schedule_source_release
         and all(
