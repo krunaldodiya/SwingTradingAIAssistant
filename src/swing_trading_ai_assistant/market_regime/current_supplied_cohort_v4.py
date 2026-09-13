@@ -4215,6 +4215,9 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             "cohort_selected_at": request.cohort_selected_at,
             "decision_cutoff": request.decision_cutoff,
             "schedule_identity_sha256": request.schedule_identity_sha256,
+            "schedule_evidence_sha256": request.schedule_evidence_sha256,
+            "schedule_source": request.schedule_source,
+            "schedule_source_release": request.schedule_source_release,
             "members": tuple(item.value() for item in request.members),
             "mapping_failure_reasons": context.raw_result.reasons,
             "mapping_receipts": tuple(

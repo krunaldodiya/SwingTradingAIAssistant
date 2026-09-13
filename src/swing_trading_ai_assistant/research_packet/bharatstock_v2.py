@@ -462,8 +462,29 @@ class BharatStockFeatureSourceV2:
                     self.source_projection_identity_sha256,
                 )
             )
-            or type(self.capture_contract_version) is not str
-            or not self.capture_contract_version
+            or (
+                self.capture_contract_version,
+                self.provider_source,
+                self.source_profile,
+                self.price_basis,
+                self.volume_basis,
+            )
+            not in {
+                (
+                    "bharatstock-capture@v3",
+                    "bharatstock-api@v1",
+                    "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+                    "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+                    "SOURCE_REPORTED",
+                ),
+                (
+                    "bharatstock-capture@v2",
+                    "bharatstock-api@v1",
+                    "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
+                    "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+                    "SOURCE_REPORTED_UNADJUSTED",
+                ),
+            }
             or type(self.requested_sessions) is not tuple
             or len(self.requested_sessions) != _EXPECTED_SESSIONS[self.feature]
             or self.admitted_sessions != self.requested_sessions
@@ -530,6 +551,7 @@ class BharatStockFeatureSlotV2:
                 "RETAINED_REVISION",
                 "ATTEMPTED_NO_REVISION",
                 "NOT_ATTEMPTED_SHARED_STOP",
+                "NOT_ATTEMPTED_PREREQUISITE",
                 "UNREQUESTED",
             }
             or type(self.requested_sessions) is not tuple
@@ -554,7 +576,8 @@ class BharatStockFeatureSlotV2:
                     and len(self.requested_sessions) < _EXPECTED_SESSIONS[self.feature]
                 )
             )
-            or (self.state == "UNREQUESTED") != (self.request_provenance is None)
+            or (self.state in {"UNREQUESTED", "NOT_ATTEMPTED_PREREQUISITE"})
+            != (self.request_provenance is None)
             or (
                 self.request_provenance is not None
                 and self.request_provenance.requested_sessions
@@ -1100,6 +1123,14 @@ def _validate_packet(  # noqa: C901 - closed packet/stop matrix
                     or provenance.decision_cutoff != slot.source.decision_cutoff
                     or slot.source.known_at > packet.mapping_projection.decision_cutoff
                     or slot.source.requested_sessions != slot.requested_sessions
+                    or slot.source.schedule_identity_sha256
+                    != packet.mapping_projection.schedule_identity_sha256
+                    or slot.source.selection_identity_sha256
+                    != packet.selection_identity_sha256
+                    or any(
+                        member.price_basis != slot.source.price_basis
+                        for member in packet.members
+                    )
                 ):
                     return False
         if packet.shared_stop_time is not None:

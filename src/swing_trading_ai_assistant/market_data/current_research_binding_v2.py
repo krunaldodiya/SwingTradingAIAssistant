@@ -308,13 +308,8 @@ class CurrentResearchMappingProjectionV2:
             or len({item.effective_symbol for item in self.members})
             != len(self.members)
             or any(
-                (
-                    self.origin == "RETAINED_INSTRUMENT_SNAPSHOT"
-                    and (
-                        item.valid_from > selected.date()
-                        or selected.date() > item.valid_through
-                    )
-                )
+                item.valid_from > selected.date()
+                or selected.date() > item.valid_through
                 or item.mapping_valid_from > selected.date()
                 or (
                     item.mapping_valid_through is not None

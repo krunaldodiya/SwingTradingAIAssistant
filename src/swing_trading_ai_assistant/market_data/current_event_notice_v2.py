@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -15,7 +14,6 @@ from typing import Final, Literal, cast
 from zoneinfo import ZoneInfo
 
 from .current_event_notice import (
-    _ARCHIVE_DIRECTORY,  # pyright: ignore[reportPrivateUsage]
     _ARCHIVE_LOCK,  # pyright: ignore[reportPrivateUsage]
     CurrentEventCohortMemberV1,
     CurrentEventNoticeFailureV1,
@@ -34,6 +32,8 @@ from .current_event_notice import (
     _receipt_datetime,  # pyright: ignore[reportPrivateUsage]
     _relevant_row_failure,  # pyright: ignore[reportPrivateUsage]
     _trusted_utc_now,  # pyright: ignore[reportPrivateUsage]
+    _validate_archive_directory,  # pyright: ignore[reportPrivateUsage]
+    _validate_archive_root,  # pyright: ignore[reportPrivateUsage]
     current_event_notice_runtime_code_identity_v1,
     parse_current_event_notice_artifact_v1,
     validate_retained_current_event_notice_v1,
@@ -123,16 +123,72 @@ def _verify_final_archive_binding(operation: object, directory: int) -> None:
     ensure_live = getattr(operation, "ensure_live", None)
     if type(root) is not int or not callable(ensure_live):
         raise ValueError("current event V2 archive authority invalid")
-    opened = os.fstat(directory)
-    named = os.stat(_ARCHIVE_DIRECTORY, dir_fd=root, follow_symlinks=False)
-    root_info = os.fstat(root)
-    if not stat.S_ISDIR(opened.st_mode):
-        raise ValueError("current event V2 archive authority invalid")
-    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-        raise ValueError("current event V2 archive authority invalid")
-    if not stat.S_ISDIR(root_info.st_mode):
-        raise ValueError("current event V2 archive authority invalid")
-    ensure_live()
+    try:
+        # Reuse the V1 authority contract immediately before success: type,
+        # owner UID, exact private mode and descriptor/name inode binding.
+        _validate_archive_directory(root, directory)
+        _validate_archive_root(root)
+        ensure_live()
+    except (OSError, ValueError, RuntimeError):
+        raise ValueError("current event V2 archive authority invalid") from None
+
+
+def _decode_stored_projection_v2(  # noqa: C901 - bounded closed decoder
+    raw: bytes, expected_keys: set[str]
+) -> dict[str, object]:
+    """Decode an untrusted recovery prefix before any suffix publication."""
+    if type(raw) is not bytes or not 1 <= len(raw) <= 1024 * 1024:
+        raise ValueError("current event V2 immutable archive conflict")
+
+    def pairs(items: list[tuple[object, object]]) -> dict[str, object]:
+        if any(type(key) is not str for key, _ in items):
+            raise ValueError("current event V2 immutable archive conflict")
+        result: dict[str, object] = {cast(str, key): value for key, value in items}
+        if len(result) != len(items):
+            raise ValueError("current event V2 immutable archive conflict")
+        return result
+
+    def integer(token: str) -> int:
+        if len(token) > 258:
+            raise ValueError("current event V2 immutable archive conflict")
+        return int(token)
+
+    try:
+        decoded: object = json.loads(raw, object_pairs_hook=pairs, parse_int=integer)
+    except (RecursionError, TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("current event V2 immutable archive conflict") from None
+    if type(decoded) is not dict:
+        raise ValueError("current event V2 immutable archive conflict")
+    projection = {
+        cast(str, key): value
+        for key, value in cast(dict[object, object], decoded).items()
+    }
+    if set(projection) != expected_keys:
+        raise ValueError("current event V2 immutable archive conflict")
+    # Iterative bounds keep malformed retained JSON from consuming recursive
+    # semantic validation or becoming a repair trigger.
+    stack: list[tuple[object, int]] = [(projection, 0)]
+    nodes = 0
+    string_bytes = 0
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        if nodes > 50_000 or depth > 16:
+            raise ValueError("current event V2 immutable archive conflict")
+        if type(value) is str:
+            string_bytes += len(value.encode())
+            if len(value.encode()) > 4_096 or string_bytes > 1024 * 1024:
+                raise ValueError("current event V2 immutable archive conflict")
+        elif type(value) is list:
+            items = cast(list[object], value)
+            stack.extend([(item, depth + 1) for item in items])
+        elif type(value) is dict:
+            items = cast(dict[str, object], value)
+            stack.extend([(item, depth + 1) for item in items.values()])
+            stack.extend([(key, depth + 1) for key in items])
+        elif value is not None and type(value) not in {bool, int}:
+            raise ValueError("current event V2 immutable archive conflict")
+    return projection
 
 
 def _instant(value: object) -> datetime:
@@ -498,12 +554,9 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
         or cutoff != mapping.decision_cutoff
         or source_range is None
         or source_range[1] != known.astimezone(ZoneInfo("Asia/Kolkata")).date()
-        or (
-            mapping.origin == "RETAINED_INSTRUMENT_SNAPSHOT"
-            and any(
-                not _mapping_valid_on_source_date(item, source_range[1])
-                for item in mapping.members
-            )
+        or any(
+            not _mapping_valid_on_source_date(item, source_range[1])
+            for item in mapping.members
         )
         or not notice_dates_valid
         or len({item.observation_identity_sha256 for item in notices}) != len(notices)
@@ -585,6 +638,42 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
         if (
             value.snapshot_identity_sha256 != snapshot_identity
             or value.archive_identity_sha256 != archive_identity
+            or value.receipt_identity_sha256 != receipt_identity
+            or value.retained_identity_sha256 != retained_identity
+        ):
+            return False
+    else:
+        # V1's private snapshot preimage is deliberately opaque in V2, but the
+        # archive, receipt and retained identities are fully determined by this
+        # redacted projection and must not become rehashable substitutions.
+        archive_identity = _digest(
+            {
+                "artifact_identity_sha256": value.artifact_identity_sha256,
+                "snapshot_identity_sha256": value.snapshot_identity_sha256,
+                "contract_version": "current-supplied-cohort-event-notice@v1",
+                "archive_protocol": "current-event-notice-archive@v1",
+            }
+        )
+        known_text = cast(str, _wire(known))
+        receipt_core = {
+            "version": "retained-current-event-notice-receipt@v1",
+            "artifact_identity_sha256": value.artifact_identity_sha256,
+            "snapshot_identity_sha256": value.snapshot_identity_sha256,
+            "archive_identity_sha256": archive_identity,
+            "runtime_code_identity_sha256": value.source_runtime_code_identity_sha256,
+            "known_at": known_text,
+            "acquisition_method": value.acquisition_method,
+            "licence_policy_identity": value.licence_policy_identity,
+            "source_filename": value.source_filename,
+            "source_encoding": value.source_encoding,
+            "source_has_bom": value.source_has_bom,
+        }
+        receipt_identity = _digest(receipt_core)
+        retained_identity = _digest(
+            {**receipt_core, "receipt_identity_sha256": receipt_identity}
+        )
+        if (
+            value.archive_identity_sha256 != archive_identity
             or value.receipt_identity_sha256 != receipt_identity
             or value.retained_identity_sha256 != retained_identity
         ):
@@ -769,7 +858,7 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
         or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
     ):
         raise ValueError("current event V2 source-time integrity invalid")
-    if mapping.origin == "RETAINED_INSTRUMENT_SNAPSHOT" and any(
+    if any(
         not _mapping_valid_on_source_date(member, source_date)
         for member in mapping.members
     ):
@@ -911,9 +1000,14 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                 raise ValueError("current event retention exceeded decision cutoff")
             if stored is not None:
                 try:
-                    stored_core = json.loads(stored[0])
+                    stored_core = _decode_stored_projection_v2(
+                        stored[0], set(projection_core)
+                    )
+                    stored_known_text = stored_core["known_at"]
+                    if type(stored_known_text) is not str:
+                        raise ValueError("current event V2 immutable archive conflict")
                     stored_known = datetime.fromisoformat(
-                        stored_core["known_at"].replace("Z", "+00:00")
+                        stored_known_text.replace("Z", "+00:00")
                     )
                 except (KeyError, TypeError, ValueError):
                     raise ValueError(

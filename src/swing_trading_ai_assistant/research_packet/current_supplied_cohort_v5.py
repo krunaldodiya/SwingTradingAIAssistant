@@ -39,7 +39,9 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
+    _ADJUSTED_FAILURE_PAIRS,  # pyright: ignore[reportPrivateUsage]
     RetainedCurrentSamePassMarketContextV4,
+    _packet_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
     _research_binding_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
     current_same_pass_market_regime_runtime_code_identity_v4,
 )
@@ -52,6 +54,7 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockFeatureCoverageV2,
     BharatStockMemberFeatureV2,
+    BharatStockResearchMemberV2,
     BharatStockResearchPacketV2,
     bharatstock_research_packet_semantics_are_valid_v2,
     validate_bharatstock_research_packet_v2,
@@ -320,6 +323,12 @@ def _regime_semantics_are_exact(
     return regime == expected
 
 
+def _component_ledger_is_valid(
+    components: tuple[CurrentResearchV5Component, ...], context: object
+) -> bool:
+    return _component_ledger_is_valid_impl(components, cast(Any, context))
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentResearchV5ContextSection:
     completion_status: Literal["READY", "FAILED"]
@@ -331,6 +340,8 @@ class CurrentResearchV5ContextSection:
     canonical_cohort_identity_sha256: str
     cohort_size: int
     raw_result_identity_sha256: str
+    raw_grid_identity_sha256: str | None
+    adjusted_component_identity_sha256: str
     market_data_report_identity_sha256: str
     market_regime_report_identity_sha256: str | None
     market_regime_schema_identity_sha256: str
@@ -347,6 +358,9 @@ class CurrentResearchV5ContextSection:
     market_regime_declines: int | None
     market_regime_unchanged: int | None
     market_regime_reasons: tuple[str, ...]
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
     industry_report_identity_sha256: str | None
     components: tuple[CurrentResearchV5Component, ...]
     mapping_receipt_count: int
@@ -362,7 +376,9 @@ class CurrentResearchV5ContextSection:
             self.retained_context_identity_sha256,
             self.canonical_cohort_identity_sha256,
             self.raw_result_identity_sha256,
+            self.adjusted_component_identity_sha256,
             self.market_data_report_identity_sha256,
+            self.schedule_evidence_sha256,
             self.context_projection_identity_sha256,
         )
         optional = (
@@ -378,6 +394,10 @@ class CurrentResearchV5ContextSection:
             self.completion_status not in {"READY", "FAILED"}
             or any(not _valid_digest(value) for value in required)
             or any(value is not None and not _valid_digest(value) for value in optional)
+            or (
+                self.raw_grid_identity_sha256 is not None
+                and not _valid_digest(self.raw_grid_identity_sha256)
+            )
             or any(not _valid_digest(value) for value in regime_digests)
             or self.market_regime_schema_identity_sha256 != _regime_schema_identity()
             or self.market_regime_calculation_identity_sha256
@@ -391,6 +411,10 @@ class CurrentResearchV5ContextSection:
             or type(self.cohort_size) is not int
             or not 1 <= self.cohort_size <= 100
             or type(self.market_regime_reasons) is not tuple
+            or type(self.schedule_source) is not str
+            or not 1 <= len(self.schedule_source.encode()) <= 256
+            or type(self.schedule_source_release) is not str
+            or not 1 <= len(self.schedule_source_release.encode()) <= 256
             or any(
                 type(reason) is not str or not 1 <= len(reason.encode()) <= 128
                 for reason in self.market_regime_reasons
@@ -417,6 +441,7 @@ class CurrentResearchV5ContextSection:
                 "ADJUSTED_DAILY_CLOSE_V2",
                 "MARKET_REGIME_V4",
             )
+            or not _component_ledger_is_valid(self.components, self)
             or self.completion_status
             != (
                 "READY"
@@ -438,6 +463,97 @@ class CurrentResearchV5ContextSection:
         if self.context_projection_identity_sha256 != expected:
             raise ValueError("invalid current V5 context section")
         object.__setattr__(self, "market_regime_decision_cutoff", regime_cutoff)
+
+
+def _component_ledger_is_valid_impl(
+    components: tuple[CurrentResearchV5Component, ...], context: Any
+) -> bool:
+    """Validate the fixed V4 producer ledger before deriving V5 readiness."""
+    expected = (
+        ("RAW_GRID_V1", "current-same-pass-raw-daily-grid@v4"),
+        (
+            "CORPORATE_ACTION_SCREEN_V1",
+            "current-supplied-cohort-corporate-action-screen@v1",
+        ),
+        ("ADJUSTED_DAILY_CLOSE_V2", "provider-neutral-adjusted-daily-close@v3"),
+        ("MARKET_REGIME_V4", "current-supplied-cohort-market-regime@v4"),
+    )
+    if (
+        tuple((item.component, item.contract_version) for item in components)
+        != expected
+    ):
+        return False
+    raw, screen, adjusted, regime = components
+    if (
+        raw.schema_identity_sha256 is None
+        or raw.runtime_code_identity_sha256 is None
+        or raw.evidence_state not in {"OBSERVED", "INSUFFICIENT_EVIDENCE"}
+        or (raw.evidence_state == "OBSERVED")
+        != (
+            raw.reasons == ()
+            and context.raw_grid_identity_sha256 is not None
+            and raw.primary_identity_sha256 == context.raw_grid_identity_sha256
+        )
+        or (raw.evidence_state == "INSUFFICIENT_EVIDENCE")
+        != (
+            bool(raw.reasons)
+            and context.raw_grid_identity_sha256 is None
+            and raw.primary_identity_sha256 == context.raw_result_identity_sha256
+        )
+    ):
+        return False
+    if (
+        screen.schema_identity_sha256 is None
+        or screen.runtime_code_identity_sha256 is None
+        or screen.evidence_state not in {"SCREENED", "INSUFFICIENT_EVIDENCE"}
+        or (screen.evidence_state == "SCREENED") != (screen.reasons == ())
+        or (screen.evidence_state == "INSUFFICIENT_EVIDENCE") != bool(screen.reasons)
+    ):
+        return False
+    if (
+        adjusted.schema_identity_sha256 is not None
+        or adjusted.runtime_code_identity_sha256 is not None
+        or adjusted.evidence_state
+        not in {
+            "SUCCESS",
+            "INVALID_REQUEST",
+            "INSUFFICIENT_DATA",
+            "PROVIDER_FAILURE",
+            "NOT_ATTEMPTED",
+        }
+        or adjusted.primary_identity_sha256
+        != context.adjusted_component_identity_sha256
+        or (adjusted.evidence_state == "SUCCESS") != (adjusted.reasons == ())
+        or (
+            adjusted.evidence_state in _ADJUSTED_FAILURE_PAIRS
+            and (
+                len(adjusted.reasons) != 1
+                or adjusted.reasons[0]
+                not in _ADJUSTED_FAILURE_PAIRS[adjusted.evidence_state]
+            )
+        )
+        or (
+            adjusted.evidence_state == "NOT_ATTEMPTED"
+            and adjusted.reasons != ("UPSTREAM_INSUFFICIENT_EVIDENCE",)
+        )
+    ):
+        return False
+    return (
+        regime.schema_identity_sha256 == context.market_regime_schema_identity_sha256
+        and regime.runtime_code_identity_sha256
+        == context.market_regime_runtime_code_identity_sha256
+        and regime.primary_identity_sha256
+        == context.market_regime_report_identity_sha256
+        and regime.evidence_state == context.market_regime_evidence_state
+        and (
+            (regime.evidence_state == "OBSERVED" and regime.reasons == ())
+            or (
+                regime.evidence_state == "INSUFFICIENT_EVIDENCE"
+                and regime.reasons == context.market_regime_reasons
+                and bool(regime.reasons)
+            )
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -558,6 +674,13 @@ def _context_section(
     raw = accessor(retained)
     if type(raw) is not dict:
         raise ValueError("current V5 retained context invalid")
+    packet_accessor = cast(
+        Callable[[object, object], dict[str, object] | None],
+        _packet_projection_from_retained_context_v4,
+    )
+    raw_packet = packet_accessor(retained, object())
+    if type(raw_packet) is not dict:
+        raise ValueError("current V5 retained context invalid")
     if (
         mapping.origin != "RETAINED_SAME_PASS_CONTEXT"
         or mapping.context_identity_sha256 != raw["context_identity_sha256"]
@@ -607,6 +730,10 @@ def _context_section(
         "canonical_cohort_identity_sha256": raw["canonical_cohort_identity_sha256"],
         "cohort_size": len(mapping.members),
         "raw_result_identity_sha256": raw["raw_result_identity_sha256"],
+        "raw_grid_identity_sha256": raw_packet["raw_grid_identity_sha256"],
+        "adjusted_component_identity_sha256": raw_packet[
+            "adjusted_component_identity_sha256"
+        ],
         "market_data_report_identity_sha256": raw["market_data_report_identity_sha256"],
         "market_regime_report_identity_sha256": raw[
             "market_regime_report_identity_sha256"
@@ -629,6 +756,9 @@ def _context_section(
         "market_regime_declines": raw["market_regime_declines"],
         "market_regime_unchanged": raw["market_regime_unchanged"],
         "market_regime_reasons": raw["market_regime_reasons"],
+        "schedule_evidence_sha256": raw["schedule_evidence_sha256"],
+        "schedule_source": raw["schedule_source"],
+        "schedule_source_release": raw["schedule_source_release"],
         "industry_report_identity_sha256": industry_identity,
         "components": components,
         "mapping_receipt_count": len(receipts),
@@ -643,6 +773,8 @@ def _context_section(
         cast(str, values["canonical_cohort_identity_sha256"]),
         len(mapping.members),
         cast(str, values["raw_result_identity_sha256"]),
+        cast(str | None, values["raw_grid_identity_sha256"]),
+        cast(str, values["adjusted_component_identity_sha256"]),
         cast(str, values["market_data_report_identity_sha256"]),
         cast(str | None, values["market_regime_report_identity_sha256"]),
         cast(str, values["market_regime_schema_identity_sha256"]),
@@ -663,6 +795,9 @@ def _context_section(
         cast(int | None, values["market_regime_declines"]),
         cast(int | None, values["market_regime_unchanged"]),
         cast(tuple[str, ...], values["market_regime_reasons"]),
+        cast(str, values["schedule_evidence_sha256"]),
+        cast(str, values["schedule_source"]),
+        cast(str, values["schedule_source_release"]),
         cast(str | None, values["industry_report_identity_sha256"]),
         components,
         len(receipts),
@@ -899,8 +1034,31 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         != mapping.completion_marker_identity_sha256
         or packet.context.retained_context_identity_sha256
         != mapping.retained_context_identity_sha256
+        or packet.context.canonical_cohort_identity_sha256
+        != mapping.canonical_cohort_identity_sha256
+        or packet.context.cohort_size != len(mapping.members)
         or packet.context.market_regime_decision_cutoff
         != packet.bound_request.request.decision_cutoff
+        or packet.context.schedule_evidence_sha256
+        != packet.bound_request.request.schedule_evidence_sha256
+        or packet.context.schedule_source
+        != packet.bound_request.request.schedule_source
+        or packet.context.schedule_source_release
+        != packet.bound_request.request.schedule_source_release
+        or any(
+            source.schedule_evidence_sha256
+            != packet.bound_request.request.schedule_evidence_sha256
+            or source.schedule_identity_sha256
+            != packet.bound_request.request.schedule_identity_sha256
+            or source.selection_identity_sha256
+            != mapping.ordered_selection_identity_sha256
+            or source.price_basis != packet.price_evidence.price_basis
+            for source in (
+                slot.source
+                for slot in packet.price_evidence.feature_slots
+                if slot.source is not None
+            )
+        )
         or packet.context.mapping_receipt_count
         != sum(item.discovery_source is not None for item in mapping.members)
         or packet.coverage != packet.price_evidence.coverage
@@ -1288,12 +1446,54 @@ def validate_current_research_packet_v5(packet: object) -> CurrentResearchPacket
     return packet
 
 
-def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
-    """Bound the exact JSON graph before canonical graph/byte construction."""
-    stack = [(value, 0) for value in roots]
-    nodes = 0
-    estimated_bytes = len(roots)  # one terminal LF per independent root
+@dataclass(frozen=True, slots=True)
+class _WriterMembersPreflightV5:
+    mapping: CurrentResearchMappingProjectionV2
+    price: BharatStockResearchPacketV2
+    event: RetainedCurrentEventNoticeProjectionV2
+
+
+@dataclass(frozen=True, slots=True)
+class _WriterMemberPreflightV5:
+    mapping: CurrentResearchMappingMemberV2
+    price_member: BharatStockResearchMemberV2
+    event_member: CurrentEventMemberProjectionV2
+
+
+@dataclass(slots=True)
+class _TypedWriterStatsV5:
+    """Opt-in instrumentation for writer admission, separate from JSON reading."""
+
+    nodes_admitted: int = 0
+    nodes_rejected_before_construction: int = 0
+    canonical_calls_before_admission: int = 0
+
+
+def _preflight_typed_writer_v5(  # noqa: C901
+    fields_to_write: tuple[tuple[str, object], ...],
+    stats: _TypedWriterStatsV5 | None = None,
+) -> None:
+    """Reserve the final V5 object without hashing, wiring or constructing it."""
+    if (
+        type(fields_to_write) is not tuple
+        or not fields_to_write
+        or any(type(key) is not str for key, _ in fields_to_write)
+        or len({key for key, _ in fields_to_write}) != len(fields_to_write)
+    ):
+        raise ValueError("current V5 typed value")
+    counters = stats if stats is not None else _TypedWriterStatsV5()
+    stack: list[tuple[object, int]] = []
+    nodes = 1  # the reserved final object itself
+    estimated_bytes = 2 + max(0, len(fields_to_write) - 1) + 1  # braces, commas, LF
     decoded_string_bytes = 0
+
+    def admit(depth: int) -> None:
+        nonlocal nodes
+        if nodes >= 50_000 or depth > 16:
+            counters.nodes_rejected_before_construction += 1
+            raise ValueError("current V5 typed bounds")
+        nodes += 1
+        counters.nodes_admitted = nodes
 
     def add_string(value: str) -> None:
         nonlocal estimated_bytes, decoded_string_bytes
@@ -1303,19 +1503,14 @@ def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
         decoded_string_bytes += size
         estimated_bytes += len(json.dumps(value, ensure_ascii=True))
 
-    def add_key(value: str, depth: int) -> None:
-        nonlocal nodes, estimated_bytes
-        nodes += 1
-        if nodes > 50_000 or depth > 16:
-            raise ValueError("current V5 typed bounds")
-        add_string(value)
+    for key, value in reversed(fields_to_write):
+        admit(1)
+        add_string(key)
         estimated_bytes += 1  # colon
-
+        stack.append((value, 1))
     while stack:
         value, depth = stack.pop()
-        nodes += 1
-        if nodes > 50_000 or depth > 16:
-            raise ValueError("current V5 typed bounds")
+        admit(depth)
         if type(value) is str:
             add_string(value)
         elif type(value) is Decimal:
@@ -1329,6 +1524,67 @@ def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
             ):
                 raise ValueError("current V5 decimal bounds")
             add_string(format(decimal_value, "f"))
+        elif type(value) is _WriterMembersPreflightV5:
+            count = len(value.mapping.members)
+            if count > 10_000:
+                raise ValueError("current V5 cardinality bounds")
+            estimated_bytes += 2 + max(0, count - 1)
+            stack.extend(
+                (
+                    _WriterMemberPreflightV5(
+                        value.mapping.members[position],
+                        value.price.members[position],
+                        value.event.members[position],
+                    ),
+                    depth + 1,
+                )
+                for position in range(count - 1, -1, -1)
+            )
+        elif type(value) is _WriterMemberPreflightV5:
+            member_value = value
+            expected: tuple[tuple[str, object], ...] = (
+                ("mapping", member_value.mapping),
+                (
+                    "candle_geometry",
+                    next(
+                        (
+                            item
+                            for item in member_value.price_member.features
+                            if item.feature == "CANDLE_GEOMETRY"
+                        ),
+                        None,
+                    ),
+                ),
+                (
+                    "previous_close_comparison",
+                    next(
+                        (
+                            item
+                            for item in member_value.price_member.features
+                            if item.feature == "PREVIOUS_CLOSE_COMPARISON"
+                        ),
+                        None,
+                    ),
+                ),
+                (
+                    "market_structure",
+                    next(
+                        (
+                            item
+                            for item in member_value.price_member.features
+                            if item.feature == "MARKET_STRUCTURE"
+                        ),
+                        None,
+                    ),
+                ),
+                ("event_notice", member_value.event_member),
+            )
+            estimated_bytes += 2 + len(expected) - 1
+            for key, item in reversed(expected):
+                admit(depth + 1)
+                add_string(key)
+                estimated_bytes += 1
+                stack.append((item, depth + 1))
         elif type(value) is tuple:
             items = cast(tuple[object, ...], value)
             if len(items) > 10_000:
@@ -1341,12 +1597,13 @@ def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
                 raise ValueError("current V5 typed value")
             estimated_bytes += 2 + max(0, len(items) - 1)
             for key, item in reversed(items):
-                add_key(cast(str, key), depth + 1)
+                admit(depth + 1)
+                add_string(cast(str, key))
+                estimated_bytes += 1
                 stack.append((item, depth + 1))
         elif type(value) is datetime:
-            instant_value = value
             add_string(
-                instant_value.astimezone(UTC)
+                value.astimezone(UTC)
                 .isoformat(timespec="microseconds")
                 .replace("+00:00", "Z")
             )
@@ -1357,17 +1614,18 @@ def _preflight_typed_writer_v5(*roots: object) -> None:  # noqa: C901
         elif type(value) is bool:
             estimated_bytes += 4 if value else 5
         elif type(value) is int:
-            integer_value = value
-            if integer_value.bit_length() > 1024:
+            if value.bit_length() > 1024:
                 raise ValueError("current V5 integer bounds")
-            estimated_bytes += len(str(integer_value))
+            estimated_bytes += len(str(value))
         elif is_dataclass(value) and not isinstance(value, type):
             public = tuple(
                 item for item in fields(value) if not item.name.startswith("_")
             )
             estimated_bytes += 2 + max(0, len(public) - 1)
             for item in reversed(public):
-                add_key(item.name, depth + 1)
+                admit(depth + 1)
+                add_string(item.name)
+                estimated_bytes += 1
                 stack.append((getattr(value, item.name), depth + 1))
         else:
             raise ValueError("current V5 typed value")
@@ -1421,13 +1679,25 @@ def build_current_research_packet_v5(
         or price.selection_identity_sha256 != mapping.ordered_selection_identity_sha256
         or event.mapping_projection != mapping
         or event.decision_cutoff != request.decision_cutoff
+        or context.canonical_cohort_identity_sha256
+        != mapping.canonical_cohort_identity_sha256
+        or context.cohort_size != len(mapping.members)
+        or context.schedule_evidence_sha256 != request.schedule_evidence_sha256
+        or context.schedule_source != request.schedule_source
+        or context.schedule_source_release != request.schedule_source_release
+        or any(
+            source.schedule_evidence_sha256 != request.schedule_evidence_sha256
+            or source.schedule_identity_sha256 != request.schedule_identity_sha256
+            or source.selection_identity_sha256
+            != mapping.ordered_selection_identity_sha256
+            or source.price_basis != price.price_basis
+            for source in (
+                slot.source for slot in price.feature_slots if slot.source is not None
+            )
+        )
     ):
         raise ValueError("current V5 cross-component substitution")
     bound = _bound_request(request, mapping)
-    members = tuple(
-        _member(item, price, event, position)
-        for position, item in enumerate(mapping.members)
-    )
     execution_state: Literal["RESEARCH_READY", "NON_READY"] = (
         "RESEARCH_READY"
         if _integrated_price_is_ready_v5(price)
@@ -1440,24 +1710,31 @@ def build_current_research_packet_v5(
         else "NON_READY"
     )
     runtime = current_research_packet_runtime_code_identity_v5()
+    fields_to_write: tuple[tuple[str, object], ...] = (
+        ("contract_version", _CONTRACT),
+        ("schema_identity_sha256", _SCHEMA_IDENTITY),
+        ("configuration_identity_sha256", _CONFIGURATION_IDENTITY),
+        ("runtime_code_identity_sha256", runtime),
+        ("execution_state", execution_state),
+        ("bound_request", bound),
+        ("price_evidence", price),
+        ("event_evidence", event),
+        ("industry_evidence", industry),
+        ("context", context),
+        ("coverage", price.coverage),
+        ("members", _WriterMembersPreflightV5(mapping, price, event)),
+    )
+    # Reserve the final digest's exact key/value and separators before hashing,
+    # attaching members or building the final dictionary/serialization graph.
+    _preflight_typed_writer_v5((*fields_to_write, ("result_identity_sha256", "0" * 64)))
+    members = tuple(
+        _member(item, price, event, position)
+        for position, item in enumerate(mapping.members)
+    )
     preimage = {
-        "contract_version": _CONTRACT,
-        "schema_identity_sha256": _SCHEMA_IDENTITY,
-        "configuration_identity_sha256": _CONFIGURATION_IDENTITY,
-        "runtime_code_identity_sha256": runtime,
-        "execution_state": execution_state,
-        "bound_request": bound,
-        "price_evidence": price,
-        "event_evidence": event,
-        "industry_evidence": industry,
-        "context": context,
-        "coverage": price.coverage,
-        "members": members,
+        key: (members if key == "members" else value) for key, value in fields_to_write
     }
     result_identity = _digest(preimage)
-    # The result identity is a final public field; preflight its complete graph
-    # before allocating the canonical packet representation.
-    _preflight_typed_writer_v5({**preimage, "result_identity_sha256": result_identity})
     packet = object.__new__(CurrentResearchPacketV5)
     for name, value in {
         **preimage,
