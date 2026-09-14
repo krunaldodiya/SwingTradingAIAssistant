@@ -1520,6 +1520,22 @@ _FINITE_INSUFFICIENT_REASONS: Final = frozenset(
 )
 
 
+# CaptureResultV2's finite non-storage refusals, not client/member categories.
+# The public workflow separately handles shared calendar/storage authority loss
+# and binds deadline stops; this table classifies only a no-revision slot.
+_FINITE_CAPTURE_NO_REVISION_REASONS: Final = frozenset(
+    {
+        "PARENT_REVISION_MISMATCH",
+        "CORRECTION_LINEAGE_LIMIT",
+        "CORRECTION_CONTENT_UNCHANGED",
+        "CORRECTION_OBSERVATION_ORDER",
+        "REVISION_TOO_LARGE",
+        "ACQUISITION_DEADLINE_EXCEEDED",
+        "SCHEDULE_EVIDENCE_MISMATCH",
+    }
+)
+
+
 def _failure_outcome(
     reason: str,
 ) -> tuple[_Availability, _Support, _Comparability]:
@@ -1548,6 +1564,20 @@ def _failure_member_feature(
             (),
         )
     reason = slot.failure_reason or slot.failure_code or "PRICE_EVIDENCE_UNAVAILABLE"
+    if (
+        slot.state == "ATTEMPTED_NO_REVISION"
+        and slot.failure_code == "INSUFFICIENT_EVIDENCE"
+        and reason in _FINITE_CAPTURE_NO_REVISION_REASONS
+    ):
+        return BharatStockMemberFeatureV2(
+            slot.feature,
+            "INSUFFICIENT_EVIDENCE",
+            "NOT_ESTABLISHED",
+            "NOT_ESTABLISHED",
+            reason,
+            None,
+            (),
+        )
     availability, support, comparability = _failure_outcome(reason)
     return BharatStockMemberFeatureV2(
         slot.feature, availability, support, comparability, reason, None, ()

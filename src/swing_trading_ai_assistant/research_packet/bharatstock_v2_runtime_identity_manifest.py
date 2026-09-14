@@ -3,7 +3,7 @@
 from typing import Final
 
 BHARATSTOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py": "091977869b4fc3c3e09517c788e723d3415dc5decd1344a8438bb4db81ff7a5d",
+    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py": "01e41649be0b8ca7d119614a3cc1ef4543fbc18720e55ff7a18a43b3018bb36a",
     "src/swing_trading_ai_assistant/research_packet/bharatstock.py": "3c069177245684811588e3a8cb8a77b3835d8823073ede6b0de5f97a93a59abc",
     "src/swing_trading_ai_assistant/market_structure/current_live.py": "592cecf888eee4347cf9ff6c45f03705df27c557a3d6d21df51b8ea7fdf73c31",
     "src/swing_trading_ai_assistant/market_structure/current_live_runtime_identity_manifest.py": "1064bafb6c5b1846f1d4ef26c70d9a1621daac0c9421fb399f7b0cce4bdf5b67",

@@ -477,16 +477,25 @@ def _capture_window(
     refresh: bool,
 ) -> tuple[CaptureResultV2, CaptureRequestV2]:
     attempted: list[CaptureRequestV2] = []
-    result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
-        request,
-        root,
-        lease,
-        window,
-        price_client,
-        refresh=refresh,
-        prior=None,
-        request_attempt_observer=attempted.append,
-    )
+    try:
+        result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
+            request,
+            root,
+            lease,
+            window,
+            price_client,
+            refresh=refresh,
+            prior=None,
+            request_attempt_observer=attempted.append,
+        )
+    except legacy.CurrentStockResearchFailure as error:
+        if (error.stage, error.code) != ("deadline", "ACQUISITION_DEADLINE_EXPIRED"):
+            raise
+        # V1's clock throws before capture can return its governed deadline
+        # refusal. Normalize only that exact outcome for V2's bound shared stop.
+        result = CaptureResultV2(
+            "INSUFFICIENT_EVIDENCE", None, "ACQUISITION_DEADLINE_EXCEEDED"
+        )
     if not attempted:
         raise ValueError("BharatStock V2 capture attempt was not observed")
     return result, attempted[-1]
@@ -702,6 +711,14 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                         runtime,
                         "storage",
                         capture.reason or capture.code,
+                    )
+                if (
+                    capture.code == "INSUFFICIENT_EVIDENCE"
+                    and capture.reason == "SCHEDULE_EVIDENCE_MISMATCH"
+                ):
+                    # Every price window depends on this same calendar authority.
+                    return _terminal(
+                        symbol, question, window, runtime, "calendar", capture.reason
                     )
                 trigger_request = submitted
                 if revision is not None and revision.shared_failure is not None:

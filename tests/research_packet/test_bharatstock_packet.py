@@ -327,6 +327,53 @@ def test_one_session_withholds_both_feature_facts_explicitly() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "reason",
+    (
+        "PARENT_REVISION_MISMATCH",
+        "CORRECTION_LINEAGE_LIMIT",
+        "CORRECTION_CONTENT_UNCHANGED",
+        "CORRECTION_OBSERVATION_ORDER",
+        "REVISION_TOO_LARGE",
+        "ACQUISITION_DEADLINE_EXCEEDED",
+        "SCHEDULE_EVIDENCE_MISMATCH",
+    ),
+)
+def test_v2_capture_no_revision_reason_routing_is_closed_and_channel_specific(
+    reason: str,
+) -> None:
+    # Component classification only: no retained acquisition/admission is claimed.
+    request = _revision_with_history(1).request
+    provenance = BharatStockCaptureRequestProvenanceV2(
+        request.request_identity_sha256,
+        request.schedule_identity_sha256,
+        request.decision_cutoff,
+        request.sessions,
+    )
+    input_slot = BharatStockFeatureInputV2(
+        "CANDLE_GEOMETRY",
+        "ATTEMPTED_NO_REVISION",
+        request.sessions,
+        request_provenance=provenance,
+        failure_code="INSUFFICIENT_EVIDENCE",
+        failure_reason=reason,
+        executed_at=_CUTOFF,
+    )
+    slot = bharatstock_v2._slot(input_slot, "0" * 64)  # pyright: ignore[reportPrivateUsage]
+    feature = bharatstock_v2._failure_member_feature(slot)  # pyright: ignore[reportPrivateUsage]
+    assert feature.availability == "INSUFFICIENT_EVIDENCE"
+    assert feature.support == feature.comparability == "NOT_ESTABLISHED"
+    assert feature.reason == reason and feature.fact is None
+    wrong_code = bharatstock_v2._slot(  # pyright: ignore[reportPrivateUsage]
+        replace(input_slot, failure_code="INTERNAL_ERROR"), "0" * 64
+    )
+    with pytest.raises(ValueError, match="unexpected BharatStock"):
+        bharatstock_v2._failure_member_feature(wrong_code)  # pyright: ignore[reportPrivateUsage]
+    # Capture-only categories must not become accepted client/member errors.
+    with pytest.raises(ValueError, match="unexpected BharatStock"):
+        bharatstock_v2._failure_outcome(reason)  # pyright: ignore[reportPrivateUsage]
+
+
 def test_v2_requested_slot_provenance_is_exact_and_bounded() -> None:
     request = _revision_with_history(1).request
     provenance = BharatStockCaptureRequestProvenanceV2(

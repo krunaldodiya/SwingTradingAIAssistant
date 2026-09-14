@@ -1755,7 +1755,10 @@ def _adopt_delivered_legacy_archive(
     receipt_name = f"{archive_identity}.receipt.json"
     marker_name = f"{archive_identity}.complete.json"
     with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
-        directory = _open_archive(operation.descriptor)
+        try:
+            directory = _open_existing_archive(operation.descriptor)
+        except FileNotFoundError:
+            return None
         try:
             receipt_entry = _read_stable_private_object(
                 directory, receipt_name, _MAX_ARCHIVE_RECEIPT_BYTES
