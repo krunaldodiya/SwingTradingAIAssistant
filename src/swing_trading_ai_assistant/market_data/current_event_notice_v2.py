@@ -59,6 +59,7 @@ _SCHEMA_IDENTITY: Final = hashlib.sha256(
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
     b"archive-bound-local-mapping-producer-attempt-logical-commit@v3\n"
 ).hexdigest()
+_IST: Final = ZoneInfo("Asia/Kolkata")
 
 
 def _wire(value: object) -> object:
@@ -719,7 +720,8 @@ def _validate_projection(  # noqa: C901 - exact source/archive equations
         or known > cutoff
         or cutoff != mapping.decision_cutoff
         or source_range is None
-        or source_range[1] != known.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        or source_range[1] != known.astimezone(_IST).date()
+        or source_range[1] != mapping.selected_at.astimezone(_IST).date()
         or any(
             not _mapping_valid_on_source_date(item, source_range[1])
             for item in mapping.members
@@ -922,7 +924,12 @@ def project_retained_current_event_notices_v2(
     """Revalidate archive bytes, then project mapping conflicts per member."""
     if not root.is_absolute() or type(lease) is not StorageRootLease:
         raise ValueError("current event V2 archive input invalid")
-    retained = validate_retained_current_event_notice_v1(root, lease, retained)
+    try:
+        retained = validate_retained_current_event_notice_v1(root, lease, retained)
+    except Exception as error:
+        # Archive reads are untrusted admission evidence.  Never project a
+        # retained V1 result after any missing, corrupt, or unsafe read.
+        raise ValueError("current event V2 retained archive invalid") from error
     mapping = validate_current_research_binding_v2(mapping_binding)
     cutoff = mapping.decision_cutoff
     attempts = (
@@ -932,7 +939,8 @@ def project_retained_current_event_notices_v2(
     if (
         retained.known_at > cutoff
         or source_date is None
-        or source_date != retained.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        or source_date != retained.known_at.astimezone(_IST).date()
+        or source_date != mapping.selected_at.astimezone(_IST).date()
         or any(
             not _mapping_valid_on_source_date(item, source_date)
             for item in mapping.members
@@ -1164,7 +1172,8 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
         if not prefix_exists and (
             known_at > mapping.decision_cutoff
             or source_date is None
-            or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+            or source_date != known_at.astimezone(_IST).date()
+            or source_date != mapping.selected_at.astimezone(_IST).date()
             or any(
                 not _mapping_valid_on_source_date(member, source_date)
                 for member in mapping.members
@@ -1194,7 +1203,8 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             if stored is None and (
                 known_at > mapping.decision_cutoff
                 or source_date is None
-                or source_date != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                or source_date != known_at.astimezone(_IST).date()
+                or source_date != mapping.selected_at.astimezone(_IST).date()
                 or any(
                     not _mapping_valid_on_source_date(member, source_date)
                     for member in mapping.members
@@ -1281,8 +1291,8 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                 if (
                     source_date is None
                     or known_at > mapping.decision_cutoff
-                    or source_date
-                    != known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                    or source_date != known_at.astimezone(_IST).date()
+                    or source_date != mapping.selected_at.astimezone(_IST).date()
                     or any(
                         not _mapping_valid_on_source_date(member, source_date)
                         for member in mapping.members

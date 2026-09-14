@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final, Literal, cast
+from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     RetainedCurrentSamePassMarketContextV4,
@@ -38,6 +39,7 @@ _SCHEMA_IDENTITY: Final = hashlib.sha256(
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
     b"exact-retained-mapping-explicit-discovery-outcome-no-fallback@v3\n"
 ).hexdigest()
+_IST: Final = ZoneInfo("Asia/Kolkata")
 
 
 def _wire(value: object) -> object:
@@ -308,12 +310,12 @@ class CurrentResearchMappingProjectionV2:
             or len({item.effective_symbol for item in self.members})
             != len(self.members)
             or any(
-                item.valid_from > selected.date()
-                or selected.date() > item.valid_through
-                or item.mapping_valid_from > selected.date()
+                item.valid_from > selected.astimezone(_IST).date()
+                or selected.astimezone(_IST).date() > item.valid_through
+                or item.mapping_valid_from > selected.astimezone(_IST).date()
                 or (
                     item.mapping_valid_through is not None
-                    and selected.date() > item.mapping_valid_through
+                    and selected.astimezone(_IST).date() > item.mapping_valid_through
                 )
                 or (
                     item.discovery_retrieved_at is not None
@@ -539,7 +541,7 @@ def resolve_current_research_binding_v2(
                 or instrument.exchange != "NSE"
                 or instrument.segment != "NSE_EQ"
                 or instrument.instrument_type != "EQ"
-                or metadata.observation_date != selected.date()
+                or metadata.observation_date != selected.astimezone(_IST).date()
             ):
                 raise ValueError("unsupported current research mapping")
             mapping_identity = _digest(

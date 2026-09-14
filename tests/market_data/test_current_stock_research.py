@@ -369,6 +369,7 @@ def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
         assert result.evidence_known_at == (
             None if question == "CURRENT_STRUCTURE" else _NOW
         )
+        assert b'"source_bars"' not in result.canonical_json_bytes()
 
 
 @pytest.mark.parametrize("available", (1, 2, 10, 20))
@@ -387,7 +388,7 @@ def test_v2_integrated_short_calendar_retains_independent_windows_without_struct
         sources,
         [
             clock.value.date() - timedelta(days=offset)
-            for offset in range(32)
+            for offset in range(workflow_v2._LOOKBACK_DAYS)  # pyright: ignore[reportPrivateUsage]
             if clock.value.date() - timedelta(days=offset) not in retained_sessions
         ],
     )

@@ -77,9 +77,10 @@ from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
 _IST: Final = ZoneInfo("Asia/Kolkata")
-# The shared official-calendar admission boundary permits at most 32 calendar
-# days, which still contains the required 21 completed weekday sessions.
-_LOOKBACK_DAYS: Final = 32
+# A calendar month can contain enough exchange holidays that 32 calendar days
+# does not provide 21 completed official sessions.  Retain a wider official
+# schedule window; features still select their exact independent sessions.
+_LOOKBACK_DAYS: Final = 64
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -228,7 +229,9 @@ def _wire(value: object) -> object:
         return {
             item.name: _wire(getattr(value, item.name))
             for item in fields(value)
-            if not item.name.startswith("_")
+            # Raw OHLCV is retained only to validate feature facts.  The V2
+            # result is public evidence and exports those facts, never bars.
+            if not item.name.startswith("_") and item.name != "source_bars"
         }
     if type(value) is tuple:
         return [_wire(item) for item in cast(tuple[object, ...], value)]

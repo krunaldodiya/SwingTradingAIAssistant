@@ -1004,8 +1004,10 @@ def _industry_semantics_are_valid_v5(
     return False
 
 
-def _integrated_price_is_ready_v5(price: BharatStockResearchPacketV2) -> bool:
-    """Return true only for the mandatory retained 1/2/21 Price matrix."""
+def _integrated_price_is_ready_v5(
+    price: BharatStockResearchPacketV2, context: CurrentResearchV5ContextSection
+) -> bool:
+    """Return true only for the context-bound retained 1/2/21 Price matrix."""
     expected_counts = (1, 2, 21)
     if (
         price.execution_state != "COMPLETED"
@@ -1020,6 +1022,9 @@ def _integrated_price_is_ready_v5(price: BharatStockResearchPacketV2) -> bool:
         tuple(len(item) for item in sessions) != expected_counts
         or sessions[0] != sessions[1][-1:]
         or sessions[1] != sessions[2][-2:]
+        # The 21-session window must end at this retained context's decision
+        # session, rather than merely being a coherent older capture window.
+        or sessions[2][-1] != context.market_regime_decision_session
         or any(item.state != "RETAINED_REVISION" for item in price.feature_slots)
     ):
         return False
@@ -1156,7 +1161,7 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         or packet.execution_state
         != (
             "RESEARCH_READY"
-            if _integrated_price_is_ready_v5(packet.price_evidence)
+            if _integrated_price_is_ready_v5(packet.price_evidence, packet.context)
             and packet.context.completion_status == "READY"
             and type(packet.industry_evidence) is CurrentIndustryParticipationReportV4
             and all(
@@ -1788,7 +1793,7 @@ def build_current_research_packet_v5(
     bound = _bound_request(request, mapping)
     execution_state: Literal["RESEARCH_READY", "NON_READY"] = (
         "RESEARCH_READY"
-        if _integrated_price_is_ready_v5(price)
+        if _integrated_price_is_ready_v5(price, context)
         and context.completion_status == "READY"
         and type(industry) is CurrentIndustryParticipationReportV4
         and all(
