@@ -452,6 +452,22 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     assert decoded.canonical_json_bytes() == public_bytes
     assert decoded.admitted is False
 
+    # A public caller can recompute V5's public digest, but cannot thereby
+    # reconcile a substituted request with its nested retained mapping proof.
+    rehashed = json.loads(public_bytes)
+    rehashed["bound_request"]["request"]["selected_at"] = "2024-01-01T00:00:00.000000Z"
+    rehashed["result_identity_sha256"] = current_supplied_cohort_v5._public_digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            key: value
+            for key, value in rehashed.items()
+            if key != "result_identity_sha256"
+        }
+    )
+    with pytest.raises(ValueError, match="current V5"):
+        CurrentResearchPacketV5.from_canonical_json_bytes(
+            json.dumps(rehashed, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+
     regime_payload = json.loads(packet.canonical_json_bytes())
     context_payload = regime_payload["context"]
     context_payload["market_regime"] = (
