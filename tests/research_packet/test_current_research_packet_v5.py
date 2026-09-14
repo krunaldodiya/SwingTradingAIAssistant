@@ -7,6 +7,7 @@ import importlib.util
 import json
 import sys
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -14,7 +15,23 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from swing_trading_ai_assistant.market_data import current_event_notice_v2 as event_v2
+from swing_trading_ai_assistant.market_data import (
+    bharatstock_capture as capture_v2,
+)
+from swing_trading_ai_assistant.market_data import (
+    current_event_notice_v2 as event_v2,
+)
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockDailyPrice,
+    BharatStockHistory,
+    BharatStockInstrument,
+)
+from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    CaptureRequestV2,
+    read_bharatstock_capture_binding_v2,
+    schedule_identity_v2,
+    selection_identity_v2,
+)
 from swing_trading_ai_assistant.market_data.current_event_notice import (
     EVENT_NOTICE_SCHEMA_IDENTITY_SHA256,
     CurrentEventNoticeInputV1,
@@ -25,6 +42,9 @@ from swing_trading_ai_assistant.market_data.current_research_binding_v2 import (
 )
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     compose_retained_integrated_current_research_v2,
+)
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    ScheduleEvidenceStore,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.research_packet import (
@@ -43,6 +63,15 @@ from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 impor
     build_current_research_packet_v5,
     current_research_packet_runtime_code_identity_v5,
 )
+
+
+def _admit_context_binding(root: Path, context: object) -> object:
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        return admit_retained_context_research_binding_v2(
+            context, ScheduleEvidenceStore(root, lease)
+        )
 
 
 def test_v5_request_has_frozen_schedule_and_time_bounds() -> None:
@@ -278,7 +307,7 @@ def test_failed_context_mapping_provenance_is_explicitly_absent(
         exercise_archive_contracts=False,
         capture=captured,
     )
-    binding = admit_retained_context_research_binding_v2(captured["retained"])
+    binding = _admit_context_binding(captured["root"], captured["retained"])
     mapping = validate_current_research_binding_v2(binding)
     assert all(item.discovery_source is None for item in mapping.members)
     assert all(
@@ -317,8 +346,13 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     industry = industry_test._api().reduce_current_industry_participation_v4(
         context, classification
     )
-    mapping_binding = admit_retained_context_research_binding_v2(context)
+    mapping_binding = _admit_context_binding(captured["root"], context)
     mapping = validate_current_research_binding_v2(mapping_binding)
+    assert (
+        mapping.context_schedule_identity_sha256
+        == private_context.request.schedule_identity_sha256
+    )
+    assert mapping.context_schedule_identity_sha256 != mapping.schedule_identity_sha256
     selected = mapping.selected_at
     cutoff = mapping.decision_cutoff
     execution = selected
@@ -458,6 +492,158 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
         build_current_research_packet_v5(
             request, mapping_binding, older_price, context, event, industry
         )
+
+    if not failed_context:
+        acquired = StorageRootLease.try_acquire(captured["root"])
+        assert acquired.lease is not None
+        with acquired.lease as lease:
+            resolved = ScheduleEvidenceStore(captured["root"], lease).resolve(
+                retained_schedule.schedule_evidence_sha256
+            )
+        assert resolved.schedule is not None
+        capture_schedule_identity = schedule_identity_v2(resolved.schedule)
+        official_sessions = tuple(
+            item.trade_date
+            for item in resolved.schedule.sessions
+            if item.close_at <= cutoff
+        )
+        assert official_sessions[-21:] == sessions
+
+        class ReadyClient:
+            def history(
+                self,
+                instrument: BharatStockInstrument,
+                start: date,
+                end: date,
+                *,
+                effect_guard: object = None,
+            ) -> BharatStockHistory:
+                del effect_guard
+                window = tuple(
+                    item for item in official_sessions if start <= item <= end
+                )
+                return BharatStockHistory(
+                    instrument,
+                    tuple(
+                        BharatStockDailyPrice(
+                            item,
+                            Decimal("10"),
+                            Decimal("11"),
+                            Decimal("9"),
+                            Decimal("10"),
+                            100,
+                            Decimal("10"),
+                            Decimal("1"),
+                        )
+                        for item in window
+                    ),
+                    selected,
+                    ("a" * 64, "b" * 64),
+                    2,
+                )
+
+        def retained_slot(
+            feature: str, window: tuple[date, ...]
+        ) -> BharatStockFeatureInputV2:
+            capture_request = CaptureRequestV2(
+                tuple(item.instrument for item in mapping.members),
+                window,
+                cutoff,
+                retained_schedule.schedule_evidence_sha256,
+                retained_schedule.schedule_source,
+                retained_schedule.schedule_source_release,
+                capture_schedule_identity,
+                selection_identity_v2(
+                    tuple(item.instrument for item in mapping.members)
+                ),
+            )
+            result = capture_v2.capture_bharatstock_v2(
+                capture_request,
+                captured["root"],
+                captured["root"],
+                client=cast(Any, ReadyClient()),
+                clock=lambda: selected,
+            )
+            assert result.revision is not None
+            revision = result.revision
+            return BharatStockFeatureInputV2(
+                cast(Any, feature),
+                "RETAINED_REVISION",
+                window,
+                retained_capture=read_bharatstock_capture_binding_v2(
+                    captured["root"], revision.revision_identity_sha256
+                ),
+                request_provenance=BharatStockCaptureRequestProvenanceV2(
+                    revision.request.request_identity_sha256,
+                    revision.request.schedule_identity_sha256,
+                    revision.request.decision_cutoff,
+                    revision.request.sessions,
+                ),
+            )
+
+        ready_price = build_bharatstock_research_packet_v2(
+            (
+                retained_slot("CANDLE_GEOMETRY", sessions[-1:]),
+                retained_slot("PREVIOUS_CLOSE_COMPARISON", sessions[-2:]),
+                retained_slot("MARKET_STRUCTURE", sessions),
+            ),
+            mapping_binding,
+        )
+        ready = build_current_research_packet_v5(
+            request, mapping_binding, ready_price, context, event, industry
+        )
+        assert ready.execution_state == "RESEARCH_READY"
+        assert tuple(item.observed for item in ready.coverage) == (1, 1, 1)
+        ready_bytes = ready.canonical_json_bytes()
+        assert b'"source_bars"' not in ready_bytes
+        assert (
+            CurrentResearchPacketV5.from_canonical_json_bytes(ready_bytes).admitted
+            is False
+        )
+        rehashed_ready = json.loads(ready_bytes)
+        rehashed_ready["bound_request"]["request"]["schedule_identity_sha256"] = (
+            "0" * 64
+        )
+        rehashed_ready["result_identity_sha256"] = (
+            current_supplied_cohort_v5._public_digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    key: value
+                    for key, value in rehashed_ready.items()
+                    if key != "result_identity_sha256"
+                }
+            )
+        )
+        with pytest.raises(ValueError, match="current V5"):
+            CurrentResearchPacketV5.from_canonical_json_bytes(
+                json.dumps(
+                    rehashed_ready, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
+        # The retained schedule contains exactly the current 21 completed
+        # sessions, so only the older 1/2 windows are covered without runtime
+        # calendar expansion; Structure remains the admitted current 21 window.
+        older_official_sessions = official_sessions[:-1]
+        assert len(older_official_sessions) == 20
+        older_retained_price = build_bharatstock_research_packet_v2(
+            (
+                retained_slot("CANDLE_GEOMETRY", older_official_sessions[-1:]),
+                retained_slot(
+                    "PREVIOUS_CLOSE_COMPARISON", older_official_sessions[-2:]
+                ),
+                retained_slot("MARKET_STRUCTURE", sessions),
+            ),
+            mapping_binding,
+        )
+        with pytest.raises(ValueError, match="current V5 packet"):
+            build_current_research_packet_v5(
+                request,
+                mapping_binding,
+                older_retained_price,
+                context,
+                event,
+                industry,
+            )
 
     packet = build_current_research_packet_v5(
         request, mapping_binding, price, context, event, industry

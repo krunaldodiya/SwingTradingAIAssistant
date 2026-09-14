@@ -15,14 +15,20 @@ from zoneinfo import ZoneInfo
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import (
     RetainedCurrentSamePassMarketContextV4,
     _research_binding_projection_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
+    _research_binding_request_from_retained_context_v4,  # pyright: ignore[reportPrivateUsage]
 )
 
 from .adjusted_daily.service_v3 import mapping_identity_v3
 from .bharatstock import BharatStockInstrument
-from .bharatstock_capture import selection_identity_v2
+from .bharatstock_capture import schedule_identity_v2, selection_identity_v2
 from .catalog import DuckDBCatalog
 from .current_research_binding_v2_runtime_identity_manifest import (
     CURRENT_RESEARCH_BINDING_RUNTIME_SOURCE_SHA256_V2,
+)
+from .current_same_pass_daily_v4 import (
+    CurrentSamePassMarketRegimeRequestV4,
+    current_same_pass_schedule_identity_v1,
+    resolve_latest_completed_sessions_v1,
 )
 from .instrument_snapshot import (
     SNAPSHOT_SOURCE_V1,
@@ -30,14 +36,20 @@ from .instrument_snapshot import (
     ResolvedInstrumentSnapshotV1,
 )
 from .runtime_source_verifier import runtime_source_sha256
+from .schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleEvidenceStore,
+    ScheduleOutcome,
+    schedule_digest,
+)
 from .storage_root_lease import StorageRootLease
 
 _CONTRACT: Final = "current-research-binding@v2"
 _SCHEMA_IDENTITY: Final = hashlib.sha256(
-    b"current-research-binding-schema@v3\n"
+    b"current-research-binding-schema@v4\n"
 ).hexdigest()
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
-    b"exact-retained-mapping-explicit-discovery-outcome-no-fallback@v3\n"
+    b"exact-retained-v4-and-capture-schedule-anchors@v4\n"
 ).hexdigest()
 _IST: Final = ZoneInfo("Asia/Kolkata")
 
@@ -224,6 +236,7 @@ class CurrentResearchMappingProjectionV2:
     selected_at: datetime
     decision_cutoff: datetime
     schedule_identity_sha256: str
+    context_schedule_identity_sha256: str | None
     ordered_selection_identity_sha256: str
     canonical_cohort_identity_sha256: str
     members: tuple[CurrentResearchMappingMemberV2, ...]
@@ -241,6 +254,7 @@ class CurrentResearchMappingProjectionV2:
                 member.__post_init__()
         cutoff = _instant(self.decision_cutoff)
         context_values = (
+            self.context_schedule_identity_sha256,
             self.context_identity_sha256,
             self.context_object_sha256,
             self.context_receipt_identity_sha256,
@@ -436,6 +450,7 @@ def _projection(
     selected_at: datetime,
     decision_cutoff: datetime,
     schedule_identity_sha256: str,
+    context_schedule_identity_sha256: str | None = None,
     members: tuple[CurrentResearchMappingMemberV2, ...],
     context: tuple[str, str, str, str, str] | None = None,
 ) -> CurrentResearchMappingProjectionV2:
@@ -464,6 +479,7 @@ def _projection(
         "selected_at": selected_at,
         "decision_cutoff": decision_cutoff,
         "schedule_identity_sha256": schedule_identity_sha256,
+        "context_schedule_identity_sha256": context_schedule_identity_sha256,
         "ordered_selection_identity_sha256": ordered_selection,
         "canonical_cohort_identity_sha256": canonical_cohort,
         "members": members,
@@ -482,6 +498,7 @@ def _projection(
         selected_at,
         decision_cutoff,
         schedule_identity_sha256,
+        context_schedule_identity_sha256,
         ordered_selection,
         canonical_cohort,
         members,
@@ -587,8 +604,45 @@ def resolve_current_research_binding_v2(
 
 def admit_retained_context_research_binding_v2(
     retained: RetainedCurrentSamePassMarketContextV4,
+    schedule_store: ScheduleEvidenceStore,
 ) -> AdmittedCurrentResearchBindingV2:
-    """Project a complete mapping/context binding from the V4 closure."""
+    """Project V5 mapping anchors from one exact retained V4 schedule."""
+    request_accessor = cast(
+        Callable[[object], CurrentSamePassMarketRegimeRequestV4 | None],
+        _research_binding_request_from_retained_context_v4,
+    )
+    request = request_accessor(retained)
+    if type(request) is not CurrentSamePassMarketRegimeRequestV4:
+        raise ValueError("retained same-pass context request is not admitted")
+    if type(schedule_store) is not ScheduleEvidenceStore:
+        raise TypeError("retained context requires the delivered schedule store")
+    resolved = schedule_store.resolve(request.schedule_evidence_sha256)
+    schedule = resolved.schedule
+    if (
+        resolved.outcome not in {ScheduleOutcome.RETAINED, ScheduleOutcome.RESOLVED}
+        or type(schedule) is not ExpectedSessionSchedule
+        or resolved.digest != request.schedule_evidence_sha256
+        or schedule_digest(schedule) != request.schedule_evidence_sha256
+        or schedule.source != request.schedule_source
+        or schedule.source_release != request.schedule_source_release
+        or schedule.as_of > request.decision_cutoff
+    ):
+        raise ValueError("retained same-pass schedule is not admitted")
+    try:
+        sessions = resolve_latest_completed_sessions_v1(request, schedule)
+    except ValueError as error:
+        raise ValueError("retained same-pass schedule is not complete") from error
+    context_schedule_identity = current_same_pass_schedule_identity_v1(
+        schedule_evidence_sha256=request.schedule_evidence_sha256,
+        schedule_source=request.schedule_source,
+        schedule_source_release=request.schedule_source_release,
+        timezone=schedule.timezone,
+        coverage_through=schedule.covered_to,
+        sessions=sessions,
+    )
+    if context_schedule_identity != request.schedule_identity_sha256:
+        raise ValueError("retained same-pass schedule identity is conflicted")
+    capture_schedule_identity = schedule_identity_v2(schedule)
     accessor = cast(
         Callable[[object], dict[str, object] | None],
         _research_binding_projection_from_retained_context_v4,
@@ -649,7 +703,8 @@ def admit_retained_context_research_binding_v2(
             origin="RETAINED_SAME_PASS_CONTEXT",
             selected_at=cast(datetime, raw["cohort_selected_at"]),
             decision_cutoff=cast(datetime, raw["decision_cutoff"]),
-            schedule_identity_sha256=cast(str, raw["schedule_identity_sha256"]),
+            schedule_identity_sha256=capture_schedule_identity,
+            context_schedule_identity_sha256=context_schedule_identity,
             members=tuple(members),
             context=context,
         )

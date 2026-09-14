@@ -4193,6 +4193,15 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             "request_matches": request_matches,
         }
 
+    def research_binding_request(
+        value: object,
+    ) -> CurrentSamePassMarketRegimeRequestV4 | None:
+        """Expose the closure-owned immutable request to the V5 successor only."""
+        if not validate(value):
+            return None
+        binding = archive_bindings[value._archive_seal]
+        return candidate_bindings[binding.candidate_seal].context.request
+
     def research_binding_projection(value: object) -> dict[str, object] | None:
         """Expose the minimum exact retained request/context proof for V5.
 
@@ -4390,6 +4399,7 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
         validate,
         industry_projection,
         packet_projection,
+        research_binding_request,
         research_binding_projection,
     )
 
@@ -4402,6 +4412,7 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
     validate_retained_current_same_pass_market_context_v4,
     _industry_projection_from_retained_context_v4,
     _packet_projection_from_retained_context_v4,
+    _research_binding_request_from_retained_context_v4,
     _research_binding_projection_from_retained_context_v4,
 ) = _sealed_v4_boundary()
 

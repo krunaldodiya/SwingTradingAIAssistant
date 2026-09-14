@@ -104,10 +104,10 @@ from .current_supplied_cohort_v5_runtime_identity_manifest import (
 
 _CONTRACT: Final = "current-supplied-cohort-research-packet@v5"
 _SCHEMA_IDENTITY: Final = hashlib.sha256(
-    b"current-supplied-cohort-research-packet-schema@v6\n"
+    b"current-supplied-cohort-research-packet-schema@v7\n"
 ).hexdigest()
 _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
-    b"recursive-retained-price-event-regime-industry-mapping-complete@v6\n"
+    b"recursive-retained-price-event-regime-industry-dual-schedule-anchors@v7\n"
 ).hexdigest()
 _FEATURE_ORDER: Final = (
     "CANDLE_GEOMETRY",
@@ -771,6 +771,7 @@ def _context_section(
         != raw["completion_marker_identity_sha256"]
         or mapping.retained_context_identity_sha256
         != raw["retained_context_identity_sha256"]
+        or mapping.context_schedule_identity_sha256 != raw["schedule_identity_sha256"]
     ):
         raise ValueError("current V5 context/mapping substitution")
     components = tuple(

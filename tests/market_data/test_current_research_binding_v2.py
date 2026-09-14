@@ -218,6 +218,7 @@ def test_mapping_projection_rejects_fully_rehashed_selected_date_interval_substi
         values.update(
             origin=origin,
             members=(base,),
+            context_schedule_identity_sha256="a" * 64,
             context_identity_sha256="b" * 64,
             context_object_sha256="c" * 64,
             context_receipt_identity_sha256="d" * 64,
