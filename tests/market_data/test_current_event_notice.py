@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from itertools import product
@@ -935,6 +936,46 @@ def _seed_delivered_legacy_archive_fixture(
         "receipt_identity": receipt_identity,
         "retained_identity": retained_identity,
     }
+
+
+@pytest.mark.parametrize("removal", ("rename", "delete"))
+def test_legacy_validation_never_recreates_archive_lost_after_initial_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, removal: str
+) -> None:
+    api = _api()
+    artifact = _artifact()
+    snapshot = _project(api, artifact)
+    root = tmp_path / "legacy-validation"
+    root.mkdir(mode=0o700)
+    _seed_delivered_legacy_archive_fixture(api, root, snapshot, artifact)
+    monkeypatch.setattr(api, "_trusted_utc_now", lambda: _KNOWN_AT)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        retained = api._adopt_delivered_legacy_archive(root, lease, snapshot, artifact)
+        assert retained is not None
+        original = api._adopt_delivered_legacy_archive
+        archive = root / ".current-event-notice-v1"
+        interventions = 0
+
+        def remove_before_legacy_revalidation(*args: Any, **kwargs: Any) -> Any:
+            nonlocal interventions
+            interventions += 1
+            if removal == "rename":
+                archive.rename(root / ".moved-event-archive")
+            else:
+                shutil.rmtree(archive)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            api, "_adopt_delivered_legacy_archive", remove_before_legacy_revalidation
+        )
+        with pytest.raises(ValueError, match="retained legacy event notice invalid"):
+            api.validate_retained_current_event_notice_v1(
+                root, lease, retained, archive_objects=True
+            )
+        assert interventions == 1
+        assert not archive.exists()
 
 
 def test_pre_amendment_archive_adopts_and_retries_without_rewriting(

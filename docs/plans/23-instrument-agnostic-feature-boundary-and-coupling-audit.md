@@ -211,3 +211,10 @@ Each slice must be separately tracked, test-first where it changes behavior, and
 ## Documentation-only evidence and limits
 
 Issue #130 inspected governing documentation, every available Sprint 1-through-current record, relevant Plans 01–22, the research-vision/instrument-extensibility note, the Nifty 100 hypothesis note, and current source hotspots. This plan records a static coupling audit only. It does not prove runtime behavior, data availability, provider support, Nifty Next 50 point-in-time evidence, or completion of any remediation slice.
+
+## Issue #187 successor crosswalk
+
+The V2/V5 successor binds an ordered explicit 1–100 canonical BharatStock
+selection separately from its canonical cohort identity. Price features stay
+independent of index policy; unchanged 1–50 legacy aggregates remain local
+capabilities rather than a reason to suppress independent price facts.

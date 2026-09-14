@@ -392,3 +392,12 @@ authorization-payload SHA-256
 revoked before send. No inquiry email, provider contact, provider call,
 credential use, or acquisition occurred. These are not Plan 11's historical
 public-page research receipt hashes.
+
+### #187 implementation boundary
+
+The #187 successor exposes independently admitted BharatStock geometry,
+comparison and Structure facts in a V5 envelope. It preserves unversioned
+`research-current` V1 behavior; `--contract-version v2` is explicit and returns
+question readiness, not trade eligibility. Context acquisition remains outside
+this command, while retained validated context can be composed at V5's Python
+boundary.

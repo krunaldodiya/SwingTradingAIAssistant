@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 import os
+import sys
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.message import Message
@@ -12,7 +14,7 @@ from http.client import HTTPResponse
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 from urllib.request import HTTPSHandler
 from urllib.response import addinfourl
 
@@ -25,6 +27,9 @@ from swing_trading_ai_assistant.market_data import (
 from swing_trading_ai_assistant.market_data import catalog as catalog_api
 from swing_trading_ai_assistant.market_data import (
     current_stock_research as workflow,
+)
+from swing_trading_ai_assistant.market_data import (
+    current_stock_research_v2 as workflow_v2,
 )
 from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
 from swing_trading_ai_assistant.market_data.bharatstock import (
@@ -45,6 +50,10 @@ from swing_trading_ai_assistant.market_data.current_stock_research import (
     CurrentStockResearchResultV1,
     research_current_stock_v1,
 )
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
+    research_current_stock_v2,
+)
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
     HttpResponseHeaders,
@@ -64,6 +73,10 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
 )
+from swing_trading_ai_assistant.market_structure.current_live import (
+    current_market_structure_identity_sha256_v1,
+)
+from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
 
 _NOW = datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
 
@@ -73,6 +86,23 @@ class _Clock:
     value: datetime = _NOW
 
     def now(self) -> datetime:
+        return self.value
+
+
+class _V2BoundaryClock(_Clock):
+    """Inject an input effect between stages, without replacing any validator."""
+
+    def __init__(self, boundary: int, effect: Callable[[], None]) -> None:
+        self.value = _NOW
+        self.boundary = boundary
+        self.effect = effect
+        self.observations = 0
+
+    def now(self) -> datetime:
+        if sys._getframe(2).f_code.co_name == "_observe_v2_time":
+            self.observations += 1
+            if self.observations == self.boundary:
+                self.effect()
         return self.value
 
 
@@ -180,6 +210,7 @@ class _Prices:
         self.failure: Exception | None = None
         self.after_history: Callable[[], None] | None = None
         self.missing_last = False
+        self.full_history = False
 
     def history(
         self,
@@ -207,7 +238,15 @@ class _Prices:
                     adjusted_close=None,
                     adjustment_factor=None,
                 )
-                for day in (start, end)
+                for day in (
+                    tuple(
+                        start + timedelta(days=index)
+                        for index in range((end - start).days + 1)
+                        if (start + timedelta(days=index)).weekday() < 5
+                    )
+                    if self.full_history
+                    else tuple(dict.fromkeys((start, end)))
+                )
                 if not self.missing_last or day != end
             ),
             retrieved_at=self.clock.now(),
@@ -238,6 +277,869 @@ def _research(
         snapshot_transport=sources,
         price_client=cast(BharatStockClient, prices),
     )
+
+
+def test_v2_cli_is_explicit_and_preserves_unversioned_v1_admission(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def v2(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        del storage_root, refresh
+        return CurrentStockResearchResultV2(
+            "current-stock-research@v2",
+            "UNAVAILABLE",
+            "provider",
+            "PRICE_EVIDENCE_UNAVAILABLE",
+            question,
+            symbol,
+            _NOW,
+            _NOW + timedelta(minutes=1),
+            "a" * 64,
+            None,
+            ("fixture_only",),
+        )
+
+    assert (
+        main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--contract-version",
+                "v2",
+                "--question",
+                "LATEST_COMPLETED_CANDLE",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=v2,
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["contract_version"] == "current-stock-research@v2"
+    assert payload["question"] == "LATEST_COMPLETED_CANDLE"
+
+    assert (
+        main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--contract-version",
+                "v2",
+                "--output",
+                "json",
+            ]
+        )
+        == 2
+    )
+    assert capsys.readouterr().err == "request_invalid\n"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("question", "PRICE_BEHAVIOR"),
+        ("question", "CURRENT_STRUCTURE"),
+        ("symbol", "OTHER"),
+        ("data_selection_time", _NOW - timedelta(seconds=1)),
+        ("acquisition_deadline", _NOW + timedelta(days=1)),
+        ("packet", "unadmitted_copy"),
+    ),
+)
+@pytest.mark.parametrize("at_serialization", (False, True))
+def test_v2_result_rejects_substituted_question_identity_and_unadmitted_packet(
+    tmp_path: Path, field: str, value: object, at_serialization: bool
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    result = research_current_stock_v2(
+        "PNB",
+        tmp_path,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, _Prices(clock)),
+    )
+    assert result.status == "READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    replacement = copy.deepcopy(result.packet) if field == "packet" else value
+    with pytest.raises(ValueError):
+        if at_serialization:
+            object.__setattr__(result, field, replacement)
+            result.canonical_json_bytes()
+        else:
+            replace(result, **{field: replacement})
+
+
+def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
+    tmp_path: Path,
+) -> None:
+    expected = {
+        "LATEST_COMPLETED_CANDLE": "READY",
+        "PRICE_BEHAVIOR": "READY",
+        "CURRENT_STRUCTURE": "NOT_READY",
+        "INTEGRATED_CURRENT_RESEARCH": "NOT_READY",
+    }
+    for question, status in expected.items():
+        clock, sources = _Clock(), _OfficialSources()
+        root = tmp_path / question
+        root.mkdir(mode=0o700)
+        result = research_current_stock_v2(
+            "PNB",
+            root,
+            question=cast(
+                Literal[
+                    "LATEST_COMPLETED_CANDLE",
+                    "PRICE_BEHAVIOR",
+                    "CURRENT_STRUCTURE",
+                    "INTEGRATED_CURRENT_RESEARCH",
+                ],
+                question,
+            ),
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, _Prices(clock)),
+        )
+        assert result.status == status, (result.stage, result.code)
+        assert result.packet is not None
+        assert result.data_selection_time == _NOW
+        assert result.evidence_known_at == (
+            None if question == "CURRENT_STRUCTURE" else _NOW
+        )
+        assert b'"source_bars"' not in result.canonical_json_bytes()
+        if question == "INTEGRATED_CURRENT_RESEARCH":
+            assert tuple(item.feature for item in result.context_outcomes) == (
+                "EVENT_NOTICES",
+                "MARKET_REGIME",
+                "INDUSTRY_PARTICIPATION",
+            )
+            assert all(
+                item.availability == "NOT_ATTEMPTED"
+                and item.support == "NOT_ESTABLISHED"
+                and item.reason == "RETAINED_CONTEXT_NOT_PROVIDED"
+                for item in result.context_outcomes
+            )
+        else:
+            assert result.context_outcomes == ()
+
+
+@pytest.mark.parametrize("available", (1, 2, 10, 20))
+def test_v2_integrated_short_calendar_retains_independent_windows_without_structure_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, available: int
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    completed = [
+        clock.value.date() - timedelta(days=offset)
+        for offset in range(1, 32)
+        if (clock.value.date() - timedelta(days=offset)).weekday() < 5
+    ]
+    retained_sessions = set(completed[:available])
+    _declare_closures(
+        sources,
+        [
+            clock.value.date() - timedelta(days=offset)
+            for offset in range(32)
+            if clock.value.date() - timedelta(days=offset) not in retained_sessions
+        ],
+    )
+    attempted_windows: list[tuple[date, ...]] = []
+    original_capture = workflow_v2._capture_window
+
+    def capture_and_record(
+        *args: object, **kwargs: object
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        attempted_windows.append(request.sessions)
+        return original_capture(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", capture_and_record)
+    root = tmp_path / f"short-calendar-{available}"
+    root.mkdir(mode=0o700)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert type(result) is CurrentStockResearchResultV2
+    assert result.status == "NOT_READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    slots = result.packet.feature_slots
+    features = result.packet.members[0].features
+    assert slots[0].state == "RETAINED_REVISION"
+    assert features[0].availability == "OBSERVED"
+    if available == 1:
+        assert slots[1].state == "NOT_ATTEMPTED_PREREQUISITE"
+        assert features[1].availability == "INSUFFICIENT_EVIDENCE"
+    else:
+        assert slots[1].state == "RETAINED_REVISION"
+        assert features[1].availability == "OBSERVED"
+    assert slots[2].state == "NOT_ATTEMPTED_PREREQUISITE"
+    assert slots[2].request_provenance is None
+    assert slots[2].source is None
+    assert features[2].availability == "INSUFFICIENT_EVIDENCE"
+    assert features[2].reason == "INSUFFICIENT_COMPLETED_SESSIONS"
+    assert all(len(window) != 21 for window in attempted_windows)
+    assert sum(len(window) == 21 for window in attempted_windows) == 0
+
+
+def test_v2_price_source_rejects_fully_rehashed_provenance_substitutions(
+    tmp_path: Path,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    root = tmp_path / "price-source-negative"
+    root.mkdir(mode=0o700)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+
+    for replacement in (
+        {"projection_runtime_code_identity_sha256": "0" * 64},
+        {"capture_schema_identity_sha256": "0" * 64},
+        {"capture_configuration_identity_sha256": "0" * 64},
+        {"capture_runtime_code_identity_sha256": "0" * 64},
+        {"provider_source": "substituted-provider@v1"},
+        {"source_profile": "SUBSTITUTED_SOURCE_PROFILE"},
+        {"selection_identity_sha256": "0" * 64},
+        {
+            "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
+            "price_basis": "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+            "volume_basis": "SOURCE_REPORTED_UNADJUSTED",
+        },
+        {"volume_basis": "SOURCE_REPORTED_UNADJUSTED"},
+    ):
+        tampered = copy.deepcopy(result.packet)
+        slot = tampered.feature_slots[0]
+        assert slot.source is not None
+        source = slot.source
+        for name, value in replacement.items():
+            object.__setattr__(source, name, value)
+        object.__setattr__(
+            source,
+            "source_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    "provider_source": source.provider_source,
+                    "source_profile": source.source_profile,
+                    "revision_identity_sha256": source.capture_revision_identity_sha256,
+                    "schedule_evidence_sha256": source.schedule_evidence_sha256,
+                    "schedule_source": source.schedule_source,
+                    "schedule_source_release": source.schedule_source_release,
+                    "price_basis": source.price_basis,
+                    "volume_basis": source.volume_basis,
+                }
+            ),
+        )
+        object.__setattr__(
+            source,
+            "source_projection_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(source, item.name)
+                    for item in fields(source)
+                    if item.name != "source_projection_identity_sha256"
+                }
+            ),
+        )
+        object.__setattr__(
+            slot,
+            "slot_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(slot, item.name)
+                    for item in fields(slot)
+                    if item.name != "slot_identity_sha256"
+                }
+            ),
+        )
+        object.__setattr__(
+            tampered,
+            "result_identity_sha256",
+            packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+                {
+                    item.name: getattr(tampered, item.name)
+                    for item in fields(tampered)
+                    if item.name not in {"result_identity_sha256", "_admission_seal"}
+                }
+            ),
+        )
+        assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(
+            tampered
+        )
+
+
+def test_v2_current_structure_with_21_official_sessions_is_ready(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "structure-ready"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="CURRENT_STRUCTURE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "READY", (result.stage, result.code)
+    assert result.packet is not None
+    structure = result.packet.members[0].features[0]
+    assert structure.feature == "MARKET_STRUCTURE"
+    assert structure.availability == "OBSERVED"
+    # CURRENT_STRUCTURE does not acquire or require an unrequested two-session
+    # comparison capture.
+    assert len(prices.calls) == 1
+
+    tampered = copy.deepcopy(result.packet)
+    tampered_fact = tampered.members[0].features[0].fact
+    assert tampered_fact is not None
+    changed_identities = (
+        "b" * 64,
+        *tampered_fact.calculation.input_bar_identities_sha256[1:],
+    )
+    object.__setattr__(
+        tampered_fact.calculation,
+        "input_bar_identities_sha256",
+        changed_identities,
+    )
+    object.__setattr__(
+        tampered_fact.calculation,
+        "member_identity_sha256",
+        current_market_structure_identity_sha256_v1(
+            tampered_fact.calculation,
+            omit=frozenset({"member_identity_sha256"}),
+        ),
+    )
+    object.__setattr__(
+        tampered_fact, "adjusted_bar_identities_sha256", changed_identities
+    )
+    preimage = {
+        item.name: getattr(tampered, item.name)
+        for item in fields(tampered)
+        if item.name not in {"result_identity_sha256", "_admission_seal"}
+    }
+    object.__setattr__(
+        tampered,
+        "result_identity_sha256",
+        packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
+    )
+    assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(tampered)
+
+
+def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "local-two-session-failure"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    original = workflow_v2._capture_window
+
+    def fail_two_sessions(
+        *args: object, **kwargs: object
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        if len(request.sessions) == 2:
+            return (
+                capture_api.CaptureResultV2(
+                    "INSUFFICIENT_EVIDENCE", None, "MISSING_HISTORY"
+                ),
+                request,
+            )
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", fail_two_sessions)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    features = result.packet.members[0].features
+    assert [item.availability for item in features[:3]] == [
+        "OBSERVED",
+        "INSUFFICIENT_EVIDENCE",
+        "OBSERVED",
+    ]
+    failed_slot = result.packet.feature_slots[1]
+    assert failed_slot.state == "ATTEMPTED_NO_REVISION"
+    assert failed_slot.source is None
+    assert len(failed_slot.requested_sessions) == 2
+    assert failed_slot.failure_reason == "MISSING_HISTORY"
+    assert failed_slot.executed_at is not None
+
+
+def test_v2_storage_failure_after_first_window_is_publication_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "storage-failure"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    original = workflow_v2._capture_window
+
+    def fail_second_window(
+        *args: object, **kwargs: object
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        if len(request.sessions) == 2:
+            return (
+                capture_api.CaptureResultV2(
+                    "STORE_UNAVAILABLE", None, "EVIDENCE_CONFLICT"
+                ),
+                request,
+            )
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", fail_second_window)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "UNAVAILABLE"
+    assert result.stage == "storage"
+    assert result.packet is None
+
+
+@pytest.mark.parametrize(
+    "category", ("AUTHENTICATION_FAILED", "UNRECOGNIZED_PROVIDER_DEFECT")
+)
+def test_v2_unknown_shared_producer_reason_remains_fatal(
+    tmp_path: Path, category: str
+) -> None:
+    root = tmp_path / "unknown-shared-stop"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.failure = BharatStockError(category, member_local=False)
+    with pytest.raises(ValueError, match="unexpected BharatStock V2 producer reason"):
+        research_current_stock_v2(
+            "PNB",
+            root,
+            question="INTEGRATED_CURRENT_RESEARCH",
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+    assert len(prices.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "category",
+    (
+        "AUTHENTICATION",
+        "AUTHORIZATION",
+        "RATE_LIMITED",
+        "PROVIDER_UNAVAILABLE",
+        "REDIRECT_REJECTED",
+        "RESPONSE_LIMIT_EXCEEDED",
+        "TRANSPORT_FAILED",
+        "REQUEST_BUDGET_EXHAUSTED",
+    ),
+)
+@pytest.mark.parametrize("failure_effect", (1, 2, 3))
+def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
+    tmp_path: Path, failure_effect: int, category: str
+) -> None:
+    root = tmp_path / f"shared-stop-{failure_effect}"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    history = prices.history
+
+    def selective_failure(*args: object, **kwargs: object) -> BharatStockHistory:
+        if len(prices.calls) + 1 == failure_effect:
+            prices.failure = BharatStockError(category, member_local=False)
+        try:
+            return history(*args, **kwargs)  # type: ignore[arg-type]
+        finally:
+            prices.failure = None
+
+    prices.history = selective_failure  # type: ignore[method-assign]
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    assert result.packet.execution_state == "STOPPED"
+    assert result.packet.shared_stop_code == category
+    assert (
+        result.packet.shared_stop_trigger_feature
+        == (
+            "CANDLE_GEOMETRY",
+            "PREVIOUS_CLOSE_COMPARISON",
+            "MARKET_STRUCTURE",
+        )[failure_effect - 1]
+    )
+    assert len(prices.calls) == failure_effect
+    features = result.packet.members[0].features
+    assert all(
+        feature.availability == "OBSERVED" and feature.fact is not None
+        for feature in features[: failure_effect - 1]
+    )
+    assert features[failure_effect - 1].availability == "INSUFFICIENT_EVIDENCE"
+    assert all(
+        feature.availability == "NOT_ATTEMPTED" for feature in features[failure_effect:]
+    )
+    assert all(
+        slot.state == "NOT_ATTEMPTED_SHARED_STOP"
+        for slot in result.packet.feature_slots[failure_effect:]
+    )
+    if failure_effect == 1:
+        assert result.evidence_known_at is None
+
+
+@pytest.mark.parametrize("expired_effect", (1, 2, 3))
+@pytest.mark.parametrize("phase", ("before", "inside"))
+def test_v2_deadline_before_or_inside_capture_preserves_completed_facts_and_stops(
+    tmp_path: Path, expired_effect: int, phase: str
+) -> None:
+    root = tmp_path / "capture-deadline"
+    root.mkdir(mode=0o700)
+    clock: _Clock = (
+        _V2BoundaryClock(
+            2 * expired_effect - 1,
+            lambda: setattr(clock, "value", _NOW + timedelta(minutes=31)),
+        )
+        if phase == "before"
+        else _Clock()
+    )
+    sources = _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    def expire_inside_capture() -> None:
+        if len(prices.calls) == expired_effect:
+            clock.value = _NOW + timedelta(minutes=31)
+
+    if phase == "inside":
+        prices.after_history = expire_inside_capture
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert result.status == "NOT_READY" and result.code == "QUESTION_NOT_READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    packet = result.packet
+    assert packet.execution_state == "STOPPED"
+    assert packet.shared_stop_code == "DEADLINE_EXCEEDED"
+    assert packet.shared_stop_phase == "CAPTURE"
+    assert (
+        packet.shared_stop_trigger_feature
+        == ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE")[
+            expired_effect - 1
+        ]
+    )
+    assert len(prices.calls) == expired_effect - (1 if phase == "before" else 0)
+    features = packet.members[0].features
+    assert all(
+        f.availability == "OBSERVED" and f.fact is not None
+        for f in features[: expired_effect - 1]
+    )
+    if expired_effect > 1:
+        geometry = features[0].fact
+        assert isinstance(geometry, packet_v2.BharatStockCandleGeometryFactV2)
+        assert geometry.candle_direction == "UP"
+        assert (
+            geometry.range_size,
+            geometry.body_size,
+            geometry.upper_wick_size,
+            geometry.lower_wick_size,
+        ) == (Decimal(20), Decimal(5), Decimal(5), Decimal(10))
+    if expired_effect > 2:
+        comparison = features[1].fact
+        assert isinstance(
+            comparison, packet_v2.BharatStockPreviousCloseComparisonFactV2
+        )
+        assert comparison.open_vs_previous_close == "UNCHANGED"
+        assert comparison.open_to_previous_close_distance == Decimal(0)
+        assert comparison.close_vs_previous_close == "UP"
+        assert comparison.close_to_previous_close_distance == Decimal(5)
+    assert features[expired_effect - 1].availability == "INSUFFICIENT_EVIDENCE"
+    assert features[expired_effect - 1].reason == "ACQUISITION_DEADLINE_EXCEEDED"
+    assert all(f.availability == "NOT_ATTEMPTED" for f in features[expired_effect:])
+    assert all(
+        s.state == "NOT_ATTEMPTED_SHARED_STOP"
+        for s in packet.feature_slots[expired_effect:]
+    )
+    if expired_effect == 1:
+        assert result.evidence_known_at is None
+
+
+def test_v2_schedule_lost_before_capture_is_a_shared_calendar_failure(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lost-schedule"
+    root.mkdir(mode=0o700)
+
+    def remove_schedule() -> None:
+        schedules = tuple((root / "calendar-schedules" / "sha256").glob("*.json"))
+        assert schedules
+        for path in schedules:
+            path.unlink()
+
+    clock = _V2BoundaryClock(1, remove_schedule)
+    sources = _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert result.status == "UNAVAILABLE" and result.stage == "calendar"
+    assert result.code == "SCHEDULE_EVIDENCE_MISMATCH"
+    assert result.packet is None and prices.calls == []
+    assert clock.observations == 2  # One capture preflight and its completion only.
+
+
+def test_v2_prepared_noop_correction_is_insufficient_without_another_effect(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "prepared-noop"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    first = research_current_stock_v2(
+        "PNB",
+        root,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert first.status == "READY"
+    assert type(first.packet) is packet_v2.BharatStockResearchPacketV2
+    source = first.packet.feature_slots[0].source
+    assert source is not None
+    parent = capture_api.read_bharatstock_capture_revision_v2(
+        root, source.capture_revision_identity_sha256
+    )
+    request = replace(
+        parent.request, parent_revision_sha256=parent.revision_identity_sha256
+    )
+    prepared = replace(parent, request=request)
+    # Synthetic valid recovery state, not a claim of an observed writer interruption.
+    path = (
+        root
+        / "bharatstock-capture-v3"
+        / "prepared"
+        / f"{request.request_identity_sha256}.json"
+    )
+    path.write_bytes(prepared.canonical_json_bytes())
+    path.chmod(0o600)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="LATEST_COMPLETED_CANDLE",
+        refresh=True,
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert result.status == "NOT_READY" and result.code == "QUESTION_NOT_READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    assert result.packet.execution_state == "COMPLETED"
+    feature = result.packet.members[0].features[0]
+    assert feature.availability == "INSUFFICIENT_EVIDENCE"
+    assert feature.reason == "CORRECTION_CONTENT_UNCHANGED" and feature.fact is None
+    assert len(prices.calls) == 1
+
+
+@pytest.mark.parametrize("completed_effect", (1, 2, 3))
+def test_v2_finalization_deadline_preserves_prior_facts_and_effect_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completed_effect: int
+) -> None:
+    root = tmp_path / f"deadline-stop-{completed_effect}"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    original = workflow_v2._capture_window
+    completed = 0
+
+    def expire_after_capture(*args: object, **kwargs: object):
+        nonlocal completed
+        result = original(*args, **kwargs)  # type: ignore[arg-type]
+        completed += 1
+        if completed == completed_effect:
+            clock.value = _NOW + timedelta(minutes=31)
+        return result
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", expire_after_capture)
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    assert result.packet.execution_state == "STOPPED"
+    assert result.packet.shared_stop_code == "DEADLINE_EXCEEDED"
+    assert result.packet.shared_stop_phase == "FINALIZATION"
+    assert len(prices.calls) == completed_effect
+    assert (
+        sum(slot.state == "RETAINED_REVISION" for slot in result.packet.feature_slots)
+        == completed_effect
+    )
+
+
+def test_v2_advancing_clock_retains_invocation_selection_time(tmp_path: Path) -> None:
+    root = tmp_path / "advancing"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.after_history = lambda: setattr(clock, "value", _NOW + timedelta(minutes=1))
+
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "READY"
+    assert result.data_selection_time == _NOW
+    assert result.evidence_known_at == _NOW + timedelta(minutes=1)
+
+
+def test_v2_cli_runs_each_closed_question_against_the_real_service(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for question in (
+        "LATEST_COMPLETED_CANDLE",
+        "PRICE_BEHAVIOR",
+        "CURRENT_STRUCTURE",
+        "INTEGRATED_CURRENT_RESEARCH",
+    ):
+        root = tmp_path / question
+        root.mkdir(mode=0o700)
+        clock, sources = _Clock(), _OfficialSources()
+
+        def v2(
+            symbol: str,
+            storage_root: Path,
+            *,
+            question: Literal[
+                "LATEST_COMPLETED_CANDLE",
+                "PRICE_BEHAVIOR",
+                "CURRENT_STRUCTURE",
+                "INTEGRATED_CURRENT_RESEARCH",
+            ],
+            refresh: bool = False,
+            _root: Path = root,
+            _clock: _Clock = clock,
+            _sources: _OfficialSources = sources,
+        ) -> CurrentStockResearchResultV2:
+            del storage_root
+            return research_current_stock_v2(
+                symbol,
+                _root,
+                question=question,
+                refresh=refresh,
+                clock=_clock,
+                calendar_transport=_sources,
+                snapshot_transport=_sources,
+                price_client=cast(BharatStockClient, _Prices(_clock)),
+            )
+
+        assert main(
+            [
+                "research-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(root),
+                "--contract-version",
+                "v2",
+                "--question",
+                question,
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=v2,
+        ) == (0 if question in {"LATEST_COMPLETED_CANDLE", "PRICE_BEHAVIOR"} else 1)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["question"] == question
+        assert payload["status"] in {"READY", "NOT_READY"}
 
 
 def test_cold_research_computes_two_completed_session_fact_and_sanitized_cli(

@@ -279,3 +279,9 @@ Before implementation acceptance:
 7. Issue #148 closes only through its reviewed PR and hosted gates.
 
 No return, effectiveness, recommendation, trade, or financial-adviser claim is authorized.
+## Issue #187 successor crosswalk
+
+BharatStock V2 reuses the existing 21-session Structure mathematics only after
+its own exact source-reported completed-session admission. Its one- and
+two-session price facts do not reinterpret this Plan's raw-grid, screen or
+historical reader requirements.

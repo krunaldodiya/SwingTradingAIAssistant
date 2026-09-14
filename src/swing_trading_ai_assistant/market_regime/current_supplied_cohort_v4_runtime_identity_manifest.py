@@ -3,5 +3,5 @@
 from typing import Final
 
 CURRENT_SAME_PASS_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V4: Final = {
-    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4.py": "2f94a5bc4cc32253a81f7f5e0deaed8af1474e79b2490093a686c30e84f24608",
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4.py": "dfeadb455c2a8b0e99d2efe5bcb33a590d0d31c17e0965f531a2f30474822c3d",
 }

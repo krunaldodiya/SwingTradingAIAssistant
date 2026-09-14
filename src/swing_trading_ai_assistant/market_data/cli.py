@@ -60,6 +60,11 @@ from .current_stock_research import (
     CurrentStockResearchResultV1,
     research_current_stock_v1,
 )
+from .current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
+    QuestionV2,
+    research_current_stock_v2,
+)
 from .daily_ohlcv import (
     DailyQueryServiceV1,
     DuckDBDailyOHLCVEngineV1,
@@ -203,6 +208,17 @@ class CurrentStockResearchPortV1(Protocol):
     def __call__(
         self, symbol: str, storage_root: Path, *, refresh: bool = False
     ) -> CurrentStockResearchResultV1: ...
+
+
+class CurrentStockResearchPortV2(Protocol):
+    def __call__(
+        self,
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: QuestionV2,
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2: ...
 
 
 class _ClockV1(Protocol):
@@ -464,7 +480,7 @@ def build_parser() -> argparse.ArgumentParser:
     historical_read.add_argument("--output", choices=("json",), required=True)
     research_current = commands.add_parser(
         "research-current",
-        help="prepare two completed sessions and return one Price Action fact",
+        help="prepare versioned current-stock research from completed sessions",
     )
     research_current.add_argument("--symbol", required=True)
     research_current.add_argument(
@@ -474,6 +490,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     research_current.add_argument("--refresh", action="store_true")
+    research_current.add_argument(
+        "--contract-version", choices=("v1", "v2"), default="v1"
+    )
+    research_current.add_argument(
+        "--question",
+        choices=(
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ),
+    )
     research_current.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
@@ -516,6 +544,7 @@ def main(
     query_service: PublicQueryPortV1 | None = None,
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     current_stock_research: CurrentStockResearchPortV1 | None = None,
+    current_stock_research_v2: CurrentStockResearchPortV2 | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
     try:
@@ -530,7 +559,9 @@ def main(
                 args, current_cohort_service, trusted_clock or _SystemClock()
             )
         if args.command == "research-current":
-            return _run_research_current_command(args, current_stock_research)
+            return _run_research_current_command(
+                args, current_stock_research, current_stock_research_v2
+            )
         if args.command == "regime-current":
             return _run_current_regime_command(args)
         if args.command == "historical-ohlcv-upstox-raw":
@@ -549,21 +580,48 @@ def main(
 
 
 def _run_research_current_command(
-    args: argparse.Namespace, service: CurrentStockResearchPortV1 | None
+    args: argparse.Namespace,
+    service: CurrentStockResearchPortV1 | None,
+    service_v2: CurrentStockResearchPortV2 | None,
 ) -> int:
     try:
-        result = (
-            research_current_stock_v1(
-                args.symbol, args.storage_root, refresh=args.refresh
+        if args.contract_version == "v2":
+            if args.question is None:
+                raise CurrentStockResearchInputError("V2 requires a research question")
+            result_v2 = (
+                research_current_stock_v2(
+                    args.symbol,
+                    args.storage_root,
+                    question=args.question,
+                    refresh=args.refresh,
+                )
+                if service_v2 is None
+                else service_v2(
+                    args.symbol,
+                    args.storage_root,
+                    question=args.question,
+                    refresh=args.refresh,
+                )
             )
-            if service is None
-            else service(args.symbol, args.storage_root, refresh=args.refresh)
-        )
+            payload = result_v2.canonical_json_bytes()
+            status = result_v2.status
+        else:
+            if args.question is not None:
+                raise CurrentStockResearchInputError("V1 does not accept a question")
+            result_v1 = (
+                research_current_stock_v1(
+                    args.symbol, args.storage_root, refresh=args.refresh
+                )
+                if service is None
+                else service(args.symbol, args.storage_root, refresh=args.refresh)
+            )
+            payload = result_v1.canonical_json_bytes()
+            status = result_v1.status
     except CurrentStockResearchInputError:
         sys.stderr.write("request_invalid\n")
         return 2
-    sys.stdout.buffer.write(result.canonical_json_bytes())
-    return 0 if result.status == "OBSERVED" else 1
+    sys.stdout.buffer.write(payload)
+    return 0 if status in {"OBSERVED", "READY"} else 1
 
 
 def _run_historical_ohlcv_upstox_raw_command(args: argparse.Namespace) -> int:

@@ -4193,6 +4193,120 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
             "request_matches": request_matches,
         }
 
+    def research_binding_request(
+        value: object,
+    ) -> CurrentSamePassMarketRegimeRequestV4 | None:
+        """Expose the closure-owned immutable request to the V5 successor only."""
+        if not validate(value):
+            return None
+        binding = archive_bindings[value._archive_seal]
+        return candidate_bindings[binding.candidate_seal].context.request
+
+    def research_binding_projection(value: object) -> dict[str, object] | None:
+        """Expose the minimum exact retained request/context proof for V5.
+
+        This successor accessor does not alter V4 serialization.  Its authority
+        comes from the closure-owned archive binding and therefore also works
+        for retained contexts whose public market-data rows are unavailable.
+        """
+        if not validate(value):
+            return None
+        binding = archive_bindings[value._archive_seal]
+        context = candidate_bindings[binding.candidate_seal].context
+        request = context.request
+        receipts = context.raw_result.mapping_receipts or ()
+        return {
+            "request_identity_sha256": request.request_identity_sha256,
+            "canonical_cohort_identity_sha256": (
+                request.canonical_cohort_identity_sha256
+            ),
+            "plan21_cohort_identity_sha256": request.plan21_cohort_identity_sha256,
+            "cohort_selected_at": request.cohort_selected_at,
+            "decision_cutoff": request.decision_cutoff,
+            "schedule_identity_sha256": request.schedule_identity_sha256,
+            "schedule_evidence_sha256": request.schedule_evidence_sha256,
+            "schedule_source": request.schedule_source,
+            "schedule_source_release": request.schedule_source_release,
+            "members": tuple(item.value() for item in request.members),
+            "mapping_failure_reasons": context.raw_result.reasons,
+            "mapping_receipts": tuple(
+                {
+                    "isin": receipt.member.isin,
+                    "mapping_identity": receipt.member.mapping_identity,
+                    "snapshot_source": receipt.snapshot_source,
+                    "snapshot_schema_version": receipt.snapshot_schema_version,
+                    "observation_sha256": receipt.observation_sha256,
+                    "observation_date": receipt.observation_date,
+                    "retrieved_at": receipt.retrieved_at,
+                    "known_at": receipt.known_at,
+                    "raw_mapping_projection_identity_sha256": (
+                        receipt.raw_mapping_projection_identity_sha256
+                    ),
+                }
+                for receipt in receipts
+            ),
+            "context_identity_sha256": context.context_identity_sha256,
+            "context_object_sha256": context.context_object_sha256,
+            "context_receipt_identity_sha256": (value.context_receipt_identity_sha256),
+            "completion_marker_identity_sha256": (
+                value.completion_marker_identity_sha256
+            ),
+            "retained_context_identity_sha256": (
+                value.retained_context_identity_sha256
+            ),
+            "archive_known_at": value.archive_known_at,
+            "raw_result_identity_sha256": (
+                context.raw_result.raw_result_identity_sha256
+            ),
+            "market_data_report_identity_sha256": (
+                context.market_data_report.report_identity_sha256
+            ),
+            "market_regime_report_identity_sha256": (
+                context.market_regime_report.report_identity_sha256
+            ),
+            "market_regime_schema_identity_sha256": (
+                context.market_regime_report.schema_identity_sha256
+            ),
+            "market_regime_calculation_identity_sha256": (
+                context.market_regime_report.calculation_identity_sha256
+            ),
+            "market_regime_runtime_code_identity_sha256": (
+                context.market_regime_report.runtime_code_identity_sha256
+            ),
+            "market_regime_evidence_state": (
+                context.market_regime_report.evidence_state
+            ),
+            "market_regime_decision_session": (
+                context.market_regime_report.decision_session
+            ),
+            "market_regime_comparison_session": (
+                context.market_regime_report.comparison_session
+            ),
+            "market_regime_decision_cutoff": (
+                context.market_regime_report.decision_cutoff
+            ),
+            "market_regime": context.market_regime_report.regime,
+            "market_regime_advances": context.market_regime_report.advances,
+            "market_regime_declines": context.market_regime_report.declines,
+            "market_regime_unchanged": context.market_regime_report.unchanged,
+            "market_regime_reasons": context.market_regime_report.reasons,
+            "component_ledger": tuple(
+                {
+                    "position": row.position,
+                    "component": row.component,
+                    "contract_version": row.contract_version,
+                    "evidence_state": row.evidence_state,
+                    "schema_identity_sha256": row.schema_identity_sha256,
+                    "runtime_code_identity_sha256": row.runtime_code_identity_sha256,
+                    "primary_identity_sha256": row.primary_identity_sha256,
+                    "known_at": row.known_at,
+                    "reasons": row.reasons,
+                    "ledger_row_identity_sha256": row.ledger_row_identity_sha256,
+                }
+                for row in context.component_ledger
+            ),
+        }
+
     file_archives: WeakKeyDictionary[
         object, _FileCurrentSamePassMarketContextArchiveV1
     ] = WeakKeyDictionary()
@@ -4285,6 +4399,8 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
         validate,
         industry_projection,
         packet_projection,
+        research_binding_request,
+        research_binding_projection,
     )
 
 
@@ -4296,6 +4412,8 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
     validate_retained_current_same_pass_market_context_v4,
     _industry_projection_from_retained_context_v4,
     _packet_projection_from_retained_context_v4,
+    _research_binding_request_from_retained_context_v4,
+    _research_binding_projection_from_retained_context_v4,
 ) = _sealed_v4_boundary()
 
 

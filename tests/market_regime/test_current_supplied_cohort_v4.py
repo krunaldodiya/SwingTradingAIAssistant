@@ -330,6 +330,7 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
     expect_archive_failure: bool = False,
     capture: dict[str, Any] | None = None,
     include_partial: bool = False,
+    include_prior_official_session: bool = False,
 ) -> None:
     """Exercise V4's raw-first, screen, direct-provider, and archive chain.
 
@@ -349,7 +350,13 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
     screen = fixture._screen_fixture()
     scenario = screen._scenario(tmp_path, count=cohort_size, retain=screen_retain)
     try:
-        request, sessions = fixture._request(scenario, screen)
+        if include_prior_official_session:
+            request, sessions = fixture._request(
+                scenario, screen, include_prior_official_session=True
+            )
+        else:
+            # Preserve the original call shape for existing substitution fixtures.
+            request, sessions = fixture._request(scenario, screen)
         if include_partial:
             request = _with_partial_request(request)
         effects: list[str] = []
@@ -496,6 +503,7 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
                 retained=result,
                 request=request,
                 provider=provider,
+                root=scenario.root,
             )
         context_path, receipt_path, marker_path = _archive_paths(
             scenario.root, result.context_identity_sha256

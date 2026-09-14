@@ -9,6 +9,28 @@ from .bharatstock import (
     BharatStockResearchPacketV1,
     build_bharatstock_research_packet_v1,
 )
+from .bharatstock_v2 import (
+    BharatStockCandleGeometryFactV2,
+    BharatStockFeatureCoverageV2,
+    BharatStockFeatureInputV2,
+    BharatStockFeatureSlotV2,
+    BharatStockFeatureSourceV2,
+    BharatStockMemberFeatureV2,
+    BharatStockPreviousCloseComparisonFactV2,
+    BharatStockResearchMemberV2,
+    BharatStockResearchPacketV2,
+    build_bharatstock_research_packet_v2,
+    validate_bharatstock_research_packet_v2,
+)
+from .current_supplied_cohort_v5 import (
+    CurrentResearchPacketV5,
+    CurrentResearchV5BoundRequest,
+    CurrentResearchV5ContextSection,
+    CurrentResearchV5Member,
+    CurrentResearchV5Request,
+    build_current_research_packet_v5,
+    validate_current_research_packet_v5,
+)
 
 __all__ = [
     "BharatStockAdjustedBarV1",
@@ -18,4 +40,22 @@ __all__ = [
     "BharatStockResearchMemberV1",
     "BharatStockResearchPacketV1",
     "build_bharatstock_research_packet_v1",
+    "BharatStockCandleGeometryFactV2",
+    "BharatStockFeatureCoverageV2",
+    "BharatStockFeatureInputV2",
+    "BharatStockFeatureSlotV2",
+    "BharatStockFeatureSourceV2",
+    "BharatStockMemberFeatureV2",
+    "BharatStockPreviousCloseComparisonFactV2",
+    "BharatStockResearchMemberV2",
+    "BharatStockResearchPacketV2",
+    "build_bharatstock_research_packet_v2",
+    "validate_bharatstock_research_packet_v2",
+    "CurrentResearchPacketV5",
+    "CurrentResearchV5BoundRequest",
+    "CurrentResearchV5ContextSection",
+    "CurrentResearchV5Member",
+    "CurrentResearchV5Request",
+    "build_current_research_packet_v5",
+    "validate_current_research_packet_v5",
 ]

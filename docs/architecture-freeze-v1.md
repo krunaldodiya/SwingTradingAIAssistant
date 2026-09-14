@@ -690,3 +690,14 @@ unchanged. Source-at-rest manifests are refreshed from formatted code, including
 transitively bound manifests; old revisions retain their original writer and
 evidence identities. Current boundary regressions, exact independent review,
 repository gates, and installed-artifact proof are recorded with Issue #145.
+
+## Issue #187 additive current-research successor
+
+Issue #187 adds `bharatstock-retained-research-packet@v2` and the thin
+`current-supplied-cohort-research-packet@v5` envelope. V2 independently admits
+one-, two- and 21-completed-session BharatStock windows: candle geometry needs
+one bar, previous-close comparison needs two and Structure reuses the exact
+existing 21-session mathematics. V5 preserves ordered selection identity,
+separate canonical cohort identity, per-feature coverage/provenance and
+question readiness. V1/V4 contracts, archival claims, Upstox raw evidence and
+independent context acquisition remain unchanged.
