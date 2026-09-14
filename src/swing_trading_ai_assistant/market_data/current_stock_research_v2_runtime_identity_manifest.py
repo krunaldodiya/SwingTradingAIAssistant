@@ -17,8 +17,8 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4_runtime_identity_manifest.py": "85068bf99755a3ed6d9d867ced246553c96fdd7f8e423b44830a728d3d7d44a7",
     "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py": "f6cfff4621767cd2ec39d370ca78a3cdbb4635ba947cad5d8511f2e97122b300",
     "src/swing_trading_ai_assistant/research_packet/bharatstock_v2_runtime_identity_manifest.py": "743c2e89f94e2e0498b92a52f35615a89076853fc45788683a51a8a97bbdb6e6",
-    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5.py": "8fe304cc672297e8b7042a6ff96579c1e9ee2cf81759e54a0051ba063cd2b53a",
-    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5_runtime_identity_manifest.py": "bde3fe0f71b5c11c608ad2488bfbf1cec3aad209eeaabc6f642ba66aec98b731",
+    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5.py": "a0ba24be18f70ea251dd31da2af0370f0c2574968ac80ee1fedf007b4f273b3f",
+    "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5_runtime_identity_manifest.py": "a86476fa8244f771dfe924b3f4f6b73c12d40a19c18ed698fd1345141971e7f4",
     "src/swing_trading_ai_assistant/sector_analysis/current_industry_participation_v4.py": "4e86510158c7d26c94c7a888af29a7b282cd6fa464a886fe4408d220f6fe53e5",
     "src/swing_trading_ai_assistant/sector_analysis/current_industry_participation_v4_runtime_identity_manifest.py": "9bff11114e44605c969bace68fdb666d0ec22157e5f54c37e49c8ac5be3416ac",
 }

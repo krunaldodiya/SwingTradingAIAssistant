@@ -1070,8 +1070,10 @@ def _integrated_price_is_ready_v5(
         tuple(len(item) for item in sessions) != expected_counts
         or sessions[0] != sessions[1][-1:]
         or sessions[1] != sessions[2][-2:]
-        # The 21-session window must end at this retained context's decision
-        # session, rather than merely being a coherent older capture window.
+        # The exact retained S0..S20 official window anchors Structure. Price
+        # comparison remains the final two official sessions (S19, S20), not
+        # the Regime's S0 comparison anchor.
+        or sessions[2][0] != context.market_regime_comparison_session
         or sessions[2][-1] != context.market_regime_decision_session
         or any(item.state != "RETAINED_REVISION" for item in price.feature_slots)
     ):
