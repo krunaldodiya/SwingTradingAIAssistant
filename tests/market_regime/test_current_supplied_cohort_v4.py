@@ -496,6 +496,7 @@ def test_outer_composition_retains_real_context_and_archive_files(  # noqa: C901
                 retained=result,
                 request=request,
                 provider=provider,
+                root=scenario.root,
             )
         context_path, receipt_path, marker_path = _archive_paths(
             scenario.root, result.context_identity_sha256

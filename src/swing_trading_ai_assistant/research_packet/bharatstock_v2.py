@@ -1479,15 +1479,34 @@ def _coverage(
     )
 
 
+_FINITE_INSUFFICIENT_REASONS: Final = frozenset(
+    {
+        # BharatStockClient's 404 covers both lookup and price-page requests;
+        # it is not an authoritative capability refusal.
+        "NOT_FOUND",
+        "RESPONSE_INVALID",
+        "PAGINATION_INVALID",
+        "REQUEST_REJECTED",
+        "PRICE_EVIDENCE_INVALID",
+        "EMPTY_HISTORY",
+        "HISTORY_INVALID",
+        "HISTORY_INCOMPLETE",
+        "MISSING_HISTORY",
+        "INSUFFICIENT_COMPLETED_SESSIONS",
+        "PRICE_EVIDENCE_UNAVAILABLE",
+    }
+)
+
+
 def _failure_outcome(
     reason: str,
 ) -> tuple[_Availability, _Support, _Comparability]:
-    """Map only finite producer-local reasons; unknown failures stay insufficient."""
-    if reason == "NOT_FOUND":
-        return "UNSUPPORTED_CAPABILITY", "UNSUPPORTED", "NOT_ESTABLISHED"
+    """Classify only enumerated producer outcomes; unknown defects stay fatal."""
     if reason == "IDENTITY_MISMATCH":
         return "INSUFFICIENT_EVIDENCE", "CONFLICTED", "NOT_ESTABLISHED"
-    return "INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"
+    if reason in _FINITE_INSUFFICIENT_REASONS:
+        return "INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"
+    raise ValueError("unexpected BharatStock V2 producer reason")
 
 
 def _failure_member_feature(

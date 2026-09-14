@@ -37,7 +37,7 @@ _CUTOFF = datetime(2026, 8, 31, 12, tzinfo=UTC)
 @pytest.mark.parametrize(
     ("reason", "expected"),
     (
-        ("NOT_FOUND", ("UNSUPPORTED_CAPABILITY", "UNSUPPORTED", "NOT_ESTABLISHED")),
+        ("NOT_FOUND", ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED")),
         (
             "IDENTITY_MISMATCH",
             ("INSUFFICIENT_EVIDENCE", "CONFLICTED", "NOT_ESTABLISHED"),
@@ -52,6 +52,11 @@ def test_v2_finite_producer_failure_reason_mapping(
     reason: str, expected: tuple[str, str, str]
 ) -> None:
     assert bharatstock_v2._failure_outcome(reason) == expected  # pyright: ignore[reportPrivateUsage]
+
+
+def test_v2_unknown_producer_reason_is_fatal() -> None:
+    with pytest.raises(ValueError, match="unexpected BharatStock"):
+        bharatstock_v2._failure_outcome("UNRECOGNIZED_PROVIDER_DEFECT")  # pyright: ignore[reportPrivateUsage]
 
 
 def _sessions(session_count: int = 21) -> tuple[date, ...]:

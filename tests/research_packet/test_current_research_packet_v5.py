@@ -298,22 +298,19 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     failed_context: bool,
 ) -> None:
     industry_test = _industry_test_module()
-    if failed_context:
-        captured: dict[str, Any] = {}
-        with pytest.MonkeyPatch.context() as context_patch:
-            industry_test._v4_test_module().test_outer_composition_retains_real_context_and_archive_files(
-                tmp_path / "context",
-                context_patch,
-                exercise_archive_contracts=False,
-                raw_directions=("ADVANCE",),
-                adjusted_directions=("DECLINE",),
-                expected_state="INSUFFICIENT_EVIDENCE",
-                capture=captured,
-            )
-        context = captured["retained"]
-        private_context = captured["candidate"].context_object
-    else:
-        context, private_context = industry_test._retained_context(tmp_path / "context")
+    captured: dict[str, Any] = {}
+    with pytest.MonkeyPatch.context() as context_patch:
+        industry_test._v4_test_module().test_outer_composition_retains_real_context_and_archive_files(
+            tmp_path / "context",
+            context_patch,
+            exercise_archive_contracts=False,
+            raw_directions=("ADVANCE",),
+            adjusted_directions=(("DECLINE",) if failed_context else ("ADVANCE",)),
+            expected_state=("INSUFFICIENT_EVIDENCE" if failed_context else "OBSERVED"),
+            capture=captured,
+        )
+    context = captured["retained"]
+    private_context = captured["candidate"].context_object
     classification = industry_test._retained_classification(
         tmp_path / "classification", context, private_context
     )
