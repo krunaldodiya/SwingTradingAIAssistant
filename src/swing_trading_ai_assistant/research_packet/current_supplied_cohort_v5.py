@@ -1052,31 +1052,40 @@ def _industry_semantics_are_valid_v5(
     return False
 
 
+def _price_sessions_match_context_v5(
+    price: BharatStockResearchPacketV2, context: CurrentResearchV5ContextSection
+) -> bool:
+    """Bind all requested Price windows to the retained official S0..S20 set."""
+    if (
+        price.requested_features != _FEATURE_ORDER
+        or tuple(item.feature for item in price.feature_slots) != _FEATURE_ORDER
+        or len(price.feature_slots) != 3
+    ):
+        return False
+    sessions = tuple(item.requested_sessions for item in price.feature_slots)
+    return (
+        tuple(len(item) for item in sessions) == (1, 2, 21)
+        and sessions[0] == sessions[1][-1:]
+        and sessions[1] == sessions[2][-2:]
+        and sessions[2][0] == context.market_regime_comparison_session
+        and sessions[2][-1] == context.market_regime_decision_session
+    )
+
+
 def _integrated_price_is_ready_v5(
     price: BharatStockResearchPacketV2, context: CurrentResearchV5ContextSection
 ) -> bool:
     """Return true only for the context-bound retained 1/2/21 Price matrix."""
-    expected_counts = (1, 2, 21)
     if (
         price.execution_state != "COMPLETED"
+        or not _price_sessions_match_context_v5(price, context)
         or price.requested_features != _FEATURE_ORDER
         or tuple(item.feature for item in price.coverage) != _FEATURE_ORDER
         or len(price.feature_slots) != 3
         or tuple(item.feature for item in price.feature_slots) != _FEATURE_ORDER
     ):
         return False
-    sessions = tuple(item.requested_sessions for item in price.feature_slots)
-    if (
-        tuple(len(item) for item in sessions) != expected_counts
-        or sessions[0] != sessions[1][-1:]
-        or sessions[1] != sessions[2][-2:]
-        # The exact retained S0..S20 official window anchors Structure. Price
-        # comparison remains the final two official sessions (S19, S20), not
-        # the Regime's S0 comparison anchor.
-        or sessions[2][0] != context.market_regime_comparison_session
-        or sessions[2][-1] != context.market_regime_decision_session
-        or any(item.state != "RETAINED_REVISION" for item in price.feature_slots)
-    ):
+    if any(item.state != "RETAINED_REVISION" for item in price.feature_slots):
         return False
     cohort_size = len(price.members)
     return (
@@ -1205,6 +1214,7 @@ def _packet_semantics_are_valid_v5(
         != sum(item.discovery_source is not None for item in mapping.members)
         or packet.coverage != packet.price_evidence.coverage
         or not price_validator(packet.price_evidence)
+        or not _price_sessions_match_context_v5(packet.price_evidence, packet.context)
         or not current_event_notice_semantics_are_valid_v2(packet.event_evidence)
         or packet.members
         != tuple(

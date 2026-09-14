@@ -325,8 +325,9 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     selected = mapping.selected_at
     cutoff = mapping.decision_cutoff
     execution = selected
+    assert private_context.raw_result.raw_grid is not None
     sessions = tuple(
-        selected.date() - timedelta(days=index) for index in range(20, -1, -1)
+        item.session for item in private_context.raw_result.raw_grid.sessions
     )
 
     def provenance(window: tuple[date, ...]) -> BharatStockCaptureRequestProvenanceV2:
@@ -401,6 +402,8 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     retained_schedule = current_supplied_cohort_v5._context_section(  # pyright: ignore[reportPrivateUsage]
         context, mapping, industry
     )
+    assert sessions[0] == retained_schedule.market_regime_comparison_session
+    assert sessions[-1] == retained_schedule.market_regime_decision_session
     request = CurrentResearchV5Request(
         selected,
         cutoff,
@@ -420,6 +423,43 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     with pytest.raises(ValueError, match="mandatory Price matrix"):
         build_current_research_packet_v5(
             request, mapping_binding, geometry_only, context, event, industry
+        )
+    older_sessions = tuple(item - timedelta(days=1) for item in sessions)
+    older_price = build_bharatstock_research_packet_v2(
+        (
+            BharatStockFeatureInputV2(
+                "CANDLE_GEOMETRY",
+                "ATTEMPTED_NO_REVISION",
+                older_sessions[-1:],
+                request_provenance=provenance(older_sessions[-1:]),
+                failure_code="MISSING_HISTORY",
+                failure_reason="MISSING_HISTORY",
+                executed_at=execution,
+            ),
+            BharatStockFeatureInputV2(
+                "PREVIOUS_CLOSE_COMPARISON",
+                "ATTEMPTED_NO_REVISION",
+                older_sessions[-2:],
+                request_provenance=provenance(older_sessions[-2:]),
+                failure_code="MISSING_HISTORY",
+                failure_reason="MISSING_HISTORY",
+                executed_at=execution,
+            ),
+            BharatStockFeatureInputV2(
+                "MARKET_STRUCTURE",
+                "ATTEMPTED_NO_REVISION",
+                older_sessions,
+                request_provenance=provenance(older_sessions),
+                failure_code="MISSING_HISTORY",
+                failure_reason="MISSING_HISTORY",
+                executed_at=execution,
+            ),
+        ),
+        mapping_binding,
+    )
+    with pytest.raises(ValueError, match="current V5 packet"):
+        build_current_research_packet_v5(
+            request, mapping_binding, older_price, context, event, industry
         )
 
     packet = build_current_research_packet_v5(
