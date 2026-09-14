@@ -337,6 +337,7 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
             adjusted_directions=(("DECLINE",) if failed_context else ("ADVANCE",)),
             expected_state=("INSUFFICIENT_EVIDENCE" if failed_context else "OBSERVED"),
             capture=captured,
+            include_prior_official_session=True,
         )
     context = captured["retained"]
     private_context = captured["candidate"].context_object
@@ -620,18 +621,15 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
                 ).encode()
                 + b"\n"
             )
-        # The retained schedule contains exactly the current 21 completed
-        # sessions, so only the older 1/2 windows are covered without runtime
-        # calendar expansion; Structure remains the admitted current 21 window.
-        older_official_sessions = official_sessions[:-1]
-        assert len(older_official_sessions) == 20
+        older_official_sessions = official_sessions[-22:-1]
+        assert len(older_official_sessions) == 21
         older_retained_price = build_bharatstock_research_packet_v2(
             (
                 retained_slot("CANDLE_GEOMETRY", older_official_sessions[-1:]),
                 retained_slot(
                     "PREVIOUS_CLOSE_COMPARISON", older_official_sessions[-2:]
                 ),
-                retained_slot("MARKET_STRUCTURE", sessions),
+                retained_slot("MARKET_STRUCTURE", older_official_sessions),
             ),
             mapping_binding,
         )

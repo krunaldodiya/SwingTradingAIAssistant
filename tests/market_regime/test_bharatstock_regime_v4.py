@@ -38,6 +38,7 @@ from swing_trading_ai_assistant.market_data.current_same_pass_daily_v4 import (
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
+    ScheduleClosure,
     ScheduleSession,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
@@ -280,17 +281,34 @@ class _TemporaryRetainedEvidence:
         return tuple(source_rows), tuple(bars)
 
 
-def _request(scenario, screen):
+def _request(scenario, screen, *, include_prior_official_session: bool = False):
     base = screen._schedule()
+    prior = ()
+    prior_closures = ()
+    if include_prior_official_session:
+        prior_date = base.covered_from - timedelta(days=3)
+        prior = (
+            ScheduleSession(
+                prior_date,
+                datetime(2026, 7, 3, 3, 45, tzinfo=UTC),
+                datetime(2026, 7, 3, 10, tzinfo=UTC),
+                "REGULAR",
+            ),
+        )
+        prior_closures = (
+            ScheduleClosure(prior_date + timedelta(days=1), "WEEKEND"),
+            ScheduleClosure(prior_date + timedelta(days=2), "WEEKEND"),
+        )
     schedule = ExpectedSessionSchedule(
         3,
         "nse-upstox-composed-calendar",
         "composed-calendar@v1=" + "b" * 64,
         base.as_of,
         base.timezone,
-        base.covered_from,
+        prior[0].trade_date if prior else base.covered_from,
         _CUTOFF.date(),
-        base.sessions
+        prior
+        + base.sessions
         + (
             ScheduleSession(
                 _CUTOFF.date(),
@@ -299,7 +317,7 @@ def _request(scenario, screen):
                 "SPECIAL",
             ),
         ),
-        base.closures,
+        prior_closures + base.closures,
     )
     retained = scenario.schedule_store.retain(schedule)
     assert retained.digest is not None
@@ -330,11 +348,12 @@ def _request(scenario, screen):
         )
         for index, member in enumerate(scenario.manifest.members)
     )
+    raw_sessions = schedule.sessions[-22:-1] if prior else schedule.sessions[:-1]
     sessions = tuple(
         CurrentSamePassRawSessionV1(
             index, item.trade_date, item.open_at, item.close_at, item.kind
         )
-        for index, item in enumerate(schedule.sessions[:-1])
+        for index, item in enumerate(raw_sessions)
     )
     cohort = raw_daily._hash(
         {

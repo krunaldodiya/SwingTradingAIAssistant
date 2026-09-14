@@ -60,6 +60,10 @@ _CUTOFF = datetime(2026, 8, 31, 12, tzinfo=UTC)
             "EMPTY_HISTORY",
             ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"),
         ),
+        (
+            "AUTHENTICATION_FAILED",
+            ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"),
+        ),
     ),
 )
 def test_v2_finite_producer_failure_reason_mapping(
@@ -579,6 +583,8 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
                 2,
             )
 
+    captured_slots: dict[str, tuple[BharatStockFeatureInputV2, ...]] = {}
+
     def packet(client: Client, name: str) -> object:
         capture_root = tmp_path / name
         capture_root.mkdir(mode=0o700)
@@ -626,6 +632,7 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
                     ),
                 )
             )
+        captured_slots[name] = tuple(slots)
         return build_bharatstock_research_packet_v2(tuple(slots), mapping_binding)
 
     complete = packet(Client(), "complete")
@@ -637,6 +644,30 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
         == ((100, 100, 0),) * 3
     )
     assert tuple(member.member for member in complete.members) == members
+    for position, feature in enumerate(
+        ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE")
+    ):
+        independent = build_bharatstock_research_packet_v2(
+            tuple(
+                slot
+                if index == position
+                else BharatStockFeatureInputV2(
+                    (
+                        "CANDLE_GEOMETRY",
+                        "PREVIOUS_CLOSE_COMPARISON",
+                        "MARKET_STRUCTURE",
+                    )[index],
+                    "UNREQUESTED",
+                    (),
+                )
+                for index, slot in enumerate(captured_slots["complete"])
+            ),
+            mapping_binding,
+        )
+        assert independent.requested_features == (feature,)
+        assert tuple(
+            member.features[0].fact for member in independent.members
+        ) == tuple(member.features[position].fact for member in complete.members)
     local = {members[index].isin for index in (0, 49, 99)}
     partial = packet(Client(local), "partial")
     assert (
@@ -663,6 +694,9 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
     )
     blocked = packet(Client(mismatched_adjustment=True), "blocked")
     assert tuple(item.dependency_blocked for item in blocked.coverage) == (0, 100, 100)
+    assert tuple(member.features[0].fact for member in blocked.members) == tuple(
+        member.features[0].fact for member in complete.members
+    )
     assert all(
         member.features[0].availability == "OBSERVED"
         and tuple(item.availability for item in member.features[1:])
