@@ -444,10 +444,12 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     assert (
         packet.members[0].event_notice.availability == "NO_MATCHING_NOTICE_IN_SNAPSHOT"
     )
-    decoded = CurrentResearchPacketV5.from_canonical_json_bytes(
-        packet.canonical_json_bytes()
-    )
-    assert decoded == packet
+    public_bytes = packet.canonical_json_bytes()
+    assert b'"source_bars"' not in public_bytes
+    for raw_ohlcv_key in (b'"open"', b'"high"', b'"low"', b'"close"', b'"volume"'):
+        assert raw_ohlcv_key not in public_bytes
+    decoded = CurrentResearchPacketV5.from_canonical_json_bytes(public_bytes)
+    assert decoded.canonical_json_bytes() == public_bytes
     assert decoded.admitted is False
 
     regime_payload = json.loads(packet.canonical_json_bytes())

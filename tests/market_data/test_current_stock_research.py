@@ -406,6 +406,20 @@ def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
             None if question == "CURRENT_STRUCTURE" else _NOW
         )
         assert b'"source_bars"' not in result.canonical_json_bytes()
+        if question == "INTEGRATED_CURRENT_RESEARCH":
+            assert tuple(item.feature for item in result.context_outcomes) == (
+                "EVENT_NOTICES",
+                "MARKET_REGIME",
+                "INDUSTRY_PARTICIPATION",
+            )
+            assert all(
+                item.availability == "NOT_ATTEMPTED"
+                and item.support == "NOT_ESTABLISHED"
+                and item.reason == "RETAINED_CONTEXT_NOT_PROVIDED"
+                for item in result.context_outcomes
+            )
+        else:
+            assert result.context_outcomes == ()
 
 
 @pytest.mark.parametrize("available", (1, 2, 10, 20))

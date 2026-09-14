@@ -117,6 +117,36 @@ _REQUIRED: Final[dict[QuestionV2, tuple[str, ...]]] = {
     "CURRENT_STRUCTURE": ("MARKET_STRUCTURE",),
     "INTEGRATED_CURRENT_RESEARCH": _FEATURES,
 }
+ContextFeatureV2: TypeAlias = Literal[
+    "EVENT_NOTICES", "MARKET_REGIME", "INDUSTRY_PARTICIPATION"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentResearchContextOutcomeV2:
+    """Explicit result for a requested context feature not acquired by V2."""
+
+    feature: ContextFeatureV2
+    availability: Literal["NOT_ATTEMPTED"]
+    support: Literal["NOT_ESTABLISHED"]
+    reason: Literal["RETAINED_CONTEXT_NOT_PROVIDED"]
+
+    def __post_init__(self) -> None:
+        if (
+            self.feature not in _FEATURES[3:]
+            or self.availability != "NOT_ATTEMPTED"
+            or self.support != "NOT_ESTABLISHED"
+            or self.reason != "RETAINED_CONTEXT_NOT_PROVIDED"
+        ):
+            raise ValueError("invalid current-stock V2 context outcome")
+
+
+_INTEGRATED_CONTEXT_OUTCOMES: Final = tuple(
+    CurrentResearchContextOutcomeV2(
+        feature, "NOT_ATTEMPTED", "NOT_ESTABLISHED", "RETAINED_CONTEXT_NOT_PROVIDED"
+    )
+    for feature in _FEATURES[3:]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +163,7 @@ class CurrentStockResearchResultV2:
     packet: BharatStockResearchPacketV2 | CurrentResearchPacketV5 | None
     limitations: tuple[str, ...]
     evidence_known_at: datetime | None = None
+    context_outcomes: tuple[CurrentResearchContextOutcomeV2, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -166,6 +197,19 @@ class CurrentStockResearchResultV2:
             )
             or type(self.limitations) is not tuple
             or not self.limitations
+            or type(self.context_outcomes) is not tuple
+            or any(
+                type(item) is not CurrentResearchContextOutcomeV2
+                for item in self.context_outcomes
+            )
+            or any(item.__post_init__() is not None for item in self.context_outcomes)
+            or self.context_outcomes
+            != (
+                _INTEGRATED_CONTEXT_OUTCOMES
+                if self.question == "INTEGRATED_CURRENT_RESEARCH"
+                and type(self.packet) is BharatStockResearchPacketV2
+                else ()
+            )
             or any(type(item) is not str or not item for item in self.limitations)
             or (self.packet is None) == (self.status in {"READY", "NOT_READY"})
             or (
@@ -817,6 +861,11 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 price_packet,
                 _LIMITATIONS,
                 known_at,
+                (
+                    _INTEGRATED_CONTEXT_OUTCOMES
+                    if question == "INTEGRATED_CURRENT_RESEARCH"
+                    else ()
+                ),
             )
     except (
         legacy.CurrentStockResearchFailure,

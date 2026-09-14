@@ -66,9 +66,11 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort_v4 import 
     _schema_identity as _regime_schema_identity,  # pyright: ignore[reportPrivateUsage]
 )
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
+    BharatStockCandleGeometryFactV2,
     BharatStockFeatureCoverageV2,
     BharatStockFeatureSourceV2,
     BharatStockMemberFeatureV2,
+    BharatStockPreviousCloseComparisonFactV2,
     BharatStockResearchMemberV2,
     BharatStockResearchPacketV2,
     bharatstock_research_packet_semantics_are_valid_v2,
@@ -142,6 +144,7 @@ def _wire(value: object) -> object:
 
 
 def _canonical_bytes(value: object) -> bytes:
+    """Encode private producer evidence, including internal bar witnesses."""
     return (
         json.dumps(
             _wire(value), sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -150,8 +153,52 @@ def _canonical_bytes(value: object) -> bytes:
     )
 
 
+def _public_wire(value: object) -> object:
+    """Project V5's public facts without exposing raw source OHLCV witnesses."""
+    if type(value) is Decimal:
+        return format(value, "f")
+    if type(value) is datetime:
+        return (
+            value.astimezone(UTC)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+    if type(value) is date:
+        return value.isoformat()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: _public_wire(getattr(value, item.name))
+            for item in fields(value)
+            if not item.name.startswith("_") and item.name != "source_bars"
+        }
+    if type(value) is tuple:
+        return [_public_wire(item) for item in cast(tuple[object, ...], value)]
+    if type(value) is dict:
+        return {
+            str(key): _public_wire(item)
+            for key, item in cast(dict[object, object], value).items()
+        }
+    return value
+
+
+def _public_canonical_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            _public_wire(value),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        + b"\n"
+    )
+
+
 def _digest(value: object) -> str:
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _public_digest(value: object) -> str:
+    return hashlib.sha256(_public_canonical_bytes(value)).hexdigest()
 
 
 def _valid_digest(value: object) -> bool:
@@ -641,7 +688,8 @@ class CurrentResearchPacketV5:
         raise TypeError("current V5 packets are producer-minted only")
 
     def canonical_json_bytes(self) -> bytes:
-        return _canonical_bytes(self)
+        """Return the redacted public V5 projection, never raw OHLCV witnesses."""
+        return _public_canonical_bytes(self)
 
     @classmethod
     def from_canonical_json_bytes(cls, raw: bytes) -> CurrentResearchPacketV5:
@@ -676,7 +724,7 @@ def _admit(packet: CurrentResearchPacketV5) -> None:
 
     _ADMISSIONS[packet_id] = (
         weakref.ref(packet, discard),
-        packet.canonical_json_bytes(),
+        _canonical_bytes(packet),
         seal,
     )
 
@@ -686,7 +734,7 @@ def _admission_digest(packet: CurrentResearchPacketV5) -> str | None:
     if (
         entry is None
         or entry[0]() is not packet
-        or entry[1] != packet.canonical_json_bytes()
+        or entry[1] != _canonical_bytes(packet)
         or entry[2] is not object.__getattribute__(packet, "_seal")
     ):
         return None
@@ -1081,7 +1129,10 @@ def _schedule_provenance_is_valid_v5(
     )
 
 
-def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
+def _packet_semantics_are_valid_v5(
+    packet: CurrentResearchPacketV5,
+    price_validator: Callable[[object], bool],
+) -> bool:
     try:
         packet.bound_request.request.__post_init__()
         packet.bound_request.mapping.__post_init__()
@@ -1151,7 +1202,7 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         or packet.context.mapping_receipt_count
         != sum(item.discovery_source is not None for item in mapping.members)
         or packet.coverage != packet.price_evidence.coverage
-        or not bharatstock_research_packet_semantics_are_valid_v2(packet.price_evidence)
+        or not price_validator(packet.price_evidence)
         or not current_event_notice_semantics_are_valid_v2(packet.event_evidence)
         or packet.members
         != tuple(
@@ -1178,7 +1229,105 @@ def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
         for item in fields(packet)
         if item.name not in {"result_identity_sha256", "_seal"}
     }
-    return packet.result_identity_sha256 == _digest(preimage)
+    return packet.result_identity_sha256 == _public_digest(preimage)
+
+
+def _validate_packet(packet: CurrentResearchPacketV5) -> bool:
+    """Validate an in-memory packet and its private retained price witnesses."""
+    return _packet_semantics_are_valid_v5(
+        packet, bharatstock_research_packet_semantics_are_valid_v2
+    )
+
+
+def _public_price_semantics_are_valid_v5(value: object) -> bool:  # noqa: C901
+    """Validate the public V5 price shape without recreating private bar witnesses."""
+    if type(value) is not BharatStockResearchPacketV2:
+        return False
+    price = value
+    try:
+        price.mapping_projection.__post_init__()
+        if (
+            price.contract_version != "bharatstock-retained-research-packet@v2"
+            or not _valid_digest(price.result_identity_sha256)
+            or tuple(slot.feature for slot in price.feature_slots) != _FEATURE_ORDER
+            or tuple(item.feature for item in price.coverage)
+            != price.requested_features
+            or tuple(item.instrument for item in price.mapping_projection.members)
+            != tuple(item.member for item in price.members)
+        ):
+            return False
+        for slot in price.feature_slots:
+            slot.__post_init__()
+            if slot.source is not None:
+                slot.source.__post_init__()
+        for coverage in price.coverage:
+            coverage.__post_init__()
+        for member in price.members:
+            member.__post_init__()
+            for feature in member.features:
+                expected = {
+                    "CANDLE_GEOMETRY": BharatStockCandleGeometryFactV2,
+                    "PREVIOUS_CLOSE_COMPARISON": BharatStockPreviousCloseComparisonFactV2,
+                }.get(feature.feature)
+                if feature.feature == "MARKET_STRUCTURE":
+                    expected = type(feature.fact) if feature.fact is not None else None
+                if (
+                    feature.source_bars
+                    or feature.availability
+                    not in {
+                        "OBSERVED",
+                        "UNSUPPORTED_CAPABILITY",
+                        "DEPENDENCY_BLOCKED",
+                        "INSUFFICIENT_EVIDENCE",
+                        "NOT_ATTEMPTED",
+                    }
+                    or feature.support
+                    not in {"SUPPORTED", "UNSUPPORTED", "CONFLICTED", "NOT_ESTABLISHED"}
+                    or feature.comparability
+                    not in {"SUPPORTED", "CONFLICTED", "NOT_ESTABLISHED"}
+                    or (feature.availability == "OBSERVED")
+                    != (feature.fact is not None and feature.reason is None)
+                    or (
+                        feature.availability != "OBSERVED"
+                        and (feature.fact is not None or not feature.reason)
+                    )
+                    or (
+                        feature.fact is not None
+                        and expected is not None
+                        and type(feature.fact) is not expected
+                    )
+                ):
+                    return False
+                if feature.fact is not None:
+                    feature.fact.__post_init__()
+        expected_coverage: list[BharatStockFeatureCoverageV2] = []
+        for feature in price.requested_features:
+            features = tuple(member.feature(feature) for member in price.members)
+            if any(item is None for item in features):
+                return False
+            availability = tuple(
+                item.availability
+                for item in cast(tuple[BharatStockMemberFeatureV2, ...], features)
+            )
+            expected_coverage.append(
+                BharatStockFeatureCoverageV2(
+                    feature,
+                    len(price.members),
+                    availability.count("OBSERVED"),
+                    availability.count("UNSUPPORTED_CAPABILITY"),
+                    availability.count("DEPENDENCY_BLOCKED"),
+                    availability.count("INSUFFICIENT_EVIDENCE"),
+                    availability.count("NOT_ATTEMPTED"),
+                )
+            )
+        return price.coverage == tuple(expected_coverage)
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+
+
+def _validate_public_packet(packet: CurrentResearchPacketV5) -> bool:
+    """Validate public V5 facts; parsed values are deliberately never admitted."""
+    return _packet_semantics_are_valid_v5(packet, _public_price_semantics_are_valid_v5)
 
 
 @dataclass(slots=True)
@@ -1415,7 +1564,9 @@ def _bounded_json_value(
     raise ValueError("current V5 JSON type")
 
 
-def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
+def _decode_typed(  # noqa: C901
+    annotation: object, value: object, *, public_projection: bool = False
+) -> object:
     origin = get_origin(annotation)
     arguments = get_args(annotation)
     if origin is Literal:
@@ -1428,7 +1579,9 @@ def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
         matches: list[object] = []
         for argument in arguments:
             try:
-                matches.append(_decode_typed(argument, value))
+                matches.append(
+                    _decode_typed(argument, value, public_projection=public_projection)
+                )
             except (TypeError, ValueError):
                 continue
         if len(matches) != 1:
@@ -1439,11 +1592,14 @@ def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
             raise ValueError("current V5 tuple")
         raw_items = cast(list[object], value)
         if len(arguments) == 2 and arguments[1] is Ellipsis:
-            return tuple(_decode_typed(arguments[0], item) for item in raw_items)
+            return tuple(
+                _decode_typed(arguments[0], item, public_projection=public_projection)
+                for item in raw_items
+            )
         if len(raw_items) != len(arguments):
             raise ValueError("current V5 fixed tuple")
         return tuple(
-            _decode_typed(expected, item)
+            _decode_typed(expected, item, public_projection=public_projection)
             for expected, item in zip(arguments, raw_items, strict=True)
         )
     if annotation is datetime:
@@ -1489,7 +1645,14 @@ def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
             raise ValueError("current V5 object")
         raw = cast(dict[str, object], value)
         public_fields = tuple(
-            item for item in fields(annotation) if not item.name.startswith("_")
+            item
+            for item in fields(annotation)
+            if not item.name.startswith("_")
+            and not (
+                public_projection
+                and annotation is BharatStockMemberFeatureV2
+                and item.name == "source_bars"
+            )
         )
         if set(raw) != {item.name for item in public_fields}:
             raise ValueError("current V5 object keys")
@@ -1497,11 +1660,23 @@ def _decode_typed(annotation: object, value: object) -> object:  # noqa: C901
         result = object.__new__(annotation)
         for item in public_fields:
             object.__setattr__(
-                result, item.name, _decode_typed(hints[item.name], raw[item.name])
+                result,
+                item.name,
+                _decode_typed(
+                    hints[item.name],
+                    raw[item.name],
+                    public_projection=public_projection,
+                ),
             )
         for item in fields(annotation):
             if item.name.startswith("_"):
                 object.__setattr__(result, item.name, object())
+            elif (
+                public_projection
+                and annotation is BharatStockMemberFeatureV2
+                and item.name == "source_bars"
+            ):
+                object.__setattr__(result, item.name, ())
         return result
     raise ValueError("current V5 unsupported type")
 
@@ -1515,10 +1690,10 @@ def _read_current_research_packet_v5(raw: bytes) -> CurrentResearchPacketV5:
         raise ValueError("current V5 packet bytes")
 
     decoded = _parse_bounded_json_v5(raw)
-    packet = _decode_typed(CurrentResearchPacketV5, decoded)
+    packet = _decode_typed(CurrentResearchPacketV5, decoded, public_projection=True)
     if (
         type(packet) is not CurrentResearchPacketV5
-        or not _validate_packet(packet)
+        or not _validate_public_packet(packet)
         or packet.canonical_json_bytes() != raw
     ):
         raise ValueError("current V5 packet semantics")
@@ -1827,7 +2002,7 @@ def build_current_research_packet_v5(
     preimage = {
         key: (members if key == "members" else value) for key, value in fields_to_write
     }
-    result_identity = _digest(preimage)
+    result_identity = _public_digest(preimage)
     packet = object.__new__(CurrentResearchPacketV5)
     for name, value in {
         **preimage,
