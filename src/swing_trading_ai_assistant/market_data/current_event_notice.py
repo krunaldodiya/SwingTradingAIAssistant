@@ -2033,11 +2033,16 @@ class FileCurrentEventNoticeArchiveV1:
             return _failure("EVENT_ARCHIVE_FAILED", cohort_size)
 
 
-def validate_retained_current_event_notice_v1(
+def validate_retained_current_event_notice_v1(  # noqa: C901
     root: Path,
     lease: StorageRootLease,
     retained: RetainedCurrentEventNoticeSnapshotV1,
-) -> RetainedCurrentEventNoticeSnapshotV1:
+    *,
+    archive_objects: bool = False,
+) -> (
+    RetainedCurrentEventNoticeSnapshotV1
+    | tuple[RetainedCurrentEventNoticeSnapshotV1, tuple[bytes, bytes, bytes, bytes]]
+):
     """Re-read archive objects and re-parse the retained projection exactly."""
     if (
         not root.is_absolute()
@@ -2138,4 +2143,8 @@ def validate_retained_current_event_notice_v1(
         or retained.member_count != len(retained.members)
     ):
         raise ValueError("retained event notice bytes invalid")
+    if archive_objects:
+        # The caller must compare these V1-validated bytes again inside its
+        # own final authorized operation; they never grant archive admission.
+        return retained, (raw, snapshot_raw, receipt_raw, marker_raw)
     return retained

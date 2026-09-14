@@ -32,9 +32,9 @@ from .current_event_notice import (
     _parse_filename_range,  # pyright: ignore[reportPrivateUsage]
     _publish_object,  # pyright: ignore[reportPrivateUsage]
     _read_stable_private_object,  # pyright: ignore[reportPrivateUsage]
-    _stable_object,  # pyright: ignore[reportPrivateUsage]
     _receipt_datetime,  # pyright: ignore[reportPrivateUsage]
     _relevant_row_failure,  # pyright: ignore[reportPrivateUsage]
+    _stable_object,  # pyright: ignore[reportPrivateUsage]
     _trusted_utc_now,  # pyright: ignore[reportPrivateUsage]
     _validate_archive_directory,  # pyright: ignore[reportPrivateUsage]
     _validate_archive_root,  # pyright: ignore[reportPrivateUsage]
@@ -942,7 +942,15 @@ def project_retained_current_event_notices_v2(
     if not root.is_absolute() or type(lease) is not StorageRootLease:
         raise ValueError("current event V2 archive input invalid")
     try:
-        retained = validate_retained_current_event_notice_v1(root, lease, retained)
+        validated = validate_retained_current_event_notice_v1(
+            root, lease, retained, archive_objects=True
+        )
+        retained, retained_objects = cast(
+            tuple[
+                RetainedCurrentEventNoticeSnapshotV1, tuple[bytes, bytes, bytes, bytes]
+            ],
+            validated,
+        )
     except Exception as error:
         # Archive reads are untrusted admission evidence.  Never project a
         # retained V1 result after any missing, corrupt, or unsafe read.
@@ -1014,20 +1022,24 @@ def project_retained_current_event_notices_v2(
                 operation,
                 directory,
                 (
-                    (f"{retained.artifact_identity_sha256}.raw.csv", None, 1024 * 1024),
+                    (
+                        f"{retained.artifact_identity_sha256}.raw.csv",
+                        retained_objects[0],
+                        1024 * 1024,
+                    ),
                     (
                         f"{retained.snapshot_identity_sha256}.snapshot.json",
-                        None,
+                        retained_objects[1],
                         1024 * 1024,
                     ),
                     (
                         f"{retained.archive_identity_sha256}.receipt.json",
-                        None,
+                        retained_objects[2],
                         64 * 1024,
                     ),
                     (
                         f"{retained.archive_identity_sha256}.complete.json",
-                        None,
+                        retained_objects[3],
                         64 * 1024,
                     ),
                 ),
