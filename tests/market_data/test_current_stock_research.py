@@ -333,6 +333,42 @@ def test_v2_cli_is_explicit_and_preserves_unversioned_v1_admission(
     assert capsys.readouterr().err == "request_invalid\n"
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("question", "PRICE_BEHAVIOR"),
+        ("question", "CURRENT_STRUCTURE"),
+        ("symbol", "OTHER"),
+        ("data_selection_time", _NOW - timedelta(seconds=1)),
+        ("acquisition_deadline", _NOW + timedelta(days=1)),
+        ("packet", "unadmitted_copy"),
+    ),
+)
+@pytest.mark.parametrize("at_serialization", (False, True))
+def test_v2_result_rejects_substituted_question_identity_and_unadmitted_packet(
+    tmp_path: Path, field: str, value: object, at_serialization: bool
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    result = research_current_stock_v2(
+        "PNB",
+        tmp_path,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, _Prices(clock)),
+    )
+    assert result.status == "READY"
+    assert type(result.packet) is packet_v2.BharatStockResearchPacketV2
+    replacement = copy.deepcopy(result.packet) if field == "packet" else value
+    with pytest.raises(ValueError):
+        if at_serialization:
+            object.__setattr__(result, field, replacement)
+            result.canonical_json_bytes()
+        else:
+            replace(result, **{field: replacement})
+
+
 def test_v2_closed_questions_execute_real_service_and_preserve_selection_time(
     tmp_path: Path,
 ) -> None:
@@ -388,7 +424,7 @@ def test_v2_integrated_short_calendar_retains_independent_windows_without_struct
         sources,
         [
             clock.value.date() - timedelta(days=offset)
-            for offset in range(workflow_v2._LOOKBACK_DAYS)  # pyright: ignore[reportPrivateUsage]
+            for offset in range(32)
             if clock.value.date() - timedelta(days=offset) not in retained_sessions
         ],
     )
@@ -432,6 +468,7 @@ def test_v2_integrated_short_calendar_retains_independent_windows_without_struct
     assert slots[2].request_provenance is None
     assert slots[2].source is None
     assert features[2].availability == "INSUFFICIENT_EVIDENCE"
+    assert features[2].reason == "INSUFFICIENT_COMPLETED_SESSIONS"
     assert all(len(window) != 21 for window in attempted_windows)
     assert sum(len(window) == 21 for window in attempted_windows) == 0
 

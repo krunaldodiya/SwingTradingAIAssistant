@@ -26,11 +26,13 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockResearchPacketV2,
     BharatStockSharedStopInputV2,
     build_bharatstock_research_packet_v2,
+    validate_bharatstock_research_packet_v2,
 )
 from swing_trading_ai_assistant.research_packet.current_supplied_cohort_v5 import (
     CurrentResearchPacketV5,
     CurrentResearchV5Request,
     build_current_research_packet_v5,
+    validate_current_research_packet_v5,
 )
 from swing_trading_ai_assistant.sector_analysis.current_industry_participation_v4 import (
     CurrentIndustryParticipationFailureV4,
@@ -77,10 +79,10 @@ from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
 _IST: Final = ZoneInfo("Asia/Kolkata")
-# A calendar month can contain enough exchange holidays that 32 calendar days
-# does not provide 21 completed official sessions.  Retain a wider official
-# schedule window; features still select their exact independent sessions.
-_LOOKBACK_DAYS: Final = 64
+# Preserve the shared bounded acquisition contract. Weekday holidays can leave
+# fewer than 21 completed sessions: report Structure insufficiency while
+# preserving independently supported geometry and comparison facts.
+_LOOKBACK_DAYS: Final = 32
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -199,6 +201,29 @@ class CurrentStockResearchResultV2:
             )
         ):
             raise ValueError("invalid current-stock V2 result")
+        if self.packet is not None:
+            if type(self.packet) is BharatStockResearchPacketV2:
+                price = validate_bharatstock_research_packet_v2(self.packet)
+            else:
+                integrated = validate_current_research_packet_v5(self.packet)
+                price = validate_bharatstock_research_packet_v2(
+                    integrated.price_evidence
+                )
+            mapping = price.mapping_projection
+            if (
+                price.requested_features
+                != tuple(
+                    feature
+                    for feature in _REQUIRED[self.question]
+                    if feature in _FEATURES[:3]
+                )
+                or len(mapping.members) != 1
+                or len(price.members) != 1
+                or mapping.members[0].effective_symbol != self.symbol
+                or mapping.selected_at != self.data_selection_time
+                or mapping.decision_cutoff != self.acquisition_deadline
+            ):
+                raise ValueError("current-stock V2 packet request mismatch")
         object.__setattr__(
             self, "data_selection_time", self.data_selection_time.astimezone(UTC)
         )
@@ -211,6 +236,9 @@ class CurrentStockResearchResultV2:
             )
 
     def canonical_json_bytes(self) -> bytes:
+        # Frozen dataclasses alone do not establish retained admission or guard
+        # against mutation through Python's object-level APIs.
+        self.__post_init__()
         return _canonical(self)
 
 
