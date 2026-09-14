@@ -8,11 +8,13 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 
 from swing_trading_ai_assistant.market_data import bharatstock_capture as capture
 from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockClient,
     BharatStockDailyPrice,
     BharatStockError,
     BharatStockHistory,
@@ -61,7 +63,7 @@ _CUTOFF = datetime(2026, 8, 31, 12, tzinfo=UTC)
             ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"),
         ),
         (
-            "AUTHENTICATION_FAILED",
+            "AUTHENTICATION",
             ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"),
         ),
     ),
@@ -72,9 +74,12 @@ def test_v2_finite_producer_failure_reason_mapping(
     assert bharatstock_v2._failure_outcome(reason) == expected  # pyright: ignore[reportPrivateUsage]
 
 
-def test_v2_unknown_producer_reason_is_fatal() -> None:
+@pytest.mark.parametrize(
+    "reason", ("UNRECOGNIZED_PROVIDER_DEFECT", "AUTHENTICATION_FAILED")
+)
+def test_v2_unknown_producer_reason_is_fatal(reason: str) -> None:
     with pytest.raises(ValueError, match="unexpected BharatStock"):
-        bharatstock_v2._failure_outcome("UNRECOGNIZED_PROVIDER_DEFECT")  # pyright: ignore[reportPrivateUsage]
+        bharatstock_v2._failure_outcome(reason)  # pyright: ignore[reportPrivateUsage]
 
 
 def _sessions(session_count: int = 21) -> tuple[date, ...]:
@@ -496,6 +501,7 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
             retained_schedule.digest
         )
     assert resolved_schedule.schedule is not None
+    validated_schedule = resolved_schedule.schedule
     mapping_spec = importlib.util.spec_from_file_location(
         "binding_fixture",
         Path(__file__).parents[1]
@@ -538,7 +544,7 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
             mismatched_adjustment: bool = False,
             failure_reason: str = "EMPTY_HISTORY",
         ) -> None:
-            self.missing = set() if missing is None else missing
+            self.missing: set[str] = set() if missing is None else missing
             self.conflict = conflict
             self.mismatched_adjustment = mismatched_adjustment
             self.failure_reason = failure_reason
@@ -585,7 +591,7 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
 
     captured_slots: dict[str, tuple[BharatStockFeatureInputV2, ...]] = {}
 
-    def packet(client: Client, name: str) -> object:
+    def packet(client: Client, name: str) -> bharatstock_v2.BharatStockResearchPacketV2:
         capture_root = tmp_path / name
         capture_root.mkdir(mode=0o700)
         acquired = StorageRootLease.try_acquire(capture_root)
@@ -593,24 +599,37 @@ def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
         with acquired.lease as lease:
             retained = ScheduleEvidenceStore(capture_root, lease).retain(schedule)
         assert retained.digest is not None
-        slots = []
-        for feature, window in (
+        slots: list[BharatStockFeatureInputV2] = []
+        windows: tuple[
+            tuple[
+                Literal[
+                    "CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE"
+                ],
+                tuple[date, ...],
+            ],
+            ...,
+        ] = (
             ("CANDLE_GEOMETRY", sessions[-1:]),
             ("PREVIOUS_CLOSE_COMPARISON", sessions[-2:]),
             ("MARKET_STRUCTURE", sessions),
-        ):
+        )
+        for feature, window in windows:
             request = CaptureRequestV2(
                 members,
                 window,
                 cutoff,
-                schedule_digest(resolved_schedule.schedule),
-                resolved_schedule.schedule.source,
-                resolved_schedule.schedule.source_release,
+                schedule_digest(validated_schedule),
+                validated_schedule.source,
+                validated_schedule.source_release,
                 schedule_identity,
                 selection_identity_v2(members),
             )
             result = capture_bharatstock_v2(
-                request, capture_root, capture_root, client=client, clock=lambda: cutoff
+                request,
+                capture_root,
+                capture_root,
+                client=cast(BharatStockClient, client),
+                clock=lambda: cutoff,
             )
             assert result.revision is not None
             revision = result.revision

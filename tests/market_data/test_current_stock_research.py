@@ -733,9 +733,46 @@ def test_v2_storage_failure_after_first_window_is_publication_fatal(
     assert result.packet is None
 
 
+@pytest.mark.parametrize(
+    "category", ("AUTHENTICATION_FAILED", "UNRECOGNIZED_PROVIDER_DEFECT")
+)
+def test_v2_unknown_shared_producer_reason_remains_fatal(
+    tmp_path: Path, category: str
+) -> None:
+    root = tmp_path / "unknown-shared-stop"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.failure = BharatStockError(category, member_local=False)
+    with pytest.raises(ValueError, match="unexpected BharatStock V2 producer reason"):
+        research_current_stock_v2(
+            "PNB",
+            root,
+            question="INTEGRATED_CURRENT_RESEARCH",
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+    assert len(prices.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "category",
+    (
+        "AUTHENTICATION",
+        "AUTHORIZATION",
+        "RATE_LIMITED",
+        "PROVIDER_UNAVAILABLE",
+        "REDIRECT_REJECTED",
+        "RESPONSE_LIMIT_EXCEEDED",
+        "TRANSPORT_FAILED",
+        "REQUEST_BUDGET_EXHAUSTED",
+    ),
+)
 @pytest.mark.parametrize("failure_effect", (1, 2, 3))
 def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
-    tmp_path: Path, failure_effect: int
+    tmp_path: Path, failure_effect: int, category: str
 ) -> None:
     root = tmp_path / f"shared-stop-{failure_effect}"
     root.mkdir(mode=0o700)
@@ -746,9 +783,7 @@ def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
 
     def selective_failure(*args: object, **kwargs: object) -> BharatStockHistory:
         if len(prices.calls) + 1 == failure_effect:
-            prices.failure = BharatStockError(
-                "AUTHENTICATION_FAILED", member_local=False
-            )
+            prices.failure = BharatStockError(category, member_local=False)
         try:
             return history(*args, **kwargs)  # type: ignore[arg-type]
         finally:
@@ -768,7 +803,7 @@ def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
     assert result.status == "NOT_READY"
     assert result.packet is not None
     assert result.packet.execution_state == "STOPPED"
-    assert result.packet.shared_stop_code == "AUTHENTICATION_FAILED"
+    assert result.packet.shared_stop_code == category
     assert (
         result.packet.shared_stop_trigger_feature
         == (
@@ -778,6 +813,15 @@ def test_v2_shared_stop_is_explicit_for_first_middle_and_final_effect(
         )[failure_effect - 1]
     )
     assert len(prices.calls) == failure_effect
+    features = result.packet.members[0].features
+    assert all(
+        feature.availability == "OBSERVED" and feature.fact is not None
+        for feature in features[: failure_effect - 1]
+    )
+    assert features[failure_effect - 1].availability == "INSUFFICIENT_EVIDENCE"
+    assert all(
+        feature.availability == "NOT_ATTEMPTED" for feature in features[failure_effect:]
+    )
     assert all(
         slot.state == "NOT_ATTEMPTED_SHARED_STOP"
         for slot in result.packet.feature_slots[failure_effect:]

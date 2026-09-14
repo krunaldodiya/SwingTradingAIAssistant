@@ -1484,6 +1484,23 @@ def _coverage(
     )
 
 
+# Exact shared categories emitted by BharatStockClient's request/header/get
+# boundaries. Capture V2 retains the triggering member's category unchanged;
+# packet-level shared-stop validation separately binds the stop and later slots.
+_FINITE_SHARED_PROVIDER_REASONS: Final = frozenset(
+    {
+        "AUTHENTICATION",
+        "AUTHORIZATION",
+        "RATE_LIMITED",
+        "PROVIDER_UNAVAILABLE",
+        "REDIRECT_REJECTED",
+        "RESPONSE_LIMIT_EXCEEDED",
+        "TRANSPORT_FAILED",
+        "REQUEST_BUDGET_EXHAUSTED",
+    }
+)
+
+
 _FINITE_INSUFFICIENT_REASONS: Final = frozenset(
     {
         # BharatStockClient's 404 covers both lookup and price-page requests;
@@ -1492,7 +1509,6 @@ _FINITE_INSUFFICIENT_REASONS: Final = frozenset(
         "RESPONSE_INVALID",
         "PAGINATION_INVALID",
         "REQUEST_REJECTED",
-        "AUTHENTICATION_FAILED",
         "PRICE_EVIDENCE_INVALID",
         "EMPTY_HISTORY",
         "HISTORY_INVALID",
@@ -1510,7 +1526,10 @@ def _failure_outcome(
     """Classify only enumerated producer outcomes; unknown defects stay fatal."""
     if reason == "IDENTITY_MISMATCH":
         return "INSUFFICIENT_EVIDENCE", "CONFLICTED", "NOT_ESTABLISHED"
-    if reason in _FINITE_INSUFFICIENT_REASONS:
+    if (
+        reason in _FINITE_INSUFFICIENT_REASONS
+        or reason in _FINITE_SHARED_PROVIDER_REASONS
+    ):
         return "INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"
     raise ValueError("unexpected BharatStock V2 producer reason")
 
