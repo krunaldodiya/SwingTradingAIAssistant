@@ -1039,9 +1039,14 @@ def _member_semantics_are_valid_v2(  # noqa: C901 - closed feature matrix
                 return False
             continue
         if not bars:
+            expected_support = (
+                "CONFLICTED"
+                if feature.reason == "IDENTITY_MISMATCH"
+                else "NOT_ESTABLISHED"
+            )
             if (
                 feature.availability not in {"INSUFFICIENT_EVIDENCE", "NOT_ATTEMPTED"}
-                or feature.support != "NOT_ESTABLISHED"
+                or feature.support != expected_support
                 or feature.comparability != "NOT_ESTABLISHED"
                 or feature.fact is not None
             ):

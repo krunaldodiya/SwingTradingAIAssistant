@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
 import tracemalloc
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
+from pathlib import Path
 
 import pytest
 
 from swing_trading_ai_assistant.market_data import bharatstock_capture as capture
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockDailyPrice,
+    BharatStockError,
     BharatStockHistory,
     BharatStockInstrument,
 )
@@ -19,12 +22,23 @@ from swing_trading_ai_assistant.market_data.bharatstock_capture import (
     CaptureMemberResultV2,
     CaptureRequestV2,
     CaptureRevisionV2,
+    capture_bharatstock_v2,
+    read_bharatstock_capture_binding_v2,
+    schedule_identity_v2,
     selection_identity_v2,
 )
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleClosure,
+    ScheduleEvidenceStore,
+    ScheduleSession,
+    schedule_digest,
+)
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.research_packet import bharatstock_v2
 from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
 )
-from swing_trading_ai_assistant.research_packet import bharatstock_v2
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
@@ -427,4 +441,231 @@ def test_compact_optional_decimal_exponents_do_not_expand_research_memory() -> N
     assert (
         tiny_packet.members[0].price_action.body_size
         == ordinary_packet.members[0].price_action.body_size
+    )
+
+
+def test_v2_real_capture_hundred_member_coverage_and_feature_independence(
+    tmp_path: Path,
+) -> None:
+    """Exercise V2 only through retained mapping and retained capture admission."""
+    sessions = tuple(
+        date(2026, 7, 29) + timedelta(days=index)
+        for index in range(29)
+        if (date(2026, 7, 29) + timedelta(days=index)).weekday() < 5
+    )
+    cutoff = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    schedule = ExpectedSessionSchedule(
+        3,
+        "nse-upstox-composed-calendar",
+        "composed-calendar@v1=" + "6" * 64,
+        cutoff,
+        "Asia/Kolkata",
+        sessions[0],
+        sessions[-1],
+        tuple(
+            ScheduleSession(
+                item,
+                datetime.combine(item, datetime.min.time(), UTC)
+                + timedelta(hours=3, minutes=45),
+                datetime.combine(item, datetime.min.time(), UTC) + timedelta(hours=10),
+                "REGULAR",
+            )
+            for item in sessions
+        ),
+        tuple(
+            ScheduleClosure(date(2026, 7, 29) + timedelta(days=index), "WEEKEND")
+            for index in range(29)
+            if (date(2026, 7, 29) + timedelta(days=index)) not in sessions
+        ),
+    )
+    root = tmp_path / "retained"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        retained_schedule = ScheduleEvidenceStore(root, lease).retain(schedule)
+    assert retained_schedule.digest is not None
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    with acquired.lease as lease:
+        resolved_schedule = ScheduleEvidenceStore(root, lease).resolve(
+            retained_schedule.digest
+        )
+    assert resolved_schedule.schedule is not None
+    mapping_spec = importlib.util.spec_from_file_location(
+        "binding_fixture",
+        Path(__file__).parents[1]
+        / "market_data"
+        / "test_current_research_binding_v2.py",
+    )
+    assert mapping_spec is not None and mapping_spec.loader is not None
+    mapping_fixture = importlib.util.module_from_spec(mapping_spec)
+    mapping_spec.loader.exec_module(mapping_fixture)
+    catalog_rows = tuple(
+        {
+            "segment": "NSE_EQ",
+            "name": f"Member {index}",
+            "exchange": "NSE",
+            "isin": f"INE{index:09d}",
+            "instrument_type": "EQ",
+            "instrument_key": f"NSE_EQ|INE{index:09d}",
+            "trading_symbol": f"S{index:03d}",
+        }
+        for index in range(100)
+    )
+    schedule_identity = schedule_identity_v2(resolved_schedule.schedule)
+    mapping_binding = mapping_fixture._binding(
+        root,
+        selected_at=cutoff,
+        decision_cutoff=cutoff,
+        snapshot_retrieved_at=cutoff - timedelta(minutes=5),
+        snapshot_observation_date=cutoff.date(),
+        instruments=catalog_rows,
+        schedule_identity_sha256=schedule_identity,
+    )
+    mapping = mapping_fixture.validate_current_research_binding_v2(mapping_binding)
+    members = tuple(item.instrument for item in mapping.members)
+
+    class Client:
+        def __init__(
+            self,
+            missing: set[str] | None = None,
+            conflict: bool = False,
+            mismatched_adjustment: bool = False,
+            failure_reason: str = "EMPTY_HISTORY",
+        ) -> None:
+            self.missing = set() if missing is None else missing
+            self.conflict = conflict
+            self.mismatched_adjustment = mismatched_adjustment
+            self.failure_reason = failure_reason
+
+        def history(
+            self,
+            instrument: BharatStockInstrument,
+            start: date,
+            end: date,
+            *,
+            effect_guard: object = None,
+        ) -> BharatStockHistory:
+            del effect_guard
+            if self.conflict:
+                raise BharatStockError("IDENTITY_MISMATCH", member_local=True)
+            if instrument.isin in self.missing:
+                raise BharatStockError(self.failure_reason, member_local=True)
+            window = tuple(item for item in sessions if start <= item <= end)
+            factor = (
+                Decimal("1")
+                if not self.mismatched_adjustment or start == sessions[-1]
+                else Decimal("2")
+            )
+            close = Decimal("11") if factor == 1 else Decimal("12")
+            return BharatStockHistory(
+                instrument,
+                tuple(
+                    BharatStockDailyPrice(
+                        item,
+                        Decimal("10"),
+                        Decimal("12"),
+                        Decimal("9"),
+                        close,
+                        100,
+                        close * factor,
+                        factor,
+                    )
+                    for item in window
+                ),
+                cutoff,
+                ("a" * 64, "b" * 64),
+                2,
+            )
+
+    def packet(client: Client, name: str) -> object:
+        capture_root = tmp_path / name
+        capture_root.mkdir(mode=0o700)
+        acquired = StorageRootLease.try_acquire(capture_root)
+        assert acquired.lease is not None
+        with acquired.lease as lease:
+            retained = ScheduleEvidenceStore(capture_root, lease).retain(schedule)
+        assert retained.digest is not None
+        slots = []
+        for feature, window in (
+            ("CANDLE_GEOMETRY", sessions[-1:]),
+            ("PREVIOUS_CLOSE_COMPARISON", sessions[-2:]),
+            ("MARKET_STRUCTURE", sessions),
+        ):
+            request = CaptureRequestV2(
+                members,
+                window,
+                cutoff,
+                schedule_digest(resolved_schedule.schedule),
+                resolved_schedule.schedule.source,
+                resolved_schedule.schedule.source_release,
+                schedule_identity,
+                selection_identity_v2(members),
+            )
+            result = capture_bharatstock_v2(
+                request, capture_root, capture_root, client=client, clock=lambda: cutoff
+            )
+            assert result.revision is not None
+            revision = result.revision
+            binding = read_bharatstock_capture_binding_v2(
+                capture_root, revision.revision_identity_sha256
+            )
+            assert type(binding) is capture.RetainedCaptureBindingV2
+            slots.append(
+                BharatStockFeatureInputV2(
+                    feature,
+                    "RETAINED_REVISION",
+                    window,
+                    retained_capture=binding,
+                    request_provenance=BharatStockCaptureRequestProvenanceV2(
+                        revision.request.request_identity_sha256,
+                        revision.request.schedule_identity_sha256,
+                        revision.request.decision_cutoff,
+                        revision.request.sessions,
+                    ),
+                )
+            )
+        return build_bharatstock_research_packet_v2(tuple(slots), mapping_binding)
+
+    complete = packet(Client(), "complete")
+    assert (
+        tuple(
+            (item.requested, item.observed, item.insufficient)
+            for item in complete.coverage
+        )
+        == ((100, 100, 0),) * 3
+    )
+    assert tuple(member.member for member in complete.members) == members
+    local = {members[index].isin for index in (0, 49, 99)}
+    partial = packet(Client(local), "partial")
+    assert (
+        tuple(
+            (item.requested, item.observed, item.insufficient, item.not_attempted)
+            for item in partial.coverage
+        )
+        == ((100, 97, 3, 0),) * 3
+    )
+    assert partial.members[1:49] == complete.members[1:49]
+    assert partial.members[50:99] == complete.members[50:99]
+    assert partial.members[99].features[0].availability == "INSUFFICIENT_EVIDENCE"
+    not_found = packet(Client(local, failure_reason="NOT_FOUND"), "not-found")
+    assert tuple(item.insufficient for item in not_found.coverage) == (3, 3, 3)
+    assert tuple(item.unsupported for item in not_found.coverage) == (0, 0, 0)
+    unavailable = packet(Client({item.isin for item in members}), "unavailable")
+    assert tuple(item.observed for item in unavailable.coverage) == (0, 0, 0)
+    assert tuple(item.insufficient for item in unavailable.coverage) == (100, 100, 100)
+    conflicted = packet(Client(conflict=True), "conflicted")
+    assert all(
+        feature.support == "CONFLICTED"
+        for member in conflicted.members
+        for feature in member.features
+    )
+    blocked = packet(Client(mismatched_adjustment=True), "blocked")
+    assert tuple(item.dependency_blocked for item in blocked.coverage) == (0, 100, 100)
+    assert all(
+        member.features[0].availability == "OBSERVED"
+        and tuple(item.availability for item in member.features[1:])
+        == ("DEPENDENCY_BLOCKED", "DEPENDENCY_BLOCKED")
+        for member in blocked.members
     )

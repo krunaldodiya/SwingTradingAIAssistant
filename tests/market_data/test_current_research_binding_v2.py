@@ -51,8 +51,10 @@ def _binding(
     decision_cutoff: datetime = _CUTOFF,
     snapshot_retrieved_at: datetime = datetime(2026, 8, 26, 8, tzinfo=UTC),
     snapshot_observation_date: date = date(2026, 8, 26),
+    instruments: tuple[dict[str, str], ...] = (_INSTRUMENT,),
+    schedule_identity_sha256: str = "a" * 64,
 ):
-    decompressed = json.dumps([_INSTRUMENT], separators=(",", ":")).encode()
+    decompressed = json.dumps(list(instruments), separators=(",", ":")).encode()
     compressed = gzip.compress(decompressed, mtime=0)
     fetched = FetchedInstrumentSnapshotV1(
         snapshot_retrieved_at,
@@ -72,11 +74,14 @@ def _binding(
         with DuckDBCatalog(root, lease=lease) as catalog:
             InstrumentSnapshotStoreV1(root, lease, catalog).retain(fetched)
         with DuckDBCatalog(root, lease=lease) as catalog:
-            resolved = InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
-                source=SNAPSHOT_SOURCE_V1,
-                segment="NSE_EQ",
-                symbol="ALPHA",
-                as_of=fetched.retrieved_at,
+            resolved = tuple(
+                InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
+                    source=SNAPSHOT_SOURCE_V1,
+                    segment="NSE_EQ",
+                    symbol=item["trading_symbol"],
+                    as_of=fetched.retrieved_at,
+                )
+                for item in instruments
             )
         return resolve_current_research_binding_v2(
             root,
@@ -84,7 +89,7 @@ def _binding(
             resolved,
             selected_at=selected_at,
             decision_cutoff=decision_cutoff,
-            schedule_identity_sha256="a" * 64,
+            schedule_identity_sha256=schedule_identity_sha256,
         )
 
 
