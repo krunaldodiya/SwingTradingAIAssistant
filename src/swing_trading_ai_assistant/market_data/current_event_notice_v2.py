@@ -27,10 +27,12 @@ from .current_event_notice import (
     _input_failure,  # pyright: ignore[reportPrivateUsage]
     _member_result,  # pyright: ignore[reportPrivateUsage]
     _open_archive,  # pyright: ignore[reportPrivateUsage]
+    _open_existing_archive,  # pyright: ignore[reportPrivateUsage]
     _parse_filename,  # pyright: ignore[reportPrivateUsage]
     _parse_filename_range,  # pyright: ignore[reportPrivateUsage]
     _publish_object,  # pyright: ignore[reportPrivateUsage]
     _read_stable_private_object,  # pyright: ignore[reportPrivateUsage]
+    _stable_object,  # pyright: ignore[reportPrivateUsage]
     _receipt_datetime,  # pyright: ignore[reportPrivateUsage]
     _relevant_row_failure,  # pyright: ignore[reportPrivateUsage]
     _trusted_utc_now,  # pyright: ignore[reportPrivateUsage]
@@ -121,7 +123,11 @@ def _mapping_valid_on_source_date(
     )
 
 
-def _verify_final_archive_binding(operation: object, directory: int) -> None:
+def _verify_final_archive_binding(
+    operation: object,
+    directory: int,
+    objects: tuple[tuple[str, bytes | None, int], ...] = (),
+) -> None:
     try:
         # Descriptor access itself re-establishes root liveness and can fail
         # after a root replacement. Normalize that final lease failure too.
@@ -139,6 +145,17 @@ def _verify_final_archive_binding(operation: object, directory: int) -> None:
             or stat.S_IMODE(root_metadata.st_mode) != 0o700
         ):
             raise ValueError("current event V2 archive authority invalid")
+        _validate_archive_root(root)
+        for name, expected, maximum in objects:
+            observed = _read_stable_private_object(directory, name, maximum)
+            if observed is None or (expected is not None and observed[0] != expected):
+                raise ValueError("current event V2 archive object invalid")
+            if (
+                expected is not None
+                and _stable_object(directory, name, expected) is None
+            ):
+                raise ValueError("current event V2 archive object invalid")
+        _validate_archive_directory(root, directory)
         _validate_archive_root(root)
         ensure_live()
     except (OSError, ValueError, RuntimeError):
@@ -991,9 +1008,30 @@ def project_retained_current_event_notices_v2(
     # V1 validation finished its own operation before semantic projection.
     # Re-open the leased root and archive immediately before public admission.
     with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
-        directory = _open_archive(operation.descriptor)
+        directory = _open_existing_archive(operation.descriptor)
         try:
-            _verify_final_archive_binding(operation, directory)
+            _verify_final_archive_binding(
+                operation,
+                directory,
+                (
+                    (f"{retained.artifact_identity_sha256}.raw.csv", None, 1024 * 1024),
+                    (
+                        f"{retained.snapshot_identity_sha256}.snapshot.json",
+                        None,
+                        1024 * 1024,
+                    ),
+                    (
+                        f"{retained.archive_identity_sha256}.receipt.json",
+                        None,
+                        64 * 1024,
+                    ),
+                    (
+                        f"{retained.archive_identity_sha256}.complete.json",
+                        None,
+                        64 * 1024,
+                    ),
+                ),
+            )
         finally:
             os.close(directory)
     _admit(value)
@@ -1324,7 +1362,14 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
                 if observed is None or observed[0] != expected:
                     raise ValueError("current event V2 stable readback invalid")
             os.fsync(directory)
-            _verify_final_archive_binding(operation, directory)
+            _verify_final_archive_binding(
+                operation,
+                directory,
+                tuple(
+                    (name, expected, maximum)
+                    for name, expected, maximum in names_and_values
+                ),
+            )
         finally:
             os.close(directory)
     attempts = (_retained_attempt(known_at, event_input.artifact_identity_sha256),)

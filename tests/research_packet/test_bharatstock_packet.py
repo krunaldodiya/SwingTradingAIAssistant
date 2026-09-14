@@ -24,6 +24,7 @@ from swing_trading_ai_assistant.market_data.bharatstock_capture import (
 from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
 )
+from swing_trading_ai_assistant.research_packet import bharatstock_v2
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockCaptureRequestProvenanceV2,
     BharatStockFeatureInputV2,
@@ -31,6 +32,26 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
 )
 
 _CUTOFF = datetime(2026, 8, 31, 12, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    (
+        ("NOT_FOUND", ("UNSUPPORTED_CAPABILITY", "UNSUPPORTED", "NOT_ESTABLISHED")),
+        (
+            "IDENTITY_MISMATCH",
+            ("INSUFFICIENT_EVIDENCE", "CONFLICTED", "NOT_ESTABLISHED"),
+        ),
+        (
+            "EMPTY_HISTORY",
+            ("INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"),
+        ),
+    ),
+)
+def test_v2_finite_producer_failure_reason_mapping(
+    reason: str, expected: tuple[str, str, str]
+) -> None:
+    assert bharatstock_v2._failure_outcome(reason) == expected  # pyright: ignore[reportPrivateUsage]
 
 
 def _sessions(session_count: int = 21) -> tuple[date, ...]:

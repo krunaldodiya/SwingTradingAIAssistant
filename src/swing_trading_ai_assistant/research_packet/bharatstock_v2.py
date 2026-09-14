@@ -1479,6 +1479,17 @@ def _coverage(
     )
 
 
+def _failure_outcome(
+    reason: str,
+) -> tuple[_Availability, _Support, _Comparability]:
+    """Map only finite producer-local reasons; unknown failures stay insufficient."""
+    if reason == "NOT_FOUND":
+        return "UNSUPPORTED_CAPABILITY", "UNSUPPORTED", "NOT_ESTABLISHED"
+    if reason == "IDENTITY_MISMATCH":
+        return "INSUFFICIENT_EVIDENCE", "CONFLICTED", "NOT_ESTABLISHED"
+    return "INSUFFICIENT_EVIDENCE", "NOT_ESTABLISHED", "NOT_ESTABLISHED"
+
+
 def _failure_member_feature(
     slot: BharatStockFeatureSlotV2,
 ) -> BharatStockMemberFeatureV2:
@@ -1492,14 +1503,10 @@ def _failure_member_feature(
             None,
             (),
         )
+    reason = slot.failure_reason or slot.failure_code or "PRICE_EVIDENCE_UNAVAILABLE"
+    availability, support, comparability = _failure_outcome(reason)
     return BharatStockMemberFeatureV2(
-        slot.feature,
-        "INSUFFICIENT_EVIDENCE",
-        "NOT_ESTABLISHED",
-        "NOT_ESTABLISHED",
-        slot.failure_reason or slot.failure_code or "PRICE_EVIDENCE_UNAVAILABLE",
-        None,
-        (),
+        slot.feature, availability, support, comparability, reason, None, ()
     )
 
 
@@ -1637,18 +1644,19 @@ def build_bharatstock_research_packet_v2(  # noqa: C901 - explicit slot matrix
                 bars = _bars_for(revision, position)
                 comparison = _comparability(slot.feature, position, retained)
                 if result.evidence_state != "OBSERVED" or bars is None:
-                    availability: _Availability = (
-                        "NOT_ATTEMPTED"
+                    reason = result.reason or "PRICE_EVIDENCE_UNAVAILABLE"
+                    availability, support, comparability = (
+                        ("NOT_ATTEMPTED", "NOT_ESTABLISHED", "NOT_ESTABLISHED")
                         if result.evidence_state == "NOT_ATTEMPTED"
-                        else "INSUFFICIENT_EVIDENCE"
+                        else _failure_outcome(reason)
                     )
                     features.append(
                         BharatStockMemberFeatureV2(
                             slot.feature,
                             availability,
-                            "NOT_ESTABLISHED",
-                            "NOT_ESTABLISHED",
-                            result.reason or "PRICE_EVIDENCE_UNAVAILABLE",
+                            support,
+                            comparability,
+                            reason,
                             None,
                             (),
                         )

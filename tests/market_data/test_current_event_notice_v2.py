@@ -6,6 +6,7 @@ import copy
 import gzip
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields, replace
 from datetime import UTC, date, datetime
@@ -563,7 +564,10 @@ def test_event_v2_rejects_fully_rehashed_mapping_expired_on_source_date_before_p
     assert not (root / ".current-event-notice-v1").exists()
 
 
-@pytest.mark.parametrize("interleaving", ("root", "archive", "archive-mode"))
+@pytest.mark.parametrize(
+    "interleaving",
+    ("root", "archive", "archive-mode", "raw", "projection", "receipt", "marker"),
+)
 def test_event_v2_final_authority_interleavings_reject_before_successful_return(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interleaving: str
 ) -> None:
@@ -574,7 +578,9 @@ def test_event_v2_final_authority_interleavings_reject_before_successful_return(
     monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
     original = event_v2._verify_final_archive_binding  # pyright: ignore[reportPrivateUsage]
 
-    def replace_immediately_before_return(operation: object, directory: int) -> None:
+    def replace_immediately_before_return(
+        operation: object, directory: int, objects: object = ()
+    ) -> None:
         archive = root / ".current-event-notice-v1"
         if interleaving == "root":
             root.rename(root.with_name(f"{root.name}-replaced"))
@@ -584,9 +590,16 @@ def test_event_v2_final_authority_interleavings_reject_before_successful_return(
             archive.rename(root / ".replaced-event-archive")
             archive.mkdir(mode=0o700)
             archive.chmod(0o700)
-        else:
+        elif interleaving == "archive-mode":
             archive.chmod(0o755)
-        original(operation, directory)
+        else:
+            os.unlink(
+                archive
+                / cast(tuple[tuple[str, object, int], ...], objects)[
+                    ("raw", "projection", "receipt", "marker").index(interleaving)
+                ][0]
+            )
+        original(operation, directory, objects)  # type: ignore[arg-type]
 
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.lease is not None
@@ -636,7 +649,10 @@ def _adopted_v1_projection(
     )
 
 
-@pytest.mark.parametrize("interleaving", ("root", "archive", "archive-mode"))
+@pytest.mark.parametrize(
+    "interleaving",
+    ("root", "archive", "archive-mode", "raw", "projection", "receipt", "marker"),
+)
 def test_adopted_event_v1_final_authority_interleavings_reject_before_return(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interleaving: str
 ) -> None:
@@ -647,7 +663,9 @@ def test_adopted_event_v1_final_authority_interleavings_reject_before_return(
     monkeypatch.setattr(event_v1, "_trusted_utc_now", lambda: _KNOWN)
     original = event_v2._verify_final_archive_binding  # pyright: ignore[reportPrivateUsage]
 
-    def replace_before_adopted_return(operation: object, directory: int) -> None:
+    def replace_before_adopted_return(
+        operation: object, directory: int, objects: object = ()
+    ) -> None:
         archive = root / ".current-event-notice-v1"
         if interleaving == "root":
             root.rename(root.with_name(f"{root.name}-replaced"))
@@ -657,9 +675,16 @@ def test_adopted_event_v1_final_authority_interleavings_reject_before_return(
             archive.rename(root / ".replaced-event-archive")
             archive.mkdir(mode=0o700)
             archive.chmod(0o700)
-        else:
+        elif interleaving == "archive-mode":
             archive.chmod(0o755)
-        original(operation, directory)
+        else:
+            os.unlink(
+                archive
+                / cast(tuple[tuple[str, object, int], ...], objects)[
+                    ("raw", "projection", "receipt", "marker").index(interleaving)
+                ][0]
+            )
+        original(operation, directory, objects)  # type: ignore[arg-type]
 
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.lease is not None

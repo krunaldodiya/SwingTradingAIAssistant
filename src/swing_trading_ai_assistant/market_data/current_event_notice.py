@@ -1468,6 +1468,23 @@ def _validate_archive_directory(root: int, directory: int) -> None:
         raise ValueError("unsafe archive directory")
 
 
+def _open_existing_archive(root: int) -> int:
+    """Open an existing private archive without creating evidence directories."""
+    _validate_archive_root(root)
+    directory = os.open(
+        _ARCHIVE_DIRECTORY,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=root,
+    )
+    try:
+        _validate_archive_directory(root, directory)
+        os.fsync(root)
+        return directory
+    except Exception:
+        os.close(directory)
+        raise
+
+
 def _open_archive(root: int) -> int:
     _validate_archive_root(root)
     with suppress(FileExistsError):
@@ -2034,7 +2051,7 @@ def validate_retained_current_event_notice_v1(
     receipt_name = f"{retained.archive_identity_sha256}.receipt.json"
     marker_name = f"{retained.archive_identity_sha256}.complete.json"
     with _ARCHIVE_LOCK, lease.root_operation(root) as operation:
-        directory = _open_archive(operation.descriptor)
+        directory = _open_existing_archive(operation.descriptor)
         try:
             raw_entry = _read_stable_private_object(
                 directory, raw_name, _MAX_ARTIFACT_BYTES

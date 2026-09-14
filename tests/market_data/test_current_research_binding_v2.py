@@ -44,12 +44,19 @@ _INSTRUMENT = {
 }
 
 
-def _binding(root: Path):
+def _binding(
+    root: Path,
+    *,
+    selected_at: datetime = _SELECTED,
+    decision_cutoff: datetime = _CUTOFF,
+    snapshot_retrieved_at: datetime = datetime(2026, 8, 26, 8, tzinfo=UTC),
+    snapshot_observation_date: date = date(2026, 8, 26),
+):
     decompressed = json.dumps([_INSTRUMENT], separators=(",", ":")).encode()
     compressed = gzip.compress(decompressed, mtime=0)
     fetched = FetchedInstrumentSnapshotV1(
-        datetime(2026, 8, 26, 8, tzinfo=UTC),
-        date(2026, 8, 26),
+        snapshot_retrieved_at,
+        snapshot_observation_date,
         compressed,
         decompressed,
         hashlib.sha256(compressed).hexdigest(),
@@ -75,8 +82,8 @@ def _binding(root: Path):
             root,
             lease,
             resolved,
-            selected_at=_SELECTED,
-            decision_cutoff=_CUTOFF,
+            selected_at=selected_at,
+            decision_cutoff=decision_cutoff,
             schedule_identity_sha256="a" * 64,
         )
 
@@ -101,6 +108,35 @@ def test_mapping_successor_revalidates_retained_snapshot_and_exact_fields(
         member.mapping_valid_from == member.mapping_valid_through == date(2026, 8, 26)
     )
     assert member.discovery_retrieved_at == datetime(2026, 8, 26, 8, tzinfo=UTC)
+
+
+def test_mapping_uses_selected_ist_date_across_utc_rollover(tmp_path: Path) -> None:
+    selected = datetime(2026, 8, 25, 18, 31, tzinfo=UTC)
+    cutoff = selected + timedelta(minutes=5)
+    retrieved = selected - timedelta(minutes=1)
+    root = tmp_path / "current-ist-snapshot"
+    root.mkdir(mode=0o700)
+    binding = _binding(
+        root,
+        selected_at=selected,
+        decision_cutoff=cutoff,
+        snapshot_retrieved_at=retrieved,
+        snapshot_observation_date=date(2026, 8, 26),
+    )
+    assert validate_current_research_binding_v2(binding).members[0].valid_from == date(
+        2026, 8, 26
+    )
+
+    stale_root = tmp_path / "previous-utc-date-snapshot"
+    stale_root.mkdir(mode=0o700)
+    with pytest.raises(ValueError, match="invalid fetched instrument snapshot"):
+        _binding(
+            stale_root,
+            selected_at=selected,
+            decision_cutoff=cutoff,
+            snapshot_retrieved_at=retrieved,
+            snapshot_observation_date=date(2026, 8, 25),
+        )
 
 
 def _same_pass_member(
