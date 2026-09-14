@@ -495,7 +495,7 @@ def test_event_v2_post_admission_mutation_and_future_source_fail_closed(
 
 
 def _binding_with_origin(mapping: Any, origin: str) -> Any:
-    """Mint a fully rehashed accepted mapping for each public V2 origin."""
+    """Build synthetic admitted mappings only for source-date rejection tests."""
     projection = mapping_v2.validate_current_research_binding_v2(mapping)
     if origin == "RETAINED_INSTRUMENT_SNAPSHOT":
         return mapping
@@ -525,6 +525,7 @@ def _binding_with_origin(mapping: Any, origin: str) -> Any:
             selected_at=projection.selected_at,
             decision_cutoff=projection.decision_cutoff,
             schedule_identity_sha256=projection.schedule_identity_sha256,
+            context_schedule_identity_sha256="f" * 64,
             members=members,
             context=("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64),
         )

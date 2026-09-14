@@ -104,6 +104,34 @@ def test_v5_request_has_frozen_schedule_and_time_bounds() -> None:
         )
 
 
+def _rehashed_bound_request_bytes(payload: dict[str, Any]) -> bytes:
+    """Recompute both affected hashes so a checksum mismatch cannot pass the test."""
+    bound = payload["bound_request"]
+    mapping = bound["mapping"]
+    bound["request_identity_sha256"] = current_supplied_cohort_v5._digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            "request": bound["request"],
+            "mapping_projection_identity_sha256": mapping[
+                "mapping_projection_identity_sha256"
+            ],
+            "ordered_selection_identity_sha256": mapping[
+                "ordered_selection_identity_sha256"
+            ],
+            "canonical_cohort_identity_sha256": mapping[
+                "canonical_cohort_identity_sha256"
+            ],
+        }
+    )
+    payload["result_identity_sha256"] = current_supplied_cohort_v5._public_digest(  # pyright: ignore[reportPrivateUsage]
+        {
+            key: value
+            for key, value in payload.items()
+            if key != "result_identity_sha256"
+        }
+    )
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
 def _fully_rehashed_price_source(
     schedule_evidence_sha256: str,
     schedule_source: str,
@@ -605,21 +633,9 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
         rehashed_ready["bound_request"]["request"]["schedule_identity_sha256"] = (
             "0" * 64
         )
-        rehashed_ready["result_identity_sha256"] = (
-            current_supplied_cohort_v5._public_digest(  # pyright: ignore[reportPrivateUsage]
-                {
-                    key: value
-                    for key, value in rehashed_ready.items()
-                    if key != "result_identity_sha256"
-                }
-            )
-        )
         with pytest.raises(ValueError, match="current V5"):
             CurrentResearchPacketV5.from_canonical_json_bytes(
-                json.dumps(
-                    rehashed_ready, sort_keys=True, separators=(",", ":")
-                ).encode()
-                + b"\n"
+                _rehashed_bound_request_bytes(rehashed_ready)
             )
         older_official_sessions = official_sessions[-22:-1]
         assert len(older_official_sessions) == 21
@@ -676,17 +692,14 @@ def test_v5_composes_retained_failed_price_with_real_context_and_event(  # noqa:
     # A public caller can recompute V5's public digest, but cannot thereby
     # reconcile a substituted request with its nested retained mapping proof.
     rehashed = json.loads(public_bytes)
-    rehashed["bound_request"]["request"]["selected_at"] = "2024-01-01T00:00:00.000000Z"
-    rehashed["result_identity_sha256"] = current_supplied_cohort_v5._public_digest(  # pyright: ignore[reportPrivateUsage]
-        {
-            key: value
-            for key, value in rehashed.items()
-            if key != "result_identity_sha256"
-        }
+    rehashed["bound_request"]["request"]["selected_at"] = (
+        (mapping.selected_at - timedelta(seconds=1))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
     with pytest.raises(ValueError, match="current V5"):
         CurrentResearchPacketV5.from_canonical_json_bytes(
-            json.dumps(rehashed, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+            _rehashed_bound_request_bytes(rehashed)
         )
 
     regime_payload = json.loads(packet.canonical_json_bytes())
