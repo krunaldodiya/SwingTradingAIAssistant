@@ -120,6 +120,10 @@ class CurrentPriceContextClockV1(Protocol):
     def now(self) -> datetime: ...
 
 
+class CurrentRawCancellationV1(Protocol):
+    def is_cancelled(self) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentRawPriceContextInputV1:
     request_identity_sha256: str
@@ -179,6 +183,14 @@ class CurrentRawPriceContextInputV1:
         )
 
 
+class CurrentRawInvocationStoppedV1(RuntimeError):
+    """Invocation-wide authority/time stop, distinct from storage authority."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 class CurrentRawInvocationControlV1:
     """The one invocation-local clock/stop boundary used by retained reads."""
 
@@ -188,11 +200,17 @@ class CurrentRawInvocationControlV1:
         *,
         selection: datetime,
         deadline: datetime,
+        cancellation: CurrentRawCancellationV1 | None = None,
     ) -> None:
+        if cancellation is not None and not callable(
+            getattr(cancellation, "is_cancelled", None)
+        ):
+            raise ValueError("current raw invocation cancellation is invalid")
         self._clock = clock
         self._selection = selection
         self._deadline = deadline
         self._last: datetime | None = None
+        self._cancellation = cancellation
         self.shared_stop: str | None = None
 
     def now(self) -> datetime:
@@ -208,17 +226,20 @@ class CurrentRawInvocationControlV1:
 
     def ensure_live(self) -> None:
         if self.shared_stop is not None:
-            raise StorageRootLeaseError("current raw invocation stopped")
+            raise CurrentRawInvocationStoppedV1(self.shared_stop)
+        if self._cancellation is not None and self._cancellation.is_cancelled():
+            self.shared_stop = "CANCELLATION_REQUESTED"
+            raise CurrentRawInvocationStoppedV1(self.shared_stop)
         value = self.now()
         if value < self._selection:
             self.shared_stop = "SELECTION_NOT_REACHED"
-            raise StorageRootLeaseError("current price context selection not reached")
+            raise CurrentRawInvocationStoppedV1(self.shared_stop)
         if value >= self._deadline:
             self.shared_stop = "DEADLINE_EXCEEDED"
-            raise StorageRootLeaseError("current price context deadline exceeded")
+            raise CurrentRawInvocationStoppedV1(self.shared_stop)
         if value.astimezone(_IST).date() != self._selection.astimezone(_IST).date():
             self.shared_stop = "IST_ROLLOVER"
-            raise StorageRootLeaseError("current price context IST date changed")
+            raise CurrentRawInvocationStoppedV1(self.shared_stop)
 
 
 @dataclass(frozen=True, slots=True)

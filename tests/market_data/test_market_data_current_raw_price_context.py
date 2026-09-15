@@ -10,13 +10,13 @@ import pytest
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
     CurrentRawInvocationControlV1,
+    CurrentRawInvocationStoppedV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
-    StorageRootLeaseError,
 )
 
 
@@ -36,7 +36,7 @@ def test_control_refuses_effects_before_the_selection_instant() -> None:
         deadline=selection + timedelta(minutes=20),
     )
 
-    with pytest.raises(StorageRootLeaseError, match="selection not reached"):
+    with pytest.raises(CurrentRawInvocationStoppedV1, match="SELECTION_NOT_REACHED"):
         control.ensure_live()
     assert control.shared_stop == "SELECTION_NOT_REACHED"
 

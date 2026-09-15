@@ -6,6 +6,8 @@ import gzip
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.request import Request
 
 import pytest
 
@@ -14,9 +16,6 @@ import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport 
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
     acquire_missing_current_raw_evidence_v1,
-)
-from swing_trading_ai_assistant.market_data.current_raw_acquisition_transport import (
-    StrictCurrentRawResponseV1,
 )
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
@@ -214,25 +213,32 @@ def test_missing_mapping_retains_once_then_freshly_replans_with_native_provider_
     )
     requested: list[str] = []
 
-    def strict_get(
-        url: str,
-        *,
-        headers: dict[str, str],
-        timeout_seconds: float,
-        deadline: datetime,
-        now: object,
-        maximum_body_bytes: int,
-        before_open: object | None = None,
-    ) -> StrictCurrentRawResponseV1:
-        del headers, timeout_seconds, deadline, now, maximum_body_bytes
-        assert callable(before_open)
-        before_open()
-        requested.append(url)
-        return StrictCurrentRawResponseV1(
-            200, url, (("Content-Type", "application/json"),), body
-        )
+    class _Response:
+        headers = SimpleNamespace(items=lambda: (("Content-Type", "application/gzip"),))
 
-    monkeypatch.setattr(transport_module, "get_strict_current_raw_v1", strict_get)
+        def getcode(self) -> int:
+            return 200
+
+        def geturl(self) -> str:
+            return UPSTOX_NSE_INSTRUMENTS_URL
+
+        def read(self, size: int) -> bytes:
+            assert size == 4_000_001
+            return body
+
+        def close(self) -> None:
+            return None
+
+    class _Opener:
+        def open(self, request: Request, *, timeout: float) -> _Response:
+            assert timeout > 0
+            requested.append(request.full_url)
+            return _Response()
+
+    def build_opener(*_handlers: object) -> _Opener:
+        return _Opener()
+
+    monkeypatch.setattr(transport_module, "build_opener", build_opener)
     request = _request(selection)
     request = CurrentRawPriceContextInputV1(
         request.request_identity_sha256,
@@ -249,14 +255,14 @@ def test_missing_mapping_retains_once_then_freshly_replans_with_native_provider_
         ),
     )
 
-    assert result.outcome == "MAPPING_RETAINED"
+    assert result.outcome == "STOPPED"
     assert result.provider_calls == 1
     assert requested == [UPSTOX_NSE_INSTRUMENTS_URL]
     assert result.plan is not None
     assert result.plan.members[0].provider_key == "NSE_EQ|INE467B01029"
-    assert result.plan.members[0].closed[0].disposition.value == "MISSING"
-    assert result.plan.members[0].action.disposition.value == "MISSING"
     assert (
         result.accounting is not None
         and result.accounting.mapping.disposition.value == "RETAINED"
+        and result.accounting.members[0][0].disposition.value
+        == "NOT_ATTEMPTED_SHARED_STOP"
     )

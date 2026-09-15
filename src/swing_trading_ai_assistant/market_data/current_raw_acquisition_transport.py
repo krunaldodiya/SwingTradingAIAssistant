@@ -23,6 +23,7 @@ _MAX_HEADERS = 32
 _MAX_HEADER_BYTES = 8 * 1024
 _MAX_BODY_BYTES = 1_000_000
 _MAX_MAPPING_BODY_BYTES = 4_000_000
+_MAX_ACTION_BODY_BYTES = 1_048_576
 _UPSTOX_HOST = "api.upstox.com"
 
 
@@ -61,7 +62,7 @@ class StrictCurrentRawOperationV1:
     def __post_init__(self) -> None:
         if (
             self.kind not in {"MAPPING", "HISTORICAL", "INTRADAY", "ACTION"}
-            or not _planned_upstox_url(self.expected_url)
+            or not _valid_operation_url(self.kind, self.expected_url)
             or not _valid_body_limit(self.expected_url, self.maximum_body_bytes)
             or (
                 self.kind == "MAPPING"
@@ -70,7 +71,14 @@ class StrictCurrentRawOperationV1:
                     or self.maximum_body_bytes != _MAX_MAPPING_BODY_BYTES
                 )
             )
-            or (self.kind != "MAPPING" and self.maximum_body_bytes != _MAX_BODY_BYTES)
+            or (
+                self.kind in {"HISTORICAL", "INTRADAY"}
+                and self.maximum_body_bytes != _MAX_BODY_BYTES
+            )
+            or (
+                self.kind == "ACTION"
+                and self.maximum_body_bytes != _MAX_ACTION_BODY_BYTES
+            )
         ):
             raise ValueError("strict current raw operation is invalid")
 
@@ -251,6 +259,21 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
                 raise
 
 
+def _valid_operation_url(kind: str, value: object) -> bool:
+    if not _planned_upstox_url(value):
+        return False
+    if kind == "MAPPING":
+        return value == UPSTOX_NSE_INSTRUMENTS_URL
+    path = urlsplit(cast(str, value)).path
+    if kind == "HISTORICAL":
+        return path.startswith("/v3/historical-candle/") and not path.startswith(
+            "/v3/historical-candle/intraday/"
+        )
+    if kind == "INTRADAY":
+        return path.startswith("/v3/historical-candle/intraday/")
+    return path.startswith("/v2/fundamentals/") and path.endswith("/corporate-actions")
+
+
 def _planned_upstox_url(value: object) -> bool:
     if type(value) is not str or len(value) > 512:
         return False
@@ -273,7 +296,7 @@ def _valid_body_limit(url: object, maximum_body_bytes: int) -> bool:
         <= (
             _MAX_MAPPING_BODY_BYTES
             if url == UPSTOX_NSE_INSTRUMENTS_URL
-            else _MAX_BODY_BYTES
+            else _MAX_ACTION_BODY_BYTES
         )
     )
 
@@ -324,6 +347,7 @@ def _valid_response_headers(
         return False
     total = 0
     content_type: str | None = None
+    content_encoding: str | None = None
     for name, value in headers:
         if type(name) is not str or type(value) is not str or not name:
             return False
@@ -341,13 +365,21 @@ def _valid_response_headers(
             if content_type is not None:
                 return False
             content_type = value.casefold().replace(" ", "")
+        if name.casefold() == "content-encoding":
+            if content_encoding is not None:
+                return False
+            content_encoding = value.casefold().replace(" ", "")
     allowed_content_types = {
         "application/json",
         "application/json;charset=utf-8",
     }
     if mapping:
         allowed_content_types.update({"application/gzip", "application/octet-stream"})
-    return total <= _MAX_HEADER_BYTES and content_type in allowed_content_types
+    return (
+        total <= _MAX_HEADER_BYTES
+        and content_type in allowed_content_types
+        and content_encoding in {None, "identity"}
+    )
 
 
 def _raise_status(status: int) -> None:

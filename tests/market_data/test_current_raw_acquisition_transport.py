@@ -115,7 +115,7 @@ def test_operation_descriptor_rejects_an_unplanned_url_before_opening(
         operation=transport.StrictCurrentRawOperationV1(
             "ACTION",
             "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions",
-            1_000_000,
+            1_048_576,
         ),
     )
 
