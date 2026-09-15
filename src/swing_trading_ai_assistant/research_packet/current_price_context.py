@@ -325,7 +325,10 @@ def research_current_price_context_v1(
     # The retained-only path intentionally never constructs a token provider.
     runtime_identity = current_price_context_runtime_code_identity_v1()
     retained = read_retained_current_raw_context_v1(
-        storage_root, schedule_identity_sha256=request.schedule_identity_sha256
+        storage_root,
+        schedule_identity_sha256=request.schedule_identity_sha256,
+        data_selection_time=request.data_selection_time,
+        admission_deadline=request.admission_deadline,
     )
     reason = retained.reason or "RAW_CONTEXT_UNAVAILABLE"
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"] = (

@@ -15,6 +15,6 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_regime/current_raw_price_context.py": "49136a3a1a8991fe64ffde8c70f3ecc9e92dfb6d0973d20ea6e9bceec38672b5",
     "src/swing_trading_ai_assistant/research_packet/__init__.py": "a404388a33d967702a325d111220e7d4b5704cea0a785e0ff01699e87ddba1d7",
-    "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "ddd8c41bc8f1d61ff3f13d292bb3b795f97cc9256f7a30d961ab4f83d471f642",
+    "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "f17c7adccf011d0158365fa66dd9fddc56284a05dbc025ddeeb5871d33ff78c6",
     "src/swing_trading_ai_assistant/sector_analysis/current_raw_industry_participation.py": "5362b2a3683f1eb074a179bb8e629f26265e7021f9ed019a71ed5abd4b50276b",
 }
