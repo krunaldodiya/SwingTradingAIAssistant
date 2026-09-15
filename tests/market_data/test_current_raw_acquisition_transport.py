@@ -22,7 +22,9 @@ class _ForbiddenBody:
 
 class _UnauthorizedResponse(_ForbiddenBody):
     getcode = staticmethod(lambda: 401)
-    geturl = staticmethod(lambda: "https://example.invalid/path")
+    geturl = staticmethod(
+        lambda: "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions"
+    )
     headers = SimpleNamespace(items=lambda: ())
 
 
@@ -47,7 +49,7 @@ def test_unauthorized_status_stops_before_response_body_read(
 
     with pytest.raises(transport.CurrentRawAuthenticationError):
         transport.get_strict_current_raw_v1(
-            "https://example.invalid/path",
+            "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions",
             headers={},
             timeout_seconds=1,
             deadline=now + timedelta(minutes=1),

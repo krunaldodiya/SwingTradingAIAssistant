@@ -10,6 +10,7 @@ import pytest
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextMemberV1,
     CurrentPriceContextRequestV1,
+    current_price_context_request_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
 )
 
@@ -57,6 +58,52 @@ def test_public_request_is_closed_bounded_and_preserves_order() -> None:
             questions=("RAW_COHORT_BREADTH",),
             industry_archive_reference=None,
         )
+
+
+def test_request_rejects_ist_rollover_expired_member_and_duplicate_json_fields() -> (
+    None
+):
+    selected_at = datetime(2026, 9, 15, 18, 20, tzinfo=UTC)
+    with pytest.raises(ValueError, match="request is invalid"):
+        CurrentPriceContextRequestV1(
+            "current-price-context-request@v1",
+            selected_at,
+            selected_at + timedelta(minutes=20),
+            "a" * 64,
+            (_member(1),),
+            (
+                "RAW_MARKET_STRUCTURE",
+                "RAW_20_SESSION_DIRECTION",
+                "RAW_COHORT_BREADTH",
+                "RAW_INDUSTRY_PARTICIPATION",
+            ),
+            None,
+        )
+    with pytest.raises(ValueError, match="not valid"):
+        CurrentPriceContextRequestV1(
+            "current-price-context-request@v1",
+            datetime(2031, 1, 1, tzinfo=UTC),
+            datetime(2031, 1, 1, 0, 1, tzinfo=UTC),
+            "a" * 64,
+            (_member(1),),
+            (
+                "RAW_MARKET_STRUCTURE",
+                "RAW_20_SESSION_DIRECTION",
+                "RAW_COHORT_BREADTH",
+                "RAW_INDUSTRY_PARTICIPATION",
+            ),
+            None,
+        )
+    duplicate = (
+        b'{"admission_deadline":"2026-09-15T09:30:00.000000Z",'
+        b'"contract_version":"current-price-context-request@v1",'
+        b'"contract_version":"current-price-context-request@v1",'
+        b'"data_selection_time":"2026-09-15T09:00:00.000000Z",'
+        b'"industry_archive_reference":null,"members":[],"questions":[], '
+        b'"schedule_identity_sha256":"' + b"a" * 64 + b'"}\n'
+    )
+    with pytest.raises(ValueError, match="request is invalid"):
+        current_price_context_request_from_canonical_json_bytes_v1(duplicate)
 
 
 def test_retained_only_public_call_never_attempts_acquisition(tmp_path: Path) -> None:

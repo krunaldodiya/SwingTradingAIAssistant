@@ -744,10 +744,8 @@ def _parse_upstox_response_strict(payload: bytes) -> tuple[CorporateActionEventV
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,
+        RecursionError,
         _CorporateActionSnapshotValidationError,
-        KeyError,
-        TypeError,
-        ValueError,
     ):
         raise CorporateActionCorruptError("corporate action response corrupt") from None
 

@@ -867,7 +867,12 @@ def _run_public_command(
 
 
 def _run_price_context_current_command(args: argparse.Namespace) -> int:
-    """Run the closed #188 request without exposing input or private paths."""
+    """Run the closed #188 request without exposing input or private paths.
+
+    Only the descriptor-relative request-file admission is a request-invalid
+    boundary.  A valid request that encounters storage, runtime, or provider
+    faults must reach ``main``'s fixed #145 ``internal_error`` boundary.
+    """
     try:
         input_file = args.input_file
         root = args.storage_root
@@ -879,14 +884,13 @@ def _run_price_context_current_command(args: argparse.Namespace) -> int:
             or type(args.acquire_missing) is not bool
         ):
             raise _RequestInvalid
-        request = current_price_context_request_from_canonical_json_bytes_v1(
-            _read_current_regime_input(input_file)
-        )
-        result = research_current_price_context_v1(
-            request, root, acquire_missing=args.acquire_missing
-        )
-    except (OSError, ValueError, StorageRootLeaseError, _RequestInvalid):
+        raw = _read_current_regime_input(input_file)
+        request = current_price_context_request_from_canonical_json_bytes_v1(raw)
+    except (OSError, ValueError, _RequestInvalid):
         raise _RequestInvalid from None
+    result = research_current_price_context_v1(
+        request, root, acquire_missing=args.acquire_missing
+    )
     sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
     return 0
 
@@ -973,10 +977,10 @@ def _read_current_regime_input(path: Path) -> bytes:
             or before.st_nlink != 1
             or stat.S_IMODE(before.st_mode) & 0o077
             or before.st_size < 1
-            or before.st_size > 16 * 1024
+            or before.st_size > 64 * 1024
         ):
             raise _RequestInvalid
-        raw = os.read(file_descriptor, 16 * 1024 + 1)
+        raw = os.read(file_descriptor, 64 * 1024 + 1)
         after = os.fstat(file_descriptor)
         if len(raw) != before.st_size or (
             before.st_dev,

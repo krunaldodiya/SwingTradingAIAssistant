@@ -8,6 +8,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
+from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     read_retained_current_raw_context_v1,
@@ -27,6 +28,9 @@ _QUESTIONS = (
     "RAW_COHORT_BREADTH",
     "RAW_INDUSTRY_PARTICIPATION",
 )
+_IST = ZoneInfo("Asia/Kolkata")
+_MAX_REQUEST_BYTES = 64 * 1024
+_MAX_RESULT_BYTES = 1_048_576
 
 
 class CurrentPriceContextClockV1(Protocol):
@@ -65,7 +69,11 @@ class CurrentPriceContextMemberV1:
             or self.instrument_type != "EQUITY"
             or self.segment != "EQ"
             or type(self.effective_symbol) is not str
-            or not self.effective_symbol
+            or not 1 <= len(self.effective_symbol) <= 64
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
+                for character in self.effective_symbol
+            )
             or type(self.valid_from) is not date
             or type(self.valid_through) is not date
             or self.valid_from > self.valid_through
@@ -115,6 +123,8 @@ class CurrentPriceContextRequestV1:
             or not self.data_selection_time < self.admission_deadline
             or self.admission_deadline - self.data_selection_time
             > timedelta(minutes=30)
+            or self.data_selection_time.astimezone(_IST).date()
+            != self.admission_deadline.astimezone(_IST).date()
             or not _digest(self.schedule_identity_sha256)
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= 50
@@ -129,9 +139,18 @@ class CurrentPriceContextRequestV1:
         ):
             raise ValueError("current price context request is invalid")
         identity = self.identity_of(self)
+        if any(
+            not member.valid_from
+            <= self.data_selection_time.astimezone(_IST).date()
+            <= member.valid_through
+            for member in self.members
+        ):
+            raise ValueError("current price context member is not valid at selection")
         if self.request_identity_sha256 not in ("", identity):
             raise ValueError("current price context request identity is invalid")
         object.__setattr__(self, "request_identity_sha256", identity)
+        if len(_canonical(_wire(_without_request_identity(self)))) > _MAX_REQUEST_BYTES:
+            raise ValueError("current price context request exceeds its bound")
 
     @staticmethod
     def identity_of(value: CurrentPriceContextRequestV1) -> str:
@@ -154,15 +173,29 @@ class CurrentPriceContextRequestV1:
 class CurrentPriceContextFeatureV1:
     question: str
     state: Literal[
-        "OBSERVED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE", "NOT_ATTEMPTED"
+        "OBSERVED",
+        "UNSUPPORTED",
+        "DEPENDENCY_BLOCKED",
+        "INSUFFICIENT_EVIDENCE",
+        "NOT_ATTEMPTED",
     ]
     reasons: tuple[str, ...]
+    support: Literal["SUPPORTED", "UNSUPPORTED"] = "SUPPORTED"
+    readiness: Literal["READY", "WITHHELD"] = "WITHHELD"
 
     def __post_init__(self) -> None:
         if (
             self.question not in _QUESTIONS
-            or (self.state == "OBSERVED" and self.reasons)
-            or (self.state != "OBSERVED" and not self.reasons)
+            or self.support not in ("SUPPORTED", "UNSUPPORTED")
+            or self.readiness not in ("READY", "WITHHELD")
+            or (
+                self.state == "OBSERVED" and (self.reasons or self.readiness != "READY")
+            )
+            or (
+                self.state != "OBSERVED"
+                and (not self.reasons or self.readiness != "WITHHELD")
+            )
+            or (self.state == "UNSUPPORTED") != (self.support == "UNSUPPORTED")
         ):
             raise ValueError("current price context feature is invalid")
 
@@ -177,6 +210,7 @@ class CurrentPriceContextResultV1:
     acquisition_outcome: Literal["NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING"]
     features: tuple[CurrentPriceContextFeatureV1, ...]
     limitations: tuple[str, ...]
+    runtime_code_identity_sha256: str
     result_identity_sha256: str = ""
 
     def __post_init__(self) -> None:
@@ -191,6 +225,7 @@ class CurrentPriceContextResultV1:
                 type(item) is not CurrentPriceContextFeatureV1 for item in self.features
             )
             or not self.limitations
+            or not _digest(self.runtime_code_identity_sha256)
         ):
             raise ValueError("current price context result is invalid")
         identity = _digest_value(_without_identity(self))
@@ -200,7 +235,7 @@ class CurrentPriceContextResultV1:
 
     def canonical_json_bytes(self) -> bytes:
         raw = _canonical(_wire(self))
-        if len(raw) > 1_048_576:
+        if len(raw) > _MAX_RESULT_BYTES:
             raise ValueError("current price context result exceeds its bound")
         return raw
 
@@ -209,11 +244,11 @@ def current_price_context_request_from_canonical_json_bytes_v1(
     raw: bytes,
 ) -> CurrentPriceContextRequestV1:
     """Decode only the closed canonical owner-supplied request representation."""
-    if type(raw) is not bytes or not 1 <= len(raw) <= 64 * 1024:
+    if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_REQUEST_BYTES:
         raise ValueError("current price context request is invalid")
     try:
-        decoded = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
         raise ValueError("current price context request is invalid") from None
     if type(decoded) is not dict:
         raise ValueError("current price context request is invalid")
@@ -259,7 +294,7 @@ def current_price_context_request_from_canonical_json_bytes_v1(
             ),
             industry_archive_reference=reference,
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, RecursionError):
         raise ValueError("current price context request is invalid") from None
 
 
@@ -274,11 +309,21 @@ def research_current_price_context_v1(
     if type(request) is not CurrentPriceContextRequestV1:
         raise ValueError("current price context input is invalid")
     if type(acquire_missing) is not bool or (
-        clock is not None and not hasattr(clock, "now")
+        clock is not None and not callable(getattr(clock, "now", None))
     ):
         raise ValueError("current price context options are invalid")
+    observed_now = datetime.now(UTC) if clock is None else clock.now()
+    if not _utc(observed_now):
+        raise ValueError("current price context clock is invalid")
+    if observed_now > request.admission_deadline:
+        raise ValueError("current price context deadline exceeded")
+    if (
+        observed_now.astimezone(_IST).date()
+        != request.data_selection_time.astimezone(_IST).date()
+    ):
+        raise ValueError("current price context IST date changed")
     # The retained-only path intentionally never constructs a token provider.
-    current_price_context_runtime_code_identity_v1()
+    runtime_identity = current_price_context_runtime_code_identity_v1()
     retained = read_retained_current_raw_context_v1(
         storage_root, schedule_identity_sha256=request.schedule_identity_sha256
     )
@@ -297,10 +342,16 @@ def research_current_price_context_v1(
         acquisition_mode=acquisition_mode,
         acquisition_outcome=acquisition_outcome,
         features=tuple(
-            CurrentPriceContextFeatureV1(question, retained.state, (reason,))
+            CurrentPriceContextFeatureV1(
+                question,
+                retained.state,
+                () if retained.state == "OBSERVED" else (reason,),
+                readiness="READY" if retained.state == "OBSERVED" else "WITHHELD",
+            )
             for question in _QUESTIONS
         ),
         limitations=("RETAINED_CALENDAR_AND_RAW_EVIDENCE_REQUIRED",),
+        runtime_code_identity_sha256=runtime_identity,
     )
 
 
@@ -410,6 +461,23 @@ def _canonical(value: object) -> bytes:
         ).encode()
         + b"\n"
     )
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
+
+
+def _without_request_identity(value: CurrentPriceContextRequestV1) -> dict[str, object]:
+    return {
+        item.name: getattr(value, item.name)
+        for item in fields(value)
+        if item.name != "request_identity_sha256"
+    }
 
 
 def _digest_value(value: object) -> str:
