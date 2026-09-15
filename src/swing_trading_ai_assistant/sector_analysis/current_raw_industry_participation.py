@@ -1,35 +1,18 @@
-"""Aggregate-only literal-Industry participation over admitted raw directions."""
+"""Aggregate-only literal-Industry participation over jointly admitted evidence."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
 
-_Direction = Literal["ADVANCE", "DECLINE", "UNCHANGED"]
-
-
-@dataclass(frozen=True, slots=True)
-class RawIndustryDirectionV1:
-    """Private producer handoff; no classification source rows are public."""
-
-    isin: str
-    exchange: Literal["NSE"]
-    effective_symbol: str
-    industry: str
-    direction: _Direction | None
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.isin) is not str
-            or not self.isin
-            or self.exchange != "NSE"
-            or type(self.effective_symbol) is not str
-            or not self.effective_symbol
-            or type(self.industry) is not str
-            or not self.industry
-            or self.direction not in ("ADVANCE", "DECLINE", "UNCHANGED", None)
-        ):
-            raise ValueError("raw Industry direction is invalid")
+from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
+    AdmittedCurrentIndustryProjectionV1,
+    admitted_current_industry_binding_v1,
+)
+from swing_trading_ai_assistant.market_data.current_raw_price_context import (
+    AdmittedCurrentRawContextV1,
+    admitted_current_raw_context_binding_v1,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +27,12 @@ class CurrentRawIndustryGroupV1:
         if (
             type(self.industry) is not str
             or not self.industry
-            or self.member_count < 1
-            or min(self.advances, self.declines, self.unchanged) < 0
+            or type(self.member_count) is not int
+            or not 1 <= self.member_count <= 50
+            or any(
+                type(value) is not int or value < 0
+                for value in (self.advances, self.declines, self.unchanged)
+            )
             or self.advances + self.declines + self.unchanged != self.member_count
         ):
             raise ValueError("raw Industry group is invalid")
@@ -61,7 +48,8 @@ class CurrentRawIndustryParticipationV1:
     def __post_init__(self) -> None:
         observed = self.evidence_state == "OBSERVED"
         if (
-            not 1 <= self.requested_count <= 50
+            type(self.requested_count) is not int
+            or not 1 <= self.requested_count <= 50
             or type(self.groups) is not tuple
             or any(
                 type(group) is not CurrentRawIndustryGroupV1 for group in self.groups
@@ -84,37 +72,69 @@ class CurrentRawIndustryParticipationV1:
 
 
 def reduce_current_raw_industry_participation_v1(
-    directions: tuple[RawIndustryDirectionV1, ...], *, requested_count: int
+    raw: AdmittedCurrentRawContextV1,
+    classification: AdmittedCurrentIndustryProjectionV1,
 ) -> CurrentRawIndustryParticipationV1:
-    """Reduce the complete admitted cohort without sector inference or shrinking N."""
+    """Join one exact raw capability with its reader-bound Industry capability."""
+    raw_projection, raw_root = admitted_current_raw_context_binding_v1(raw)
+    industry, industry_root, bound_raw_id = admitted_current_industry_binding_v1(
+        classification
+    )
     if (
-        type(directions) is not tuple
-        or type(requested_count) is not int
-        or not 1 <= requested_count <= 50
-        or len(directions) != requested_count
+        bound_raw_id != id(raw)
+        or industry_root != raw_root
+        or industry.raw_input_identity_sha256 != raw_projection.input_identity_sha256
+        or industry.raw_request_identity_sha256
+        != raw_projection.request_identity_sha256
+        or industry.ordered_selection_identity_sha256
+        != raw_projection.ordered_selection_identity_sha256
+        or industry.canonical_cohort_identity_sha256
+        != raw_projection.canonical_cohort_identity_sha256
+        or industry.comparison_session != raw_projection.sessions[0].session
+        or industry.decision_session != raw_projection.sessions[-1].session
+        or industry.evidence_cutoff != raw_projection.evidence_cutoff
+    ):
+        raise ValueError("raw Industry participation binding is invalid")
+    members = tuple(
+        (member.isin, member.exchange, member.effective_symbol)
+        for member in raw_projection.members
+    )
+    rows = industry.rows
+    if (
+        type(rows) is not tuple
+        or len(rows) != len(members)
+        or tuple(row[:3] for row in rows) != tuple(sorted(row[:3] for row in rows))
+        or len({row[:3] for row in rows}) != len(rows)
+        or {row[:3] for row in rows} != set(members)
         or any(
-            type(direction) is not RawIndustryDirectionV1 for direction in directions
+            type(row) is not tuple
+            or len(row) != 4
+            or any(type(value) is not str or not value for value in row)
+            for row in rows
         )
-        or len(
-            {(item.isin, item.exchange, item.effective_symbol) for item in directions}
-        )
-        != requested_count
     ):
         raise ValueError("raw Industry participation input is invalid")
-    if any(item.direction is None for item in directions):
+    directions = {
+        (member.isin, member.exchange, member.effective_symbol): member.direction
+        for member in raw_projection.members
+    }
+    if any(direction is None for direction in directions.values()):
         return CurrentRawIndustryParticipationV1(
             "INSUFFICIENT_EVIDENCE",
-            requested_count,
+            len(members),
             (),
             ("MEMBER_DIRECTION_UNAVAILABLE",),
         )
     totals: dict[str, list[int]] = {}
-    for item in directions:
-        values = totals.setdefault(item.industry, [0, 0, 0, 0])
+    for isin, exchange, symbol, industry_name in rows:
+        direction = directions[(isin, exchange, symbol)]
+        if direction is None:
+            raise ValueError("raw Industry participation input is invalid")
+        values = totals.setdefault(industry_name, [0, 0, 0, 0])
         values[0] += 1
-        values[{"ADVANCE": 1, "DECLINE": 2, "UNCHANGED": 3}[item.direction]] += 1  # type: ignore[index]
+        values[{"ADVANCE": 1, "DECLINE": 2, "UNCHANGED": 3}[direction]] += 1
     groups = tuple(
-        CurrentRawIndustryGroupV1(industry, *totals[industry])
-        for industry in sorted(totals)
+        CurrentRawIndustryGroupV1(industry_name, *totals[industry_name])
+        for industry_name in sorted(totals)
     )
-    return CurrentRawIndustryParticipationV1("OBSERVED", requested_count, groups, ())
+    return CurrentRawIndustryParticipationV1("OBSERVED", len(members), groups, ())

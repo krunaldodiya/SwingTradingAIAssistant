@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.cli as cli
 from swing_trading_ai_assistant.market_data.cli import main
+from swing_trading_ai_assistant.research_packet.current_price_context import (
+    CurrentPriceContextRequestV1,
+)
+
+
+class _Clock:
+    def now(self) -> datetime:
+        return datetime(2026, 9, 15, 9, 15, tzinfo=UTC)
 
 
 def test_price_context_current_accepts_closed_owner_file_and_emits_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     request = {
         "contract_version": "current-price-context-request@v1",
@@ -44,6 +54,17 @@ def test_price_context_current_accepts_closed_owner_file_and_emits_json(
     )
     input_file.chmod(0o600)
 
+    original = cli.research_current_price_context_v1
+
+    def fixed_clock_research(
+        request: CurrentPriceContextRequestV1,
+        root: Path,
+        *,
+        acquire_missing: bool = False,
+    ) -> object:
+        return original(request, root, acquire_missing=acquire_missing, clock=_Clock())
+
+    monkeypatch.setattr(cli, "research_current_price_context_v1", fixed_clock_research)
     status = main(
         [
             "price-context-current",

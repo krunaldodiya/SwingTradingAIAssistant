@@ -22,8 +22,10 @@ from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
     acquire_missing_current_raw_evidence_v1,
 )
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
+    AdmittedCurrentRawContextV1,
     CurrentPriceContextClockV1,
     CurrentPriceContextMemberV1,
+    CurrentRawCancellationV1,
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
@@ -33,12 +35,17 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_regime.current_raw_price_context import (
+    RawCohortBreadthV1,
+)
+from swing_trading_ai_assistant.market_structure.current_live import (
+    CurrentMarketStructureMemberV1,
+)
 from swing_trading_ai_assistant.research_packet.current_price_context_runtime_identity_manifest import (
     CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1,
 )
 from swing_trading_ai_assistant.sector_analysis.current_raw_industry_participation import (
     CurrentRawIndustryGroupV1,
-    RawIndustryDirectionV1,
     reduce_current_raw_industry_participation_v1,
 )
 
@@ -188,6 +195,55 @@ class CurrentPriceContextFeatureV1:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentPriceContextMemberResultV1:
+    position: int
+    isin: str
+    exchange: Literal["NSE"]
+    effective_symbol: str
+    state: Literal[
+        "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+    ]
+    reason: str | None
+    structure: CurrentMarketStructureMemberV1 | None
+    direction: Literal["ADVANCE", "DECLINE", "UNCHANGED"] | None
+    mapping_observation_sha256: str | None
+    partition_checksums: tuple[str, ...]
+    screen_identity_sha256: str | None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.position) is not int
+            or self.position < 0
+            or type(self.isin) is not str
+            or not self.isin
+            or self.exchange != "NSE"
+            or type(self.effective_symbol) is not str
+            or not self.effective_symbol
+            or self.state
+            not in (
+                "OBSERVED",
+                "UNSUPPORTED",
+                "DEPENDENCY_BLOCKED",
+                "INSUFFICIENT_EVIDENCE",
+            )
+            or (self.state == "OBSERVED") != (self.reason is None)
+            or (self.structure is None) != (self.direction is None)
+            or (self.state == "OBSERVED") != (self.structure is not None)
+            or type(self.partition_checksums) is not tuple
+            or any(not _digest(item) for item in self.partition_checksums)
+            or (
+                self.mapping_observation_sha256 is not None
+                and not _digest(self.mapping_observation_sha256)
+            )
+            or (
+                self.screen_identity_sha256 is not None
+                and not _digest(self.screen_identity_sha256)
+            )
+        ):
+            raise ValueError("current price context member result is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentPriceContextResultV1:
     contract_version: Literal["current-price-context@v1"]
     request_identity_sha256: str
@@ -198,8 +254,14 @@ class CurrentPriceContextResultV1:
         "NOT_ATTEMPTED",
         "CALENDAR_PREREQUISITE_MISSING",
         "RETAINED_EVIDENCE_READY",
-        "MAPPING_RETAINED",
+        "ACQUISITION_COMPLETED",
+        "ACQUISITION_PARTIAL",
+        "ACQUISITION_BLOCKED",
+        "STOPPED",
     ]
+    acquisition_provider_calls: int
+    members: tuple[CurrentPriceContextMemberResultV1, ...]
+    breadth: RawCohortBreadthV1 | None
     features: tuple[CurrentPriceContextFeatureV1, ...]
     limitations: tuple[str, ...]
     runtime_code_identity_sha256: str
@@ -215,6 +277,17 @@ class CurrentPriceContextResultV1:
             or not _digest(self.request_identity_sha256)
             or not _digest(self.schedule_identity_sha256)
             or not _digest(self.ordered_selection_identity_sha256)
+            or type(self.acquisition_provider_calls) is not int
+            or not 0 <= self.acquisition_provider_calls <= 251
+            or type(self.members) is not tuple
+            or not 1 <= len(self.members) <= 50
+            or any(
+                type(item) is not CurrentPriceContextMemberResultV1
+                for item in self.members
+            )
+            or tuple(item.position for item in self.members)
+            != tuple(range(len(self.members)))
+            or len({item.isin for item in self.members}) != len(self.members)
             or type(self.features) is not tuple
             or tuple(item.question for item in self.features) != _QUESTIONS
             or any(
@@ -303,33 +376,36 @@ def current_price_context_request_from_canonical_json_bytes_v1(
         raise ValueError("current price context request is invalid") from None
 
 
-def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composition order
+def research_current_price_context_v1(  # noqa: C901 -- one bounded public composition
     request: CurrentPriceContextRequestV1,
     storage_root: Path,
     *,
     acquire_missing: bool = False,
     clock: CurrentPriceContextClockV1 | None = None,
+    cancellation: CurrentRawCancellationV1 | None = None,
 ) -> CurrentPriceContextResultV1:
-    """Return admitted facts or typed withheld facts without hidden effects."""
+    """Return only verified raw facts and local Industry availability."""
     if type(request) is not CurrentPriceContextRequestV1:
         raise ValueError("current price context input is invalid")
-    if type(acquire_missing) is not bool or (
-        clock is not None and not callable(getattr(clock, "now", None))
+    if (
+        type(acquire_missing) is not bool
+        or (clock is not None and not callable(getattr(clock, "now", None)))
+        or (
+            cancellation is not None
+            and not callable(getattr(cancellation, "is_cancelled", None))
+        )
     ):
         raise ValueError("current price context options are invalid")
     observed_now = datetime.now(UTC) if clock is None else clock.now()
     if not _utc(observed_now):
         raise ValueError("current price context clock is invalid")
-    if observed_now > request.admission_deadline:
+    if not request.data_selection_time <= observed_now < request.admission_deadline:
         raise ValueError("current price context deadline exceeded")
     if (
         observed_now.astimezone(_IST).date()
         != request.data_selection_time.astimezone(_IST).date()
     ):
         raise ValueError("current price context IST date changed")
-    # Retained-only is the default and never constructs an acquisition client or
-    # token provider.  A failed existing-root admission is an explicit missing
-    # prerequisite, not permission to create a root or catalog.
     runtime_identity = current_price_context_runtime_code_identity_v1()
     raw_input = CurrentRawPriceContextInputV1(
         request.request_identity_sha256,
@@ -338,42 +414,83 @@ def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composit
         request.schedule_identity_sha256,
         request.members,
     )
-    active_clock = _SystemClock() if clock is None else clock
     control = CurrentRawInvocationControlV1(
-        active_clock,
+        _SystemClock() if clock is None else clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
+        cancellation=cancellation,
     )
     acquisition_outcome: Literal[
         "NOT_ATTEMPTED",
         "CALENDAR_PREREQUISITE_MISSING",
         "RETAINED_EVIDENCE_READY",
-        "MAPPING_RETAINED",
+        "ACQUISITION_COMPLETED",
+        "ACQUISITION_PARTIAL",
+        "ACQUISITION_BLOCKED",
+        "STOPPED",
     ] = "NOT_ATTEMPTED"
+    acquisition_provider_calls = 0
     if acquire_missing:
-        acquisition_outcome = acquire_missing_current_raw_evidence_v1(
+        acquired = acquire_missing_current_raw_evidence_v1(
             raw_input, storage_root, control=control
-        ).outcome
+        )
+        acquisition_outcome = acquired.outcome
+        acquisition_provider_calls = acquired.provider_calls
     industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"] = (
         "NOT_ATTEMPTED"
     )
     industry_reasons: tuple[str, ...] = ("INDUSTRY_REFERENCE_NOT_PROVIDED",)
     industry_groups: tuple[CurrentRawIndustryGroupV1, ...] = ()
     admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    raw_projection = None
+    raw_value: AdmittedCurrentRawContextV1 | None = None
     if admitted.lease is None:
+        member_results = _withheld_members(
+            request.members, "DEPENDENCY_BLOCKED", "CALENDAR_PREREQUISITE_MISSING"
+        )
         feature_state: Literal[
             "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
         ] = "DEPENDENCY_BLOCKED"
         reasons = ("CALENDAR_PREREQUISITE_MISSING",)
+        breadth = None
     else:
         with admitted.lease as lease:
             retained = read_retained_current_raw_context_v1(
                 storage_root, request=raw_input, lease=lease, control=control
             )
-            if retained.admitted is not None:
-                raw_projection = validate_admitted_current_raw_context_v1(
-                    retained.admitted
+            feature_state, reasons = retained.state, retained.reasons
+            if retained.admitted is None:
+                member_results = _withheld_members(
+                    request.members,
+                    cast(
+                        Literal[
+                            "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+                        ],
+                        retained.state,
+                    ),
+                    retained.reasons[0],
                 )
+                breadth = None
+            else:
+                raw_value = retained.admitted
+                raw_projection = validate_admitted_current_raw_context_v1(raw_value)
+                member_results = tuple(
+                    CurrentPriceContextMemberResultV1(
+                        item.position,
+                        item.isin,
+                        item.exchange,
+                        item.effective_symbol,
+                        item.state,
+                        item.reason,
+                        item.structure,
+                        item.direction,
+                        item.mapping_observation_sha256,
+                        item.partition_checksums,
+                        item.screen_identity_sha256,
+                    )
+                    for item in raw_projection.members
+                )
+                breadth = raw_projection.breadth
                 if request.industry_archive_reference is not None:
                     archive = read_current_industry_archive_exact_v1(
                         ArchivedIndustryReferenceV1(
@@ -383,85 +500,113 @@ def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composit
                         ),
                         storage_root=storage_root,
                         lease=lease,
-                        cutoff=raw_projection.evidence_cutoff,
+                        raw=raw_value,
                     )
                     if type(archive) is CurrentIndustryReadFailureV1:
-                        industry_state = "INSUFFICIENT_EVIDENCE"
-                        industry_reasons = (archive.reason,)
+                        industry_state, industry_reasons = (
+                            "INSUFFICIENT_EVIDENCE",
+                            (archive.reason,),
+                        )
                     else:
-                        classification = cast(
-                            AdmittedCurrentIndustryProjectionV1, archive
-                        )
-                        directions = {
-                            (
-                                member.isin,
-                                member.exchange,
-                                member.effective_symbol,
-                            ): member.direction
-                            for member in raw_projection.members
-                        }
                         grouped = reduce_current_raw_industry_participation_v1(
-                            tuple(
-                                RawIndustryDirectionV1(
-                                    isin,
-                                    cast(Literal["NSE"], exchange),
-                                    symbol,
-                                    industry,
-                                    cast(
-                                        Literal["ADVANCE", "DECLINE", "UNCHANGED"]
-                                        | None,
-                                        directions.get((isin, exchange, symbol)),
-                                    ),
-                                )
-                                for isin, exchange, symbol, industry in classification.rows
-                            ),
-                            requested_count=len(raw_projection.members),
+                            raw_value,
+                            cast(AdmittedCurrentIndustryProjectionV1, archive),
                         )
-                        if grouped.evidence_state == "OBSERVED":
-                            industry_state = "OBSERVED"
-                            industry_reasons = ()
-                            industry_groups = grouped.groups
-                        else:
-                            industry_state = "INSUFFICIENT_EVIDENCE"
-                            industry_reasons = grouped.reasons
-            feature_state = retained.state
-            reasons = retained.reasons
-    acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"] = (
-        "ACQUIRE_MISSING" if acquire_missing else "RETAINED_ONLY"
-    )
+                        industry_state = grouped.evidence_state
+                        industry_reasons = grouped.reasons
+                        industry_groups = grouped.groups
+            control.ensure_live()
     return CurrentPriceContextResultV1(
         contract_version=_RESULT_CONTRACT,
         request_identity_sha256=request.request_identity_sha256,
         schedule_identity_sha256=request.schedule_identity_sha256,
         ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
-        acquisition_mode=acquisition_mode,
-        acquisition_outcome=acquisition_outcome,
-        features=tuple(
-            CurrentPriceContextFeatureV1(
-                question,
-                feature_state
-                if question != "RAW_INDUSTRY_PARTICIPATION"
-                else industry_state,
-                reasons
-                if question != "RAW_INDUSTRY_PARTICIPATION"
-                else industry_reasons,
-                readiness="READY"
-                if (
-                    feature_state == "OBSERVED"
-                    and question != "RAW_INDUSTRY_PARTICIPATION"
-                )
-                or (
-                    question == "RAW_INDUSTRY_PARTICIPATION"
-                    and industry_state == "OBSERVED"
-                )
-                else "WITHHELD",
-            )
-            for question in _QUESTIONS
+        acquisition_mode="ACQUIRE_MISSING" if acquire_missing else "RETAINED_ONLY",
+        acquisition_outcome=cast(Any, acquisition_outcome),
+        acquisition_provider_calls=acquisition_provider_calls,
+        members=member_results,
+        breadth=breadth,
+        features=_features(
+            feature_state,
+            reasons,
+            member_results,
+            breadth,
+            industry_state,
+            industry_reasons,
         ),
-        limitations=("UPSTOX_RAW_ONLY", "RETAINED_EVIDENCE_REQUIRED"),
+        limitations=(
+            "UPSTOX_RAW_ONLY",
+            "RETAINED_EVIDENCE_REQUIRED",
+            "CURRENT_MAPPING_SCOPE",
+        ),
         runtime_code_identity_sha256=runtime_identity,
         industry_evidence_state=industry_state,
         industry_groups=industry_groups,
+    )
+
+
+def _withheld_members(
+    members: tuple[CurrentPriceContextMemberV1, ...],
+    state: Literal["UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"],
+    reason: str,
+) -> tuple[CurrentPriceContextMemberResultV1, ...]:
+    return tuple(
+        CurrentPriceContextMemberResultV1(
+            index,
+            item.isin,
+            item.exchange,
+            item.effective_symbol,
+            state,
+            reason,
+            None,
+            None,
+            None,
+            (),
+            None,
+        )
+        for index, item in enumerate(members)
+    )
+
+
+def _features(
+    state: Literal[
+        "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+    ],
+    reasons: tuple[str, ...],
+    members: tuple[CurrentPriceContextMemberResultV1, ...],
+    breadth: RawCohortBreadthV1 | None,
+    industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"],
+    industry_reasons: tuple[str, ...],
+) -> tuple[CurrentPriceContextFeatureV1, ...]:
+    structure_ready = state == "OBSERVED" and all(
+        item.structure is not None for item in members
+    )
+    direction_ready = state == "OBSERVED" and all(
+        item.direction is not None for item in members
+    )
+    breadth_ready = breadth is not None and breadth.label is not None
+
+    def raw_feature(question: str, ready: bool) -> CurrentPriceContextFeatureV1:
+        return CurrentPriceContextFeatureV1(
+            question,
+            "OBSERVED" if ready else state,
+            () if ready else reasons or ("MEMBER_EVIDENCE_UNAVAILABLE",),
+            readiness="READY" if ready else "WITHHELD",
+        )
+
+    return (
+        raw_feature("RAW_MARKET_STRUCTURE", structure_ready),
+        raw_feature("RAW_20_SESSION_DIRECTION", direction_ready),
+        raw_feature("RAW_COHORT_BREADTH", breadth_ready),
+        CurrentPriceContextFeatureV1(
+            "RAW_INDUSTRY_PARTICIPATION",
+            industry_state
+            if industry_state != "NOT_ATTEMPTED"
+            else "INSUFFICIENT_EVIDENCE",
+            () if industry_state == "OBSERVED" else industry_reasons,
+            support="SUPPORTED",
+            readiness="READY" if industry_state == "OBSERVED" else "WITHHELD",
+        ),
     )
 
 

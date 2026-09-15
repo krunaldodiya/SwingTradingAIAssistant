@@ -7,15 +7,20 @@ Industry outcome and must not create a directory, receipt, marker or ``known_at`
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import weakref
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from . import current_industry_classification as classification
+from .current_raw_price_context import (
+    AdmittedCurrentRawContextV1,
+    admitted_current_raw_context_binding_v1,
+)
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 
 
@@ -44,25 +49,45 @@ class CurrentIndustryReadFailureV1:
 
 @dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
 class AdmittedCurrentIndustryProjectionV1:
-    """An in-process capability minted only after an existing-only read.
-
-    Object identity, not a self-consistent DTO hash, is the admission
-    capability. Reconstructed, copied, and decoded values are unadmitted.
-    """
+    """Reader-minted, non-serializable Industry authority for one raw context."""
 
     snapshot_identity_sha256: str
     retained_identity_sha256: str
     original_cohort_identity_sha256: str
     known_at: datetime
     rows: tuple[tuple[str, str, str, str], ...]
+    raw_input_identity_sha256: str
+    raw_request_identity_sha256: str
+    ordered_selection_identity_sha256: str
+    canonical_cohort_identity_sha256: str
+    comparison_session: date
+    decision_session: date
+    evidence_cutoff: datetime
     _seal: object = field(repr=False, compare=False)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("current Industry projection constructor unavailable")
 
+    def __copy__(self) -> AdmittedCurrentIndustryProjectionV1:
+        raise TypeError("current Industry projection copy unavailable")
+
+    def __deepcopy__(self, memo: object) -> AdmittedCurrentIndustryProjectionV1:
+        del memo
+        raise TypeError("current Industry projection copy unavailable")
+
+    def __reduce__(self) -> str:
+        raise TypeError("current Industry projection serialization unavailable")
+
 
 _ADMITTED_PROJECTIONS: dict[
-    int, tuple[weakref.ReferenceType[AdmittedCurrentIndustryProjectionV1], object]
+    int,
+    tuple[
+        weakref.ReferenceType[AdmittedCurrentIndustryProjectionV1],
+        bytes,
+        object,
+        tuple[int, int],
+        int,
+    ],
 ] = {}
 
 
@@ -73,38 +98,67 @@ def _mint_admitted_current_industry_projection_v1(
     original_cohort_identity_sha256: str,
     known_at: datetime,
     rows: tuple[tuple[str, str, str, str], ...],
+    raw: AdmittedCurrentRawContextV1,
 ) -> AdmittedCurrentIndustryProjectionV1:
+    raw_projection, root_identity = admitted_current_raw_context_binding_v1(raw)
     projection = object.__new__(AdmittedCurrentIndustryProjectionV1)
     seal = object()
-    for name, value in (
-        ("snapshot_identity_sha256", snapshot_identity_sha256),
-        ("retained_identity_sha256", retained_identity_sha256),
-        ("original_cohort_identity_sha256", original_cohort_identity_sha256),
-        ("known_at", known_at),
-        ("rows", rows),
-        ("_seal", seal),
-    ):
+    values = {
+        "snapshot_identity_sha256": snapshot_identity_sha256,
+        "retained_identity_sha256": retained_identity_sha256,
+        "original_cohort_identity_sha256": original_cohort_identity_sha256,
+        "known_at": known_at,
+        "rows": rows,
+        "raw_input_identity_sha256": raw_projection.input_identity_sha256,
+        "raw_request_identity_sha256": raw_projection.request_identity_sha256,
+        "ordered_selection_identity_sha256": raw_projection.ordered_selection_identity_sha256,
+        "canonical_cohort_identity_sha256": raw_projection.canonical_cohort_identity_sha256,
+        "comparison_session": raw_projection.sessions[0].session,
+        "decision_session": raw_projection.sessions[-1].session,
+        "evidence_cutoff": raw_projection.evidence_cutoff,
+        "_seal": seal,
+    }
+    for name, value in values.items():
         object.__setattr__(projection, name, value)
     identity = id(projection)
 
     def _forget(_reference: object, *, _identity: int = identity) -> None:
         _ADMITTED_PROJECTIONS.pop(_identity, None)
 
-    _ADMITTED_PROJECTIONS[identity] = (weakref.ref(projection, _forget), seal)
+    _ADMITTED_PROJECTIONS[identity] = (
+        weakref.ref(projection, _forget),
+        _canonical({name: value for name, value in values.items() if name != "_seal"}),
+        seal,
+        root_identity,
+        id(raw),
+    )
     return projection
 
 
 def current_industry_projection_is_admitted_v1(value: object) -> bool:
-    """Return whether ``value`` is the exact producer-minted capability."""
+    """Return whether ``value`` is the exact reader-minted capability."""
     if type(value) is not AdmittedCurrentIndustryProjectionV1:
         return False
-    projection = value
-    entry = _ADMITTED_PROJECTIONS.get(id(projection))
-    return (
-        entry is not None
-        and entry[0]() is projection
-        and entry[1] is object.__getattribute__(projection, "_seal")
+    entry = _ADMITTED_PROJECTIONS.get(id(value))
+    if entry is None or entry[0]() is not value:
+        return False
+    try:
+        current = _projection_values(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return entry[1] == _canonical(current) and entry[2] is object.__getattribute__(
+        value, "_seal"
     )
+
+
+def admitted_current_industry_binding_v1(
+    value: object,
+) -> tuple[AdmittedCurrentIndustryProjectionV1, tuple[int, int], int]:
+    if not current_industry_projection_is_admitted_v1(value):
+        raise ValueError("current Industry projection is not admitted")
+    projection = cast(AdmittedCurrentIndustryProjectionV1, value)
+    entry = _ADMITTED_PROJECTIONS[id(projection)]
+    return projection, entry[3], entry[4]
 
 
 def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existing-only verification transaction
@@ -112,13 +166,17 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
     *,
     storage_root: Path,
     lease: StorageRootLease,
-    cutoff: datetime,
+    raw: AdmittedCurrentRawContextV1,
 ) -> AdmittedCurrentIndustryProjectionV1 | CurrentIndustryReadFailureV1:
-    """Reconstruct one named current archive without scanning or repairing it."""
+    """Reconstruct one named archive bound to one admitted raw selection."""
     if type(reference) is not CurrentIndustryArchiveReferenceV1:
         raise ValueError("current industry reader input is invalid")
-    if type(cutoff) is not datetime or cutoff.tzinfo is not UTC:
-        raise ValueError("current industry reader cutoff is invalid")
+    raw_projection, raw_root_identity = admitted_current_raw_context_binding_v1(raw)
+    if (
+        StorageRootLease.admit_existing_private_identity(storage_root)
+        != raw_root_identity
+    ):
+        raise StorageRootLeaseError("current Industry root authority lost")
     try:
         with lease.read_operation(storage_root) as operation:
             root = operation.descriptor
@@ -178,20 +236,17 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     return CurrentIndustryReadFailureV1(
                         "CONFLICTED", "CLASSIFICATION_SNAPSHOT_SUBSTITUTED"
                     )
-                raw_name = f"raw-{snapshot.artifact_sha256}.csv"
-                raw = _read(directory, raw_name, 1_048_576)
-                if raw is None:
+                raw_bytes = _read(
+                    directory, f"raw-{snapshot.artifact_sha256}.csv", 1_048_576
+                )
+                if raw_bytes is None:
                     return CurrentIndustryReadFailureV1(
                         "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARTIFACT_MISSING"
                     )
-                if hashlib.sha256(raw).hexdigest() != snapshot.artifact_sha256:
+                if hashlib.sha256(raw_bytes).hexdigest() != snapshot.artifact_sha256:
                     return CurrentIndustryReadFailureV1(
                         "CONFLICTED", "CLASSIFICATION_ARTIFACT_SUBSTITUTED"
                     )
-                # Current archives retain only an input identity. Reconstruct the
-                # fixed official-input tuple from the immutable raw bytes and
-                # reproduce the archived snapshot; receipt-carried rows alone
-                # are not an admission authority.
                 input_value = classification.CurrentIndustryClassificationInputV1(
                     {
                         "contract_version": "current-supplied-cohort-industry-classification@v1",
@@ -200,7 +255,7 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                         "source_authority": "NSE_INDICES",
                         "source_domain": "nsearchives.nseindia.com",
                         "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
-                        "artifact_byte_count": len(raw),
+                        "artifact_byte_count": len(raw_bytes),
                         "artifact_sha256": snapshot.artifact_sha256,
                         "artifact_revision": f"sha256:{snapshot.artifact_sha256}",
                         "classification_tier": "INDUSTRY",
@@ -216,7 +271,7 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                         "UNSUPPORTED", "UNSUPPORTED_CLASSIFICATION_SCHEMA"
                     )
                 parsed = classification.parse_current_industry_artifact_v1(
-                    input_value, raw
+                    input_value, raw_bytes
                 )
                 if (
                     type(parsed)
@@ -247,14 +302,46 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     )
                 marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
                     marker_raw, receipt_raw, snapshot
-                )  # pyright: ignore[reportPrivateUsage]
+                )
                 if marker_known_at != candidate.known_at:
                     return CurrentIndustryReadFailureV1(
                         "CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED"
                     )
+                rows = tuple(
+                    (row.isin, row.exchange, row.effective_symbol, row.industry)
+                    for row in snapshot.private_rows
+                )
+                expected = tuple(
+                    (member.isin, member.exchange, member.effective_symbol)
+                    for member in raw_projection.members
+                )
+                if len(rows) != len(expected) or {row[:3] for row in rows} != set(
+                    expected
+                ):
+                    return CurrentIndustryReadFailureV1(
+                        "CONFLICTED", "CLASSIFICATION_COHORT_BINDING_MISMATCH"
+                    )
+                if candidate.known_at > raw_projection.evidence_cutoff:
+                    return CurrentIndustryReadFailureV1(
+                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_FUTURE_KNOWN"
+                    )
+                if (
+                    candidate.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+                    != raw_projection.evidence_cutoff.astimezone(
+                        ZoneInfo("Asia/Kolkata")
+                    ).date()
+                ):
+                    return CurrentIndustryReadFailureV1(
+                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_STALE"
+                    )
                 classification._validate_archive_directory(root, directory)  # pyright: ignore[reportPrivateUsage]
                 classification._validate_archive_root(root)  # pyright: ignore[reportPrivateUsage]
                 operation.ensure_live()
+                if (
+                    StorageRootLease.admit_existing_private_identity(storage_root)
+                    != raw_root_identity
+                ):
+                    raise StorageRootLeaseError("current Industry root authority lost")
             finally:
                 os.close(directory)
     except FileNotFoundError:
@@ -263,31 +350,48 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
         )
     except (StorageRootLeaseError, OSError):
         raise
-    except ValueError:
+    except (AttributeError, TypeError, ValueError):
         return CurrentIndustryReadFailureV1(
             "MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED"
         )
-    if candidate.known_at > cutoff:
-        return CurrentIndustryReadFailureV1(
-            "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_FUTURE_KNOWN"
-        )
-    if (
-        candidate.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
-        != cutoff.astimezone(ZoneInfo("Asia/Kolkata")).date()
-    ):
-        return CurrentIndustryReadFailureV1(
-            "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_STALE"
-        )
-    rows = tuple(
-        (row.isin, row.exchange, row.effective_symbol, row.industry)
-        for row in snapshot.private_rows
-    )
     return _mint_admitted_current_industry_projection_v1(
         snapshot_identity_sha256=reference.snapshot_identity_sha256,
         retained_identity_sha256=reference.retained_identity_sha256,
         original_cohort_identity_sha256=snapshot.cohort_identity_sha256,
         known_at=candidate.known_at,
         rows=rows,
+        raw=raw,
+    )
+
+
+def _projection_values(value: AdmittedCurrentIndustryProjectionV1) -> dict[str, object]:
+    return {
+        item.name: getattr(value, item.name)
+        for item in fields(value)
+        if item.name != "_seal"
+    }
+
+
+def _wire(value: object) -> object:
+    if type(value) is datetime:
+        return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    if type(value) is date:
+        return value.isoformat()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: _wire(getattr(value, item.name)) for item in fields(value)}
+    if type(value) is tuple:
+        return [_wire(item) for item in cast(tuple[object, ...], value)]
+    if type(value) is dict:
+        return {
+            str(key): _wire(item)
+            for key, item in cast(dict[object, object], value).items()
+        }
+    return value
+
+
+def _canonical(value: object) -> bytes:
+    return (
+        json.dumps(_wire(value), sort_keys=True, separators=(",", ":")).encode() + b"\n"
     )
 
 

@@ -303,13 +303,16 @@ _ADMITTED: dict[
         CurrentRawContextProjectionV1,
         bytes,
         object,
+        tuple[int, int],
         tuple[object, ...],
     ],
 ] = {}
 
 
 def _mint(
-    projection: CurrentRawContextProjectionV1, receipts: tuple[object, ...]
+    projection: CurrentRawContextProjectionV1,
+    receipts: tuple[object, ...],
+    root_identity: tuple[int, int],
 ) -> AdmittedCurrentRawContextV1:
     value = object.__new__(AdmittedCurrentRawContextV1)
     seal = object()
@@ -327,14 +330,16 @@ def _mint(
         projection,
         _canonical(projection),
         seal,
+        root_identity,
         receipts,
     )
     return value
 
 
-def validate_admitted_current_raw_context_v1(
+def admitted_current_raw_context_binding_v1(
     value: object,
-) -> CurrentRawContextProjectionV1:
+) -> tuple[CurrentRawContextProjectionV1, tuple[int, int]]:
+    """Return the exact producer-bound projection and root authority receipt."""
     if type(value) is not AdmittedCurrentRawContextV1:
         raise ValueError("current raw context is not admitted")
     entry = _ADMITTED.get(id(value))
@@ -344,9 +349,18 @@ def validate_admitted_current_raw_context_v1(
         or entry[1] is not value.projection
         or entry[2] != _canonical(value.projection)
         or entry[3] is not object.__getattribute__(value, "_seal")
+        or type(entry[4]) is not tuple
+        or len(entry[4]) != 2
+        or any(type(item) is not int for item in entry[4])
     ):
         raise ValueError("current raw context is not admitted")
-    return value.projection
+    return entry[1], entry[4]
+
+
+def validate_admitted_current_raw_context_v1(
+    value: object,
+) -> CurrentRawContextProjectionV1:
+    return admitted_current_raw_context_binding_v1(value)[0]
 
 
 def read_retained_current_raw_context_v1(  # noqa: C901
@@ -589,8 +603,11 @@ def read_retained_current_raw_context_v1(  # noqa: C901
         tuple(members),
         breadth,
     )
+    root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
+    if root_identity is None:
+        raise StorageRootLeaseError("current raw context root authority lost")
     return RetainedCurrentRawContextOutcomeV1(
-        "OBSERVED", (), len(sessions), _mint(projection, tuple(receipts))
+        "OBSERVED", (), len(sessions), _mint(projection, tuple(receipts), root_identity)
     )
 
 
