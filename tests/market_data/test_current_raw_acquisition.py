@@ -80,9 +80,24 @@ class _Clock:
         return self._now
 
 
+def _member_isin(index: int) -> str:
+    if index == 0:
+        return "INE467B01029"
+    prefix = f"INE{index:08d}"
+    digits = "".join(str(ord(char) - 55) if char.isalpha() else char for char in prefix)
+    for check in range(10):
+        total = sum(
+            value if position % 2 == 0 else (value * 2 - 9 if value > 4 else value * 2)
+            for position, value in enumerate(map(int, reversed(digits + str(check))))
+        )
+        if total % 10 == 0:
+            return prefix + str(check)
+    raise AssertionError("unreachable ISIN check digit")
+
+
 def _member(index: int = 0) -> CurrentPriceContextMemberV1:
     return CurrentPriceContextMemberV1(
-        "INE467B01029" if index == 0 else f"INE{index:09d}",
+        _member_isin(index),
         "NSE",
         "EQUITY",
         "EQ",

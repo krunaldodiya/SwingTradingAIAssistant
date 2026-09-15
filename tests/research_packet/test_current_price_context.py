@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentIndustryArchiveReferenceV1,
+    CurrentPriceContextBreadthV1,
     CurrentPriceContextMemberV1,
     CurrentPriceContextRequestV1,
     current_price_context_request_from_canonical_json_bytes_v1,
@@ -41,6 +43,9 @@ from tests.market_data.current_raw_acquisition_fixtures import (
 from tests.market_data.current_raw_acquisition_fixtures import (
     control as fixture_control,
 )
+from tests.market_data.current_raw_acquisition_fixtures import (
+    schedule as fixture_schedule,
+)
 
 
 class _Clock:
@@ -51,9 +56,23 @@ class _Clock:
         return self.value
 
 
+def _member_isin(index: int) -> str:
+    prefix = f"INE{index:08d}"
+    digits = "".join(str(ord(char) - 55) if char.isalpha() else char for char in prefix)
+    for check in range(10):
+        values = map(int, reversed(digits + str(check)))
+        total = sum(
+            value if position % 2 == 0 else (value * 2 - 9 if value > 4 else value * 2)
+            for position, value in enumerate(values)
+        )
+        if total % 10 == 0:
+            return prefix + str(check)
+    raise AssertionError("unreachable ISIN check digit")
+
+
 def _member(index: int) -> CurrentPriceContextMemberV1:
     return CurrentPriceContextMemberV1(
-        isin=f"INE000A01{index:03d}",
+        isin=_member_isin(index),
         exchange="NSE",
         instrument_type="EQUITY",
         segment="EQ",
@@ -357,3 +376,434 @@ def test_acquire_missing_public_exposes_only_safe_accounting(
     assert result.acquisition_provider_calls == wire.attempts == 2
     assert result.members[0].state == "OBSERVED"
     assert "fixture-token" not in result.canonical_json_bytes().decode()
+
+
+def _acquire_retained_raw(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    raw_request: CurrentRawPriceContextInputV1 | None = None,
+    action_in_window: bool = False,
+    replies: list[WireReply] | None = None,
+) -> CurrentRawPriceContextInputV1:
+    request = seed_root(
+        root,
+        retained_action=True,
+        action_in_window=action_in_window,
+        request_value=raw_request,
+    )
+    wire = RecordedWire(
+        replies
+        if replies is not None
+        else [WireReply(body=historical_body()) for _ in request.members]
+    )
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    acquired = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+    assert acquired.outcome == "ACQUISITION_COMPLETED"
+    assert acquired.provider_calls == wire.attempts == len(request.members)
+    return request
+
+
+def test_public_retained_member_fact_is_immutable_deterministic_and_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    request = _public_request(raw_request)
+
+    first = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    second = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+
+    member = first.members[0]
+    assert member.state == "OBSERVED"
+    assert member.structure is not None and member.direction == "UNCHANGED"
+    assert member.mapping_observation_sha256 is not None
+    assert member.partition_checksums and member.screen_identity_sha256 is not None
+    assert first.breadth is not None
+    assert (
+        first.breadth.requested_count,
+        first.breadth.observed_count,
+        first.breadth.advances,
+        first.breadth.declines,
+        first.breadth.unchanged,
+        first.breadth.insufficient_count,
+    ) == (1, 1, 0, 0, 1, 0)
+    assert first.features[0].readiness == "READY"
+    assert first.limitations == (
+        "UPSTOX_RAW_ONLY",
+        "RETAINED_EVIDENCE_REQUIRED",
+        "CURRENT_MAPPING_SCOPE",
+    )
+    assert first == second
+    assert first.result_identity_sha256 == second.result_identity_sha256
+    assert first.canonical_json_bytes() == second.canonical_json_bytes()
+    with pytest.raises(FrozenInstanceError):
+        first.members = ()  # type: ignore[misc]
+    assert first.breadth is not None
+    with pytest.raises(ValueError, match="result is invalid"):
+        replace(
+            first,
+            breadth=CurrentPriceContextBreadthV1(
+                1, 0, 0, 0, 0, 1, None, ("MEMBER_DIRECTION_UNAVAILABLE",)
+            ),
+            result_identity_sha256="",
+        )
+    payload = first.canonical_json_bytes().decode()
+    for private in (
+        str(root),
+        "https://",
+        "Authorization",
+        "fixture-token",
+        "raw-",
+        "_seal",
+        "registry",
+        "Traceback",
+        "internal_error",
+    ):
+        assert private not in payload
+    partition = next(root.rglob("*.parquet"))
+    partition.chmod(0o600)
+    partition.write_bytes(b"corrupt")
+    corrupted = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    assert (
+        corrupted.members[0].state,
+        corrupted.members[0].reason,
+        corrupted.members[0].structure,
+        corrupted.members[0].direction,
+    ) == ("INSUFFICIENT_EVIDENCE", "RAW_PARTITION_CORRUPT", None, None)
+
+
+def test_public_action_observed_withholds_only_affected_member_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch, action_in_window=True)
+
+    result = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+
+    member = result.members[0]
+    assert (member.state, member.reason, member.structure, member.direction) == (
+        "INSUFFICIENT_EVIDENCE",
+        "ACTION_IN_WINDOW",
+        None,
+        None,
+    )
+    assert result.breadth is not None
+    assert result.breadth.requested_count == result.breadth.insufficient_count == 1
+    assert result.breadth.observed_count == 0
+    assert result.features[1].readiness == "WITHHELD"
+
+
+def test_public_industry_failures_never_suppress_retained_raw_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    request = _public_request(raw_request, reference)
+    valid = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    assert valid.industry_evidence_state == "OBSERVED"
+    assert valid.industry_groups and valid.members[0].structure is not None
+    mismatched = research_current_price_context_v1(
+        _public_request(
+            raw_request,
+            CurrentIndustryArchiveReferenceV1(
+                "current-industry-archive-reference@v1", "a" * 64, "b" * 64
+            ),
+        ),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    assert (
+        mismatched.industry_evidence_state,
+        mismatched.members[0].state,
+        mismatched.members[0].direction,
+    ) == ("INSUFFICIENT_EVIDENCE", "OBSERVED", "UNCHANGED")
+
+    corrupted = next((root / ".current-industry-classification-v1").glob("raw-*.csv"))
+    corrupted.chmod(0o600)
+    corrupted.write_bytes(b"corrupt")
+    missing = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    assert missing.industry_evidence_state == "INSUFFICIENT_EVIDENCE"
+    assert missing.members[0].state == "OBSERVED"
+    assert missing.members[0].structure is not None
+
+
+def test_public_mixed_two_member_results_preserve_order_and_breadth_denominator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    source = seed_root(root, retained_action=True)
+    raw_request = CurrentRawPriceContextInputV1(
+        source.request_identity_sha256,
+        source.data_selection_time,
+        source.admission_deadline,
+        source.schedule_identity_sha256,
+        (source.members[0], _member(2)),
+    )
+    # Re-seed exact two-member mapping/action evidence using real stores.
+    root = tmp_path / "two"
+    raw_request = seed_root(root, retained_action=True, request_value=raw_request)
+    wire = RecordedWire([WireReply(status=404), WireReply(body=historical_body())])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    acquired = acquire_missing_current_raw_evidence_v1(
+        raw_request, root, control=fixture_control(raw_request)
+    )
+    assert acquired.outcome == "ACQUISITION_PARTIAL" and wire.attempts == 2
+
+    result = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+
+    assert [item.effective_symbol for item in result.members] == ["ACME", "SYM002"]
+    assert [item.state for item in result.members] == [
+        "INSUFFICIENT_EVIDENCE",
+        "OBSERVED",
+    ]
+    assert result.members[0].reason == "RAW_PARTITION_CORRUPT"
+    assert result.breadth is not None
+    assert (
+        result.breadth.requested_count,
+        result.breadth.observed_count,
+        result.breadth.advances,
+        result.breadth.declines,
+        result.breadth.unchanged,
+        result.breadth.insufficient_count,
+        result.breadth.label,
+    ) == (2, 1, 0, 0, 1, 1, None)
+
+
+def test_public_n50_success_and_n51_request_rejection_are_effect_bounded(
+    tmp_path: Path,
+) -> None:
+    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    members = tuple(_member(index) for index in range(1, 51))
+    request = CurrentPriceContextRequestV1(
+        "current-price-context-request@v1",
+        selected_at,
+        selected_at + timedelta(minutes=30),
+        "a" * 64,
+        members,
+        (
+            "RAW_MARKET_STRUCTURE",
+            "RAW_20_SESSION_DIRECTION",
+            "RAW_COHORT_BREADTH",
+            "RAW_INDUSTRY_PARTICIPATION",
+        ),
+        None,
+    )
+    root = tmp_path / "retained"
+    root.mkdir(mode=0o700)
+    result = research_current_price_context_v1(request, root, clock=_Clock(selected_at))
+    assert len(result.members) == 50
+    assert result.members[0].position == 0 and result.members[-1].position == 49
+    assert len(result.canonical_json_bytes()) <= 1_048_576
+
+    with pytest.raises(ValueError, match="request is invalid"):
+        CurrentPriceContextRequestV1(
+            "current-price-context-request@v1",
+            selected_at,
+            selected_at + timedelta(minutes=30),
+            "a" * 64,
+            members + (_member(51),),
+            (
+                "RAW_MARKET_STRUCTURE",
+                "RAW_20_SESSION_DIRECTION",
+                "RAW_COHORT_BREADTH",
+                "RAW_INDUSTRY_PARTICIPATION",
+            ),
+            None,
+        )
+
+
+def test_public_directions_cover_advance_decline_and_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = {
+        "ADVANCE": (100.0, 101.0),
+        "DECLINE": (101.0, 100.0),
+        "UNCHANGED": (100.0, 100.0),
+    }
+    for direction, (first, last) in expected.items():
+        root = tmp_path / direction.lower()
+        raw_request = seed_root(root, retained_action=True)
+        closes = (
+            (90.0, first) + (100.5,) * (len(fixture_schedule().sessions) - 3) + (last,)
+        )
+        wire = RecordedWire([WireReply(body=historical_body(closes=closes))])
+        monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+        monkeypatch.setattr(
+            acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+        )
+        assert (
+            acquire_missing_current_raw_evidence_v1(
+                raw_request, root, control=fixture_control(raw_request)
+            ).outcome
+            == "ACQUISITION_COMPLETED"
+        )
+        result = research_current_price_context_v1(
+            _public_request(raw_request),
+            root,
+            clock=_Clock(raw_request.data_selection_time),
+        )
+        assert result.members[0].direction == direction
+        assert result.members[0].structure is not None
+
+
+def test_public_deadline_cancellation_and_unsafe_root_stop_before_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = seed_root(root)
+    wire = RecordedWire([])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    request = _public_request(raw_request)
+
+    with pytest.raises(ValueError, match="deadline exceeded"):
+        research_current_price_context_v1(
+            request,
+            root,
+            acquire_missing=True,
+            clock=_Clock(raw_request.admission_deadline),
+        )
+
+    class _Cancelled:
+        def is_cancelled(self) -> bool:
+            return True
+
+    cancelled = research_current_price_context_v1(
+        request,
+        root,
+        acquire_missing=True,
+        clock=_Clock(raw_request.data_selection_time),
+        cancellation=_Cancelled(),
+    )
+    assert (
+        cancelled.acquisition_outcome,
+        cancelled.acquisition_provider_calls,
+        cancelled.members[0].reason,
+    ) == ("STOPPED", 0, "ACQUISITION_STOPPED")
+    root.chmod(0o755)
+    unsafe = research_current_price_context_v1(
+        request,
+        root,
+        acquire_missing=True,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    assert (
+        unsafe.acquisition_outcome,
+        unsafe.acquisition_provider_calls,
+        unsafe.members[0].reason,
+    ) == ("STOPPED", 0, "ACQUISITION_STOPPED")
+    assert wire.attempts == FixtureTokenProvider.calls == 0
+
+
+def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = seed_root(tmp_path / "base", retained_action=True)
+    raw_request = CurrentRawPriceContextInputV1(
+        base.request_identity_sha256,
+        base.data_selection_time,
+        base.admission_deadline,
+        base.schedule_identity_sha256,
+        (base.members[0], _member(2)),
+    )
+    partial_root = tmp_path / "partial"
+    seed_root(partial_root, retained_action=True, request_value=raw_request)
+    partial_wire = RecordedWire(
+        [WireReply(status=404), WireReply(body=historical_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", partial_wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    partial = research_current_price_context_v1(
+        _public_request(raw_request),
+        partial_root,
+        acquire_missing=True,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    assert (
+        partial.acquisition_outcome,
+        partial.acquisition_provider_calls,
+        partial.members[0].state,
+        partial.members[1].state,
+    ) == ("ACQUISITION_PARTIAL", 2, "INSUFFICIENT_EVIDENCE", "OBSERVED")
+
+    stopped_root = tmp_path / "stopped"
+    seed_root(stopped_root, retained_action=True, request_value=raw_request)
+    stopped_wire = RecordedWire([WireReply(status=401)])
+    monkeypatch.setattr(transport_module, "build_opener", stopped_wire.build_opener)
+    stopped = research_current_price_context_v1(
+        _public_request(raw_request),
+        stopped_root,
+        acquire_missing=True,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    assert (
+        stopped.acquisition_outcome,
+        stopped.acquisition_provider_calls,
+        stopped_wire.attempts,
+    ) == ("STOPPED", 1, 1)
+    payload = stopped.canonical_json_bytes().decode()
+    assert "AUTHENTICATION_FAILED" not in payload
+    assert "fixture-token" not in payload
+
+
+def test_public_request_decoder_rejects_malformed_oversize_nested_and_enum_values() -> (
+    None
+):
+    raw = (
+        json.dumps(
+            {
+                "contract_version": "current-price-context-request@v1",
+                "data_selection_time": "2026-09-15T09:00:00.000000Z",
+                "admission_deadline": "2026-09-15T09:30:00.000000Z",
+                "schedule_identity_sha256": "a" * 64,
+                "members": [],
+                "questions": [],
+                "industry_archive_reference": None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    for value in (
+        raw.replace(b'"questions":[]', b'"questions":["UNKNOWN"]'),
+        raw[:-1] + b',"unknown":true}\n',
+        b"[" * 2_000 + b"]" * 2_000,
+        b"x" * (64 * 1024 + 1),
+    ):
+        with pytest.raises(ValueError, match="request is invalid"):
+            current_price_context_request_from_canonical_json_bytes_v1(value)

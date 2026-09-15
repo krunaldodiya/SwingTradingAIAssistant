@@ -54,7 +54,7 @@ def test_missing_retained_calendar_is_a_no_effect_dependency_outcome(
         "a" * 64,
         (
             CurrentPriceContextMemberV1(
-                "INE000A01001",
+                "INE467B01029",
                 "NSE",
                 "EQUITY",
                 "EQ",

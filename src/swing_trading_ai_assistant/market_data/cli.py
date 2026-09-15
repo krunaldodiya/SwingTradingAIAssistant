@@ -582,10 +582,7 @@ def main(
                 args, current_stock_research, current_stock_research_v2
             )
         if args.command in {"regime-current", "price-context-current"}:
-            return {
-                "regime-current": _run_current_regime_command,
-                "price-context-current": _run_price_context_current_command,
-            }[args.command](args)
+            return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
             return _run_historical_ohlcv_upstox_raw_command(args)
         if args.command == "historical-ohlcv-upstox-raw-read":
@@ -866,7 +863,15 @@ def _run_public_command(
     return exit_code
 
 
-def _run_price_context_current_command(args: argparse.Namespace) -> int:
+def _run_current_packet_command(args: argparse.Namespace, clock: _ClockV1) -> int:
+    if args.command == "regime-current":
+        return _run_current_regime_command(args)
+    return _run_price_context_current_command(args, clock)
+
+
+def _run_price_context_current_command(
+    args: argparse.Namespace, clock: _ClockV1
+) -> int:
     """Run the closed #188 request without exposing input or private paths.
 
     Only the descriptor-relative request-file admission is a request-invalid
@@ -889,7 +894,7 @@ def _run_price_context_current_command(args: argparse.Namespace) -> int:
     except (OSError, ValueError, _RequestInvalid):
         raise _RequestInvalid from None
     result = research_current_price_context_v1(
-        request, root, acquire_missing=args.acquire_missing
+        request, root, acquire_missing=args.acquire_missing, clock=clock
     )
     sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
     return 0

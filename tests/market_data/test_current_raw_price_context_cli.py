@@ -8,11 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import swing_trading_ai_assistant.market_data.cli as cli
 from swing_trading_ai_assistant.market_data.cli import main
-from swing_trading_ai_assistant.research_packet.current_price_context import (
-    CurrentPriceContextRequestV1,
-)
 
 
 class _Clock:
@@ -21,7 +17,7 @@ class _Clock:
 
 
 def test_price_context_current_accepts_closed_owner_file_and_emits_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     request = {
         "contract_version": "current-price-context-request@v1",
@@ -30,7 +26,7 @@ def test_price_context_current_accepts_closed_owner_file_and_emits_json(
         "schedule_identity_sha256": "a" * 64,
         "members": [
             {
-                "isin": "INE000A01001",
+                "isin": "INE467B01029",
                 "exchange": "NSE",
                 "instrument_type": "EQUITY",
                 "segment": "EQ",
@@ -54,27 +50,19 @@ def test_price_context_current_accepts_closed_owner_file_and_emits_json(
     )
     input_file.chmod(0o600)
 
-    original = cli.research_current_price_context_v1
-
-    def fixed_clock_research(
-        request: CurrentPriceContextRequestV1,
-        root: Path,
-        *,
-        acquire_missing: bool = False,
-    ) -> object:
-        return original(request, root, acquire_missing=acquire_missing, clock=_Clock())
-
-    monkeypatch.setattr(cli, "research_current_price_context_v1", fixed_clock_research)
+    root = tmp_path / "retained"
+    root.mkdir(mode=0o700)
     status = main(
         [
             "price-context-current",
             "--input-file",
             str(input_file),
             "--storage-root",
-            str(tmp_path),
+            str(root),
             "--output",
             "json",
-        ]
+        ],
+        trusted_clock=_Clock(),
     )
 
     captured = capsys.readouterr()

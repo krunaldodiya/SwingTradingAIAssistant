@@ -101,7 +101,7 @@ class CurrentPriceContextMemberV1:
         if (
             type(self.isin) is not str
             or len(self.isin) != 12
-            or not self.isin.startswith("INE")
+            or not _valid_isin_checksum(self.isin)
             or self.exchange != "NSE"
             or self.instrument_type != "EQUITY"
             or self.segment != "EQ"
@@ -796,6 +796,20 @@ def recheck_retained_current_raw_context_v1(
     with DuckDBCatalog(storage_root, read_only=True, lease=lease) as catalog:
         catalog.ensure_read_identity()
     control.ensure_live()
+
+
+def _valid_isin_checksum(value: str) -> bool:
+    """Require the canonical ISIN check digit before it reaches a public request."""
+    encoded = "".join(str(ord(item) - 55) if item.isalpha() else item for item in value)
+    total = 0
+    for position, item in enumerate(reversed(encoded)):
+        digit = int(item)
+        if position % 2:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
 
 
 def _utc(value: object) -> bool:

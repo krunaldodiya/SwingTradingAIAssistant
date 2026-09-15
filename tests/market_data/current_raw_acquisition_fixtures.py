@@ -257,19 +257,26 @@ def control(
     )
 
 
-def historical_body(value: tuple[ScheduleSession, ...] | None = None) -> bytes:
+def historical_body(
+    value: tuple[ScheduleSession, ...] | None = None,
+    *,
+    closes: tuple[float, ...] | None = None,
+) -> bytes:
     sessions = schedule().sessions if value is None else value
+    if closes is not None and len(closes) != len(sessions):
+        raise ValueError("fixture close count is invalid")
     candles = [
         [
             session.open_at.isoformat(),
-            100.0,
-            101.0,
-            99.0,
-            100.5,
+            close if closes is not None else 100.0,
+            (close if closes is not None else 100.0) + 1.0,
+            (close if closes is not None else 100.0) - 1.0,
+            close if closes is not None else 100.5,
             10,
             None,
         ]
-        for session in sessions
+        for index, session in enumerate(sessions)
+        for close in ((closes[index] if closes is not None else 100.5),)
     ]
     return json.dumps({"status": "success", "data": {"candles": candles}}).encode()
 

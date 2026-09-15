@@ -34,7 +34,10 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
-from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from swing_trading_ai_assistant.market_regime.current_raw_price_context import (
     RawCohortBreadthV1,
 )
@@ -244,6 +247,42 @@ class CurrentPriceContextMemberResultV1:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentPriceContextBreadthV1:
+    """Public complete-cohort accounting without raw bars or private receipts."""
+
+    requested_count: int
+    observed_count: int
+    advances: int
+    declines: int
+    unchanged: int
+    insufficient_count: int
+    label: Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"] | None
+    reasons: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.requested_count) is not int
+            or not 1 <= self.requested_count <= 50
+            or any(
+                type(value) is not int or value < 0
+                for value in (
+                    self.observed_count,
+                    self.advances,
+                    self.declines,
+                    self.unchanged,
+                    self.insufficient_count,
+                )
+            )
+            or self.observed_count + self.insufficient_count != self.requested_count
+            or self.advances + self.declines + self.unchanged != self.observed_count
+            or (self.label is not None)
+            != (self.insufficient_count == 0 and not self.reasons)
+            or (self.label is None and not self.reasons)
+        ):
+            raise ValueError("current price context breadth is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentPriceContextResultV1:
     contract_version: Literal["current-price-context@v1"]
     request_identity_sha256: str
@@ -261,7 +300,7 @@ class CurrentPriceContextResultV1:
     ]
     acquisition_provider_calls: int
     members: tuple[CurrentPriceContextMemberResultV1, ...]
-    breadth: RawCohortBreadthV1 | None
+    breadth: CurrentPriceContextBreadthV1 | None
     features: tuple[CurrentPriceContextFeatureV1, ...]
     limitations: tuple[str, ...]
     runtime_code_identity_sha256: str
@@ -288,6 +327,21 @@ class CurrentPriceContextResultV1:
             or tuple(item.position for item in self.members)
             != tuple(range(len(self.members)))
             or len({item.isin for item in self.members}) != len(self.members)
+            or (
+                self.breadth is not None
+                and (
+                    type(self.breadth) is not CurrentPriceContextBreadthV1
+                    or self.breadth.requested_count != len(self.members)
+                    or self.breadth.observed_count
+                    != sum(item.direction is not None for item in self.members)
+                    or self.breadth.advances
+                    != sum(item.direction == "ADVANCE" for item in self.members)
+                    or self.breadth.declines
+                    != sum(item.direction == "DECLINE" for item in self.members)
+                    or self.breadth.unchanged
+                    != sum(item.direction == "UNCHANGED" for item in self.members)
+                )
+            )
             or type(self.features) is not tuple
             or tuple(item.question for item in self.features) != _QUESTIONS
             or any(
@@ -326,24 +380,19 @@ def current_price_context_request_from_canonical_json_bytes_v1(
         raise ValueError("current price context request is invalid")
     try:
         decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
-        raise ValueError("current price context request is invalid") from None
-    if type(decoded) is not dict:
-        raise ValueError("current price context request is invalid")
-    value = cast(dict[str, object], decoded)
-    if _canonical(value) != raw:
-        raise ValueError("current price context request is invalid")
-    if set(value) != {
-        "contract_version",
-        "data_selection_time",
-        "admission_deadline",
-        "schedule_identity_sha256",
-        "members",
-        "questions",
-        "industry_archive_reference",
-    }:
-        raise ValueError("current price context request is invalid")
-    try:
+        if type(decoded) is not dict:
+            raise ValueError
+        value = cast(dict[str, object], decoded)
+        if _canonical(value) != raw or set(value) != {
+            "contract_version",
+            "data_selection_time",
+            "admission_deadline",
+            "schedule_identity_sha256",
+            "members",
+            "questions",
+            "industry_archive_reference",
+        }:
+            raise ValueError
         reference = _reference_from_value(value["industry_archive_reference"])
         members = _members_from_value(value["members"])
         questions = value["questions"]
@@ -372,7 +421,13 @@ def current_price_context_request_from_canonical_json_bytes_v1(
             ),
             industry_archive_reference=reference,
         )
-    except (KeyError, TypeError, ValueError, RecursionError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
         raise ValueError("current price context request is invalid") from None
 
 
@@ -436,12 +491,47 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
         )
         acquisition_outcome = acquired.outcome
         acquisition_provider_calls = acquired.provider_calls
+        if acquisition_outcome == "STOPPED":
+            member_results = _withheld_members(
+                request.members, "DEPENDENCY_BLOCKED", "ACQUISITION_STOPPED"
+            )
+            return CurrentPriceContextResultV1(
+                contract_version=_RESULT_CONTRACT,
+                request_identity_sha256=request.request_identity_sha256,
+                schedule_identity_sha256=request.schedule_identity_sha256,
+                ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
+                acquisition_mode="ACQUIRE_MISSING",
+                acquisition_outcome=acquisition_outcome,
+                acquisition_provider_calls=acquisition_provider_calls,
+                members=member_results,
+                breadth=None,
+                features=_features(
+                    "DEPENDENCY_BLOCKED",
+                    ("ACQUISITION_STOPPED",),
+                    member_results,
+                    None,
+                    "NOT_ATTEMPTED",
+                    ("INDUSTRY_NOT_ATTEMPTED",),
+                ),
+                limitations=(
+                    "UPSTOX_RAW_ONLY",
+                    "RETAINED_EVIDENCE_REQUIRED",
+                    "CURRENT_MAPPING_SCOPE",
+                ),
+                runtime_code_identity_sha256=runtime_identity,
+            )
     industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"] = (
         "NOT_ATTEMPTED"
     )
     industry_reasons: tuple[str, ...] = ("INDUSTRY_REFERENCE_NOT_PROVIDED",)
     industry_groups: tuple[CurrentRawIndustryGroupV1, ...] = ()
     admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    if (
+        admitted.lease is None
+        and storage_root.exists()
+        and StorageRootLease.admit_existing_private_identity(storage_root) is None
+    ):
+        raise StorageRootLeaseError("current price context root authority unavailable")
     raw_projection = None
     raw_value: AdmittedCurrentRawContextV1 | None = None
     if admitted.lease is None:
@@ -490,7 +580,7 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                     )
                     for item in raw_projection.members
                 )
-                breadth = raw_projection.breadth
+                breadth = _public_breadth(raw_projection.breadth, member_results)
                 if request.industry_archive_reference is not None:
                     archive = read_current_industry_archive_exact_v1(
                         ArchivedIndustryReferenceV1(
@@ -568,13 +658,37 @@ def _withheld_members(
     )
 
 
+def _public_breadth(
+    raw: RawCohortBreadthV1,
+    members: tuple[CurrentPriceContextMemberResultV1, ...],
+) -> CurrentPriceContextBreadthV1:
+    """Preserve complete-cohort counts even when a label is rightly withheld."""
+    observed = tuple(item for item in members if item.direction is not None)
+    advances = sum(item.direction == "ADVANCE" for item in observed)
+    declines = sum(item.direction == "DECLINE" for item in observed)
+    unchanged = len(observed) - advances - declines
+    insufficient = len(members) - len(observed)
+    if raw.requested_count != len(members):
+        raise ValueError("current price context breadth is invalid")
+    return CurrentPriceContextBreadthV1(
+        requested_count=len(members),
+        observed_count=len(observed),
+        advances=advances,
+        declines=declines,
+        unchanged=unchanged,
+        insufficient_count=insufficient,
+        label=raw.label,
+        reasons=raw.reasons,
+    )
+
+
 def _features(
     state: Literal[
         "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
     ],
     reasons: tuple[str, ...],
     members: tuple[CurrentPriceContextMemberResultV1, ...],
-    breadth: RawCohortBreadthV1 | None,
+    breadth: CurrentPriceContextBreadthV1 | None,
     industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"],
     industry_reasons: tuple[str, ...],
 ) -> tuple[CurrentPriceContextFeatureV1, ...]:
@@ -587,10 +701,15 @@ def _features(
     breadth_ready = breadth is not None and breadth.label is not None
 
     def raw_feature(question: str, ready: bool) -> CurrentPriceContextFeatureV1:
+        withheld_reasons = reasons or tuple(
+            dict.fromkeys(item.reason for item in members if item.reason is not None)
+        )
         return CurrentPriceContextFeatureV1(
             question,
-            "OBSERVED" if ready else state,
-            () if ready else reasons or ("MEMBER_EVIDENCE_UNAVAILABLE",),
+            "OBSERVED"
+            if ready
+            else (state if state != "OBSERVED" else "INSUFFICIENT_EVIDENCE"),
+            () if ready else withheld_reasons or ("MEMBER_EVIDENCE_UNAVAILABLE",),
             readiness="READY" if ready else "WITHHELD",
         )
 
