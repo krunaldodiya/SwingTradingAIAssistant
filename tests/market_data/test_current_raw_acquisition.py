@@ -14,6 +14,7 @@ import pytest
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+from swing_trading_ai_assistant.market_data.credentials import CredentialNotFoundError
 from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
     acquire_missing_current_raw_evidence_v1,
 )
@@ -21,6 +22,7 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
+    read_retained_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
     UPSTOX_NSE_INSTRUMENTS_URL,
@@ -35,6 +37,19 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+)
+from tests.market_data.current_raw_acquisition_fixtures import (
+    FixtureTokenProvider,
+    RecordedWire,
+    WireReply,
+    action_body,
+    historical_body,
+    remove_action_metadata,
+    seed_root,
+    url_error,
+)
+from tests.market_data.current_raw_acquisition_fixtures import (
+    control as fixture_control,
 )
 
 
@@ -266,3 +281,302 @@ def test_missing_mapping_retains_once_then_freshly_replans_with_native_provider_
         and result.accounting.members[0][0].disposition.value
         == "NOT_ATTEMPTED_SHARED_STOP"
     )
+
+
+def test_closed_month_acquisition_retains_real_partition_and_reuses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One admitted closed month reaches the native catalog and fresh reader."""
+    request = seed_root(tmp_path / "retained", retained_action=True)
+    wire = RecordedWire([WireReply(body=historical_body())])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, tmp_path / "retained", control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_COMPLETED"
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert [item.full_url for item in wire.requests] == [
+        "https://api.upstox.com/v3/historical-candle/"
+        "NSE_EQ%7CINE467B01029/minutes/1/2026-09-30/2026-09-01"
+    ]
+    assert wire.requests[0].get_header("Authorization") == "Bearer fixture-token"
+    assert result.plan is not None
+    assert result.plan.members[0].closed[0].disposition.value == "REUSABLE"
+    assert result.plan.members[0].action.disposition.value == "REUSABLE"
+    assert result.accounting is not None
+    assert result.accounting.members[0][0].disposition.value == "RETAINED"
+    assert all(slot.attempts == 0 for slot in result.accounting.members[0][1:])
+    admitted = StorageRootLease.try_admit_read_existing(tmp_path / "retained")
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        fresh = read_retained_current_raw_context_v1(
+            tmp_path / "retained",
+            request=request,
+            lease=lease,
+            control=fixture_control(request),
+        )
+    assert fresh.state == "OBSERVED" and fresh.admitted is not None
+    assert fresh.admitted.projection.members[0].state == "OBSERVED"
+
+    reused = acquire_missing_current_raw_evidence_v1(
+        request, tmp_path / "retained", control=fixture_control(request)
+    )
+    assert reused.outcome == "RETAINED_EVIDENCE_READY"
+    assert reused.provider_calls == 0
+    assert wire.attempts == 1
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        WireReply(status=404),
+        WireReply(status=408),
+        WireReply(status=500),
+        url_error(),
+        WireReply(body=historical_body(), response_url="https://wrong.example/"),
+        WireReply(body=b"{}"),
+    ],
+    ids=["404", "408", "500", "network", "redirect", "bad-body"],
+)
+def test_closed_month_local_provider_refusals_never_retry_or_retain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply: WireReply
+) -> None:
+    request = seed_root(tmp_path / "retained", retained_action=True)
+    wire = RecordedWire([reply])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, tmp_path / "retained", control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert result.accounting is not None
+    assert result.accounting.members[0][0].disposition.value == "FAILED"
+    assert result.accounting.members[0][0].reason == "PROVIDER_OR_DATA_FAILURE"
+    assert result.plan is not None
+    assert result.plan.members[0].closed[0].disposition.value == "MISSING"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (401, "AUTHENTICATION_FAILED"),
+        (403, "AUTHORIZATION_FAILED"),
+        (429, "RATE_LIMITED"),
+    ],
+)
+def test_closed_month_shared_provider_stops_preserve_opened_slot_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    reason: str,
+) -> None:
+    request = seed_root(tmp_path / "retained", retained_action=True)
+    wire = RecordedWire([WireReply(status=status)])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, tmp_path / "retained", control=fixture_control(request)
+    )
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    closed = result.accounting.members[0][0]
+    assert (closed.attempts, closed.disposition.value, closed.reason) == (
+        1,
+        "FAILED",
+        reason,
+    )
+    assert all(slot.reason == reason for slot in result.accounting.members[0][1:])
+
+
+def test_closed_month_missing_token_stops_before_the_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class MissingToken:
+        def get_access_token(self) -> object:
+            raise CredentialNotFoundError("fixture")
+
+    request = seed_root(tmp_path / "retained", retained_action=True)
+    wire = RecordedWire([WireReply(body=historical_body())])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", MissingToken
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, tmp_path / "retained", control=fixture_control(request)
+    )
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 0
+    assert result.accounting is not None
+    assert result.accounting.members[0][0].reason == "AUTHENTICATION_FAILED"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        WireReply(status=404),
+        WireReply(body=b"x" * 1_048_577),
+        WireReply(
+            body=action_body(),
+            headers=(
+                ("Content-Type", "application/json"),
+                ("Content-Encoding", "gzip"),
+            ),
+        ),
+    ],
+    ids=["404", "oversize", "encoded"],
+)
+def test_action_local_failures_preserve_admissible_raw_without_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply: WireReply
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root)
+    bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            request, root, control=fixture_control(request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    remove_action_metadata(root)
+
+    wire = RecordedWire([reply])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    assert result.accounting.members[0][0].disposition.value == "REUSED"
+    assert result.accounting.members[0][-1].disposition.value == "FAILED"
+
+
+@pytest.mark.parametrize(
+    "control_factory",
+    [
+        lambda request: CurrentRawInvocationControlV1(
+            _Clock(request.data_selection_time),
+            selection=request.data_selection_time,
+            deadline=request.data_selection_time,
+        ),
+        lambda request: CurrentRawInvocationControlV1(
+            _Clock(request.data_selection_time),
+            selection=request.data_selection_time,
+            deadline=request.admission_deadline,
+            cancellation=SimpleNamespace(is_cancelled=lambda: True),
+        ),
+    ],
+    ids=["deadline", "cancellation"],
+)
+def test_initial_deadline_or_cancellation_is_zero_effect(
+    tmp_path: Path, control_factory: object
+) -> None:
+    request = seed_root(tmp_path / "retained", retained_action=True)
+    result = acquire_missing_current_raw_evidence_v1(
+        request,
+        tmp_path / "retained",
+        control=control_factory(request),  # type: ignore[operator]
+    )
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("in_window", "expected_reason", "expected_outcome"),
+    [
+        (False, None, "ACQUISITION_COMPLETED"),
+        (True, "ACTION_IN_WINDOW", "ACQUISITION_COMPLETED"),
+    ],
+)
+def test_action_acquisition_retains_singleton_screen_and_reuses_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    in_window: bool,
+    expected_reason: str | None,
+    expected_outcome: str,
+) -> None:
+    """The action GET follows real reusable raw evidence and seals Plan-21 state."""
+    root = tmp_path / "retained"
+    request = seed_root(root)
+    FixtureTokenProvider.calls = 0
+    bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            request, root, control=fixture_control(request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    assert bootstrap.attempts == 2
+    remove_action_metadata(root)
+
+    wire = RecordedWire([WireReply(body=action_body(in_window=in_window))])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    FixtureTokenProvider.calls = 0
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert [item.full_url for item in wire.requests] == [
+        "https://api.upstox.com/v2/fundamentals/INE467B01029/corporate-actions"
+    ]
+    assert wire.requests[0].get_header("Authorization") == "Bearer fixture-token"
+    assert result.plan is not None
+    assert result.plan.members[0].action.disposition.value == "REUSABLE"
+    assert result.plan.members[0].action.reason == expected_reason
+    assert result.outcome == expected_outcome
+    assert result.accounting is not None
+    assert result.accounting.members[0][-1].disposition.value == "RETAINED"
+    assert all(slot.attempts == 0 for slot in result.accounting.members[0][:-1])
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        retained = read_retained_current_raw_context_v1(
+            root,
+            request=request,
+            lease=lease,
+            control=fixture_control(request),
+        )
+    assert retained.state == "OBSERVED" and retained.admitted is not None
+    member_state = retained.admitted.projection.members[0]
+    assert member_state.state == ("INSUFFICIENT_EVIDENCE" if in_window else "OBSERVED")
+    assert member_state.reason == ("SCREEN_UNAVAILABLE" if in_window else None)
+
+    reused = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+    assert reused.outcome == "RETAINED_EVIDENCE_READY"
+    assert reused.provider_calls == 0
+    assert wire.attempts == 1

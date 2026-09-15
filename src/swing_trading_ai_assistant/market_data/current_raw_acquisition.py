@@ -33,7 +33,11 @@ from .corporate_actions import (
     CorporateActionStaleError,
     UpstoxCorporateActionsClientV1,
 )
-from .credentials import CredentialNotFoundError, EnvironmentAccessTokenProvider
+from .credentials import (
+    AccessToken,
+    CredentialNotFoundError,
+    EnvironmentAccessTokenProvider,
+)
 from .current_cohort import (
     CurrentCohortMemberV1,
     CurrentSuppliedCohortAdmissionPolicyV1,
@@ -532,7 +536,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                         storage_root, request, control, ledger
                     )
                 except BaseException as error:
-                    ledger.failed(slot.key, _local_effect_reason(error))
+                    _record_effect_failure(ledger, slot.key, error)
                     ledger.member_stop(position, "PROVIDER_OR_DATA_FAILURE")
                     failed = True
                     break
@@ -598,7 +602,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 ledger.retained(member.action.key)
                 plan = _reinspect_after_effect(storage_root, request, control, ledger)
             except BaseException as error:
-                ledger.failed(member.action.key, _local_effect_reason(error))
+                _record_effect_failure(ledger, member.action.key, error)
                 ledger.member_stop(position, "PROVIDER_OR_DATA_FAILURE")
 
         final, admitted = _fresh_final_admission(
@@ -622,9 +626,9 @@ class _InvocationTokenV1:
 
     def __init__(self) -> None:
         self._provider: EnvironmentAccessTokenProvider | None = None
-        self._token: object | None = None
+        self._token: AccessToken | None = None
 
-    def get(self) -> object:
+    def get(self) -> AccessToken:
         if self._token is None:
             if self._provider is None:
                 self._provider = EnvironmentAccessTokenProvider()
@@ -679,7 +683,7 @@ class _ExactHistoricalSessionV1:
     def fetch(self, request: HistoricalRequest) -> HistoricalResponse:
         if request != self._expected:
             raise _MemberEffectFailure("PROVIDER_CONTRACT_FAILURE")
-        response = self._client.fetch(request, self._token.get())  # type: ignore[arg-type]
+        response = self._client.fetch(request, self._token.get())
         if response.status_code != 200 or response.error_category is not None:
             raise _MemberEffectFailure("PROVIDER_REFUSED")
         return response
@@ -1022,7 +1026,7 @@ def _advance_current_month_once(
                     _strict_transport(
                         "HISTORICAL", url, history.key, request, guard, ledger
                     )
-                ).fetch(historical_request, token.get())  # type: ignore[arg-type]
+                ).fetch(historical_request, token.get())
                 attempted.append(history.key)
                 history_rows = canonicalize_upstox_equity_candles(
                     normalize_candles(response.candles), instrument, guard.now()
@@ -1036,7 +1040,7 @@ def _advance_current_month_once(
                     _strict_transport(
                         "INTRADAY", url, intraday.key, request, guard, ledger
                     )
-                ).fetch(IntradayRequest(instrument.instrument_key), token.get())  # type: ignore[arg-type]
+                ).fetch(IntradayRequest(instrument.instrument_key), token.get())
                 attempted.append(intraday.key)
                 intraday_rows = tuple(
                     replace(row, source_version="upstox-intraday-v3")
@@ -1133,7 +1137,7 @@ def _retain_action_once(
                     "ACTION", url, member.action.key, request, guard, ledger
                 ),
                 clock=guard.now,
-            ).fetch_strict(member.member.isin, token.get())  # type: ignore[arg-type]
+            ).fetch_strict(member.member.isin, token.get().reveal())
             CorporateActionSnapshotStoreV1(root, lease, catalog).retain(snapshot)
             guard.ensure_live()
 
@@ -1154,6 +1158,18 @@ def _mark_current_failed(
         if slot is not None and ledger.opened(slot.key):
             ledger.failed(slot.key, reason, aborted=True)
     ledger.member_stop(position, reason)
+
+
+def _record_effect_failure(
+    ledger: _AcquisitionLedgerV1, key: str, error: BaseException
+) -> None:
+    try:
+        reason = _local_effect_reason(error)
+    except _SharedAcquisitionStop as stop:
+        if ledger.opened(key):
+            ledger.failed(key, stop.reason)
+        raise
+    ledger.failed(key, reason)
 
 
 def _local_effect_reason(error: BaseException) -> str:
@@ -1929,7 +1945,7 @@ def _is_exact_action_blocking_screen(
     private = published.private_result
     return (
         private.outcome is PrivateCorporateActionScreenOutcomeV1.ACTION_OBSERVED
-        and private.selected_snapshot_set_identity_sha256 is not None
+        and private.selected_snapshot_set_identity_sha256 is None
         and private.cohort_identity_sha256 == cohort_identity
         and private.comparison_session == selected[0].trade_date
         and private.decision_session == selected[-1].trade_date
