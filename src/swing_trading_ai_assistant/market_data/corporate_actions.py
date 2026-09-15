@@ -53,6 +53,22 @@ class CorporateActionUnavailableError(CorporateActionError):
     """The provider or retained evidence is unavailable."""
 
 
+class CorporateActionAuthenticationError(CorporateActionError):
+    """The provider rejected the invocation credentials."""
+
+
+class CorporateActionAuthorizationError(CorporateActionError):
+    """The provider rejected the invocation authority."""
+
+
+class CorporateActionRateLimitedError(CorporateActionError):
+    """The provider applied an invocation-wide rate limit."""
+
+
+class CorporateActionProviderResponseError(CorporateActionError):
+    """A strict provider response was not a successful action reply."""
+
+
 class CorporateActionMissingError(CorporateActionUnavailableError):
     """No retained observation exists for the requested instrument."""
 
@@ -312,6 +328,55 @@ class UpstoxCorporateActionsClientV1:
             raise ValueError("invalid corporate action clock")
         self._transport = transport
         self._clock = clock
+
+    def fetch_strict(self, isin: str, access_token: str) -> CorporateActionSnapshotV1:
+        """Fetch one snapshot without broad exception laundering.
+
+        The legacy ``fetch`` preserves its historical broad failure envelope.
+        This additive call gives #188 its status-first shared-stop boundary.
+        """
+        if not _valid_isin(isin) or not _valid_token(access_token):
+            raise CorporateActionUnavailableError(
+                "corporate action request unavailable"
+            )
+        response = self._transport.get(
+            UPSTOX_CORPORATE_ACTIONS_URL_V1.format(isin=isin),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+        if response.status_code == 401:
+            raise CorporateActionAuthenticationError(
+                "corporate action authentication failed"
+            )
+        if response.status_code == 403:
+            raise CorporateActionAuthorizationError(
+                "corporate action authorization failed"
+            )
+        if response.status_code == 429:
+            raise CorporateActionRateLimitedError("corporate action rate limited")
+        if response.status_code != 200:
+            raise CorporateActionProviderResponseError(
+                "corporate action response unavailable"
+            )
+        events = _parse_upstox_response_strict(response.body)
+        retrieved_at = self._clock()
+        if not _aware(retrieved_at):
+            raise ValueError("corporate action clock is invalid")
+        try:
+            return CorporateActionSnapshotV1(
+                1,
+                isin,
+                UPSTOX_CORPORATE_ACTIONS_SOURCE_V1,
+                UPSTOX_CORPORATE_ACTIONS_ADAPTER_RELEASE_V1,
+                retrieved_at,
+                tuple(sorted(events, key=lambda event: event.event_digest_sha256)),
+            )
+        except _CorporateActionSnapshotValidationError:
+            raise CorporateActionCorruptError(
+                "corporate action response corrupt"
+            ) from None
 
     def fetch(self, isin: str, access_token: str) -> CorporateActionSnapshotV1:
         if not _valid_isin(isin) or not _valid_token(access_token):
@@ -644,6 +709,47 @@ def _availability(
         metadata.snapshot_sha256 if metadata else None,
         events,
     )
+
+
+def _parse_upstox_response_strict(payload: bytes) -> tuple[CorporateActionEventV1, ...]:
+    """Parse known provider-data defects without swallowing implementation faults."""
+    if (
+        type(payload) is not bytes
+        or len(payload) > MAX_CORPORATE_ACTION_RESPONSE_BYTES_V1
+    ):
+        raise CorporateActionCorruptError("corporate action response corrupt")
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_float=Decimal,
+            parse_constant=_reject_constant,
+        )
+        _assert_depth(value)
+        if type(value) is not dict or set(cast(dict[str, object], value)) != {
+            "status",
+            "data",
+        }:
+            raise _CorporateActionSnapshotValidationError
+        raw = cast(dict[str, object], value)
+        if raw["status"] != "success" or type(raw["data"]) is not list:
+            raise _CorporateActionSnapshotValidationError
+        data = cast(list[object], raw["data"])
+        if len(data) > MAX_CORPORATE_ACTION_EVENTS_V1:
+            raise _CorporateActionSnapshotValidationError
+        events = tuple(_upstox_event(event) for event in data)
+        if len({event.event_digest_sha256 for event in events}) != len(events):
+            raise _CorporateActionSnapshotValidationError
+        return events
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _CorporateActionSnapshotValidationError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ):
+        raise CorporateActionCorruptError("corporate action response corrupt") from None
 
 
 def _parse_upstox_response(payload: bytes) -> tuple[CorporateActionEventV1, ...]:

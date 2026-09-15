@@ -23,6 +23,10 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     current_supplied_cohort_market_regime_runtime_code_identity_v1,
     evaluate_current_supplied_cohort_market_regime_v1,
 )
+from swing_trading_ai_assistant.research_packet.current_price_context import (
+    current_price_context_request_from_canonical_json_bytes_v1,
+    research_current_price_context_v1,
+)
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
@@ -444,6 +448,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
+    price_context_current = commands.add_parser(
+        "price-context-current",
+        help="return independent retained raw current-price context",
+    )
+    price_context_current.add_argument(
+        "--input-file", type=Path, required=True, metavar="ABSOLUTE_OWNER_PRIVATE_JSON"
+    )
+    price_context_current.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    price_context_current.add_argument("--acquire-missing", action="store_true")
+    price_context_current.add_argument("--output", choices=("json",), required=True)
     historical_upstox_raw = commands.add_parser(
         "historical-ohlcv-upstox-raw",
         help="complete one retained Upstox raw daily OHLCV revision",
@@ -562,8 +581,11 @@ def main(
             return _run_research_current_command(
                 args, current_stock_research, current_stock_research_v2
             )
-        if args.command == "regime-current":
-            return _run_current_regime_command(args)
+        if args.command in {"regime-current", "price-context-current"}:
+            return {
+                "regime-current": _run_current_regime_command,
+                "price-context-current": _run_price_context_current_command,
+            }[args.command](args)
         if args.command == "historical-ohlcv-upstox-raw":
             return _run_historical_ohlcv_upstox_raw_command(args)
         if args.command == "historical-ohlcv-upstox-raw-read":
@@ -842,6 +864,31 @@ def _run_public_command(
     exit_code = bounded_nifty50_exit_code(batch.outcome)
     sys.stdout.write(render_bounded_nifty50_read_json(batch).decode("utf-8"))
     return exit_code
+
+
+def _run_price_context_current_command(args: argparse.Namespace) -> int:
+    """Run the closed #188 request without exposing input or private paths."""
+    try:
+        input_file = args.input_file
+        root = args.storage_root
+        if (
+            type(input_file) is not type(Path())
+            or not input_file.is_absolute()
+            or type(root) is not type(Path())
+            or not root.is_absolute()
+            or type(args.acquire_missing) is not bool
+        ):
+            raise _RequestInvalid
+        request = current_price_context_request_from_canonical_json_bytes_v1(
+            _read_current_regime_input(input_file)
+        )
+        result = research_current_price_context_v1(
+            request, root, acquire_missing=args.acquire_missing
+        )
+    except (OSError, ValueError, StorageRootLeaseError, _RequestInvalid):
+        raise _RequestInvalid from None
+    sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
+    return 0
 
 
 def _run_current_regime_command(args: argparse.Namespace) -> int:
