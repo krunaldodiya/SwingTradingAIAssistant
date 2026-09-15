@@ -7,15 +7,21 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
+    CurrentPriceContextClockV1,
+    CurrentPriceContextMemberV1,
+    CurrentRawInvocationControlV1,
+    CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
+    validate_admitted_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.research_packet.current_price_context_runtime_identity_manifest import (
     CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1,
 )
@@ -33,10 +39,6 @@ _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_RESULT_BYTES = 1_048_576
 
 
-class CurrentPriceContextClockV1(Protocol):
-    def now(self) -> datetime: ...
-
-
 def current_price_context_runtime_code_identity_v1() -> str:
     """Verify the reviewed source map before exposing a public result."""
     root = Path(__file__).parent.parent
@@ -48,37 +50,6 @@ def current_price_context_runtime_code_identity_v1() -> str:
             raise ValueError("current price context runtime identity is invalid")
         observed[relative] = actual
     return _digest_value(observed)
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentPriceContextMemberV1:
-    isin: str
-    exchange: Literal["NSE"]
-    instrument_type: Literal["EQUITY"]
-    segment: Literal["EQ"]
-    effective_symbol: str
-    valid_from: date
-    valid_through: date
-
-    def __post_init__(self) -> None:
-        if (
-            type(self.isin) is not str
-            or len(self.isin) != 12
-            or not self.isin.startswith("INE")
-            or self.exchange != "NSE"
-            or self.instrument_type != "EQUITY"
-            or self.segment != "EQ"
-            or type(self.effective_symbol) is not str
-            or not 1 <= len(self.effective_symbol) <= 64
-            or any(
-                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
-                for character in self.effective_symbol
-            )
-            or type(self.valid_from) is not date
-            or type(self.valid_through) is not date
-            or self.valid_from > self.valid_through
-        ):
-            raise ValueError("current price context member is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,15 +293,38 @@ def research_current_price_context_v1(
         != request.data_selection_time.astimezone(_IST).date()
     ):
         raise ValueError("current price context IST date changed")
-    # The retained-only path intentionally never constructs a token provider.
+    # Retained-only is the default and never constructs an acquisition client or
+    # token provider.  A failed existing-root admission is an explicit missing
+    # prerequisite, not permission to create a root or catalog.
     runtime_identity = current_price_context_runtime_code_identity_v1()
-    retained = read_retained_current_raw_context_v1(
-        storage_root,
-        schedule_identity_sha256=request.schedule_identity_sha256,
-        data_selection_time=request.data_selection_time,
-        admission_deadline=request.admission_deadline,
+    raw_input = CurrentRawPriceContextInputV1(
+        request.request_identity_sha256,
+        request.data_selection_time,
+        request.admission_deadline,
+        request.schedule_identity_sha256,
+        request.members,
     )
-    reason = retained.reason or "RAW_CONTEXT_UNAVAILABLE"
+    active_clock = _SystemClock() if clock is None else clock
+    control = CurrentRawInvocationControlV1(
+        active_clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+    )
+    admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    if admitted.lease is None:
+        feature_state: Literal[
+            "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+        ] = "DEPENDENCY_BLOCKED"
+        reasons = ("CALENDAR_PREREQUISITE_MISSING",)
+    else:
+        with admitted.lease as lease:
+            retained = read_retained_current_raw_context_v1(
+                storage_root, request=raw_input, lease=lease, control=control
+            )
+            if retained.admitted is not None:
+                validate_admitted_current_raw_context_v1(retained.admitted)
+            feature_state = retained.state
+            reasons = retained.reasons
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"] = (
         "ACQUIRE_MISSING" if acquire_missing else "RETAINED_ONLY"
     )
@@ -341,21 +335,33 @@ def research_current_price_context_v1(
         contract_version=_RESULT_CONTRACT,
         request_identity_sha256=request.request_identity_sha256,
         schedule_identity_sha256=request.schedule_identity_sha256,
-        ordered_selection_identity_sha256=_digest_value(request.members),
+        ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
         acquisition_mode=acquisition_mode,
         acquisition_outcome=acquisition_outcome,
         features=tuple(
             CurrentPriceContextFeatureV1(
                 question,
-                retained.state,
-                () if retained.state == "OBSERVED" else (reason,),
-                readiness="READY" if retained.state == "OBSERVED" else "WITHHELD",
+                feature_state
+                if question != "RAW_INDUSTRY_PARTICIPATION"
+                else "NOT_ATTEMPTED",
+                reasons
+                if question != "RAW_INDUSTRY_PARTICIPATION"
+                else ("INDUSTRY_REFERENCE_NOT_PROVIDED",),
+                readiness="READY"
+                if feature_state == "OBSERVED"
+                and question != "RAW_INDUSTRY_PARTICIPATION"
+                else "WITHHELD",
             )
             for question in _QUESTIONS
         ),
-        limitations=("RETAINED_CALENDAR_AND_RAW_EVIDENCE_REQUIRED",),
+        limitations=("UPSTOX_RAW_ONLY", "RETAINED_EVIDENCE_REQUIRED"),
         runtime_code_identity_sha256=runtime_identity,
     )
+
+
+class _SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)
 
 
 def _reference_from_value(value: object) -> CurrentIndustryArchiveReferenceV1 | None:
