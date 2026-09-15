@@ -16,6 +16,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .instruments import UPSTOX_NSE_INSTRUMENTS_URL
+
 _MAX_HEADERS = 32
 _MAX_HEADER_BYTES = 8 * 1024
 _MAX_BODY_BYTES = 1_000_000
@@ -155,12 +157,14 @@ def _planned_upstox_url(value: object) -> bool:
     if type(value) is not str or len(value) > 512:
         return False
     parsed = urlsplit(value)
+    if value == UPSTOX_NSE_INSTRUMENTS_URL:
+        return True
     return (
         parsed.scheme == "https"
         and parsed.netloc == _UPSTOX_HOST
         and not parsed.query
         and not parsed.fragment
-        and parsed.path.startswith("/v2/")
+        and (parsed.path.startswith("/v2/") or parsed.path.startswith("/v3/"))
     )
 
 
