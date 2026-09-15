@@ -1,85 +1,72 @@
-"""Bounded #188 missing-evidence acquisition admission.
+"""Bounded retained inspection and missing-work acquisition entrypoint for #188.
 
-This module deliberately owns only effect admission and shared-stop precedence.
-Concrete provider work is supplied by the production composition after a retained
-calendar has proved the physical plan; a missing prerequisite cannot read a
-credential or touch a provider.
+The public boundary supplies only the canonical raw projection, storage root and
+invocation stop control.  It never supplies a credential, provider key, or an
+assertion that physical evidence is complete.  Calendar admission is always
+performed before any future effect-planning phase.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal
 
-
-@dataclass(frozen=True, slots=True)
-class CurrentRawAcquisitionRequestV1:
-    contract_version: Literal["current-raw-acquisition@v1"]
-    schedule_identity_sha256: str
-    requested_at: datetime
-    deadline: datetime
-    member_count: int
-    physical_coverage_complete: bool
-
-    def __post_init__(self) -> None:
-        if (
-            self.contract_version != "current-raw-acquisition@v1"
-            or not _digest(self.schedule_identity_sha256)
-            or not _utc(self.requested_at)
-            or not _utc(self.deadline)
-            or not 1 <= self.member_count <= 50
-            or type(self.physical_coverage_complete) is not bool
-            or not self.requested_at < self.deadline
-            or self.deadline - self.requested_at > timedelta(minutes=30)
-        ):
-            raise ValueError("current raw acquisition request is invalid")
+from .current_raw_price_context import (
+    CurrentRawInvocationControlV1,
+    CurrentRawPriceContextInputV1,
+    read_retained_current_raw_context_v1,
+)
+from .storage_root_lease import StorageRootLease
 
 
 @dataclass(frozen=True, slots=True)
 class CurrentRawAcquisitionResultV1:
+    """Safe accounting for one bounded acquisition invocation.
+
+    ``RETAINED_EVIDENCE_READY`` means inspection established that no provider
+    work is required.  It deliberately does not represent a successful write.
+    """
+
     outcome: Literal[
         "NOT_ATTEMPTED",
         "CALENDAR_PREREQUISITE_MISSING",
-        "CREDENTIALS_UNAVAILABLE",
-        "READY",
+        "RETAINED_EVIDENCE_READY",
     ]
     provider_calls: int
 
     def __post_init__(self) -> None:
-        if self.provider_calls < 0 or (
-            self.outcome != "READY" and self.provider_calls != 0
-        ):
+        if self.provider_calls != 0:
             raise ValueError("current raw acquisition result is invalid")
 
 
 def acquire_missing_current_raw_evidence_v1(
-    request: CurrentRawAcquisitionRequestV1,
-    credential: Callable[[], str],
+    request: CurrentRawPriceContextInputV1,
+    storage_root: Path,
+    *,
+    control: CurrentRawInvocationControlV1,
 ) -> CurrentRawAcquisitionResultV1:
-    """Admit the calendar before lazily obtaining a provider credential.
+    """Inspect retained prerequisites before any acquisition effect is possible.
 
-    No network operation occurs in this narrow admission primitive.  The caller
-    can use ``READY`` only to begin the separately bounded serial effect plan.
+    This deliberately establishes the mandatory calendar/root gate without
+    constructing credential or HTTP machinery.  A future writer phase must use
+    the same canonical request and a fresh retained admission after closing its
+    bounded private transaction; callers cannot bypass this gate with a boolean
+    or callback.
     """
-    if type(request) is not CurrentRawAcquisitionRequestV1 or not callable(credential):
+    if (
+        type(request) is not CurrentRawPriceContextInputV1
+        or type(control) is not CurrentRawInvocationControlV1
+    ):
         raise ValueError("current raw acquisition input is invalid")
-    if not request.physical_coverage_complete:
+    control.ensure_live()
+    admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    if admitted.lease is None:
         return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
-    token = credential()
-    if type(token) is not str or not token:
-        return CurrentRawAcquisitionResultV1("CREDENTIALS_UNAVAILABLE", 0)
-    return CurrentRawAcquisitionResultV1("READY", 0)
-
-
-def _digest(value: object) -> bool:
-    return (
-        type(value) is str
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
-    )
-
-
-def _utc(value: object) -> bool:
-    return type(value) is datetime and value.tzinfo is UTC
+    with admitted.lease as lease:
+        inspected = read_retained_current_raw_context_v1(
+            storage_root, request=request, lease=lease, control=control
+        )
+    if "CALENDAR_PREREQUISITE_MISSING" in inspected.reasons:
+        return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
+    return CurrentRawAcquisitionResultV1("RETAINED_EVIDENCE_READY", 0)

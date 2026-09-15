@@ -7,7 +7,7 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader.py": "e835ca9eef8c45f52b78c763d7df7e8763679a0ec6c5749c4fc67f59c4b6962b",
     "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader_runtime_identity_manifest.py": "6ada364f068168311e82b25952e1a6fe08d090e5808e9121d3bc620e375f2030",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "710b70ae32ff9b0008c21dfcfd04f605bcff9c8cecfa75f14417080be3e857c3",
-    "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "26e7dd15dad424515dd63e492c7e9f91454d4885117d0e83299f9137a5a7f0a6",
+    "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "469b7c7e016f31eed1df9ee027b3cce32381e47db1259f6285e3dfe21e6d2450",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport.py": "f4890bde97ad596a4b06d8185e600697bfebc73afc534605ac541f0b07f7c2d4",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport_runtime_identity_manifest.py": "1ebc41374358be4ffde5eee2dfb72d4998ad74de9d47c6e81323a50713612b84",
     "src/swing_trading_ai_assistant/market_data/current_raw_price_context.py": "1ac39f6ec7144c2b5f5b40d7bd0c7a5eb1748e657b8922e7feb7e1fefafcc58d",
@@ -15,6 +15,6 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_regime/current_raw_price_context.py": "49136a3a1a8991fe64ffde8c70f3ecc9e92dfb6d0973d20ea6e9bceec38672b5",
     "src/swing_trading_ai_assistant/research_packet/__init__.py": "a404388a33d967702a325d111220e7d4b5704cea0a785e0ff01699e87ddba1d7",
-    "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "4efff03cd422a02b00424aa0f818ab884b2a1d0dae5f27329338cca9e334cab5",
+    "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "67e89646b8daed3f38b6cea12a6e401448e8f26b3c3bc31994cf80686161d54e",
     "src/swing_trading_ai_assistant/sector_analysis/current_raw_industry_participation.py": "5362b2a3683f1eb074a179bb8e629f26265e7021f9ed019a71ed5abd4b50276b",
 }

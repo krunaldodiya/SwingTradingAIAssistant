@@ -18,6 +18,9 @@ from swing_trading_ai_assistant.market_data.current_industry_archive_reader impo
 from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
     CurrentIndustryArchiveReferenceV1 as ArchivedIndustryReferenceV1,
 )
+from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
+    acquire_missing_current_raw_evidence_v1,
+)
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextClockV1,
     CurrentPriceContextMemberV1,
@@ -191,7 +194,9 @@ class CurrentPriceContextResultV1:
     schedule_identity_sha256: str
     ordered_selection_identity_sha256: str
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"]
-    acquisition_outcome: Literal["NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING"]
+    acquisition_outcome: Literal[
+        "NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING", "RETAINED_EVIDENCE_READY"
+    ]
     features: tuple[CurrentPriceContextFeatureV1, ...]
     limitations: tuple[str, ...]
     runtime_code_identity_sha256: str
@@ -336,6 +341,13 @@ def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composit
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
     )
+    acquisition_outcome: Literal[
+        "NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING", "RETAINED_EVIDENCE_READY"
+    ] = "NOT_ATTEMPTED"
+    if acquire_missing:
+        acquisition_outcome = acquire_missing_current_raw_evidence_v1(
+            raw_input, storage_root, control=control
+        ).outcome
     industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"] = (
         "NOT_ATTEMPTED"
     )
@@ -410,9 +422,6 @@ def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composit
             reasons = retained.reasons
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"] = (
         "ACQUIRE_MISSING" if acquire_missing else "RETAINED_ONLY"
-    )
-    acquisition_outcome: Literal["NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING"] = (
-        "CALENDAR_PREREQUISITE_MISSING" if acquire_missing else "NOT_ATTEMPTED"
     )
     return CurrentPriceContextResultV1(
         contract_version=_RESULT_CONTRACT,
