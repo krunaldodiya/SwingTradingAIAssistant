@@ -27,6 +27,7 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
+    validate_admitted_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.instruments import (
     UPSTOX_NSE_INSTRUMENTS_URL,
@@ -356,7 +357,9 @@ def test_closed_month_acquisition_retains_real_partition_and_reuses_it(
             control=fixture_control(request),
         )
     assert fresh.state == "OBSERVED" and fresh.admitted is not None
-    assert fresh.admitted.projection.members[0].state == "OBSERVED"
+    assert validate_admitted_current_raw_context_v1(fresh.admitted).members[
+        0
+    ].state == ("OBSERVED")
 
     reused = acquire_missing_current_raw_evidence_v1(
         request, tmp_path / "retained", control=fixture_control(request)
@@ -618,7 +621,9 @@ def test_action_acquisition_retains_singleton_screen_and_reuses_it(
             control=fixture_control(request),
         )
     assert retained.state == "OBSERVED" and retained.admitted is not None
-    member_state = retained.admitted.projection.members[0]
+    member_state = validate_admitted_current_raw_context_v1(retained.admitted).members[
+        0
+    ]
     assert member_state.state == ("INSUFFICIENT_EVIDENCE" if in_window else "OBSERVED")
     assert member_state.reason == ("ACTION_IN_WINDOW" if in_window else None)
 
@@ -717,7 +722,9 @@ def test_current_month_acquisition_publishes_real_partition_then_reuses(
             root, request=request, lease=lease, control=_current_control(request)
         )
     assert fresh.state == "OBSERVED" and fresh.admitted is not None
-    assert fresh.admitted.projection.members[0].state == "OBSERVED"
+    assert validate_admitted_current_raw_context_v1(fresh.admitted).members[
+        0
+    ].state == ("OBSERVED")
 
     reused = acquire_missing_current_raw_evidence_v1(
         request, root, control=_current_control(request)
@@ -791,7 +798,10 @@ def test_current_history_local_refusals_do_not_publish_a_partial_current_snapsho
             root, request=request, lease=lease, control=_current_control(request)
         )
     assert fresh.state == "OBSERVED" and fresh.admitted is not None
-    assert fresh.admitted.projection.members[0].reason == "RAW_PARTITION_CORRUPT"
+    assert (
+        validate_admitted_current_raw_context_v1(fresh.admitted).members[0].reason
+        == "RAW_PARTITION_CORRUPT"
+    )
 
 
 def test_current_missing_token_and_unsafe_root_stop_before_the_opener(

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import pickle
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -16,27 +16,16 @@ from swing_trading_ai_assistant.market_data.current_industry_archive_reader impo
     current_industry_projection_is_admitted_v1,
     read_current_industry_archive_exact_v1,
 )
+from swing_trading_ai_assistant.market_data.current_raw_price_context import (
+    AdmittedCurrentRawContextV1,
+    admitted_current_raw_context_binding_v1,
+)
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
 
 def _forged() -> AdmittedCurrentIndustryProjectionV1:
     candidate = object.__new__(AdmittedCurrentIndustryProjectionV1)
-    for name, value in (
-        ("snapshot_identity_sha256", "a" * 64),
-        ("retained_identity_sha256", "b" * 64),
-        ("original_cohort_identity_sha256", "c" * 64),
-        ("known_at", datetime(2026, 9, 15, 9, tzinfo=UTC)),
-        ("rows", (("INE000A01001", "NSE", "AAA", "Banks"),)),
-        ("raw_input_identity_sha256", "d" * 64),
-        ("raw_request_identity_sha256", "e" * 64),
-        ("ordered_selection_identity_sha256", "f" * 64),
-        ("canonical_cohort_identity_sha256", "0" * 64),
-        ("comparison_session", datetime(2026, 9, 1, tzinfo=UTC).date()),
-        ("decision_session", datetime(2026, 9, 30, tzinfo=UTC).date()),
-        ("evidence_cutoff", datetime(2026, 9, 15, 9, tzinfo=UTC)),
-        ("_seal", object()),
-    ):
-        object.__setattr__(candidate, name, value)
+    object.__setattr__(candidate, "_seal", object())
     return candidate
 
 
@@ -45,13 +34,39 @@ def test_industry_projection_cannot_be_constructed_copied_or_serialized() -> Non
         AdmittedCurrentIndustryProjectionV1()  # type: ignore[call-arg]
     candidate = _forged()
     assert current_industry_projection_is_admitted_v1(candidate) is False
+    assert repr(candidate) == "AdmittedCurrentIndustryProjectionV1()"
+    assert set(asdict(candidate)) == {"_seal"}
+    with pytest.raises(AttributeError):
+        object.__setattr__(candidate, "rows", ())
     for operation in (
         lambda: copy.copy(candidate),
         lambda: copy.deepcopy(candidate),
         lambda: pickle.dumps(candidate),
         lambda: replace(candidate),
+        lambda: json.dumps(candidate),
     ):
         with pytest.raises(TypeError):
+            operation()
+
+
+def test_raw_capability_cannot_be_constructed_or_serialized() -> None:
+    with pytest.raises(TypeError, match="constructor unavailable"):
+        AdmittedCurrentRawContextV1()  # type: ignore[call-arg]
+    candidate = object.__new__(AdmittedCurrentRawContextV1)
+    object.__setattr__(candidate, "_seal", object())
+    assert repr(candidate) == "AdmittedCurrentRawContextV1()"
+    assert set(asdict(candidate)) == {"_seal"}
+    with pytest.raises(AttributeError):
+        object.__setattr__(candidate, "projection", object())
+    for operation in (
+        lambda: copy.copy(candidate),
+        lambda: copy.deepcopy(candidate),
+        lambda: pickle.dumps(candidate),
+        lambda: replace(candidate),
+        lambda: json.dumps(candidate),
+        lambda: admitted_current_raw_context_binding_v1(candidate),
+    ):
+        with pytest.raises((TypeError, ValueError)):
             operation()
 
 

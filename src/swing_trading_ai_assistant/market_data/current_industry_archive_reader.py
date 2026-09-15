@@ -47,9 +47,9 @@ class CurrentIndustryReadFailureV1:
     reason: str
 
 
-@dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
-class AdmittedCurrentIndustryProjectionV1:
-    """Reader-minted, non-serializable Industry authority for one raw context."""
+@dataclass(frozen=True, slots=True)
+class _IndustryProjectionDataV1:
+    """Registry-private verified archive projection, never caller authority."""
 
     snapshot_identity_sha256: str
     retained_identity_sha256: str
@@ -63,10 +63,19 @@ class AdmittedCurrentIndustryProjectionV1:
     comparison_session: date
     decision_session: date
     evidence_cutoff: datetime
+
+
+@dataclass(frozen=True, slots=True, init=False, weakref_slot=True, repr=False)
+class AdmittedCurrentIndustryProjectionV1:
+    """Opaque reader-minted authority for one exact raw capability."""
+
     _seal: object = field(repr=False, compare=False)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("current Industry projection constructor unavailable")
+
+    def __repr__(self) -> str:
+        return "AdmittedCurrentIndustryProjectionV1()"
 
     def __copy__(self) -> AdmittedCurrentIndustryProjectionV1:
         raise TypeError("current Industry projection copy unavailable")
@@ -78,11 +87,15 @@ class AdmittedCurrentIndustryProjectionV1:
     def __reduce__(self) -> str:
         raise TypeError("current Industry projection serialization unavailable")
 
+    def __getstate__(self) -> object:
+        raise TypeError("current Industry projection serialization unavailable")
+
 
 _ADMITTED_PROJECTIONS: dict[
     int,
     tuple[
         weakref.ReferenceType[AdmittedCurrentIndustryProjectionV1],
+        _IndustryProjectionDataV1,
         bytes,
         object,
         tuple[int, int],
@@ -103,23 +116,21 @@ def _mint_admitted_current_industry_projection_v1(
     raw_projection, root_identity = admitted_current_raw_context_binding_v1(raw)
     projection = object.__new__(AdmittedCurrentIndustryProjectionV1)
     seal = object()
-    values = {
-        "snapshot_identity_sha256": snapshot_identity_sha256,
-        "retained_identity_sha256": retained_identity_sha256,
-        "original_cohort_identity_sha256": original_cohort_identity_sha256,
-        "known_at": known_at,
-        "rows": rows,
-        "raw_input_identity_sha256": raw_projection.input_identity_sha256,
-        "raw_request_identity_sha256": raw_projection.request_identity_sha256,
-        "ordered_selection_identity_sha256": raw_projection.ordered_selection_identity_sha256,
-        "canonical_cohort_identity_sha256": raw_projection.canonical_cohort_identity_sha256,
-        "comparison_session": raw_projection.sessions[0].session,
-        "decision_session": raw_projection.sessions[-1].session,
-        "evidence_cutoff": raw_projection.evidence_cutoff,
-        "_seal": seal,
-    }
-    for name, value in values.items():
-        object.__setattr__(projection, name, value)
+    values = _IndustryProjectionDataV1(
+        snapshot_identity_sha256=snapshot_identity_sha256,
+        retained_identity_sha256=retained_identity_sha256,
+        original_cohort_identity_sha256=original_cohort_identity_sha256,
+        known_at=known_at,
+        rows=rows,
+        raw_input_identity_sha256=raw_projection.input_identity_sha256,
+        raw_request_identity_sha256=raw_projection.request_identity_sha256,
+        ordered_selection_identity_sha256=raw_projection.ordered_selection_identity_sha256,
+        canonical_cohort_identity_sha256=raw_projection.canonical_cohort_identity_sha256,
+        comparison_session=raw_projection.sessions[0].session,
+        decision_session=raw_projection.sessions[-1].session,
+        evidence_cutoff=raw_projection.evidence_cutoff,
+    )
+    object.__setattr__(projection, "_seal", seal)
     identity = id(projection)
 
     def _forget(_reference: object, *, _identity: int = identity) -> None:
@@ -127,7 +138,8 @@ def _mint_admitted_current_industry_projection_v1(
 
     _ADMITTED_PROJECTIONS[identity] = (
         weakref.ref(projection, _forget),
-        _canonical({name: value for name, value in values.items() if name != "_seal"}),
+        values,
+        _canonical(values),
         seal,
         root_identity,
         id(raw),
@@ -142,23 +154,19 @@ def current_industry_projection_is_admitted_v1(value: object) -> bool:
     entry = _ADMITTED_PROJECTIONS.get(id(value))
     if entry is None or entry[0]() is not value:
         return False
-    try:
-        current = _projection_values(value)
-    except (AttributeError, TypeError, ValueError):
-        return False
-    return entry[1] == _canonical(current) and entry[2] is object.__getattribute__(
+    return entry[2] == _canonical(entry[1]) and entry[3] is object.__getattribute__(
         value, "_seal"
     )
 
 
 def admitted_current_industry_binding_v1(
     value: object,
-) -> tuple[AdmittedCurrentIndustryProjectionV1, tuple[int, int], int]:
+) -> tuple[_IndustryProjectionDataV1, tuple[int, int], int]:
     if not current_industry_projection_is_admitted_v1(value):
         raise ValueError("current Industry projection is not admitted")
     projection = cast(AdmittedCurrentIndustryProjectionV1, value)
     entry = _ADMITTED_PROJECTIONS[id(projection)]
-    return projection, entry[3], entry[4]
+    return entry[1], entry[4], entry[5]
 
 
 def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existing-only verification transaction
@@ -362,14 +370,6 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
         rows=rows,
         raw=raw,
     )
-
-
-def _projection_values(value: AdmittedCurrentIndustryProjectionV1) -> dict[str, object]:
-    return {
-        item.name: getattr(value, item.name)
-        for item in fields(value)
-        if item.name != "_seal"
-    }
 
 
 def _wire(value: object) -> object:

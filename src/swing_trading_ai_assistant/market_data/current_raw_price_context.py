@@ -277,13 +277,30 @@ class CurrentRawContextProjectionV1:
     bar_basis: Literal["1d-derived-from-retained-1m"] = "1d-derived-from-retained-1m"
 
 
-@dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
+@dataclass(frozen=True, slots=True, init=False, weakref_slot=True, repr=False)
 class AdmittedCurrentRawContextV1:
-    projection: CurrentRawContextProjectionV1
+    """Opaque, process-local authority; the projection remains registry-private."""
+
     _seal: object = field(repr=False, compare=False)
 
     def __init__(self, *_: object, **__: object) -> None:
         raise TypeError("current raw context constructor unavailable")
+
+    def __repr__(self) -> str:
+        return "AdmittedCurrentRawContextV1()"
+
+    def __copy__(self) -> AdmittedCurrentRawContextV1:
+        raise TypeError("current raw context copy unavailable")
+
+    def __deepcopy__(self, memo: object) -> AdmittedCurrentRawContextV1:
+        del memo
+        raise TypeError("current raw context copy unavailable")
+
+    def __reduce__(self) -> str:
+        raise TypeError("current raw context serialization unavailable")
+
+    def __getstate__(self) -> object:
+        raise TypeError("current raw context serialization unavailable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,7 +333,6 @@ def _mint(
 ) -> AdmittedCurrentRawContextV1:
     value = object.__new__(AdmittedCurrentRawContextV1)
     seal = object()
-    object.__setattr__(value, "projection", projection)
     object.__setattr__(value, "_seal", seal)
     identity = id(value)
 
@@ -346,8 +362,7 @@ def admitted_current_raw_context_binding_v1(
     if (
         entry is None
         or entry[0]() is not value
-        or entry[1] is not value.projection
-        or entry[2] != _canonical(value.projection)
+        or entry[2] != _canonical(entry[1])
         or entry[3] is not object.__getattribute__(value, "_seal")
         or type(entry[4]) is not tuple
         or len(entry[4]) != 2

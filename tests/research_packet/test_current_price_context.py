@@ -15,10 +15,18 @@ import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport 
 from swing_trading_ai_assistant.market_data import (
     current_industry_classification as classification,
 )
+from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
+    AdmittedCurrentIndustryProjectionV1,
+    read_current_industry_archive_exact_v1,
+)
+from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
+    CurrentIndustryArchiveReferenceV1 as ReaderIndustryReferenceV1,
+)
 from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
     acquire_missing_current_raw_evidence_v1,
 )
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
+    AdmittedCurrentRawContextV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
@@ -31,6 +39,9 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextRequestV1,
     current_price_context_request_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
+)
+from swing_trading_ai_assistant.sector_analysis.current_raw_industry_participation import (
+    reduce_current_raw_industry_participation_v1,
 )
 from tests.market_data.current_raw_acquisition_fixtures import (
     FixtureTokenProvider,
@@ -175,13 +186,20 @@ def _classification_isin(index: int) -> str:
     raise AssertionError("unreachable ISIN check digit")
 
 
-def _classification_artifact(member: CurrentPriceContextMemberV1) -> bytes:
+def _classification_artifact(
+    members: tuple[CurrentPriceContextMemberV1, ...],
+) -> bytes:
     header = "Company Name,Industry,Symbol,Series,ISIN Code"
     rows = [
-        f"Company {index:03d},Banking,{'ACME' if index == 0 else f'SYM{index:03d}'},EQ,{'INE467B01029' if index == 0 else _classification_isin(index)}"
+        f"Company {index:03d},Banking,OTHER{index:03d},EQ,"
+        f"{_classification_isin(index + 100)}"
         for index in range(100)
     ]
-    rows[0] = f"Company 000,Banking,{member.effective_symbol},EQ,{member.isin}"
+    for index, member in enumerate(members):
+        rows[index] = (
+            f"Company {index:03d},{'Banking' if index % 2 else 'Technology'},"
+            f"{member.effective_symbol},EQ,{member.isin}"
+        )
     return ("\n".join((header, *rows)) + "\n").encode()
 
 
@@ -245,8 +263,7 @@ def _retain_industry_for_raw(
         )
         assert raw.admitted is not None
         projection = validate_admitted_current_raw_context_v1(raw.admitted)
-    member = raw_request.members[0]
-    artifact = _classification_artifact(member)
+    artifact = _classification_artifact(raw_request.members)
     classification_input = _classification_input(artifact)
     parsed = classification.parse_current_industry_artifact_v1(
         classification_input, artifact
@@ -333,6 +350,35 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
         == "ACQUISITION_COMPLETED"
     )
     reference = _retain_industry_for_raw(root, raw_request)
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        raw = read_retained_current_raw_context_v1(
+            root, request=raw_request, lease=lease, control=fixture_control(raw_request)
+        )
+        assert raw.admitted is not None
+        archive = read_current_industry_archive_exact_v1(
+            ReaderIndustryReferenceV1(
+                reference.contract_version,
+                reference.snapshot_identity_sha256,
+                reference.retained_identity_sha256,
+            ),
+            storage_root=root,
+            lease=lease,
+            raw=raw.admitted,
+        )
+        assert isinstance(archive, AdmittedCurrentIndustryProjectionV1)
+        reduced = reduce_current_raw_industry_participation_v1(raw.admitted, archive)
+        assert reduced.evidence_state == "OBSERVED"
+        assert reduced.groups[0].member_count == 1
+        forged_raw = object.__new__(AdmittedCurrentRawContextV1)
+        object.__setattr__(forged_raw, "_seal", object())
+        forged_industry = object.__new__(AdmittedCurrentIndustryProjectionV1)
+        object.__setattr__(forged_industry, "_seal", object())
+        with pytest.raises(ValueError, match="not admitted"):
+            reduce_current_raw_industry_participation_v1(forged_raw, archive)
+        with pytest.raises(ValueError, match="not admitted"):
+            reduce_current_raw_industry_participation_v1(raw.admitted, forged_industry)
 
     result = research_current_price_context_v1(
         _public_request(raw_request, reference),
@@ -599,37 +645,77 @@ def test_public_mixed_two_member_results_preserve_order_and_breadth_denominator(
 
 
 def test_public_n50_success_and_n51_request_rejection_are_effect_bounded(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    base = seed_root(tmp_path / "base")
     members = tuple(_member(index) for index in range(1, 51))
-    request = CurrentPriceContextRequestV1(
-        "current-price-context-request@v1",
-        selected_at,
-        selected_at + timedelta(minutes=30),
-        "a" * 64,
+    raw_request = CurrentRawPriceContextInputV1(
+        base.request_identity_sha256,
+        base.data_selection_time,
+        base.admission_deadline,
+        base.schedule_identity_sha256,
         members,
-        (
-            "RAW_MARKET_STRUCTURE",
-            "RAW_20_SESSION_DIRECTION",
-            "RAW_COHORT_BREADTH",
-            "RAW_INDUSTRY_PARTICIPATION",
-        ),
-        None,
     )
     root = tmp_path / "retained"
-    root.mkdir(mode=0o700)
-    result = research_current_price_context_v1(request, root, clock=_Clock(selected_at))
-    assert len(result.members) == 50
-    assert result.members[0].position == 0 and result.members[-1].position == 49
-    assert len(result.canonical_json_bytes()) <= 1_048_576
+    seed_root(root, retained_action=True, request_value=raw_request)
+    wire = RecordedWire([WireReply(body=historical_body()) for _ in members])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    acquired = acquire_missing_current_raw_evidence_v1(
+        raw_request, root, control=fixture_control(raw_request)
+    )
+    assert acquired.outcome == "ACQUISITION_COMPLETED"
+    assert acquired.provider_calls == wire.attempts == 50
+    reference = _retain_industry_for_raw(root, raw_request)
+    request = _public_request(raw_request, reference)
+    provider_attempts = wire.attempts
+    credential_calls = FixtureTokenProvider.calls
+
+    first = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    second = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+
+    assert len(first.members) == 50
+    assert tuple(item.position for item in first.members) == tuple(range(50))
+    assert tuple(item.isin for item in first.members) == tuple(
+        member.isin for member in members
+    )
+    assert all(item.state == "OBSERVED" for item in first.members)
+    assert first.breadth is not None
+    assert (
+        first.breadth.requested_count,
+        first.breadth.observed_count,
+        first.breadth.advances,
+        first.breadth.declines,
+        first.breadth.unchanged,
+        first.breadth.insufficient_count,
+    ) == (50, 50, 0, 0, 50, 0)
+    assert first.industry_evidence_state == "OBSERVED"
+    assert sum(group.member_count for group in first.industry_groups) == 50
+    assert sum(group.unchanged for group in first.industry_groups) == 50
+    assert first.acquisition_mode == "RETAINED_ONLY"
+    assert first.acquisition_provider_calls == 0
+    assert wire.attempts == provider_attempts == 50
+    assert FixtureTokenProvider.calls == credential_calls
+    assert len(first.canonical_json_bytes()) <= 1_048_576
+    payload = first.canonical_json_bytes().decode()
+    for private in (str(root), "fixture-token", "https://", "Authorization", "raw-"):
+        assert private not in payload
+    assert first == second
+    assert first.result_identity_sha256 == second.result_identity_sha256
+    assert first.canonical_json_bytes() == second.canonical_json_bytes()
 
     with pytest.raises(ValueError, match="request is invalid"):
         CurrentPriceContextRequestV1(
             "current-price-context-request@v1",
-            selected_at,
-            selected_at + timedelta(minutes=30),
-            "a" * 64,
+            raw_request.data_selection_time,
+            raw_request.admission_deadline,
+            raw_request.schedule_identity_sha256,
             members + (_member(51),),
             (
                 "RAW_MARKET_STRUCTURE",
