@@ -9,6 +9,16 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from current_raw_acquisition_fixtures import (
+    FixtureTokenProvider,
+    RecordedWire,
+    WireReply,
+    action_body,
+    historical_body,
+    seed_root,
+)
+from current_raw_acquisition_fixtures import control as fixture_control
+from current_raw_acquisition_fixtures import schedule as fixture_schedule
 
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
@@ -42,20 +52,6 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
 )
 from swing_trading_ai_assistant.sector_analysis.current_raw_industry_participation import (
     reduce_current_raw_industry_participation_v1,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    FixtureTokenProvider,
-    RecordedWire,
-    WireReply,
-    action_body,
-    historical_body,
-    seed_root,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    control as fixture_control,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    schedule as fixture_schedule,
 )
 
 

@@ -25,6 +25,8 @@ from .bharatstock_v2 import (
 from .current_price_context import (
     CurrentIndustryArchiveReferenceV1,
     CurrentPriceContextBreadthV1,
+    CurrentPriceContextFeatureV1,
+    CurrentPriceContextMemberResultV1,
     CurrentPriceContextMemberV1,
     CurrentPriceContextRequestV1,
     CurrentPriceContextResultV1,
@@ -61,6 +63,8 @@ __all__ = [
     "validate_bharatstock_research_packet_v2",
     "CurrentIndustryArchiveReferenceV1",
     "CurrentPriceContextBreadthV1",
+    "CurrentPriceContextFeatureV1",
+    "CurrentPriceContextMemberResultV1",
     "CurrentPriceContextMemberV1",
     "CurrentPriceContextRequestV1",
     "CurrentPriceContextResultV1",

@@ -11,6 +11,26 @@ from types import SimpleNamespace
 from urllib.request import Request
 
 import pytest
+from current_raw_acquisition_fixtures import (
+    FixtureTokenProvider,
+    MutableCancellation,
+    MutableClock,
+    RecordedWire,
+    WireReply,
+    action_body,
+    conflict_action_snapshot,
+    corrupt_action_snapshot,
+    current_history_body,
+    current_month_request,
+    historical_body,
+    intraday_body,
+    remove_action_metadata,
+    seed_root,
+    url_error,
+)
+from current_raw_acquisition_fixtures import control as fixture_control
+from current_raw_acquisition_fixtures import members as fixture_members
+from current_raw_acquisition_fixtures import schedule as fixture_schedule
 
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
@@ -42,32 +62,6 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    FixtureTokenProvider,
-    MutableCancellation,
-    MutableClock,
-    RecordedWire,
-    WireReply,
-    action_body,
-    conflict_action_snapshot,
-    corrupt_action_snapshot,
-    current_history_body,
-    current_month_request,
-    historical_body,
-    intraday_body,
-    remove_action_metadata,
-    seed_root,
-    url_error,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    control as fixture_control,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    members as fixture_members,
-)
-from tests.market_data.current_raw_acquisition_fixtures import (
-    schedule as fixture_schedule,
 )
 
 _FIXTURE_SELECTION = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)

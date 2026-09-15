@@ -183,11 +183,28 @@ _DEFAULT_STORAGE_DIRECTORY = "SwingTradingAIAssistantData"
 class _RequestInvalid(ValueError):
     """An explicitly rejected CLI input or storage admission."""
 
+    def __init__(self, *, already_reported: bool = False) -> None:
+        self.already_reported = already_reported
+
+
+def _render_request_invalid(error: _RequestInvalid) -> None:
+    if not error.already_reported:
+        sys.stderr.write("request_invalid\n")
+
 
 class _ArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
         del message
         self.exit(2, "request_invalid\n")
+
+
+def _parse_cli_args(argv: list[str] | None) -> argparse.Namespace:
+    try:
+        return build_parser().parse_args(argv)
+    except SystemExit as error:
+        if argv and argv[0] == "price-context-current":
+            raise _RequestInvalid(already_reported=True) from error
+        raise
 
 
 class PublicDownloadPortV1(Protocol):
@@ -570,7 +587,7 @@ def main(
         if not _admit_regime_current_argv(argv):
             sys.stderr.write("invalid regime-current request\n")
             return 2
-        args = build_parser().parse_args(argv)
+        args = _parse_cli_args(argv)
         if args.command == "probe-upstox":
             return _run_probe(args)
         if args.command == "cohort-current":
@@ -590,8 +607,8 @@ def main(
         return _run_public_command(
             args, download_service, coverage_service, query_service
         )
-    except _RequestInvalid:
-        sys.stderr.write("request_invalid\n")
+    except _RequestInvalid as error:
+        _render_request_invalid(error)
         return 2
     except Exception:
         sys.stderr.write("internal_error\n")
@@ -897,7 +914,7 @@ def _run_price_context_current_command(
         request, root, acquire_missing=args.acquire_missing, clock=clock
     )
     sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
-    return 0
+    return 0 if all(item.state == "OBSERVED" for item in result.features[:3]) else 1
 
 
 def _run_current_regime_command(args: argparse.Namespace) -> int:

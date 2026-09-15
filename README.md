@@ -129,13 +129,18 @@ market-data price-context-current \
 
 The equivalent SDK is
 `research_current_price_context_v1(request, storage_root, acquire_missing=False)`.
+Both the absolute request file and the existing absolute owner-private storage
+root are required; neither belongs in a public repository or command output.
 Retained-only is the default and does not read credentials or call a provider.
-`--acquire-missing` is explicit, but still requires already-retained exact
-calendar coverage for the selected 21 sessions and physical download plan;
-otherwise it returns a typed calendar-prerequisite outcome before any provider
-or credential effect. The result is raw completed-session context, not adjusted
-or BharatStock data, a recommendation, live-provider proof, or a claim that
-missing evidence is neutral.
+`--acquire-missing` is the explicit, serial, bounded opt-in; it still requires
+already-retained exact calendar coverage for the selected 21 sessions and the
+physical download plan, otherwise it returns a typed calendar-prerequisite
+outcome before any provider or credential effect. Results use only retained
+Upstox raw completed-session provenance (`UPSTOX / RAW / 1d-derived-from-retained-1m`),
+not BharatStock or adjusted prices. Literal `INDUSTRY` participation is local:
+missing or unsupported retained Industry evidence does not suppress independent
+raw facts. The command emits research facts, never an analytic recommendation,
+live/provider proof, or a claim that missing evidence is neutral.
 
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:
