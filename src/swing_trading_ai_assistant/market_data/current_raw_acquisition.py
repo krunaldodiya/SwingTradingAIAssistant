@@ -15,7 +15,10 @@ from pathlib import Path
 from typing import Literal
 
 from .catalog import DuckDBCatalog
-from .current_raw_acquisition_transport import StrictCurrentRawHttpTransportV1
+from .current_raw_acquisition_transport import (
+    StrictCurrentRawHttpTransportV1,
+    StrictCurrentRawOperationV1,
+)
 from .current_raw_price_context import (
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
@@ -109,7 +112,12 @@ def acquire_missing_current_raw_evidence_v1(
     if "CALENDAR_PREREQUISITE_MISSING" in inspected.reasons:
         return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
     if not mapping_missing:
-        return CurrentRawAcquisitionResultV1("RETAINED_EVIDENCE_READY", 0)
+        outcome = (
+            "RETAINED_EVIDENCE_READY"
+            if _retained_evidence_is_ready(inspected)
+            else "NOT_ATTEMPTED"
+        )
+        return CurrentRawAcquisitionResultV1(outcome, 0)
     return _retain_missing_mapping(
         storage_root, root_identity=root_identity, request=request, control=control
     )
@@ -121,6 +129,14 @@ def _mapping_fetch_is_required(inspected: object) -> bool:
         return False
     projection = validate_admitted_current_raw_context_v1(admitted)
     return any(member.reason == "RAW_MAPPING_MISSING" for member in projection.members)
+
+
+def _retained_evidence_is_ready(inspected: object) -> bool:
+    admitted = getattr(inspected, "admitted", None)
+    if admitted is None:
+        return False
+    projection = validate_admitted_current_raw_context_v1(admitted)
+    return all(member.state == "OBSERVED" for member in projection.members)
 
 
 def _retain_missing_mapping(
@@ -151,11 +167,26 @@ def _retain_missing_mapping(
             storage_root, request=request, lease=lease, control=control
         ):
             return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
+        attempts = 0
+
+        def before_open() -> None:
+            nonlocal attempts
+            if attempts != 0:
+                raise RuntimeError("current raw mapping attempt budget exceeded")
+            attempts += 1
+
         with DuckDBCatalog(storage_root, lease=lease) as catalog:
             store = InstrumentSnapshotStoreV1(storage_root, lease, catalog)
             client = InstrumentSnapshotClientV1(
                 StrictCurrentRawHttpTransportV1(
-                    deadline=request.admission_deadline, now=control.now
+                    deadline=request.admission_deadline,
+                    now=control.now,
+                    operation=StrictCurrentRawOperationV1(
+                        "MAPPING",
+                        "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
+                        4_000_000,
+                    ),
+                    before_open=before_open,
                 ),
                 clock=control.now,
             )
@@ -163,7 +194,7 @@ def _retain_missing_mapping(
             control.ensure_live()
             store.retain(fetched, deadline=control)
             control.ensure_live()
-    return CurrentRawAcquisitionResultV1("MAPPING_RETAINED", 1)
+    return CurrentRawAcquisitionResultV1("MAPPING_RETAINED", attempts)
 
 
 def _physical_calendar_prerequisite_is_proven(
@@ -195,7 +226,10 @@ def _physical_calendar_prerequisite_is_proven(
     )[-21:]
     if len(selected) != 21:
         return False
-    current_month = (selected[-1].trade_date.year, selected[-1].trade_date.month)
+    current_month = (
+        control.selection_ist_date.year,
+        control.selection_ist_date.month,
+    )
     for year, month in _selected_months(selected):
         lower = date(year, month, 1)
         upper = (

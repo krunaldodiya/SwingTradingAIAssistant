@@ -145,8 +145,11 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
         deadline: datetime,
         now: object,
         maximum_body_bytes: int,
+        before_open: object | None = None,
     ) -> StrictCurrentRawResponseV1:
         del timeout_seconds, deadline, now, maximum_body_bytes
+        assert callable(before_open)
+        before_open()
         requested.append((url, headers.copy()))
         return StrictCurrentRawResponseV1(
             200, url, (("Content-Type", "application/json"),), body
@@ -170,6 +173,18 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
 
     assert result.outcome == "MAPPING_RETAINED"
     assert result.provider_calls == 1
+    assert requested == [(UPSTOX_NSE_INSTRUMENTS_URL, {"Accept": "application/json"})]
+
+    second = acquire_missing_current_raw_evidence_v1(
+        request,
+        tmp_path,
+        control=CurrentRawInvocationControlV1(
+            _Clock(selection), selection=selection, deadline=request.admission_deadline
+        ),
+    )
+
+    assert second.outcome == "NOT_ATTEMPTED"
+    assert second.provider_calls == 0
     assert requested == [(UPSTOX_NSE_INSTRUMENTS_URL, {"Accept": "application/json"})]
 
 
@@ -214,8 +229,15 @@ def test_missing_physical_calendar_coverage_stops_before_retained_work_inspectio
         "read_retained_current_raw_context_v1",
         forbidden_retained_work,
     )
+    request = CurrentRawPriceContextInputV1(
+        "a" * 64,
+        selection,
+        selection + timedelta(minutes=30),
+        schedule_digest(schedule),
+        (_request(selection).members[0],),
+    )
     result = acquire_missing_current_raw_evidence_v1(
-        _request(selection),
+        request,
         tmp_path,
         control=CurrentRawInvocationControlV1(
             _Clock(selection),

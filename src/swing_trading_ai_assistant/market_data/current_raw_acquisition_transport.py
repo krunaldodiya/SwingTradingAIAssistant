@@ -7,11 +7,11 @@ are accepted only from an exact, preplanned Upstox HTTPS endpoint.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -22,6 +22,7 @@ from .instruments import UPSTOX_NSE_INSTRUMENTS_URL
 _MAX_HEADERS = 32
 _MAX_HEADER_BYTES = 8 * 1024
 _MAX_BODY_BYTES = 1_000_000
+_MAX_MAPPING_BODY_BYTES = 4_000_000
 _UPSTOX_HOST = "api.upstox.com"
 
 
@@ -49,6 +50,31 @@ class CurrentRawDeadlineError(CurrentRawTransportError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class StrictCurrentRawOperationV1:
+    """One immutable, bounded endpoint permission for an acquisition slot."""
+
+    kind: Literal["MAPPING", "HISTORICAL", "INTRADAY", "ACTION"]
+    expected_url: str
+    maximum_body_bytes: int
+
+    def __post_init__(self) -> None:
+        if (
+            self.kind not in {"MAPPING", "HISTORICAL", "INTRADAY", "ACTION"}
+            or not _planned_upstox_url(self.expected_url)
+            or not _valid_body_limit(self.expected_url, self.maximum_body_bytes)
+            or (
+                self.kind == "MAPPING"
+                and (
+                    self.expected_url != UPSTOX_NSE_INSTRUMENTS_URL
+                    or self.maximum_body_bytes != _MAX_MAPPING_BODY_BYTES
+                )
+            )
+            or (self.kind != "MAPPING" and self.maximum_body_bytes != _MAX_BODY_BYTES)
+        ):
+            raise ValueError("strict current raw operation is invalid")
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args: object, **kwargs: object) -> Request | None:
         return None
@@ -63,17 +89,34 @@ class StrictCurrentRawHttpTransportV1:
     bearer header.
     """
 
-    def __init__(self, *, deadline: datetime, now: Callable[[], datetime]) -> None:
+    def __init__(
+        self,
+        *,
+        deadline: datetime,
+        now: Callable[[], datetime],
+        operation: StrictCurrentRawOperationV1 | None = None,
+        before_open: Callable[[], None] | None = None,
+    ) -> None:
         if (
             type(deadline) is not datetime
             or deadline.tzinfo is not UTC
             or not callable(now)
+            or (
+                operation is not None
+                and type(operation) is not StrictCurrentRawOperationV1
+            )
+            or (before_open is not None and not callable(before_open))
         ):
             raise ValueError("strict current raw transport is invalid")
         self._deadline = deadline
         self._now = now
+        self._operation = operation
+        self._before_open = before_open
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        operation = self._operation
+        if operation is not None and url != operation.expected_url:
+            raise CurrentRawProviderResponseError("current raw operation URL refused")
         response = get_strict_current_raw_v1(
             url,
             headers=headers,
@@ -81,8 +124,15 @@ class StrictCurrentRawHttpTransportV1:
             deadline=self._deadline,
             now=self._now,
             maximum_body_bytes=(
-                4_000_000 if url == UPSTOX_NSE_INSTRUMENTS_URL else _MAX_BODY_BYTES
+                operation.maximum_body_bytes
+                if operation is not None
+                else (
+                    _MAX_MAPPING_BODY_BYTES
+                    if url == UPSTOX_NSE_INSTRUMENTS_URL
+                    else _MAX_BODY_BYTES
+                )
             ),
+            before_open=self._before_open,
         )
         return HttpResponse(
             status_code=response.status_code,
@@ -109,6 +159,7 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
     deadline: datetime,
     now: Callable[[], datetime],
     maximum_body_bytes: int = _MAX_BODY_BYTES,
+    before_open: Callable[[], None] | None = None,
 ) -> StrictCurrentRawResponseV1:
     """Perform one exact, bounded GET with status-first failure handling."""
     if (
@@ -118,8 +169,9 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         or not callable(now)
         or type(timeout_seconds) not in (int, float)
         or type(maximum_body_bytes) is not int
-        or not 0 <= maximum_body_bytes <= _MAX_BODY_BYTES
+        or not _valid_body_limit(url, maximum_body_bytes)
         or not _valid_headers(headers)
+        or (before_open is not None and not callable(before_open))
     ):
         raise ValueError("strict current raw request is invalid")
     current = now()
@@ -137,6 +189,8 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         method="GET",  # type: ignore[arg-type]
     )
     opener = build_opener(_NoRedirect())
+    if before_open is not None:
+        before_open()
     try:
         response = opener.open(request, timeout=min(float(timeout_seconds), remaining))
     except HTTPError as error:
@@ -168,8 +222,10 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         final_url = response.geturl()
         if final_url != trusted_url:
             raise CurrentRawProviderResponseError("current raw redirect refused")
-        header_items = tuple((name, value) for name, value in response.headers.items())
-        if not _valid_response_headers(header_items):
+        header_items = _bounded_response_headers(response.headers.items())
+        if not _valid_response_headers(
+            header_items, mapping=(trusted_url == UPSTOX_NSE_INSTRUMENTS_URL)
+        ):
             raise CurrentRawProviderResponseError(
                 "current raw response headers invalid"
             )
@@ -181,7 +237,9 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
             raise ValueError("strict current raw clock is invalid")
         if completed > deadline:
             raise CurrentRawDeadlineError("current raw deadline exceeded")
-        return StrictCurrentRawResponseV1(status, final_url, header_items, body)
+        return StrictCurrentRawResponseV1(
+            status, final_url, cast(tuple[tuple[str, str], ...], header_items), body
+        )
     except BaseException as error:
         primary = error
         raise
@@ -208,6 +266,33 @@ def _planned_upstox_url(value: object) -> bool:
     )
 
 
+def _valid_body_limit(url: object, maximum_body_bytes: int) -> bool:
+    return (
+        0
+        <= maximum_body_bytes
+        <= (
+            _MAX_MAPPING_BODY_BYTES
+            if url == UPSTOX_NSE_INSTRUMENTS_URL
+            else _MAX_BODY_BYTES
+        )
+    )
+
+
+def _bounded_response_headers(value: object) -> tuple[tuple[object, object], ...]:
+    if not isinstance(value, Iterable):
+        return ()
+    headers: list[tuple[object, object]] = []
+    items = cast(Iterable[object], value)
+    for item in items:
+        if len(headers) >= _MAX_HEADERS or not isinstance(item, (tuple, list)):
+            return ()
+        pair = cast(tuple[object, ...] | list[object], item)
+        if len(pair) != 2:
+            return ()
+        headers.append((pair[0], pair[1]))
+    return tuple(headers)
+
+
 def _valid_headers(value: object) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -232,7 +317,9 @@ def _valid_headers(value: object) -> bool:
     return total <= _MAX_HEADER_BYTES
 
 
-def _valid_response_headers(headers: tuple[tuple[object, object], ...]) -> bool:
+def _valid_response_headers(
+    headers: tuple[tuple[object, object], ...], *, mapping: bool
+) -> bool:
     if len(headers) > _MAX_HEADERS:
         return False
     total = 0
@@ -254,10 +341,13 @@ def _valid_response_headers(headers: tuple[tuple[object, object], ...]) -> bool:
             if content_type is not None:
                 return False
             content_type = value.casefold().replace(" ", "")
-    return total <= _MAX_HEADER_BYTES and content_type in {
+    allowed_content_types = {
         "application/json",
         "application/json;charset=utf-8",
     }
+    if mapping:
+        allowed_content_types.update({"application/gzip", "application/octet-stream"})
+    return total <= _MAX_HEADER_BYTES and content_type in allowed_content_types
 
 
 def _raise_status(status: int) -> None:

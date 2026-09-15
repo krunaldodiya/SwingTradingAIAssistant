@@ -202,6 +202,10 @@ class CurrentRawInvocationControlV1:
         self._last = value
         return value
 
+    @property
+    def selection_ist_date(self) -> date:
+        return self._selection.astimezone(_IST).date()
+
     def ensure_live(self) -> None:
         if self.shared_stop is not None:
             raise StorageRootLeaseError("current raw invocation stopped")
@@ -570,7 +574,7 @@ def _member_rows(  # noqa: C901
     )
     rows: list[object] = []
     checksums: list[str] = []
-    current = sessions[-1].session
+    current = control.selection_ist_date
     selected_dates = {item.session for item in sessions}
     for plan in plans:
         control.ensure_live()
