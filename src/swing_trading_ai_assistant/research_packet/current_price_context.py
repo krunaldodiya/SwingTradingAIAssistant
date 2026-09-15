@@ -195,7 +195,10 @@ class CurrentPriceContextResultV1:
     ordered_selection_identity_sha256: str
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"]
     acquisition_outcome: Literal[
-        "NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING", "RETAINED_EVIDENCE_READY"
+        "NOT_ATTEMPTED",
+        "CALENDAR_PREREQUISITE_MISSING",
+        "RETAINED_EVIDENCE_READY",
+        "MAPPING_RETAINED",
     ]
     features: tuple[CurrentPriceContextFeatureV1, ...]
     limitations: tuple[str, ...]
@@ -342,7 +345,10 @@ def research_current_price_context_v1(  # noqa: C901 -- fixed one-lease composit
         deadline=request.admission_deadline,
     )
     acquisition_outcome: Literal[
-        "NOT_ATTEMPTED", "CALENDAR_PREREQUISITE_MISSING", "RETAINED_EVIDENCE_READY"
+        "NOT_ATTEMPTED",
+        "CALENDAR_PREREQUISITE_MISSING",
+        "RETAINED_EVIDENCE_READY",
+        "MAPPING_RETAINED",
     ] = "NOT_ATTEMPTED"
     if acquire_missing:
         acquisition_outcome = acquire_missing_current_raw_evidence_v1(

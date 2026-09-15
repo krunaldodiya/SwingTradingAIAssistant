@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .http import HttpResponse, HttpResponseHeaders
 from .instruments import UPSTOX_NSE_INSTRUMENTS_URL
 
 _MAX_HEADERS = 32
@@ -51,6 +52,45 @@ class CurrentRawDeadlineError(CurrentRawTransportError):
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args: object, **kwargs: object) -> Request | None:
         return None
+
+
+class StrictCurrentRawHttpTransportV1:
+    """One-operation adapter from the strict edge to existing provider clients.
+
+    It intentionally holds only deadline/clock policy; provider clients retain
+    their own fixed URL and response parsers.  Mapping requests are always
+    credential-free, while raw/action clients may carry their already-admitted
+    bearer header.
+    """
+
+    def __init__(self, *, deadline: datetime, now: Callable[[], datetime]) -> None:
+        if (
+            type(deadline) is not datetime
+            or deadline.tzinfo is not UTC
+            or not callable(now)
+        ):
+            raise ValueError("strict current raw transport is invalid")
+        self._deadline = deadline
+        self._now = now
+
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        response = get_strict_current_raw_v1(
+            url,
+            headers=headers,
+            timeout_seconds=30.0,
+            deadline=self._deadline,
+            now=self._now,
+            maximum_body_bytes=(
+                4_000_000 if url == UPSTOX_NSE_INSTRUMENTS_URL else _MAX_BODY_BYTES
+            ),
+        )
+        return HttpResponse(
+            status_code=response.status_code,
+            body=response.body,
+            headers=HttpResponseHeaders.from_items(response.headers),
+            request_url=response.url,
+            response_url=response.url,
+        )
 
 
 @dataclass(frozen=True, slots=True)
