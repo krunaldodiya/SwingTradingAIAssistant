@@ -1,4 +1,4 @@
-"""Focused retained-prerequisite contracts for #188 acquisition planning."""
+"""Focused native retained-inspection contracts for #188 acquisition replanning."""
 
 from __future__ import annotations
 
@@ -47,97 +47,143 @@ class _Clock:
         return self._now
 
 
-def _request(now: datetime) -> CurrentRawPriceContextInputV1:
+def _member(index: int = 0) -> CurrentPriceContextMemberV1:
+    return CurrentPriceContextMemberV1(
+        "INE467B01029" if index == 0 else f"INE{index:09d}",
+        "NSE",
+        "EQUITY",
+        "EQ",
+        "ACME" if index == 0 else f"ACME{index}",
+        date(2020, 1, 1),
+        date(2030, 1, 1),
+    )
+
+
+def _request(
+    now: datetime, members: tuple[CurrentPriceContextMemberV1, ...] | None = None
+) -> CurrentRawPriceContextInputV1:
     return CurrentRawPriceContextInputV1(
         "a" * 64,
         now,
         now + timedelta(minutes=30),
         "b" * 64,
-        (
-            CurrentPriceContextMemberV1(
-                "INE000A01001",
-                "NSE",
-                "EQUITY",
-                "EQ",
-                "ACME",
-                date(2020, 1, 1),
-                date(2030, 1, 1),
-            ),
-        ),
+        (_member(),) if members is None else members,
     )
 
 
-def test_finite_physical_plan_preserves_positions_and_5n_plus_1_bound() -> None:
-    selection = datetime(2026, 10, 1, 9, 59, tzinfo=UTC)
-    selected = tuple(
-        type("Session", (), {"trade_date": date(2026, 9, 10) + timedelta(days=index)})()
-        for index in range(21)
+def _sessions(start: date, count: int = 21) -> tuple[ScheduleSession, ...]:
+    return tuple(
+        ScheduleSession(
+            start + timedelta(days=index),
+            datetime.combine(start + timedelta(days=index), datetime.min.time(), UTC)
+            + timedelta(hours=3, minutes=45),
+            datetime.combine(start + timedelta(days=index), datetime.min.time(), UTC)
+            + timedelta(hours=10),
+            "REGULAR",
+        )
+        for index in range(count)
     )
-    request = _request(selection)
+
+
+def _retain_schedule(root: Path, schedule: ExpectedSessionSchedule) -> None:
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        assert ScheduleEvidenceStore(root, acquired.lease).retain(
+            schedule
+        ).digest == schedule_digest(schedule)
+        with DuckDBCatalog(root, lease=acquired.lease):
+            pass
+    finally:
+        acquired.lease.close()
+
+
+def test_exact_physical_preplan_uses_selection_month_and_completed_today_boundary() -> (
+    None
+):
+    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
     plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
-        request, selected, mapping_reusable=False
+        _request(selection), _sessions(date(2026, 9, 10)), mapping_reusable=False
     )
 
     assert plan.maximum_calls == 6
-    assert plan.mapping.disposition.value == "MISSING"
-    assert plan.members[0].position == 0
-    assert len(plan.members[0].closed) == 1
+    assert [slot.kind for slot in plan.members[0].closed] == ["CLOSED"]
     assert plan.members[0].current_history is None
     assert plan.members[0].intraday is None
     assert plan.members[0].closed[0].disposition.value == "BLOCKED_MAPPING"
 
 
-def test_ledger_counts_only_strict_openers_and_freezes_a_member() -> None:
-    selection = datetime(2026, 10, 1, 9, 59, tzinfo=UTC)
-    selected = tuple(
-        type("Session", (), {"trade_date": date(2026, 9, 10) + timedelta(days=index)})()
-        for index in range(21)
-    )
+def test_completed_today_preplan_reserves_intraday_after_history() -> None:
+    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
     plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
-        _request(selection), selected, mapping_reusable=False
+        _request(selection), _sessions(date(2026, 9, 11)), mapping_reusable=False
+    )
+
+    assert [slot.kind for slot in plan.members[0].closed] == ["CLOSED"]
+    assert plan.members[0].current_history is not None
+    assert plan.members[0].intraday is not None
+    assert plan.members[0].intraday.disposition.value == "BLOCKED_MAPPING"
+
+
+def test_ledger_refuses_reusable_nonacquirable_and_duplicate_slots() -> None:
+    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        _request(selection), _sessions(date(2026, 9, 10)), mapping_reusable=False
     )
     ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
     ledger.before_open("mapping")
     ledger.member_stop(0, "PROVIDER_REFUSED")
-    snapshot = ledger.snapshot()
 
+    with pytest.raises(RuntimeError, match="attempt rejected"):
+        ledger.before_open("mapping")
+    with pytest.raises(RuntimeError, match="attempt rejected"):
+        ledger.before_open(plan.members[0].closed[0].key)
+    snapshot = ledger.snapshot()
     assert snapshot.total_calls == 1
     assert snapshot.mapping.attempts == 1
     assert all(slot.attempts == 0 for slot in snapshot.members[0])
-    with pytest.raises(RuntimeError, match="attempt rejected"):
-        ledger.before_open("mapping")
 
 
-def test_missing_calendar_prerequisite_uses_root_and_control_not_callback(
-    tmp_path: Path,
-) -> None:
+def test_n50_has_exact_three_month_251_bound_and_n51_is_rejected_before_effects() -> (
+    None
+):
+    selection = datetime(2026, 3, 16, 10, 1, tzinfo=UTC)
+    selected = (
+        _sessions(date(2026, 1, 10), 7)
+        + _sessions(date(2026, 2, 10), 7)
+        + _sessions(date(2026, 3, 10), 7)
+    )
+    members = tuple(_member(index) for index in range(50))
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        _request(selection, members), selected, mapping_reusable=False
+    )
+
+    assert plan.maximum_calls == 251
+    assert len(acquisition_module._plan_slots(plan)) == 251  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ValueError, match="input is invalid"):
+        _request(selection, members + (_member(50),))
+
+
+def test_missing_calendar_prerequisite_is_zero_effect(tmp_path: Path) -> None:
     now = datetime(2026, 9, 15, 9, tzinfo=UTC)
-    request = _request(now)
     result = acquire_missing_current_raw_evidence_v1(
-        request,
+        _request(now),
         tmp_path,
         control=CurrentRawInvocationControlV1(
-            _Clock(now), selection=now, deadline=request.admission_deadline
+            _Clock(now), selection=now, deadline=now + timedelta(minutes=30)
         ),
     )
+
     assert result.outcome == "CALENDAR_PREREQUISITE_MISSING"
     assert result.provider_calls == 0
 
 
-def test_missing_mapping_fetches_once_without_constructing_a_token(
+def test_missing_mapping_retains_once_then_freshly_replans_with_native_provider_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A real retained calendar/catalog admits exactly one credential-free fetch."""
+    """The real store/catalog inspector does not infer raw/action readiness."""
     selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
-    sessions = tuple(
-        ScheduleSession(
-            date(2026, 9, 1) + timedelta(days=offset),
-            datetime(2026, 9, 1, 3, 45, tzinfo=UTC) + timedelta(days=offset),
-            datetime(2026, 9, 1, 10, tzinfo=UTC) + timedelta(days=offset),
-            "REGULAR",
-        )
-        for offset in range(31)
-    )
+    sessions = _sessions(date(2026, 9, 1), 31)
     schedule = ExpectedSessionSchedule(
         schema_version=SCHEDULE_SCHEMA_VERSION_V3,
         source="nse-authoritative-calendar",
@@ -148,18 +194,7 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
         covered_to=sessions[-1].trade_date,
         sessions=sessions,
     )
-    acquired = StorageRootLease.try_acquire(tmp_path)
-    assert acquired.outcome is LeaseOutcome.ACQUIRED
-    assert acquired.lease is not None
-    try:
-        retained = ScheduleEvidenceStore(tmp_path, acquired.lease).retain(schedule)
-        assert retained.digest == schedule_digest(schedule)
-        with DuckDBCatalog(tmp_path, lease=acquired.lease):
-            pass
-    finally:
-        acquired.lease.close()
-
-    requested: list[tuple[str, dict[str, str]]] = []
+    _retain_schedule(tmp_path, schedule)
     body = gzip.compress(
         json.dumps(
             [
@@ -167,9 +202,9 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
                     "segment": "NSE_EQ",
                     "name": "Acme Limited",
                     "exchange": "NSE",
-                    "isin": "INE000A01001",
+                    "isin": "INE467B01029",
                     "instrument_type": "EQ",
-                    "instrument_key": "NSE_EQ|INE000A01001",
+                    "instrument_key": "NSE_EQ|INE467B01029",
                     "trading_symbol": "ACME",
                 }
             ],
@@ -177,6 +212,7 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
         ).encode(),
         mtime=0,
     )
+    requested: list[str] = []
 
     def strict_get(
         url: str,
@@ -188,21 +224,22 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
         maximum_body_bytes: int,
         before_open: object | None = None,
     ) -> StrictCurrentRawResponseV1:
-        del timeout_seconds, deadline, now, maximum_body_bytes
+        del headers, timeout_seconds, deadline, now, maximum_body_bytes
         assert callable(before_open)
         before_open()
-        requested.append((url, headers.copy()))
+        requested.append(url)
         return StrictCurrentRawResponseV1(
             200, url, (("Content-Type", "application/json"),), body
         )
 
     monkeypatch.setattr(transport_module, "get_strict_current_raw_v1", strict_get)
+    request = _request(selection)
     request = CurrentRawPriceContextInputV1(
-        "a" * 64,
-        selection,
-        selection + timedelta(minutes=30),
+        request.request_identity_sha256,
+        request.data_selection_time,
+        request.admission_deadline,
         schedule_digest(schedule),
-        (_request(selection).members[0],),
+        request.members,
     )
     result = acquire_missing_current_raw_evidence_v1(
         request,
@@ -214,78 +251,12 @@ def test_missing_mapping_fetches_once_without_constructing_a_token(
 
     assert result.outcome == "MAPPING_RETAINED"
     assert result.provider_calls == 1
-    assert requested == [(UPSTOX_NSE_INSTRUMENTS_URL, {"Accept": "application/json"})]
-
-    second = acquire_missing_current_raw_evidence_v1(
-        request,
-        tmp_path,
-        control=CurrentRawInvocationControlV1(
-            _Clock(selection), selection=selection, deadline=request.admission_deadline
-        ),
+    assert requested == [UPSTOX_NSE_INSTRUMENTS_URL]
+    assert result.plan is not None
+    assert result.plan.members[0].provider_key == "NSE_EQ|INE467B01029"
+    assert result.plan.members[0].closed[0].disposition.value == "MISSING"
+    assert result.plan.members[0].action.disposition.value == "MISSING"
+    assert (
+        result.accounting is not None
+        and result.accounting.mapping.disposition.value == "RETAINED"
     )
-
-    assert second.outcome == "NOT_ATTEMPTED"
-    assert second.provider_calls == 0
-    assert requested == [(UPSTOX_NSE_INSTRUMENTS_URL, {"Accept": "application/json"})]
-
-
-def test_missing_physical_calendar_coverage_stops_before_retained_work_inspection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The selected sessions alone cannot authorize mapping/catalog inspection."""
-    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
-    sessions = tuple(
-        ScheduleSession(
-            date(2026, 9, 11) + timedelta(days=offset),
-            datetime(2026, 9, 11, 3, 45, tzinfo=UTC) + timedelta(days=offset),
-            datetime(2026, 9, 11, 10, tzinfo=UTC) + timedelta(days=offset),
-            "REGULAR",
-        )
-        for offset in range(21)
-    )
-    schedule = ExpectedSessionSchedule(
-        schema_version=SCHEDULE_SCHEMA_VERSION_V3,
-        source="nse-authoritative-calendar",
-        source_release=f"sha256:{'a' * 64}",
-        as_of=selection,
-        timezone="Asia/Kolkata",
-        covered_from=sessions[0].trade_date,
-        covered_to=sessions[-1].trade_date,
-        sessions=sessions,
-    )
-    acquired = StorageRootLease.try_acquire(tmp_path)
-    assert acquired.outcome is LeaseOutcome.ACQUIRED
-    assert acquired.lease is not None
-    try:
-        retained = ScheduleEvidenceStore(tmp_path, acquired.lease).retain(schedule)
-        assert retained.digest == schedule_digest(schedule)
-    finally:
-        acquired.lease.close()
-
-    def forbidden_retained_work(*args: object, **kwargs: object) -> object:
-        raise AssertionError("retained mapping/catalog inspection must not run")
-
-    monkeypatch.setattr(
-        acquisition_module,
-        "read_retained_current_raw_context_v1",
-        forbidden_retained_work,
-    )
-    request = CurrentRawPriceContextInputV1(
-        "a" * 64,
-        selection,
-        selection + timedelta(minutes=30),
-        schedule_digest(schedule),
-        (_request(selection).members[0],),
-    )
-    result = acquire_missing_current_raw_evidence_v1(
-        request,
-        tmp_path,
-        control=CurrentRawInvocationControlV1(
-            _Clock(selection),
-            selection=selection,
-            deadline=selection + timedelta(minutes=30),
-        ),
-    )
-
-    assert result.outcome == "CALENDAR_PREREQUISITE_MISSING"
-    assert result.provider_calls == 0

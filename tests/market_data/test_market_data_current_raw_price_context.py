@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
     CurrentRawInvocationControlV1,
@@ -14,6 +16,7 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 
 
@@ -23,6 +26,19 @@ class _Clock:
 
     def now(self) -> datetime:
         return self.value
+
+
+def test_control_refuses_effects_before_the_selection_instant() -> None:
+    selection = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    control = CurrentRawInvocationControlV1(
+        _Clock(selection - timedelta(seconds=1)),
+        selection=selection,
+        deadline=selection + timedelta(minutes=20),
+    )
+
+    with pytest.raises(StorageRootLeaseError, match="selection not reached"):
+        control.ensure_live()
+    assert control.shared_stop == "SELECTION_NOT_REACHED"
 
 
 def test_missing_retained_calendar_is_a_no_effect_dependency_outcome(

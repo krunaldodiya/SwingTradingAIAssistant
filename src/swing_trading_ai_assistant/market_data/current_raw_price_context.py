@@ -210,6 +210,9 @@ class CurrentRawInvocationControlV1:
         if self.shared_stop is not None:
             raise StorageRootLeaseError("current raw invocation stopped")
         value = self.now()
+        if value < self._selection:
+            self.shared_stop = "SELECTION_NOT_REACHED"
+            raise StorageRootLeaseError("current price context selection not reached")
         if value >= self._deadline:
             self.shared_stop = "DEADLINE_EXCEEDED"
             raise StorageRootLeaseError("current price context deadline exceeded")
