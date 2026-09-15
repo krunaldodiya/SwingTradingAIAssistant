@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass
+import weakref
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo
 
 from . import current_industry_classification as classification
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
@@ -40,19 +42,69 @@ class CurrentIndustryReadFailureV1:
     reason: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
 class AdmittedCurrentIndustryProjectionV1:
-    """Producer-minted private projection; callers receive no source rows."""
+    """An in-process capability minted only after an existing-only read.
+
+    Object identity, not a self-consistent DTO hash, is the admission
+    capability. Reconstructed, copied, and decoded values are unadmitted.
+    """
 
     snapshot_identity_sha256: str
     retained_identity_sha256: str
     original_cohort_identity_sha256: str
     known_at: datetime
     rows: tuple[tuple[str, str, str, str], ...]
+    _seal: object = field(repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        if self.known_at.tzinfo is not UTC or not self.rows:
-            raise ValueError("current industry projection is invalid")
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("current Industry projection constructor unavailable")
+
+
+_ADMITTED_PROJECTIONS: dict[
+    int, tuple[weakref.ReferenceType[AdmittedCurrentIndustryProjectionV1], object]
+] = {}
+
+
+def _mint_admitted_current_industry_projection_v1(
+    *,
+    snapshot_identity_sha256: str,
+    retained_identity_sha256: str,
+    original_cohort_identity_sha256: str,
+    known_at: datetime,
+    rows: tuple[tuple[str, str, str, str], ...],
+) -> AdmittedCurrentIndustryProjectionV1:
+    projection = object.__new__(AdmittedCurrentIndustryProjectionV1)
+    seal = object()
+    for name, value in (
+        ("snapshot_identity_sha256", snapshot_identity_sha256),
+        ("retained_identity_sha256", retained_identity_sha256),
+        ("original_cohort_identity_sha256", original_cohort_identity_sha256),
+        ("known_at", known_at),
+        ("rows", rows),
+        ("_seal", seal),
+    ):
+        object.__setattr__(projection, name, value)
+    identity = id(projection)
+
+    def _forget(_reference: object, *, _identity: int = identity) -> None:
+        _ADMITTED_PROJECTIONS.pop(_identity, None)
+
+    _ADMITTED_PROJECTIONS[identity] = (weakref.ref(projection, _forget), seal)
+    return projection
+
+
+def current_industry_projection_is_admitted_v1(value: object) -> bool:
+    """Return whether ``value`` is the exact producer-minted capability."""
+    if type(value) is not AdmittedCurrentIndustryProjectionV1:
+        return False
+    projection = value
+    entry = _ADMITTED_PROJECTIONS.get(id(projection))
+    return (
+        entry is not None
+        and entry[0]() is projection
+        and entry[1] is object.__getattribute__(projection, "_seal")
+    )
 
 
 def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existing-only verification transaction
@@ -136,6 +188,63 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     return CurrentIndustryReadFailureV1(
                         "CONFLICTED", "CLASSIFICATION_ARTIFACT_SUBSTITUTED"
                     )
+                # Current archives retain only an input identity. Reconstruct the
+                # fixed official-input tuple from the immutable raw bytes and
+                # reproduce the archived snapshot; receipt-carried rows alone
+                # are not an admission authority.
+                input_value = classification.CurrentIndustryClassificationInputV1(
+                    {
+                        "contract_version": "current-supplied-cohort-industry-classification@v1",
+                        "schema_identity_sha256": classification.CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+                        "source_url": "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+                        "source_authority": "NSE_INDICES",
+                        "source_domain": "nsearchives.nseindia.com",
+                        "acquisition_method": "BOUNDED_OFFICIAL_FETCH",
+                        "artifact_byte_count": len(raw),
+                        "artifact_sha256": snapshot.artifact_sha256,
+                        "artifact_revision": f"sha256:{snapshot.artifact_sha256}",
+                        "classification_tier": "INDUSTRY",
+                        "publisher_published_at": None,
+                        "publisher_effective_from": None,
+                        "publisher_effective_through": None,
+                        "publisher_revision": None,
+                        "licence_policy_identity_sha256": classification.CURRENT_INDUSTRY_LICENCE_POLICY_IDENTITY_SHA256,
+                    }
+                )
+                if input_value.input_identity_sha256 != snapshot.input_identity_sha256:
+                    return CurrentIndustryReadFailureV1(
+                        "UNSUPPORTED", "UNSUPPORTED_CLASSIFICATION_SCHEMA"
+                    )
+                parsed = classification.parse_current_industry_artifact_v1(
+                    input_value, raw
+                )
+                if (
+                    type(parsed)
+                    is classification.CurrentIndustryClassificationFailureV1
+                ):
+                    return CurrentIndustryReadFailureV1(
+                        "MALFORMED_EVIDENCE", "CLASSIFICATION_ARTIFACT_MALFORMED"
+                    )
+                reproduced = classification.project_current_supplied_cohort_industry_v1(
+                    cast(classification.ParsedCurrentIndustryArtifactV1, parsed),
+                    snapshot.cohort_identity_sha256,
+                    tuple(
+                        classification.CurrentIndustryCohortMemberV1(
+                            isin=row.isin,
+                            exchange=row.exchange,
+                            effective_symbol=row.effective_symbol,
+                        )
+                        for row in snapshot.private_rows
+                    ),
+                )
+                if (
+                    type(reproduced)
+                    is classification.CurrentIndustryClassificationFailureV1
+                    or reproduced.canonical_json_bytes() != snapshot_raw
+                ):
+                    return CurrentIndustryReadFailureV1(
+                        "CONFLICTED", "CLASSIFICATION_PROJECTION_SUBSTITUTED"
+                    )
                 marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
                     marker_raw, receipt_raw, snapshot
                 )  # pyright: ignore[reportPrivateUsage]
@@ -143,6 +252,8 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     return CurrentIndustryReadFailureV1(
                         "CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED"
                     )
+                classification._validate_archive_directory(root, directory)  # pyright: ignore[reportPrivateUsage]
+                classification._validate_archive_root(root)  # pyright: ignore[reportPrivateUsage]
                 operation.ensure_live()
             finally:
                 os.close(directory)
@@ -160,16 +271,23 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
         return CurrentIndustryReadFailureV1(
             "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_FUTURE_KNOWN"
         )
+    if (
+        candidate.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        != cutoff.astimezone(ZoneInfo("Asia/Kolkata")).date()
+    ):
+        return CurrentIndustryReadFailureV1(
+            "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_STALE"
+        )
     rows = tuple(
         (row.isin, row.exchange, row.effective_symbol, row.industry)
         for row in snapshot.private_rows
     )
-    return AdmittedCurrentIndustryProjectionV1(
-        reference.snapshot_identity_sha256,
-        reference.retained_identity_sha256,
-        snapshot.cohort_identity_sha256,
-        candidate.known_at,
-        rows,
+    return _mint_admitted_current_industry_projection_v1(
+        snapshot_identity_sha256=reference.snapshot_identity_sha256,
+        retained_identity_sha256=reference.retained_identity_sha256,
+        original_cohort_identity_sha256=snapshot.cohort_identity_sha256,
+        known_at=candidate.known_at,
+        rows=rows,
     )
 
 

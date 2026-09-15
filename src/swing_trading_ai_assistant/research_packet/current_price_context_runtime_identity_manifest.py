@@ -4,7 +4,8 @@ from typing import Final
 
 CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/cli.py": "0520cd2d9caca847ae0e4763f35648cb03fd969d567b2a6095b3ad9dd48542ef",
-    "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader.py": "b47f0ca37634ed1a2976b3f40d949f7fdb0477c94b981bccdf6a51445c68edf4",
+    "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader.py": "e835ca9eef8c45f52b78c763d7df7e8763679a0ec6c5749c4fc67f59c4b6962b",
+    "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader_runtime_identity_manifest.py": "6ada364f068168311e82b25952e1a6fe08d090e5808e9121d3bc620e375f2030",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "710b70ae32ff9b0008c21dfcfd04f605bcff9c8cecfa75f14417080be3e857c3",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "26e7dd15dad424515dd63e492c7e9f91454d4885117d0e83299f9137a5a7f0a6",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport.py": "5f7d311e4ffe172b0b9069ad6ac2ed05a8218c7834a471028d04e9ff5cfe6aac",
