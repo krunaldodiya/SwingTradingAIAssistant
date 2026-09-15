@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,10 @@ import pytest
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
-from swing_trading_ai_assistant.market_data.credentials import CredentialNotFoundError
+from swing_trading_ai_assistant.market_data.credentials import (
+    AccessToken,
+    CredentialNotFoundError,
+)
 from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
     acquire_missing_current_raw_evidence_v1,
 )
@@ -40,10 +44,17 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
 )
 from tests.market_data.current_raw_acquisition_fixtures import (
     FixtureTokenProvider,
+    MutableCancellation,
+    MutableClock,
     RecordedWire,
     WireReply,
     action_body,
+    conflict_action_snapshot,
+    corrupt_action_snapshot,
+    current_history_body,
+    current_month_request,
     historical_body,
+    intraday_body,
     remove_action_metadata,
     seed_root,
     url_error,
@@ -51,6 +62,14 @@ from tests.market_data.current_raw_acquisition_fixtures import (
 from tests.market_data.current_raw_acquisition_fixtures import (
     control as fixture_control,
 )
+from tests.market_data.current_raw_acquisition_fixtures import (
+    members as fixture_members,
+)
+from tests.market_data.current_raw_acquisition_fixtures import (
+    schedule as fixture_schedule,
+)
+
+_FIXTURE_SELECTION = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
 
 
 class _Clock:
@@ -477,31 +496,45 @@ def test_action_local_failures_preserve_admissible_raw_without_repair(
     assert result.accounting.members[0][-1].disposition.value == "FAILED"
 
 
+def _expired_control(
+    request: CurrentRawPriceContextInputV1,
+) -> CurrentRawInvocationControlV1:
+    return CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.data_selection_time,
+    )
+
+
+def _cancelled_control(
+    request: CurrentRawPriceContextInputV1,
+) -> CurrentRawInvocationControlV1:
+    cancellation = MutableCancellation()
+    cancellation.cancelled = True
+    return CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=cancellation,
+    )
+
+
 @pytest.mark.parametrize(
     "control_factory",
-    [
-        lambda request: CurrentRawInvocationControlV1(
-            _Clock(request.data_selection_time),
-            selection=request.data_selection_time,
-            deadline=request.data_selection_time,
-        ),
-        lambda request: CurrentRawInvocationControlV1(
-            _Clock(request.data_selection_time),
-            selection=request.data_selection_time,
-            deadline=request.admission_deadline,
-            cancellation=SimpleNamespace(is_cancelled=lambda: True),
-        ),
-    ],
+    [_expired_control, _cancelled_control],
     ids=["deadline", "cancellation"],
 )
 def test_initial_deadline_or_cancellation_is_zero_effect(
-    tmp_path: Path, control_factory: object
+    tmp_path: Path,
+    control_factory: Callable[
+        [CurrentRawPriceContextInputV1], CurrentRawInvocationControlV1
+    ],
 ) -> None:
     request = seed_root(tmp_path / "retained", retained_action=True)
     result = acquire_missing_current_raw_evidence_v1(
         request,
         tmp_path / "retained",
-        control=control_factory(request),  # type: ignore[operator]
+        control=control_factory(request),
     )
     assert result.outcome == "STOPPED"
     assert result.provider_calls == 0
@@ -572,7 +605,7 @@ def test_action_acquisition_retains_singleton_screen_and_reuses_it(
     assert retained.state == "OBSERVED" and retained.admitted is not None
     member_state = retained.admitted.projection.members[0]
     assert member_state.state == ("INSUFFICIENT_EVIDENCE" if in_window else "OBSERVED")
-    assert member_state.reason == ("SCREEN_UNAVAILABLE" if in_window else None)
+    assert member_state.reason == ("ACTION_IN_WINDOW" if in_window else None)
 
     reused = acquire_missing_current_raw_evidence_v1(
         request, root, control=fixture_control(request)
@@ -580,3 +613,430 @@ def test_action_acquisition_retains_singleton_screen_and_reuses_it(
     assert reused.outcome == "RETAINED_EVIDENCE_READY"
     assert reused.provider_calls == 0
     assert wire.attempts == 1
+
+
+def _current_root(
+    root: Path, *, completed_today: bool
+) -> tuple[CurrentRawPriceContextInputV1, ExpectedSessionSchedule]:
+    request, schedule = current_month_request(completed_today=completed_today)
+    assert seed_root(root, schedule_value=schedule, request_value=request) == request
+    return request, schedule
+
+
+def _current_control(
+    request: CurrentRawPriceContextInputV1,
+    cancellation: MutableCancellation | None = None,
+) -> CurrentRawInvocationControlV1:
+    return CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=cancellation,
+    )
+
+
+@pytest.mark.parametrize(
+    "completed_today", [False, True], ids=["history", "history-intraday"]
+)
+def test_current_month_acquisition_publishes_real_partition_then_reuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completed_today: bool
+) -> None:
+    root = tmp_path / "retained"
+    request, schedule = _current_root(root, completed_today=completed_today)
+    today = request.data_selection_time.date()
+    wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule, through=today - timedelta(days=1))
+            ),
+            *(
+                [WireReply(body=intraday_body(schedule, day=today))]
+                if completed_today
+                else []
+            ),
+            WireReply(body=action_body()),
+        ]
+    )
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+
+    expected_urls = [
+        "https://api.upstox.com/v3/historical-candle/"
+        "NSE_EQ%7CINE467B01029/minutes/1/2026-09-29/2026-09-01"
+    ]
+    if completed_today:
+        expected_urls.append(
+            "https://api.upstox.com/v3/historical-candle/intraday/"
+            "NSE_EQ%7CINE467B01029/minutes/1"
+        )
+    expected_urls.append(
+        "https://api.upstox.com/v2/fundamentals/INE467B01029/corporate-actions"
+    )
+    assert result.outcome == "ACQUISITION_COMPLETED"
+    assert result.provider_calls == wire.attempts == len(expected_urls)
+    assert FixtureTokenProvider.calls == 1
+    assert [item.full_url for item in wire.requests] == expected_urls
+    assert all(
+        item.get_header("Authorization") == "Bearer fixture-token"
+        for item in wire.requests
+    )
+    assert result.accounting is not None
+    member = result.accounting.members[0]
+    assert [slot.attempts for slot in member] == (
+        [1, 1, 1] if completed_today else [1, 1]
+    )
+    assert all(slot.disposition.value == "RETAINED" for slot in member if slot.attempts)
+    assert "fixture-token" not in repr(result)
+
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        fresh = read_retained_current_raw_context_v1(
+            root, request=request, lease=lease, control=_current_control(request)
+        )
+    assert fresh.state == "OBSERVED" and fresh.admitted is not None
+    assert fresh.admitted.projection.members[0].state == "OBSERVED"
+
+    reused = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+    assert reused.outcome == "RETAINED_EVIDENCE_READY"
+    assert reused.provider_calls == 0
+    assert wire.attempts == len(expected_urls)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        WireReply(status=404),
+        WireReply(status=408),
+        WireReply(status=500),
+        url_error(),
+        WireReply(body=b"{}", response_url="https://wrong.example/"),
+        WireReply(body=b"{}"),
+        WireReply(body=b"x" * 1_000_001),
+        WireReply(
+            body=b"{}",
+            headers=(
+                ("Content-Type", "application/json"),
+                ("Content-Encoding", "gzip"),
+            ),
+        ),
+        WireReply(body=b'{"status":"success","data":{"candles":[]}}'),
+    ],
+    ids=[
+        "404",
+        "408",
+        "500",
+        "network",
+        "redirect",
+        "bad",
+        "oversize",
+        "encoded",
+        "parser",
+    ],
+)
+def test_current_history_local_refusals_do_not_publish_a_partial_current_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply: WireReply
+) -> None:
+    root = tmp_path / "retained"
+    request, _schedule = _current_root(root, completed_today=False)
+    wire = RecordedWire([reply])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert result.accounting is not None
+    history, action = result.accounting.members[0]
+    assert (history.attempts, history.disposition.value, history.reason) == (
+        1,
+        "ABORTED_BEFORE_CATALOG_COMMIT",
+        "PROVIDER_OR_DATA_FAILURE",
+    )
+    assert action.attempts == 0
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        fresh = read_retained_current_raw_context_v1(
+            root, request=request, lease=lease, control=_current_control(request)
+        )
+    assert fresh.state == "OBSERVED" and fresh.admitted is not None
+    assert fresh.admitted.projection.members[0].reason == "RAW_PARTITION_CORRUPT"
+
+
+def test_current_missing_token_and_unsafe_root_stop_before_the_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class MissingToken:
+        def get_access_token(self) -> AccessToken:
+            raise CredentialNotFoundError("fixture-token")
+
+    root = tmp_path / "retained"
+    request, _schedule = _current_root(root, completed_today=False)
+    wire = RecordedWire([WireReply(body=b"{}")])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", MissingToken
+    )
+
+    missing_token = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+    assert missing_token.outcome == "STOPPED"
+    assert missing_token.provider_calls == wire.attempts == 0
+    assert "fixture-token" not in repr(missing_token)
+
+    root.chmod(0o755)
+    unsafe_root = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+    assert unsafe_root.outcome == "STOPPED"
+    assert unsafe_root.provider_calls == wire.attempts == 0
+
+
+@pytest.mark.parametrize(
+    "stage", ["history", "intraday"], ids=["between", "before-publication"]
+)
+def test_current_interruption_discards_all_staged_current_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    root = tmp_path / "retained"
+    request, schedule = _current_root(root, completed_today=True)
+    cancellation = MutableCancellation()
+    history = WireReply(
+        body=current_history_body(
+            schedule, through=request.data_selection_time.date() - timedelta(days=1)
+        )
+    )
+    intraday = WireReply(
+        body=intraday_body(schedule, day=request.data_selection_time.date())
+    )
+    (history if stage == "history" else intraday).on_read = lambda: setattr(
+        cancellation, "cancelled", True
+    )
+    wire = RecordedWire([history, intraday, WireReply(body=action_body())])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request, cancellation)
+    )
+
+    expected_calls = 1 if stage == "history" else 2
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == expected_calls
+    assert result.accounting is not None
+    slots = result.accounting.members[0]
+    assert [slot.disposition.value for slot in slots[:2]] == [
+        "ABORTED_BEFORE_CATALOG_COMMIT",
+        "NOT_ATTEMPTED_SHARED_STOP"
+        if stage == "history"
+        else "ABORTED_BEFORE_CATALOG_COMMIT",
+    ]
+    assert slots[-1].attempts == 0
+
+
+def test_current_root_replacement_before_publication_stops_without_catalog_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request, schedule = _current_root(root, completed_today=False)
+    displaced = tmp_path / "displaced"
+
+    def replace_root() -> None:
+        root.rename(displaced)
+        root.mkdir(mode=0o700)
+
+    wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(
+                    schedule,
+                    through=request.data_selection_time.date() - timedelta(days=1),
+                ),
+                on_read=replace_root,
+            )
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    assert (
+        result.accounting.members[0][0].disposition.value
+        == "ABORTED_BEFORE_CATALOG_COMMIT"
+    )
+    assert not (root / "market_data.duckdb").exists()
+    assert not any(
+        path.name == "provisional_partitions" for path in displaced.iterdir()
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (corrupt_action_snapshot, "ACTION_CORRUPT"),
+        (conflict_action_snapshot, "ACTION_AMBIGUOUS"),
+    ],
+    ids=["corrupt", "conflicted"],
+)
+def test_preexisting_action_defects_are_explicit_and_never_repaired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutate: Callable[[Path], None],
+    reason: str,
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True)
+    bootstrap = RecordedWire([WireReply(body=historical_body())])
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            request, root, control=fixture_control(request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    mutate(root)
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == 0
+    assert result.plan is not None
+    assert result.plan.members[0].action.reason == reason
+
+
+def _two_member_request() -> CurrentRawPriceContextInputV1:
+    return CurrentRawPriceContextInputV1(
+        "c" * 64,
+        _FIXTURE_SELECTION,
+        _FIXTURE_SELECTION + timedelta(minutes=20),
+        schedule_digest(fixture_schedule()),
+        fixture_members(2),
+    )
+
+
+def test_two_members_continue_after_local_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    wire = RecordedWire([WireReply(status=404), WireReply(body=historical_body())])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_PARTIAL"
+    assert result.provider_calls == wire.attempts == 2
+    assert result.accounting is not None
+    first, second = result.accounting.members
+    assert first[0].disposition.value == "FAILED"
+    assert second[0].disposition.value == "RETAINED"
+
+
+@pytest.mark.parametrize(
+    ("reply", "reason"),
+    [
+        (WireReply(status=401), "AUTHENTICATION_FAILED"),
+        (WireReply(status=429), "RATE_LIMITED"),
+    ],
+)
+def test_two_members_shared_provider_stops_prevent_every_later_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply: WireReply, reason: str
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    wire = RecordedWire([reply])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    assert all(
+        slot.reason == reason for member in result.accounting.members for slot in member
+    )
+
+
+@pytest.mark.parametrize("stop", ["deadline", "cancellation"])
+def test_two_members_deadline_or_cancellation_stops_before_every_later_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: str
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    clock = MutableClock(request.data_selection_time)
+    cancellation = MutableCancellation()
+
+    def stop_after_first_response() -> None:
+        if stop == "deadline":
+            clock.now_value = request.admission_deadline
+        else:
+            cancellation.cancelled = True
+
+    wire = RecordedWire(
+        [WireReply(body=historical_body(), on_read=stop_after_first_response)]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    control = CurrentRawInvocationControlV1(
+        clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=cancellation,
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(request, root, control=control)
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    assert all(
+        slot.attempts == 0
+        for member in result.accounting.members[1:]
+        for slot in member
+    )

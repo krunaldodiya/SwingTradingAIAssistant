@@ -579,9 +579,12 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                         storage_root, request, control, ledger
                     )
                 except BaseException as error:
-                    _mark_current_failed(
-                        ledger, position, member, _local_effect_reason(error)
-                    )
+                    try:
+                        reason = _local_effect_reason(error)
+                    except _SharedAcquisitionStop as stop:
+                        _mark_current_failed(ledger, position, member, stop.reason)
+                        raise
+                    _mark_current_failed(ledger, position, member, reason)
                     continue
 
         for position in range(len(plan.members)):
@@ -983,16 +986,12 @@ def _advance_current_month_once(
                 guard.now(),
             )
             instrument = _instrument_for_member(member, history)
-            physical = (
-                history.plan
-                if history is not None and history.plan is not None
-                else plan_upstox_equity_months(
-                    instrument,
-                    date(open_plan.month_start.year, open_plan.month_start.month, 1),
-                    selected_to,
-                    "1m",
-                )[0]
-            )
+            physical = plan_upstox_equity_months(
+                instrument,
+                date(open_plan.month_start.year, open_plan.month_start.month, 1),
+                selected_to,
+                "1m",
+            )[0]
             metadata = catalog.latest_provisional_partition_for_symbol(
                 segment="NSE_EQ",
                 symbol=instrument.symbol,

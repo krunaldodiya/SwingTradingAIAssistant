@@ -32,6 +32,8 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
 from swing_trading_ai_assistant.market_data.current_corporate_action_screen import (
     CurrentSuppliedCohortCorporateActionScreenInputV1,
     CurrentSuppliedCohortCorporateActionScreenResolverV1,
+    PrivateCorporateActionScreenOutcomeV1,
+    PublishedCurrentCorporateActionScreenV1,
     UpstoxCorporateActionScreenProviderV1,
     publish_current_corporate_action_screen_v1,
     published_current_corporate_action_screen_is_exact_valid_v1,
@@ -477,6 +479,16 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             )
                         )
                         continue
+                    if screen.action_observed:
+                        members.append(
+                            _member_failure(
+                                position,
+                                member,
+                                "INSUFFICIENT_EVIDENCE",
+                                "ACTION_IN_WINDOW",
+                            )
+                        )
+                        continue
                     bars = tuple(
                         MarketStructureMathBarV1(
                             session.session,
@@ -509,7 +521,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             None,
                             resolved.metadata.observation_sha256,
                             checksums,
-                            screen,
+                            screen.identity_sha256,
                         )
                     )
                     receipts.extend((resolved, checksums, screen))
@@ -642,6 +654,12 @@ def _member_rows(  # noqa: C901
     return tuple(rows), tuple(checksums)
 
 
+@dataclass(frozen=True, slots=True)
+class _ActionScreenResolutionV1:
+    identity_sha256: str | None
+    action_observed: bool
+
+
 def _screen(
     root: Path,
     lease: StorageRootLease,
@@ -653,7 +671,7 @@ def _screen(
     cutoff: datetime,
     schedule_source: str,
     schedule_source_release: str,
-) -> str | None:
+) -> _ActionScreenResolutionV1 | None:
     manifest = CurrentSuppliedCohortManifestV1(
         request.data_selection_time,
         (CurrentCohortMemberV1(member.isin, member.effective_symbol),),
@@ -677,7 +695,7 @@ def _screen(
     published = publish_current_corporate_action_screen_v1(
         resolver.resolve_exact(input_value, lease)
     )
-    if not published_current_corporate_action_screen_is_exact_valid_v1(
+    if published_current_corporate_action_screen_is_exact_valid_v1(
         published,
         cohort_identity_sha256=manifest.cohort_identity_sha256,
         comparison_session=sessions[0].session,
@@ -688,8 +706,31 @@ def _screen(
         schedule_source_release=schedule_source_release,
         expected_isins=(member.isin,),
     ):
-        return None
-    return published.public_report.request_identity_sha256
+        return _ActionScreenResolutionV1(
+            published.public_report.request_identity_sha256, False
+        )
+    if (
+        type(published) is PublishedCurrentCorporateActionScreenV1
+        and published.private_result.outcome
+        is PrivateCorporateActionScreenOutcomeV1.ACTION_OBSERVED
+        and published.private_result.selected_snapshot_set_identity_sha256 is None
+        and published.private_result.cohort_identity_sha256
+        == manifest.cohort_identity_sha256
+        and published.private_result.comparison_session == sessions[0].session
+        and published.private_result.decision_session == sessions[-1].session
+        and published.private_result.decision_cutoff == cutoff
+        and published.private_result.schedule_evidence_sha256
+        == request.schedule_identity_sha256
+        and published.private_result.schedule_source == schedule_source
+        and published.private_result.schedule_source_release == schedule_source_release
+        and tuple(
+            item.provider_result.isin
+            for item in published.private_result.member_results
+        )
+        == (member.isin,)
+    ):
+        return _ActionScreenResolutionV1(None, True)
+    return None
 
 
 def _member_failure(

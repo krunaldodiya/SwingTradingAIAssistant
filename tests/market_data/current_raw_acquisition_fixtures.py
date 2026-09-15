@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -44,6 +45,9 @@ _SELECTION = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
 _MEMBER = CurrentPriceContextMemberV1(
     "INE467B01029", "NSE", "EQUITY", "EQ", "ACME", date(2020, 1, 1), date(2030, 1, 1)
 )
+_MEMBER_TWO = CurrentPriceContextMemberV1(
+    "INE467B01037", "NSE", "EQUITY", "EQ", "BETA", date(2020, 1, 1), date(2030, 1, 1)
+)
 
 
 class FixedClock:
@@ -71,6 +75,22 @@ class FixtureTokenProvider:
         return AccessToken("fixture-token")
 
 
+class MutableCancellation:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def is_cancelled(self) -> bool:
+        return self.cancelled
+
+
+class MutableClock:
+    def __init__(self, now: datetime = _SELECTION) -> None:
+        self.now_value = now
+
+    def now(self) -> datetime:
+        return self.now_value
+
+
 @dataclass
 class WireReply:
     status: int = 200
@@ -78,6 +98,7 @@ class WireReply:
     headers: tuple[tuple[str, str], ...] = (("Content-Type", "application/json"),)
     response_url: str | None = None
     error: BaseException | None = None
+    on_read: Callable[[], None] | None = None
 
 
 @dataclass
@@ -114,6 +135,8 @@ class _WireResponse:
 
     def read(self, size: int) -> bytes:
         self.read_sizes.append(size)
+        if self._reply.on_read is not None:
+            self._reply.on_read()
         return self._reply.body
 
     def close(self) -> None:
@@ -150,14 +173,77 @@ def schedule() -> ExpectedSessionSchedule:
 
 def request(
     schedule_value: ExpectedSessionSchedule | None = None,
+    *,
+    selection: datetime = _SELECTION,
+    members: tuple[CurrentPriceContextMemberV1, ...] = (_MEMBER,),
 ) -> CurrentRawPriceContextInputV1:
     value = schedule() if schedule_value is None else schedule_value
     return CurrentRawPriceContextInputV1(
         "c" * 64,
-        _SELECTION,
-        _SELECTION + timedelta(minutes=20),
+        selection,
+        selection + timedelta(minutes=20),
         schedule_digest(value),
-        (_MEMBER,),
+        members,
+    )
+
+
+def members(count: int) -> tuple[CurrentPriceContextMemberV1, ...]:
+    if count == 1:
+        return (_MEMBER,)
+    if count == 2:
+        return (_MEMBER, _MEMBER_TWO)
+    raise ValueError("fixture member count is invalid")
+
+
+def current_month_schedule(selection: datetime) -> ExpectedSessionSchedule:
+    days = tuple(date(2026, 9, 1) + timedelta(days=index) for index in range(30))
+    sessions = tuple(
+        ScheduleSession(
+            day,
+            datetime(day.year, day.month, day.day, 3, 45, tzinfo=UTC),
+            datetime(day.year, day.month, day.day, 3, 46, tzinfo=UTC),
+            "REGULAR",
+        )
+        for day in days
+        if day.weekday() < 5
+    )
+    closures = tuple(
+        ScheduleClosure(day, "WEEKEND") for day in days if day.weekday() >= 5
+    )
+    return ExpectedSessionSchedule(
+        SCHEDULE_SCHEMA_VERSION_V3,
+        "nse-authoritative-calendar",
+        "sha256:" + "a" * 64,
+        selection,
+        "Asia/Kolkata",
+        days[0],
+        days[-1],
+        sessions,
+        closures,
+    )
+
+
+def current_month_request(
+    *, completed_today: bool
+) -> tuple[CurrentRawPriceContextInputV1, ExpectedSessionSchedule]:
+    selection = datetime(2026, 9, 30, 3, 47 if completed_today else 45, 0, tzinfo=UTC)
+    if not completed_today:
+        selection = selection.replace(second=30)
+    value = current_month_schedule(selection)
+    return request(value, selection=selection), value
+
+
+def current_history_body(
+    schedule_value: ExpectedSessionSchedule, *, through: date
+) -> bytes:
+    return historical_body(
+        tuple(item for item in schedule_value.sessions if item.trade_date <= through)
+    )
+
+
+def intraday_body(schedule_value: ExpectedSessionSchedule, *, day: date) -> bytes:
+    return historical_body(
+        tuple(item for item in schedule_value.sessions if item.trade_date == day)
     )
 
 
@@ -171,8 +257,8 @@ def control(
     )
 
 
-def historical_body(value: ExpectedSessionSchedule | None = None) -> bytes:
-    schedule_value = schedule() if value is None else value
+def historical_body(value: tuple[ScheduleSession, ...] | None = None) -> bytes:
+    sessions = schedule().sessions if value is None else value
     candles = [
         [
             session.open_at.isoformat(),
@@ -183,7 +269,7 @@ def historical_body(value: ExpectedSessionSchedule | None = None) -> bytes:
             10,
             None,
         ]
-        for session in schedule_value.sessions
+        for session in sessions
     ]
     return json.dumps({"status": "success", "data": {"candles": candles}}).encode()
 
@@ -216,13 +302,16 @@ def seed_root(
     *,
     retained_action: bool = False,
     action_in_window: bool = False,
+    schedule_value: ExpectedSessionSchedule | None = None,
+    request_value: CurrentRawPriceContextInputV1 | None = None,
 ) -> CurrentRawPriceContextInputV1:
     root.mkdir(mode=0o700)
     acquired = StorageRootLease.try_acquire(root)
     assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
     lease = acquired.lease
-    value = schedule()
-    request_value = request(value)
+    value = schedule() if schedule_value is None else schedule_value
+    request_value = request(value) if request_value is None else request_value
+    clock = FixedClock(request_value.data_selection_time)
     try:
         ScheduleEvidenceStore(root, lease).retain(value)
         with DuckDBCatalog(root, lease=lease) as catalog:
@@ -231,31 +320,67 @@ def seed_root(
                     [
                         {
                             "segment": "NSE_EQ",
-                            "name": "Acme Limited",
+                            "name": f"{member.effective_symbol} Limited",
                             "exchange": "NSE",
-                            "isin": _MEMBER.isin,
+                            "isin": member.isin,
                             "instrument_type": "EQ",
-                            "instrument_key": "NSE_EQ|INE467B01029",
-                            "trading_symbol": _MEMBER.effective_symbol,
+                            "instrument_key": f"NSE_EQ|{member.isin}",
+                            "trading_symbol": member.effective_symbol,
                         }
+                        for member in request_value.members
                     ],
                     separators=(",", ":"),
                 ).encode(),
                 mtime=0,
             )
             snapshot = InstrumentSnapshotClientV1(
-                StaticTransport(mapping_payload), clock=FixedClock().now
+                StaticTransport(mapping_payload), clock=clock.now
             ).fetch()
             InstrumentSnapshotStoreV1(root, lease, catalog).retain(snapshot)
             if retained_action:
-                action = UpstoxCorporateActionsClientV1(
-                    StaticTransport(action_body(in_window=action_in_window)),
-                    clock=FixedClock().now,
-                ).fetch_strict(_MEMBER.isin, "fixture-token")
-                CorporateActionSnapshotStoreV1(root, lease, catalog).retain(action)
+                for member in request_value.members:
+                    action = UpstoxCorporateActionsClientV1(
+                        StaticTransport(action_body(in_window=action_in_window)),
+                        clock=clock.now,
+                    ).fetch_strict(member.isin, "fixture-token")
+                    CorporateActionSnapshotStoreV1(root, lease, catalog).retain(action)
     finally:
         lease.close()
     return request_value
+
+
+def corrupt_action_snapshot(root: Path) -> None:
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            metadata, _snapshot = CorporateActionSnapshotStoreV1(
+                root, acquired.lease, catalog
+            ).resolve(isin=_MEMBER.isin, knowledge_cutoff=_SELECTION)
+            path = root / metadata.relative_object_path
+            path.chmod(0o600)
+            path.write_bytes(b"corrupt")
+    finally:
+        acquired.lease.close()
+
+
+def conflict_action_snapshot(root: Path) -> None:
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            snapshot = UpstoxCorporateActionsClientV1(
+                StaticTransport(action_body(in_window=True)), clock=FixedClock().now
+            ).fetch_strict(_MEMBER.isin, "fixture-token")
+            CorporateActionSnapshotStoreV1(root, acquired.lease, catalog).retain(
+                snapshot
+            )
+    finally:
+        acquired.lease.close()
 
 
 def remove_action_metadata(root: Path) -> None:
