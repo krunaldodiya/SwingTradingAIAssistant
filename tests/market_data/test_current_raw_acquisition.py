@@ -67,6 +67,47 @@ def _request(now: datetime) -> CurrentRawPriceContextInputV1:
     )
 
 
+def test_finite_physical_plan_preserves_positions_and_5n_plus_1_bound() -> None:
+    selection = datetime(2026, 10, 1, 9, 59, tzinfo=UTC)
+    selected = tuple(
+        type("Session", (), {"trade_date": date(2026, 9, 10) + timedelta(days=index)})()
+        for index in range(21)
+    )
+    request = _request(selection)
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        request, selected, mapping_reusable=False
+    )
+
+    assert plan.maximum_calls == 6
+    assert plan.mapping.disposition.value == "MISSING"
+    assert plan.members[0].position == 0
+    assert len(plan.members[0].closed) == 1
+    assert plan.members[0].current_history is None
+    assert plan.members[0].intraday is None
+    assert plan.members[0].closed[0].disposition.value == "BLOCKED_MAPPING"
+
+
+def test_ledger_counts_only_strict_openers_and_freezes_a_member() -> None:
+    selection = datetime(2026, 10, 1, 9, 59, tzinfo=UTC)
+    selected = tuple(
+        type("Session", (), {"trade_date": date(2026, 9, 10) + timedelta(days=index)})()
+        for index in range(21)
+    )
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        _request(selection), selected, mapping_reusable=False
+    )
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    ledger.before_open("mapping")
+    ledger.member_stop(0, "PROVIDER_REFUSED")
+    snapshot = ledger.snapshot()
+
+    assert snapshot.total_calls == 1
+    assert snapshot.mapping.attempts == 1
+    assert all(slot.attempts == 0 for slot in snapshot.members[0])
+    with pytest.raises(RuntimeError, match="attempt rejected"):
+        ledger.before_open("mapping")
+
+
 def test_missing_calendar_prerequisite_uses_root_and_control_not_callback(
     tmp_path: Path,
 ) -> None:
