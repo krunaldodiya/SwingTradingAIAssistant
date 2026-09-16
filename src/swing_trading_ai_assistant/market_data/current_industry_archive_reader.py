@@ -597,7 +597,8 @@ def _private_rows_are_valid(
     return (
         len(rows) == cohort_size
         and tuple(row[0] for row in rows) == tuple(sorted(row[0] for row in rows))
-        and len({(row[0], row[3], row[4]) for row in rows}) == cohort_size
+        and len({row[0] for row in rows}) == cohort_size
+        and len({row[4] for row in rows}) == cohort_size
         and all(
             _valid_isin(isin)
             and exchange == "NSE"
@@ -661,6 +662,8 @@ def _validate_snapshot_bytes(
     if (
         set(value) != expected
         or value["evidence_state"] != "PROJECTED"
+        or type(value["schema_identity_sha256"]) is not str
+        or not _digest(value["schema_identity_sha256"])
         or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or value["runtime_code_identity_sha256"] != _CLASSIFICATION_RUNTIME_IDENTITY
         or any(
@@ -710,6 +713,8 @@ def _validate_receipt_bytes(
         set(value) != expected
         or value["receipt_version"] != "retained-current-industry-receipt@v1"
         or value["evidence_state"] != "RETAINED"
+        or type(value["schema_identity_sha256"]) is not str
+        or not _digest(value["schema_identity_sha256"])
         or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or value["snapshot_runtime_code_identity_sha256"]
         != _CLASSIFICATION_RUNTIME_IDENTITY

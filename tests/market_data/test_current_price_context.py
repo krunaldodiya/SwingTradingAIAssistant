@@ -1321,8 +1321,11 @@ def test_industry_reader_closes_real_malformed_receipt_and_marker_bytes(
         "oversize_industry",
         "invalid_isin",
         "invalid_symbol",
+        "unhashable_schema_identity",
         "identity_bearing_industry",
         "duplicate_row",
+        "duplicate_isin_different_symbol",
+        "duplicate_symbol_different_isin",
         "unsorted_rows",
         "effective_symbol_mismatch",
     ),
@@ -1357,10 +1360,24 @@ def test_industry_reader_closes_real_semantic_row_mutations_before_writer_helper
     elif mutation == "invalid_symbol":
         row["symbol"] = "BAD SYMBOL"
         row["effective_symbol"] = "BAD SYMBOL"
+    elif mutation == "unhashable_schema_identity":
+        value["schema_identity_sha256"] = []
     elif mutation == "identity_bearing_industry":
         row["industry"] = f"Banking {row['symbol']}"
     elif mutation == "duplicate_row":
         rows.append(dict(row))
+        value["cohort_size"] = 2
+    elif mutation == "duplicate_isin_different_symbol":
+        second = dict(row)
+        second.update(symbol="OTHER999", effective_symbol="OTHER999")
+        rows.append(second)
+        value["cohort_size"] = 2
+    elif mutation == "duplicate_symbol_different_isin":
+        second = dict(row)
+        second["isin"] = _classification_isin(999)
+        value["private_rows"] = sorted(
+            (row, second), key=lambda candidate: candidate["isin"]
+        )
         value["cohort_size"] = 2
     elif mutation == "unsorted_rows":
         second = dict(row)
