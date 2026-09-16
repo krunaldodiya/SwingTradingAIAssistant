@@ -23,6 +23,10 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     current_supplied_cohort_market_regime_runtime_code_identity_v1,
     evaluate_current_supplied_cohort_market_regime_v1,
 )
+from swing_trading_ai_assistant.research_packet.current_price_context import (
+    current_price_context_request_from_canonical_json_bytes_v1,
+    research_current_price_context_v1,
+)
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
@@ -179,11 +183,28 @@ _DEFAULT_STORAGE_DIRECTORY = "SwingTradingAIAssistantData"
 class _RequestInvalid(ValueError):
     """An explicitly rejected CLI input or storage admission."""
 
+    def __init__(self, *, already_reported: bool = False) -> None:
+        self.already_reported = already_reported
+
+
+def _render_request_invalid(error: _RequestInvalid) -> None:
+    if not error.already_reported:
+        sys.stderr.write("request_invalid\n")
+
 
 class _ArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
         del message
         self.exit(2, "request_invalid\n")
+
+
+def _parse_cli_args(argv: list[str] | None) -> argparse.Namespace:
+    try:
+        return build_parser().parse_args(argv)
+    except SystemExit as error:
+        if argv and argv[0] == "price-context-current":
+            raise _RequestInvalid(already_reported=True) from error
+        raise
 
 
 class PublicDownloadPortV1(Protocol):
@@ -444,6 +465,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
+    price_context_current = commands.add_parser(
+        "price-context-current",
+        help="return independent retained raw current-price context",
+    )
+    price_context_current.add_argument(
+        "--input-file", type=Path, required=True, metavar="ABSOLUTE_OWNER_PRIVATE_JSON"
+    )
+    price_context_current.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    price_context_current.add_argument("--acquire-missing", action="store_true")
+    price_context_current.add_argument("--output", choices=("json",), required=True)
     historical_upstox_raw = commands.add_parser(
         "historical-ohlcv-upstox-raw",
         help="complete one retained Upstox raw daily OHLCV revision",
@@ -551,7 +587,7 @@ def main(
         if not _admit_regime_current_argv(argv):
             sys.stderr.write("invalid regime-current request\n")
             return 2
-        args = build_parser().parse_args(argv)
+        args = _parse_cli_args(argv)
         if args.command == "probe-upstox":
             return _run_probe(args)
         if args.command == "cohort-current":
@@ -562,8 +598,8 @@ def main(
             return _run_research_current_command(
                 args, current_stock_research, current_stock_research_v2
             )
-        if args.command == "regime-current":
-            return _run_current_regime_command(args)
+        if args.command in {"regime-current", "price-context-current"}:
+            return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
             return _run_historical_ohlcv_upstox_raw_command(args)
         if args.command == "historical-ohlcv-upstox-raw-read":
@@ -571,8 +607,8 @@ def main(
         return _run_public_command(
             args, download_service, coverage_service, query_service
         )
-    except _RequestInvalid:
-        sys.stderr.write("request_invalid\n")
+    except _RequestInvalid as error:
+        _render_request_invalid(error)
         return 2
     except Exception:
         sys.stderr.write("internal_error\n")
@@ -844,6 +880,43 @@ def _run_public_command(
     return exit_code
 
 
+def _run_current_packet_command(args: argparse.Namespace, clock: _ClockV1) -> int:
+    if args.command == "regime-current":
+        return _run_current_regime_command(args)
+    return _run_price_context_current_command(args, clock)
+
+
+def _run_price_context_current_command(
+    args: argparse.Namespace, clock: _ClockV1
+) -> int:
+    """Run the closed #188 request without exposing input or private paths.
+
+    Only the descriptor-relative request-file admission is a request-invalid
+    boundary.  A valid request that encounters storage, runtime, or provider
+    faults must reach ``main``'s fixed #145 ``internal_error`` boundary.
+    """
+    try:
+        input_file = args.input_file
+        root = args.storage_root
+        if (
+            type(input_file) is not type(Path())
+            or not input_file.is_absolute()
+            or type(root) is not type(Path())
+            or not root.is_absolute()
+            or type(args.acquire_missing) is not bool
+        ):
+            raise _RequestInvalid
+        raw = _read_current_regime_input(input_file)
+        request = current_price_context_request_from_canonical_json_bytes_v1(raw)
+    except (OSError, ValueError, _RequestInvalid):
+        raise _RequestInvalid from None
+    result = research_current_price_context_v1(
+        request, root, acquire_missing=args.acquire_missing, clock=clock
+    )
+    sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
+    return 0 if all(item.state == "OBSERVED" for item in result.features[:3]) else 1
+
+
 def _run_current_regime_command(args: argparse.Namespace) -> int:
     admitted = False
     try:
@@ -926,10 +999,10 @@ def _read_current_regime_input(path: Path) -> bytes:
             or before.st_nlink != 1
             or stat.S_IMODE(before.st_mode) & 0o077
             or before.st_size < 1
-            or before.st_size > 16 * 1024
+            or before.st_size > 64 * 1024
         ):
             raise _RequestInvalid
-        raw = os.read(file_descriptor, 16 * 1024 + 1)
+        raw = os.read(file_descriptor, 64 * 1024 + 1)
         after = os.fstat(file_descriptor)
         if len(raw) != before.st_size or (
             before.st_dev,

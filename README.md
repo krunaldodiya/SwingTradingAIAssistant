@@ -115,6 +115,33 @@ context or a local long-window failure makes only its dependent question/fact
 not ready. V2 emits readiness facts, not a recommendation; it preserves the
 invocation selection time separately from later evidence acquisition time.
 
+## Current raw price context (Issue #188 candidate)
+
+The additive, unreleased `current-price-context@v1` command accepts an
+owner-private closed request for an explicit 1–50 canonical NSE-equity cohort:
+
+```bash
+market-data price-context-current \
+  --input-file /absolute/private/current-price-context-request.json \
+  --storage-root /absolute/private/research-root \
+  --output json
+```
+
+The equivalent SDK is
+`research_current_price_context_v1(request, storage_root, acquire_missing=False)`.
+Both the absolute request file and the existing absolute owner-private storage
+root are required; neither belongs in a public repository or command output.
+Retained-only is the default and does not read credentials or call a provider.
+`--acquire-missing` is the explicit, serial, bounded opt-in; it still requires
+already-retained exact calendar coverage for the selected 21 sessions and the
+physical download plan, otherwise it returns a typed calendar-prerequisite
+outcome before any provider or credential effect. Results use only retained
+Upstox raw completed-session provenance (`UPSTOX / RAW / 1d-derived-from-retained-1m`),
+not BharatStock or adjusted prices. Literal `INDUSTRY` participation is local:
+missing or unsupported retained Industry evidence does not suppress independent
+raw facts. The command emits research facts, never an analytic recommendation,
+live/provider proof, or a claim that missing evidence is neutral.
+
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:
 
