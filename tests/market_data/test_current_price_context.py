@@ -13,13 +13,17 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pytest
 from current_raw_acquisition_fixtures import (
     FixtureTokenProvider,
     RecordedWire,
     WireReply,
     action_body,
+    current_history_body,
+    current_month_request,
     historical_body,
+    intraday_body,
     seed_root,
 )
 from current_raw_acquisition_fixtures import control as fixture_control
@@ -1109,6 +1113,67 @@ def test_public_mint_rechecks_real_mapping_and_raw_partition_authority(
             clock=_Clock(raw_request.data_selection_time),
         )
     assert target_name in {"mapping-catalog", "raw-partition"}
+
+
+def test_public_mint_rechecks_real_provisional_catalog_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request, schedule = current_month_request(completed_today=True)
+    assert (
+        seed_root(root, schedule_value=schedule, request_value=raw_request)
+        == raw_request
+    )
+    today = raw_request.data_selection_time.date()
+    wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule, through=today - timedelta(days=1))
+            ),
+            WireReply(body=intraday_body(schedule, day=today)),
+            WireReply(body=action_body()),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    control = CurrentRawInvocationControlV1(
+        _Clock(raw_request.data_selection_time),
+        selection=raw_request.data_selection_time,
+        deadline=raw_request.admission_deadline,
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            raw_request, root, control=control
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    original_recheck = packet_module.recheck_retained_current_raw_context_v1
+
+    def replace_then_recheck(
+        value: AdmittedCurrentRawContextV1,
+        storage_root: Path,
+        *,
+        lease: StorageRootLease,
+        control: CurrentRawInvocationControlV1,
+    ) -> None:
+        with duckdb.connect(str(root / "catalog.duckdb")) as connection:
+            connection.execute(
+                "UPDATE provisional_partitions SET row_count = row_count + 1"
+            )
+        original_recheck(value, storage_root, lease=lease, control=control)
+
+    monkeypatch.setattr(
+        packet_module, "recheck_retained_current_raw_context_v1", replace_then_recheck
+    )
+
+    with pytest.raises(StorageRootLeaseError, match="source authority changed"):
+        research_current_price_context_v1(
+            _public_request(raw_request),
+            root,
+            clock=_Clock(raw_request.data_selection_time),
+        )
 
 
 @pytest.mark.parametrize(
