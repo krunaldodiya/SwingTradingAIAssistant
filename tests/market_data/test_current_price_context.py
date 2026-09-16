@@ -671,6 +671,12 @@ def test_acquire_missing_public_exposes_only_safe_accounting(
         )
         == result
     )
+    forged = json.loads(result.canonical_json_bytes())
+    forged["acquisition_provider_calls"] = 0
+    with pytest.raises(ValueError, match="result is invalid"):
+        current_price_context_result_from_canonical_json_bytes_v1(
+            _rehashed_result_bytes(forged)
+        )
     assert "fixture-token" not in result.canonical_json_bytes().decode()
 
 
@@ -702,6 +708,12 @@ def test_public_calendar_prerequisite_acquisition_outcome_round_trips(
         )
         == result
     )
+    forged = json.loads(result.canonical_json_bytes())
+    forged["acquisition_provider_calls"] = 1
+    with pytest.raises(ValueError, match="result is invalid"):
+        current_price_context_result_from_canonical_json_bytes_v1(
+            _rehashed_result_bytes(forged)
+        )
 
 
 def _acquire_retained_raw(
@@ -1189,6 +1201,17 @@ def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
         )
         == partial
     )
+    zero_calls = json.loads(partial.canonical_json_bytes())
+    zero_calls["acquisition_provider_calls"] = 0
+    duplicate_symbol = json.loads(partial.canonical_json_bytes())
+    duplicate_symbol["members"][0]["effective_symbol"] = duplicate_symbol["members"][1][
+        "effective_symbol"
+    ]
+    for forged in (zero_calls, duplicate_symbol):
+        with pytest.raises(ValueError, match="result is invalid"):
+            current_price_context_result_from_canonical_json_bytes_v1(
+                _rehashed_result_bytes(forged)
+            )
 
     blocked_root = tmp_path / "blocked"
     blocked_request = seed_root(blocked_root, retained_action=True)
@@ -1281,6 +1304,106 @@ def test_industry_reader_closes_real_malformed_receipt_and_marker_bytes(
     target.chmod(0o600)
     target.write_bytes(b"malformed archive bytes")
     target.chmod(0o400)
+    result = _read_retained_industry(root, raw_request, reference)
+    assert isinstance(result, reader_module.CurrentIndustryReadFailureV1)
+    assert (result.state, result.reason) == (
+        "MALFORMED_EVIDENCE",
+        "CLASSIFICATION_ARCHIVE_MALFORMED",
+    )
+
+
+@pytest.mark.parametrize("object_kind", ("snapshot", "receipt"))
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "empty_industry",
+        "unsafe_industry",
+        "oversize_industry",
+        "invalid_isin",
+        "invalid_symbol",
+        "identity_bearing_industry",
+        "duplicate_row",
+        "unsorted_rows",
+        "effective_symbol_mismatch",
+    ),
+)
+def test_industry_reader_closes_real_semantic_row_mutations_before_writer_helpers(  # noqa: C901
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    object_kind: str,
+    mutation: str,
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    archive = root / ".current-industry-classification-v1"
+    source = next(
+        archive.glob(
+            f"{'snapshot' if object_kind == 'snapshot' else 'retained'}-*.json"
+        )
+    )
+    value = cast(dict[str, Any], json.loads(source.read_bytes()))
+    rows = cast(list[dict[str, str]], value["private_rows"])
+    row = rows[0]
+
+    if mutation == "empty_industry":
+        row["industry"] = ""
+    elif mutation == "unsafe_industry":
+        row["industry"] = "=unsafe"
+    elif mutation == "oversize_industry":
+        row["industry"] = "A" * 513
+    elif mutation == "invalid_isin":
+        row["isin"] = row["isin"][:-1] + str((int(row["isin"][-1]) + 1) % 10)
+    elif mutation == "invalid_symbol":
+        row["symbol"] = "BAD SYMBOL"
+        row["effective_symbol"] = "BAD SYMBOL"
+    elif mutation == "identity_bearing_industry":
+        row["industry"] = f"Banking {row['symbol']}"
+    elif mutation == "duplicate_row":
+        rows.append(dict(row))
+        value["cohort_size"] = 2
+    elif mutation == "unsorted_rows":
+        second = dict(row)
+        second.update(
+            isin=_classification_isin(999),
+            symbol="OTHER999",
+            effective_symbol="OTHER999",
+        )
+        value["private_rows"] = sorted(
+            (row, second), key=lambda candidate: candidate["isin"], reverse=True
+        )
+        value["cohort_size"] = 2
+    else:
+        assert mutation == "effective_symbol_mismatch"
+        row["effective_symbol"] = "OTHER"
+
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if object_kind == "snapshot":
+        snapshot_identity = hashlib.sha256(raw).hexdigest()
+        target = archive / f"snapshot-{snapshot_identity}.json"
+        target.write_bytes(raw)
+        target.chmod(0o400)
+        for prefix in ("retained", "completion"):
+            original = next(archive.glob(f"{prefix}-*.json"))
+            copied = archive / f"{prefix}-{snapshot_identity}.json"
+            shutil.copyfile(original, copied)
+            copied.chmod(0o400)
+        reference = CurrentIndustryArchiveReferenceV1(
+            reference.contract_version,
+            snapshot_identity,
+            reference.retained_identity_sha256,
+        )
+    else:
+        source.chmod(0o600)
+        source.write_bytes(raw)
+        source.chmod(0o400)
+
+    def unexpected_writer_helper(*_: object) -> object:
+        raise AssertionError("writer receipt helper must not receive malformed rows")
+
+    monkeypatch.setattr(
+        classification, "_retained_candidate_from_receipt", unexpected_writer_helper
+    )
     result = _read_retained_industry(root, raw_request, reference)
     assert isinstance(result, reader_module.CurrentIndustryReadFailureV1)
     assert (result.state, result.reason) == (
@@ -1863,6 +1986,11 @@ def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violation
             member_count=2, advances=2, declines=0, unchanged=0
         )
 
+    def add_three_partition_bindings(value: Any) -> None:
+        member = value["members"][0]
+        member["partition_checksums"].extend(("a" * 64, "b" * 64, "c" * 64))
+        member["raw_source_times"].extend((member["raw_source_times"][0],) * 3)
+
     mutations: tuple[Callable[[Any], None], ...] = (
         lambda value: value.__setitem__(
             "schedule_as_of", "2030-01-01T00:00:00.000000Z"
@@ -1888,6 +2016,8 @@ def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violation
             "industry_evidence_state", "INSUFFICIENT_EVIDENCE"
         ),
         lambda value: value["members"][0]["partition_checksums"].append("a" * 64),
+        add_three_partition_bindings,
+        lambda value: value["members"][0].__setitem__("screen_identity_sha256", None),
         lambda value: value["members"][0].__setitem__("direction", "SIDEWAYS"),
         lambda value: value["features"][0].__setitem__("state", "NOT_A_STATE"),
         lambda value: value["breadth"].__setitem__("label", "BROAD_ADVANCE"),
@@ -1984,6 +2114,7 @@ def test_public_result_decoder_rejects_rehashed_acquisition_and_identifier_count
         )
         == acquired
     )
+    assert acquired.acquisition_outcome == "RETAINED_EVIDENCE_READY"
 
     def short_isin(value: Any) -> None:
         member = value["members"][0]
@@ -2012,7 +2143,7 @@ def test_public_result_decoder_rejects_rehashed_acquisition_and_identifier_count
         ),
         (
             json.loads(acquired.canonical_json_bytes()),
-            lambda value: value.__setitem__("acquisition_provider_calls", 7),
+            lambda value: value.__setitem__("acquisition_provider_calls", 1),
         ),
         (
             json.loads(acquired.canonical_json_bytes()),

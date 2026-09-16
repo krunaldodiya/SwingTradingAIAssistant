@@ -370,7 +370,8 @@ class CurrentPriceContextMemberResultV1:
                 self.state == "OBSERVED"
                 and (
                     self.mapping_observation_sha256 is None
-                    or not self.partition_checksums
+                    or not 1 <= len(self.partition_checksums) <= 3
+                    or self.screen_identity_sha256 is None
                     or self.screen_knowledge_at is None
                 )
             )
@@ -686,6 +687,16 @@ class CurrentPriceContextResultV1:
                 self.acquisition_mode == "ACQUIRE_MISSING"
                 and self.acquisition_outcome == "NOT_ATTEMPTED"
             )
+            or (
+                self.acquisition_outcome
+                in ("CALENDAR_PREREQUISITE_MISSING", "RETAINED_EVIDENCE_READY")
+                and self.acquisition_provider_calls != 0
+            )
+            or (
+                self.acquisition_outcome
+                in ("ACQUISITION_COMPLETED", "ACQUISITION_PARTIAL")
+                and self.acquisition_provider_calls < 1
+            )
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= 50
             or len(self.members) != self.requested_count
@@ -696,6 +707,10 @@ class CurrentPriceContextResultV1:
             or tuple(item.position for item in self.members)
             != tuple(range(len(self.members)))
             or len({item.isin for item in self.members}) != len(self.members)
+            or (
+                len({item.effective_symbol for item in self.members})
+                != len(self.members)
+            )
             or any(
                 not _member_source_times_at_or_before(item, self.evidence_cutoff)
                 for item in self.members

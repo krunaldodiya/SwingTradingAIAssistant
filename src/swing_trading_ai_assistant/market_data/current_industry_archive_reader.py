@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
+import unicodedata
 import weakref
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
@@ -24,6 +26,21 @@ from .current_raw_price_context import (
 )
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_CLASSIFICATION_SCHEMA_IDENTITIES = frozenset(
+    {
+        classification.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+        classification.CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+    }
+)
+_CLASSIFICATION_RUNTIME_IDENTITY = (
+    classification.current_industry_classification_runtime_code_identity_v1()
+)
+
+
+def _digest(value: object) -> bool:
+    return type(value) is str and _DIGEST.fullmatch(value) is not None
+
 
 @dataclass(frozen=True, slots=True)
 class CurrentIndustryArchiveReferenceV1:
@@ -34,8 +51,8 @@ class CurrentIndustryArchiveReferenceV1:
     def __post_init__(self) -> None:
         if (
             self.contract_version != "current-industry-archive-reference@v1"
-            or not classification._valid_digest(self.snapshot_identity_sha256)  # pyright: ignore[reportPrivateUsage]
-            or not classification._valid_digest(self.retained_identity_sha256)  # pyright: ignore[reportPrivateUsage]
+            or not _digest(self.snapshot_identity_sha256)
+            or not _digest(self.retained_identity_sha256)
         ):
             raise ValueError("current industry archive reference is invalid")
 
@@ -532,23 +549,78 @@ def _object_bytes(raw: bytes) -> dict[str, object]:
     return value
 
 
-def _digest(value: object) -> bool:
+_ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
+_NSE_SYMBOL = re.compile(r"[A-Z0-9](?:[A-Z0-9.&_-]{0,30}[A-Z0-9])?\Z")
+_MAX_FIELD_CHARS = 512
+
+
+def _safe_field(value: str) -> bool:
     return (
-        type(value) is str
-        and len(value) == 64
-        and all(char in "0123456789abcdef" for char in value)
+        0 < len(value) <= _MAX_FIELD_CHARS
+        and value == value.strip()
+        and not value.startswith(("=", "+", "-", "@"))
+        and not any(
+            unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} for char in value
+        )
+    )
+
+
+def _valid_isin(value: str) -> bool:
+    if _ISIN.fullmatch(value) is None:
+        return False
+    digits = "".join(str(ord(char) - 55) if char.isalpha() else char for char in value)
+    return (
+        sum(
+            number if index % 2 == 0 else (number * 2 - 9 if number > 4 else number * 2)
+            for index, number in enumerate(map(int, reversed(digits)))
+        )
+        % 10
+        == 0
+    )
+
+
+def _identity_bearing(industry: str, isin: str, symbol: str) -> bool:
+    return (
+        re.search(re.escape(isin), industry, flags=re.ASCII | re.IGNORECASE) is not None
+        or re.search(
+            rf"(?<![A-Z0-9.&_-]){re.escape(symbol)}(?![A-Z0-9.&_-])",
+            industry,
+            flags=re.ASCII | re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _private_rows_are_valid(
+    rows: tuple[tuple[str, str, str, str, str], ...], cohort_size: int
+) -> bool:
+    return (
+        len(rows) == cohort_size
+        and tuple(row[0] for row in rows) == tuple(sorted(row[0] for row in rows))
+        and len({(row[0], row[3], row[4]) for row in rows}) == cohort_size
+        and all(
+            _valid_isin(isin)
+            and exchange == "NSE"
+            and effective_symbol == symbol
+            and _safe_field(industry)
+            and _safe_field(symbol)
+            and _NSE_SYMBOL.fullmatch(symbol) is not None
+            for isin, industry, symbol, exchange, effective_symbol in rows
+        )
+        and not any(
+            _identity_bearing(industry, isin, symbol)
+            for _, industry, _, _, _ in rows
+            for isin, _, symbol, _, _ in rows
+        )
     )
 
 
 def _private_rows(value: object, cohort_size: int) -> None:
     if type(value) is not list or not 1 <= cohort_size <= 50:
         _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
-    rows = cast(list[object], value)
-    if len(rows) != cohort_size:
-        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
     expected = {"effective_symbol", "exchange", "industry", "isin", "symbol"}
-    parsed_rows: list[dict[str, str]] = []
-    for row in rows:
+    parsed_rows: list[tuple[str, str, str, str, str]] = []
+    for row in cast(list[object], value):
         if type(row) is not dict:
             _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
         candidate = cast(dict[str, object], row)
@@ -556,15 +628,16 @@ def _private_rows(value: object, cohort_size: int) -> None:
             type(candidate[field]) is not str for field in expected
         ):
             _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
-        parsed = cast(dict[str, str], candidate)
-        if (
-            parsed["exchange"] != "NSE"
-            or parsed["effective_symbol"] != parsed["symbol"]
-        ):
-            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
-        parsed_rows.append(parsed)
-    identities = tuple(row["isin"] for row in parsed_rows)
-    if identities != tuple(sorted(identities)) or len(set(identities)) != len(rows):
+        parsed_rows.append(
+            (
+                cast(str, candidate["isin"]),
+                cast(str, candidate["industry"]),
+                cast(str, candidate["symbol"]),
+                cast(str, candidate["exchange"]),
+                cast(str, candidate["effective_symbol"]),
+            )
+        )
+    if not _private_rows_are_valid(tuple(parsed_rows), cohort_size):
         _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
 
 
@@ -588,10 +661,8 @@ def _validate_snapshot_bytes(
     if (
         set(value) != expected
         or value["evidence_state"] != "PROJECTED"
-        or value["schema_identity_sha256"]
-        not in classification._CLASSIFICATION_SCHEMA_IDENTITIES  # pyright: ignore[reportPrivateUsage]
-        or value["runtime_code_identity_sha256"]
-        != classification._CLASSIFICATION_RUNTIME_IDENTITY  # pyright: ignore[reportPrivateUsage]
+        or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
+        or value["runtime_code_identity_sha256"] != _CLASSIFICATION_RUNTIME_IDENTITY
         or any(
             not _digest(value[field])
             for field in (
@@ -639,10 +710,9 @@ def _validate_receipt_bytes(
         set(value) != expected
         or value["receipt_version"] != "retained-current-industry-receipt@v1"
         or value["evidence_state"] != "RETAINED"
-        or value["schema_identity_sha256"]
-        not in classification._CLASSIFICATION_SCHEMA_IDENTITIES  # pyright: ignore[reportPrivateUsage]
+        or value["schema_identity_sha256"] not in _CLASSIFICATION_SCHEMA_IDENTITIES
         or value["snapshot_runtime_code_identity_sha256"]
-        != classification._CLASSIFICATION_RUNTIME_IDENTITY  # pyright: ignore[reportPrivateUsage]
+        != _CLASSIFICATION_RUNTIME_IDENTITY
         or any(
             not _digest(value[field])
             for field in (
