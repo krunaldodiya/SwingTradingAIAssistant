@@ -48,6 +48,7 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextBreadthV1,
     CurrentPriceContextMemberV1,
     CurrentPriceContextRequestV1,
+    CurrentPriceContextResultV1,
     current_price_context_request_from_canonical_json_bytes_v1,
     current_price_context_result_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
@@ -389,6 +390,11 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
     assert result.members[0].state == "OBSERVED"
     assert result.members[0].direction == "UNCHANGED"
     assert result.breadth is not None and result.breadth.requested_count == 1
+    assert result.requested_count == 1
+    assert result.schedule_as_of is not None
+    assert result.members[0].mapping_retrieved_at is not None
+    assert result.members[0].raw_source_times
+    assert result.members[0].screen_knowledge_at is not None
     assert result.industry_evidence_state == "OBSERVED"
     assert result.industry_groups[0].member_count == 1
     assert result.canonical_cohort_identity_sha256
@@ -416,8 +422,20 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
     decoded = current_price_context_result_from_canonical_json_bytes_v1(
         result.canonical_json_bytes()
     )
-    assert decoded["result_identity_sha256"] == result.result_identity_sha256
-    assert type(decoded) is dict
+    assert isinstance(decoded, CurrentPriceContextResultV1)
+    assert decoded.result_identity_sha256 == result.result_identity_sha256
+    forged = json.loads(result.canonical_json_bytes())
+    forged["members"][0]["structure"] = {}
+    preimage = {
+        key: value for key, value in forged.items() if key != "result_identity_sha256"
+    }
+    forged["result_identity_sha256"] = hashlib.sha256(
+        json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    ).hexdigest()
+    with pytest.raises(ValueError, match="result is invalid"):
+        current_price_context_result_from_canonical_json_bytes_v1(
+            json.dumps(forged, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
     payload = result.canonical_json_bytes().decode()
     for private in (str(root), "fixture-token", "https://", "Authorization", "raw-"):
         assert private not in payload

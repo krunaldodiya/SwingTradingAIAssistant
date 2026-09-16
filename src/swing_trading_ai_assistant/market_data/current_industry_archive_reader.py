@@ -13,7 +13,7 @@ import weakref
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 from zoneinfo import ZoneInfo
 
 from . import current_industry_classification as classification
@@ -169,18 +169,44 @@ def admitted_current_industry_binding_v1(
     return entry[1], entry[4], entry[5]
 
 
+class _IndustryLocalRefusal(Exception):
+    def __init__(
+        self,
+        state: Literal[
+            "UNSUPPORTED", "INSUFFICIENT_EVIDENCE", "MALFORMED_EVIDENCE", "CONFLICTED"
+        ],
+        reason: str,
+    ) -> None:
+        self.state: Literal[
+            "UNSUPPORTED", "INSUFFICIENT_EVIDENCE", "MALFORMED_EVIDENCE", "CONFLICTED"
+        ] = state
+        self.reason = reason
+
+
 def _local_failure(
     storage_root: Path,
     root_identity: tuple[int, int],
-    state: Literal[
-        "UNSUPPORTED", "INSUFFICIENT_EVIDENCE", "MALFORMED_EVIDENCE", "CONFLICTED"
-    ],
-    reason: str,
+    refusal: _IndustryLocalRefusal,
 ) -> CurrentIndustryReadFailureV1:
     """A local archive refusal never masks a concurrent shared-root loss."""
     if StorageRootLease.admit_existing_private_identity(storage_root) != root_identity:
         raise StorageRootLeaseError("current Industry root authority lost")
-    return CurrentIndustryReadFailureV1(state, reason)
+    return CurrentIndustryReadFailureV1(refusal.state, refusal.reason)
+
+
+def _refuse(
+    state: Literal[
+        "UNSUPPORTED", "INSUFFICIENT_EVIDENCE", "MALFORMED_EVIDENCE", "CONFLICTED"
+    ],
+    reason: str,
+) -> NoReturn:
+    raise _IndustryLocalRefusal(state, reason)
+
+
+def _reread_exact(directory: int, name: str, expected: bytes, maximum: int) -> None:
+    """Reject same-name replacement after calculation and before admission."""
+    if _read(directory, name, maximum) != expected:
+        _refuse("CONFLICTED", "CLASSIFICATION_ARCHIVE_SUBSTITUTED")
 
 
 def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existing-only verification transaction
@@ -207,41 +233,23 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=root,
             )
+            active_error: BaseException | None = None
             try:
-                snapshot_raw = _read(
-                    directory,
-                    f"snapshot-{reference.snapshot_identity_sha256}.json",
-                    262_144,
-                )
-                receipt_raw = _read(
-                    directory,
-                    f"retained-{reference.snapshot_identity_sha256}.json",
-                    262_144,
-                )
-                marker_raw = _read(
-                    directory,
-                    f"completion-{reference.snapshot_identity_sha256}.json",
-                    16_384,
-                )
+                snapshot_name = f"snapshot-{reference.snapshot_identity_sha256}.json"
+                receipt_name = f"retained-{reference.snapshot_identity_sha256}.json"
+                marker_name = f"completion-{reference.snapshot_identity_sha256}.json"
+                snapshot_raw = _read(directory, snapshot_name, 262_144)
+                receipt_raw = _read(directory, receipt_name, 262_144)
+                marker_raw = _read(directory, marker_name, 16_384)
                 if snapshot_raw is None or receipt_raw is None or marker_raw is None:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "INSUFFICIENT_EVIDENCE",
-                        "CLASSIFICATION_ARCHIVE_MISSING",
-                    )
+                    _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING")
                 candidate = classification._retained_candidate_from_receipt(receipt_raw)  # pyright: ignore[reportPrivateUsage]
                 candidate_value = cast(Any, candidate)
                 if (
                     candidate_value.retained_identity_sha256
                     != reference.retained_identity_sha256
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_RECEIPT_SUBSTITUTED",
-                    )
+                    _refuse("CONFLICTED", "CLASSIFICATION_RECEIPT_SUBSTITUTED")
                 snapshot = classification._snapshot_with_identity(  # pyright: ignore[reportPrivateUsage]
                     classification._snapshot(  # pyright: ignore[reportPrivateUsage]
                         evidence_state="PROJECTED",
@@ -261,29 +269,13 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     != reference.snapshot_identity_sha256
                     or snapshot.canonical_json_bytes() != snapshot_raw
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_SNAPSHOT_SUBSTITUTED",
-                    )
-                raw_bytes = _read(
-                    directory, f"raw-{snapshot.artifact_sha256}.csv", 1_048_576
-                )
+                    _refuse("CONFLICTED", "CLASSIFICATION_SNAPSHOT_SUBSTITUTED")
+                raw_name = f"raw-{snapshot.artifact_sha256}.csv"
+                raw_bytes = _read(directory, raw_name, 1_048_576)
                 if raw_bytes is None:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "INSUFFICIENT_EVIDENCE",
-                        "CLASSIFICATION_ARTIFACT_MISSING",
-                    )
+                    _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARTIFACT_MISSING")
                 if hashlib.sha256(raw_bytes).hexdigest() != snapshot.artifact_sha256:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_ARTIFACT_SUBSTITUTED",
-                    )
+                    _refuse("CONFLICTED", "CLASSIFICATION_ARTIFACT_SUBSTITUTED")
                 input_value = classification.CurrentIndustryClassificationInputV1(
                     {
                         "contract_version": "current-supplied-cohort-industry-classification@v1",
@@ -304,12 +296,7 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     }
                 )
                 if input_value.input_identity_sha256 != snapshot.input_identity_sha256:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "UNSUPPORTED",
-                        "UNSUPPORTED_CLASSIFICATION_SCHEMA",
-                    )
+                    _refuse("UNSUPPORTED", "UNSUPPORTED_CLASSIFICATION_SCHEMA")
                 parsed = classification.parse_current_industry_artifact_v1(
                     input_value, raw_bytes
                 )
@@ -317,12 +304,7 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     type(parsed)
                     is classification.CurrentIndustryClassificationFailureV1
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "MALFORMED_EVIDENCE",
-                        "CLASSIFICATION_ARTIFACT_MALFORMED",
-                    )
+                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARTIFACT_MALFORMED")
                 reproduced = classification.project_current_supplied_cohort_industry_v1(
                     cast(classification.ParsedCurrentIndustryArtifactV1, parsed),
                     snapshot.cohort_identity_sha256,
@@ -340,22 +322,12 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     is classification.CurrentIndustryClassificationFailureV1
                     or reproduced.canonical_json_bytes() != snapshot_raw
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_PROJECTION_SUBSTITUTED",
-                    )
+                    _refuse("CONFLICTED", "CLASSIFICATION_PROJECTION_SUBSTITUTED")
                 marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
                     marker_raw, receipt_raw, snapshot
                 )
                 if marker_known_at != candidate.known_at:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_MARKER_SUBSTITUTED",
-                    )
+                    _refuse("CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED")
                 rows = tuple(
                     (row.isin, row.exchange, row.effective_symbol, row.industry)
                     for row in snapshot.private_rows
@@ -367,57 +339,47 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 if len(rows) != len(expected) or {row[:3] for row in rows} != set(
                     expected
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "CONFLICTED",
-                        "CLASSIFICATION_COHORT_BINDING_MISMATCH",
-                    )
+                    _refuse("CONFLICTED", "CLASSIFICATION_COHORT_BINDING_MISMATCH")
                 if candidate.known_at > raw_projection.evidence_cutoff:
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "INSUFFICIENT_EVIDENCE",
-                        "CLASSIFICATION_FUTURE_KNOWN",
-                    )
+                    _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_FUTURE_KNOWN")
                 if (
                     candidate.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
                     != raw_projection.evidence_cutoff.astimezone(
                         ZoneInfo("Asia/Kolkata")
                     ).date()
                 ):
-                    return _local_failure(
-                        storage_root,
-                        raw_root_identity,
-                        "INSUFFICIENT_EVIDENCE",
-                        "CLASSIFICATION_STALE",
-                    )
+                    _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_STALE")
+                _reread_exact(directory, raw_name, raw_bytes, 1_048_576)
+                _reread_exact(directory, snapshot_name, snapshot_raw, 262_144)
+                _reread_exact(directory, receipt_name, receipt_raw, 262_144)
+                _reread_exact(directory, marker_name, marker_raw, 16_384)
                 classification._validate_archive_directory(root, directory)  # pyright: ignore[reportPrivateUsage]
                 classification._validate_archive_root(root)  # pyright: ignore[reportPrivateUsage]
                 operation.ensure_live()
-                if (
-                    StorageRootLease.admit_existing_private_identity(storage_root)
-                    != raw_root_identity
-                ):
-                    raise StorageRootLeaseError("current Industry root authority lost")
+            except BaseException as error:
+                active_error = error
+                raise
             finally:
-                os.close(directory)
+                try:
+                    os.close(directory)
+                except BaseException:
+                    if active_error is None:
+                        raise
+    except _IndustryLocalRefusal as refusal:
+        return _local_failure(storage_root, raw_root_identity, refusal)
     except FileNotFoundError:
         return _local_failure(
             storage_root,
             raw_root_identity,
-            "INSUFFICIENT_EVIDENCE",
-            "CLASSIFICATION_ARCHIVE_MISSING",
+            _IndustryLocalRefusal(
+                "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
+            ),
         )
-    except (StorageRootLeaseError, OSError):
-        raise
-    except (AttributeError, TypeError, ValueError):
-        return _local_failure(
-            storage_root,
-            raw_root_identity,
-            "MALFORMED_EVIDENCE",
-            "CLASSIFICATION_ARCHIVE_MALFORMED",
-        )
+    if (
+        StorageRootLease.admit_existing_private_identity(storage_root)
+        != raw_root_identity
+    ):
+        raise StorageRootLeaseError("current Industry root authority lost")
     return _mint_admitted_current_industry_projection_v1(
         snapshot_identity_sha256=reference.snapshot_identity_sha256,
         retained_identity_sha256=reference.retained_identity_sha256,
@@ -452,5 +414,9 @@ def _canonical(value: object) -> bytes:
 
 
 def _read(directory: int, name: str, maximum: int) -> bytes | None:
-    value = classification._read_stable_private_object(directory, name, maximum)  # pyright: ignore[reportPrivateUsage]
+    """Translate only the archive reader's stable-object validation refusal."""
+    try:
+        value = classification._read_stable_private_object(directory, name, maximum)  # pyright: ignore[reportPrivateUsage]
+    except ValueError:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
     return None if value is None else value[0]

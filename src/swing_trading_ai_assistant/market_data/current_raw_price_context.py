@@ -261,8 +261,11 @@ class CurrentRawMemberProjectionV1:
     ]
     reason: str | None
     mapping_observation_sha256: str | None
+    mapping_retrieved_at: datetime | None
     partition_checksums: tuple[str, ...]
+    raw_source_times: tuple[datetime, ...]
     screen_identity_sha256: str | None
+    screen_knowledge_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +275,7 @@ class CurrentRawContextProjectionV1:
     ordered_selection_identity_sha256: str
     canonical_cohort_identity_sha256: str
     schedule_identity_sha256: str
+    schedule_as_of: datetime
     data_selection_time: datetime
     evidence_cutoff: datetime
     member_inputs: tuple[CurrentPriceContextMemberV1, ...]
@@ -475,7 +479,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             )
                         )
                         continue
-                    rows, checksums = _member_rows(
+                    rows, checksums, raw_source_times = _member_rows(
                         storage_root,
                         lease,
                         catalog,
@@ -555,8 +559,11 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             "OBSERVED",
                             None,
                             resolved.metadata.observation_sha256,
+                            resolved.metadata.retrieved_at,
                             checksums,
+                            raw_source_times,
                             screen.identity_sha256,
+                            screen.knowledge_at,
                         )
                     )
                     receipts.extend((resolved, checksums, screen))
@@ -619,6 +626,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
         request.ordered_selection_identity_sha256,
         request.canonical_cohort_identity_sha256,
         request.schedule_identity_sha256,
+        schedule.as_of,
         request.data_selection_time,
         cutoff,
         request.members,
@@ -642,7 +650,7 @@ def _member_rows(  # noqa: C901
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     cutoff: datetime,
     control: CurrentRawInvocationControlV1,
-) -> tuple[tuple[object, ...], tuple[str, ...]]:
+) -> tuple[tuple[object, ...], tuple[str, ...], tuple[datetime, ...]]:
     if type(instrument) is not Instrument:
         raise ValueError("resolved instrument is invalid")
     plans = plan_upstox_equity_months(
@@ -650,6 +658,7 @@ def _member_rows(  # noqa: C901
     )
     rows: list[object] = []
     checksums: list[str] = []
+    raw_source_times: list[datetime] = []
     current = control.selection_ist_date
     selected_dates = {item.session for item in sessions}
     for plan in plans:
@@ -672,6 +681,7 @@ def _member_rows(  # noqa: C901
                 raise ProvisionalPartitionUnavailableV1("identity")
             loaded = load_provisional_partition(root, lease, metadata)
             checksums.append(metadata.checksum_sha256)
+            raw_source_times.append(metadata.published_at)
         else:
             manifest = catalog.get_manifest(plan)
             if (
@@ -688,16 +698,18 @@ def _member_rows(  # noqa: C901
             if checksum != manifest.checksum_sha256:
                 raise ProvisionalPartitionUnavailableV1("checksum")
             checksums.append(checksum)
+            raw_source_times.append(manifest.updated_at)
         rows.extend(
             row for row in loaded if row.ts.astimezone(_IST).date() in selected_dates
         )
-    return tuple(rows), tuple(checksums)
+    return tuple(rows), tuple(checksums), tuple(raw_source_times)
 
 
 @dataclass(frozen=True, slots=True)
 class _ActionScreenResolutionV1:
     identity_sha256: str | None
     action_observed: bool
+    knowledge_at: datetime | None
 
 
 def _screen(
@@ -747,7 +759,9 @@ def _screen(
         expected_isins=(member.isin,),
     ):
         return _ActionScreenResolutionV1(
-            published.public_report.request_identity_sha256, False
+            published.public_report.request_identity_sha256,
+            False,
+            published.private_result.member_results[0].provider_result.retrieved_at,
         )
     if (
         type(published) is PublishedCurrentCorporateActionScreenV1
@@ -769,7 +783,11 @@ def _screen(
         )
         == (member.isin,)
     ):
-        return _ActionScreenResolutionV1(None, True)
+        return _ActionScreenResolutionV1(
+            None,
+            True,
+            published.private_result.member_results[0].provider_result.retrieved_at,
+        )
     return None
 
 
@@ -789,7 +807,10 @@ def _member_failure(
         state,
         reason,
         None,
+        None,
         (),
+        (),
+        None,
         None,
     )
 

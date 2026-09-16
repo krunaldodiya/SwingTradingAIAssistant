@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.current_industry_archive_reader as reader_module
 from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
     AdmittedCurrentIndustryProjectionV1,
     CurrentIndustryArchiveReferenceV1,
@@ -68,6 +69,21 @@ def test_raw_capability_cannot_be_constructed_or_serialized() -> None:
     ):
         with pytest.raises((TypeError, ValueError)):
             operation()
+
+
+def test_reader_propagates_unexpected_archive_reader_faults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*_: object) -> tuple[bytes, object] | None:
+        raise RuntimeError("reader implementation fault")
+
+    monkeypatch.setattr(
+        reader_module.classification, "_read_stable_private_object", unexpected
+    )
+    with pytest.raises(RuntimeError, match="implementation fault"):
+        reader_module._read(  # pyright: ignore[reportPrivateUsage]
+            0, "snapshot-any.json", 1
+        )
 
 
 def test_reader_refuses_a_caller_forged_raw_authority_before_archive_io(

@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo
@@ -44,6 +45,8 @@ from swing_trading_ai_assistant.market_regime.current_raw_price_context import (
 )
 from swing_trading_ai_assistant.market_structure.current_live import (
     CurrentMarketStructureMemberV1,
+    MarketStructureEventV1,
+    MarketStructurePivotV1,
 )
 from swing_trading_ai_assistant.research_packet.current_price_context_runtime_identity_manifest import (
     CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1,
@@ -227,8 +230,11 @@ class CurrentPriceContextMemberResultV1:
     structure: CurrentMarketStructureMemberV1 | None
     direction: Literal["ADVANCE", "DECLINE", "UNCHANGED"] | None
     mapping_observation_sha256: str | None
+    mapping_retrieved_at: datetime | None
     partition_checksums: tuple[str, ...]
+    raw_source_times: tuple[datetime, ...]
     screen_identity_sha256: str | None
+    screen_knowledge_at: datetime | None
 
     def __post_init__(self) -> None:
         if (
@@ -249,8 +255,18 @@ class CurrentPriceContextMemberResultV1:
             or (self.state == "OBSERVED") != (self.reason is None)
             or (self.structure is None) != (self.direction is None)
             or (self.state == "OBSERVED") != (self.structure is not None)
+            or (
+                self.mapping_retrieved_at is not None
+                and not _utc(self.mapping_retrieved_at)
+            )
             or type(self.partition_checksums) is not tuple
             or any(not _digest(item) for item in self.partition_checksums)
+            or type(self.raw_source_times) is not tuple
+            or any(not _utc(item) for item in self.raw_source_times)
+            or (
+                self.screen_knowledge_at is not None
+                and not _utc(self.screen_knowledge_at)
+            )
             or (
                 self.mapping_observation_sha256 is not None
                 and not _digest(self.mapping_observation_sha256)
@@ -309,7 +325,9 @@ class CurrentPriceContextResultV1:
     schedule_identity_sha256: str
     ordered_selection_identity_sha256: str
     canonical_cohort_identity_sha256: str
+    requested_count: int
     questions: tuple[str, ...]
+    schedule_as_of: datetime | None
     data_selection_time: datetime
     evidence_cutoff: datetime
     provider: Literal["UPSTOX"]
@@ -361,7 +379,10 @@ class CurrentPriceContextResultV1:
                     self.source_bindings_identity_sha256,
                 )
             )
+            or type(self.requested_count) is not int
+            or not 1 <= self.requested_count <= 50
             or self.questions != _QUESTIONS
+            or (self.schedule_as_of is not None and not _utc(self.schedule_as_of))
             or not _utc(self.data_selection_time)
             or not _utc(self.evidence_cutoff)
             or self.evidence_cutoff < self.data_selection_time
@@ -372,6 +393,7 @@ class CurrentPriceContextResultV1:
             or not 0 <= self.acquisition_provider_calls <= 251
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= 50
+            or len(self.members) != self.requested_count
             or any(
                 type(item) is not CurrentPriceContextMemberResultV1
                 for item in self.members
@@ -547,8 +569,8 @@ def _result_bindings(
 
 def current_price_context_result_from_canonical_json_bytes_v1(
     raw: bytes,
-) -> dict[str, object]:
-    """Decode the closed public wire representation without minting admission."""
+) -> CurrentPriceContextResultV1:
+    """Decode one fully validated public DTO without minting any capability."""
     if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_RESULT_BYTES:
         raise ValueError("current price context result is invalid")
     try:
@@ -558,27 +580,261 @@ def current_price_context_result_from_canonical_json_bytes_v1(
         value = cast(dict[str, object], decoded)
         if _canonical(value) != raw:
             raise ValueError
-        expected = {item.name for item in fields(CurrentPriceContextResultV1)}
-        if set(value) != expected or value.get("contract_version") != _RESULT_CONTRACT:
+        result = _result_from_value(value)
+        if result.canonical_json_bytes() != raw:
             raise ValueError
-        identity = value.get("result_identity_sha256")
-        if not _digest(identity):
-            raise ValueError
-        preimage = {
-            key: item for key, item in value.items() if key != "result_identity_sha256"
-        }
-        if _digest_value(preimage) != identity:
-            raise ValueError
-        # A decoded mapping is deliberately not an admitted raw/Industry capability.
-        return value
+        return result
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,
         RecursionError,
         TypeError,
         ValueError,
+        InvalidOperation,
     ):
         raise ValueError("current price context result is invalid") from None
+
+
+def _result_from_value(value: object) -> CurrentPriceContextResultV1:
+    if type(value) is not dict:
+        raise ValueError
+    raw = cast(dict[str, object], value)
+    if set(raw) != {item.name for item in fields(CurrentPriceContextResultV1)}:
+        raise ValueError
+    members_value = _list(raw["members"])
+    features_value = _list(raw["features"])
+    groups_value = _list(raw["industry_groups"])
+    breadth_value = raw["breadth"]
+    result = CurrentPriceContextResultV1(
+        contract_version=cast(
+            Literal["current-price-context@v1"], raw["contract_version"]
+        ),
+        request_identity_sha256=cast(str, raw["request_identity_sha256"]),
+        schema_identity_sha256=cast(str, raw["schema_identity_sha256"]),
+        calculation_identity_sha256=cast(str, raw["calculation_identity_sha256"]),
+        configuration_identity_sha256=cast(str, raw["configuration_identity_sha256"]),
+        schedule_identity_sha256=cast(str, raw["schedule_identity_sha256"]),
+        ordered_selection_identity_sha256=cast(
+            str, raw["ordered_selection_identity_sha256"]
+        ),
+        canonical_cohort_identity_sha256=cast(
+            str, raw["canonical_cohort_identity_sha256"]
+        ),
+        requested_count=_integer(raw["requested_count"]),
+        questions=_strings(raw["questions"]),
+        schedule_as_of=(
+            None
+            if raw["schedule_as_of"] is None
+            else _parse_instant(raw["schedule_as_of"])
+        ),
+        data_selection_time=_parse_instant(raw["data_selection_time"]),
+        evidence_cutoff=_parse_instant(raw["evidence_cutoff"]),
+        provider=cast(Literal["UPSTOX"], raw["provider"]),
+        price_basis=cast(Literal["RAW"], raw["price_basis"]),
+        bar_basis=cast(Literal["1d-derived-from-retained-1m"], raw["bar_basis"]),
+        source_bindings_identity_sha256=cast(
+            str, raw["source_bindings_identity_sha256"]
+        ),
+        acquisition_mode=cast(
+            Literal["RETAINED_ONLY", "ACQUIRE_MISSING"], raw["acquisition_mode"]
+        ),
+        acquisition_outcome=cast(Any, raw["acquisition_outcome"]),
+        acquisition_provider_calls=_integer(raw["acquisition_provider_calls"]),
+        members=tuple(_member_result_from_value(item) for item in members_value),
+        breadth=None if breadth_value is None else _breadth_from_value(breadth_value),
+        features=tuple(_feature_from_value(item) for item in features_value),
+        limitations=_strings(raw["limitations"]),
+        runtime_code_identity_sha256=cast(str, raw["runtime_code_identity_sha256"]),
+        industry_evidence_state=cast(Any, raw["industry_evidence_state"]),
+        industry_snapshot_identity_sha256=cast(
+            str | None, raw["industry_snapshot_identity_sha256"]
+        ),
+        industry_retained_identity_sha256=cast(
+            str | None, raw["industry_retained_identity_sha256"]
+        ),
+        industry_known_at=None
+        if raw["industry_known_at"] is None
+        else _parse_instant(raw["industry_known_at"]),
+        industry_groups=tuple(
+            _industry_group_from_value(item) for item in groups_value
+        ),
+        result_identity_sha256=cast(str, raw["result_identity_sha256"]),
+    )
+    return result
+
+
+def _member_result_from_value(value: object) -> CurrentPriceContextMemberResultV1:
+    raw = _object(
+        value, {item.name for item in fields(CurrentPriceContextMemberResultV1)}
+    )
+    return CurrentPriceContextMemberResultV1(
+        position=_integer(raw["position"]),
+        isin=cast(str, raw["isin"]),
+        exchange=cast(Literal["NSE"], raw["exchange"]),
+        effective_symbol=cast(str, raw["effective_symbol"]),
+        state=cast(Any, raw["state"]),
+        reason=cast(str | None, raw["reason"]),
+        structure=None
+        if raw["structure"] is None
+        else _structure_from_value(raw["structure"]),
+        direction=cast(Any, raw["direction"]),
+        mapping_observation_sha256=cast(str | None, raw["mapping_observation_sha256"]),
+        mapping_retrieved_at=(
+            None
+            if raw["mapping_retrieved_at"] is None
+            else _parse_instant(raw["mapping_retrieved_at"])
+        ),
+        partition_checksums=_strings(raw["partition_checksums"]),
+        raw_source_times=tuple(
+            _parse_instant(item) for item in _list(raw["raw_source_times"])
+        ),
+        screen_identity_sha256=cast(str | None, raw["screen_identity_sha256"]),
+        screen_knowledge_at=(
+            None
+            if raw["screen_knowledge_at"] is None
+            else _parse_instant(raw["screen_knowledge_at"])
+        ),
+    )
+
+
+def _structure_from_value(value: object) -> CurrentMarketStructureMemberV1:
+    raw = _object(value, {item.name for item in fields(CurrentMarketStructureMemberV1)})
+    member = CurrentMarketStructureMemberV1(
+        isin=cast(str, raw["isin"]),
+        exchange=cast(str, raw["exchange"]),
+        effective_symbol=cast(str, raw["effective_symbol"]),
+        input_bar_identities_sha256=_strings(raw["input_bar_identities_sha256"]),
+        structure_state=cast(Any, raw["structure_state"]),
+        trend=cast(Any, raw["trend"]),
+        pivots=tuple(_pivot_from_value(item) for item in _list(raw["pivots"])),
+        events=tuple(_event_from_value(item) for item in _list(raw["events"])),
+    )
+    if raw["member_identity_sha256"] != member.member_identity_sha256:
+        raise ValueError
+    return member
+
+
+def _pivot_from_value(value: object) -> MarketStructurePivotV1:
+    raw = _object(value, {item.name for item in fields(MarketStructurePivotV1)})
+    pivot = MarketStructurePivotV1(
+        kind=cast(Any, raw["kind"]),
+        position=_integer(raw["position"]),
+        confirmation_position=_integer(raw["confirmation_position"]),
+        session=_date_from_value(raw["session"]),
+        confirmation_session=_date_from_value(raw["confirmation_session"]),
+        price=_decimal(raw["price"]),
+        relation=cast(Any, raw["relation"]),
+        unclassified_reason=cast(Any, raw["unclassified_reason"]),
+        source_bar_identity_sha256=cast(str, raw["source_bar_identity_sha256"]),
+        comparison_bar_identities_sha256=cast(
+            tuple[str, str, str, str], _strings(raw["comparison_bar_identities_sha256"])
+        ),
+    )
+    if raw["pivot_identity_sha256"] != pivot.pivot_identity_sha256:
+        raise ValueError
+    return pivot
+
+
+def _event_from_value(value: object) -> MarketStructureEventV1:
+    raw = _object(value, {item.name for item in fields(MarketStructureEventV1)})
+    event = MarketStructureEventV1(
+        event=cast(Any, raw["event"]),
+        direction=cast(Any, raw["direction"]),
+        position=_integer(raw["position"]),
+        session=_date_from_value(raw["session"]),
+        close=_decimal(raw["close"]),
+        broken_pivot_identity_sha256=cast(str, raw["broken_pivot_identity_sha256"]),
+        broken_level=_decimal(raw["broken_level"]),
+        prior_trend=cast(Any, raw["prior_trend"]),
+        previous_close_bar_identity_sha256=cast(
+            str, raw["previous_close_bar_identity_sha256"]
+        ),
+        current_close_bar_identity_sha256=cast(
+            str, raw["current_close_bar_identity_sha256"]
+        ),
+    )
+    if raw["event_identity_sha256"] != event.event_identity_sha256:
+        raise ValueError
+    return event
+
+
+def _breadth_from_value(value: object) -> CurrentPriceContextBreadthV1:
+    raw = _object(value, {item.name for item in fields(CurrentPriceContextBreadthV1)})
+    return CurrentPriceContextBreadthV1(
+        _integer(raw["requested_count"]),
+        _integer(raw["observed_count"]),
+        _integer(raw["advances"]),
+        _integer(raw["declines"]),
+        _integer(raw["unchanged"]),
+        _integer(raw["insufficient_count"]),
+        cast(Any, raw["label"]),
+        _strings(raw["reasons"]),
+    )
+
+
+def _feature_from_value(value: object) -> CurrentPriceContextFeatureV1:
+    raw = _object(value, {item.name for item in fields(CurrentPriceContextFeatureV1)})
+    return CurrentPriceContextFeatureV1(
+        cast(str, raw["question"]),
+        cast(Any, raw["state"]),
+        _strings(raw["reasons"]),
+        cast(Any, raw["support"]),
+        cast(Any, raw["readiness"]),
+    )
+
+
+def _industry_group_from_value(value: object) -> CurrentRawIndustryGroupV1:
+    raw = _object(value, {item.name for item in fields(CurrentRawIndustryGroupV1)})
+    return CurrentRawIndustryGroupV1(
+        cast(str, raw["industry"]),
+        _integer(raw["member_count"]),
+        _integer(raw["advances"]),
+        _integer(raw["declines"]),
+        _integer(raw["unchanged"]),
+    )
+
+
+def _object(value: object, expected: set[str]) -> dict[str, object]:
+    if type(value) is not dict or set(cast(dict[str, object], value)) != expected:
+        raise ValueError
+    return cast(dict[str, object], value)
+
+
+def _list(value: object) -> list[object]:
+    if type(value) is not list:
+        raise ValueError
+    return cast(list[object], value)
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    parsed = _list(value)
+    if any(type(item) is not str for item in parsed):
+        raise ValueError
+    return tuple(cast(str, item) for item in parsed)
+
+
+def _integer(value: object) -> int:
+    if type(value) is not int:
+        raise ValueError
+    return value
+
+
+def _date_from_value(value: object) -> date:
+    if type(value) is not str:
+        raise ValueError
+    parsed = date.fromisoformat(value)
+    if parsed.isoformat() != value:
+        raise ValueError
+    return parsed
+
+
+def _decimal(value: object) -> Decimal:
+    if type(value) is not str:
+        raise ValueError
+    parsed = Decimal(value)
+    if not parsed.is_finite():
+        raise ValueError
+    return parsed
 
 
 def research_current_price_context_v1(  # noqa: C901 -- one bounded public composition
@@ -641,6 +897,8 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
             return CurrentPriceContextResultV1(
                 contract_version=_RESULT_CONTRACT,
                 request_identity_sha256=request.request_identity_sha256,
+                requested_count=len(request.members),
+                schedule_as_of=None,
                 **_result_bindings(request, raw_input, evidence_cutoff=observed_now),
                 acquisition_mode="ACQUIRE_MISSING",
                 acquisition_outcome=acquisition_outcome,
@@ -725,8 +983,11 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                         item.structure,
                         item.direction,
                         item.mapping_observation_sha256,
+                        item.mapping_retrieved_at,
                         item.partition_checksums,
+                        item.raw_source_times,
                         item.screen_identity_sha256,
+                        item.screen_knowledge_at,
                     )
                     for item in raw_projection.members
                 )
@@ -767,6 +1028,10 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
     return CurrentPriceContextResultV1(
         contract_version=_RESULT_CONTRACT,
         request_identity_sha256=request.request_identity_sha256,
+        requested_count=len(request.members),
+        schedule_as_of=(
+            None if raw_projection is None else raw_projection.schedule_as_of
+        ),
         **_result_bindings(
             request,
             raw_input,
@@ -830,7 +1095,10 @@ def _withheld_members(
             None,
             None,
             None,
+            None,
             (),
+            (),
+            None,
             None,
         )
         for index, item in enumerate(members)
