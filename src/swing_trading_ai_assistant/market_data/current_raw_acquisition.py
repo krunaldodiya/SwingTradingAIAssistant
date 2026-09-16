@@ -1056,6 +1056,7 @@ def _advance_current_month_once(
             )
             if not validation.candles or validation.actual_cutoff is None:
                 raise _MemberEffectFailure("CURRENT_MONTH_VALIDATION_FAILED")
+            guard.ensure_live()
             published = publish_provisional_partition_under_lease(
                 root,
                 lease,
@@ -1094,6 +1095,7 @@ def _advance_current_month_once(
                 if intraday
                 else 0,
             )
+            guard.ensure_live()
             catalog.save_provisional_partition(metadata_value)
             guard.ensure_live()
     for key in attempted:
@@ -1141,6 +1143,7 @@ def _retain_action_once(
                 ),
                 clock=guard.now,
             ).fetch_strict(member.member.isin, token.get().reveal())
+            guard.ensure_live()
             CorporateActionSnapshotStoreV1(root, lease, catalog).retain(snapshot)
             guard.ensure_live()
 
@@ -1975,25 +1978,33 @@ def _retain_missing_mapping(
             "current raw acquisition write authority unavailable"
         )
     with acquired.lease as lease:
-        control.ensure_live()
+        guard = _EffectGuardV1(root, lease, control)
+        guard.ensure_live()
         with DuckDBCatalog(root, lease=lease) as catalog:
+
+            def before_open() -> None:
+                guard.ensure_live()
+                ledger.before_open("mapping")
+
             client = InstrumentSnapshotClientV1(
                 StrictCurrentRawHttpTransportV1(
                     deadline=request.admission_deadline,
-                    now=control.now,
+                    now=guard.now,
                     operation=StrictCurrentRawOperationV1(
                         "MAPPING",
                         "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
                         4_000_000,
                     ),
-                    before_open=lambda: ledger.before_open("mapping"),
+                    before_open=before_open,
                 ),
-                clock=control.now,
+                clock=guard.now,
             )
+            snapshot = client.fetch()
+            guard.ensure_live()
             InstrumentSnapshotStoreV1(root, lease, catalog).retain(
-                client.fetch(), deadline=control
+                snapshot, deadline=guard
             )
-            control.ensure_live()
+            guard.ensure_live()
 
 
 def _slot(

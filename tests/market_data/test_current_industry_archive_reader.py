@@ -86,9 +86,7 @@ def test_reader_propagates_injected_stable_object_helper_faults(
     def unexpected(*_: object) -> tuple[bytes, object] | None:
         raise error
 
-    monkeypatch.setattr(
-        reader_module.classification, "_read_stable_private_object", unexpected
-    )
+    monkeypatch.setattr(reader_module, "_read_stable_private_object", unexpected)
     with pytest.raises(type(error), match=message):
         reader_module._read(  # pyright: ignore[reportPrivateUsage]
             0, "snapshot-any.json", 1

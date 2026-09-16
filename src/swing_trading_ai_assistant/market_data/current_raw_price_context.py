@@ -111,6 +111,10 @@ class CurrentPriceContextMemberV1:
                 ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
                 for ch in self.effective_symbol
             )
+            or not any(
+                ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                for ch in self.effective_symbol
+            )
             or type(self.valid_from) is not date
             or type(self.valid_through) is not date
             or self.valid_from > self.valid_through
@@ -538,6 +542,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                                 member,
                                 "INSUFFICIENT_EVIDENCE",
                                 "ACTION_IN_WINDOW",
+                                screen_knowledge_at=screen.knowledge_at,
                             )
                         )
                         continue
@@ -809,6 +814,8 @@ def _member_failure(
     member: CurrentPriceContextMemberV1,
     state: Literal["UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"],
     reason: str,
+    *,
+    screen_knowledge_at: datetime | None = None,
 ) -> CurrentRawMemberProjectionV1:
     return CurrentRawMemberProjectionV1(
         position,
@@ -824,7 +831,7 @@ def _member_failure(
         (),
         (),
         None,
-        None,
+        screen_knowledge_at,
     )
 
 
@@ -868,7 +875,13 @@ def recheck_retained_current_raw_context_v1(
 
 
 def is_valid_current_price_context_isin_v1(value: str) -> bool:
-    """Require the canonical ISIN check digit before it reaches a public request."""
+    """Require the canonical 12-character uppercase ASCII ISIN and check digit."""
+    if (
+        type(value) is not str
+        or len(value) != 12
+        or any(item not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" for item in value)
+    ):
+        return False
     encoded = "".join(str(ord(item) - 55) if item.isalpha() else item for item in value)
     total = 0
     for position, item in enumerate(reversed(encoded)):

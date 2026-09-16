@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import pytest
@@ -32,6 +32,7 @@ from current_raw_acquisition_fixtures import schedule as fixture_schedule
 import swing_trading_ai_assistant.market_data.current_industry_archive_reader as reader_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
+import swing_trading_ai_assistant.market_data.current_raw_price_context as raw_context_module
 import swing_trading_ai_assistant.research_packet.current_price_context as packet_module
 from swing_trading_ai_assistant.market_data import (
     current_industry_classification as classification,
@@ -202,6 +203,99 @@ def test_request_rejects_ist_rollover_expired_member_and_duplicate_json_fields()
     )
     with pytest.raises(ValueError, match="request is invalid"):
         current_price_context_request_from_canonical_json_bytes_v1(duplicate)
+
+
+def test_public_duplicate_symbol_request_is_invalid_before_cli_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    first, duplicate = _member(1), replace(_member(2), effective_symbol="SYM001")
+    value = {
+        "contract_version": "current-price-context-request@v1",
+        "data_selection_time": "2026-09-15T09:00:00.000000Z",
+        "admission_deadline": "2026-09-15T09:30:00.000000Z",
+        "schedule_identity_sha256": "a" * 64,
+        "members": [
+            {
+                "isin": member.isin,
+                "exchange": member.exchange,
+                "instrument_type": member.instrument_type,
+                "segment": member.segment,
+                "effective_symbol": member.effective_symbol,
+                "valid_from": member.valid_from.isoformat(),
+                "valid_through": member.valid_through.isoformat(),
+            }
+            for member in (first, duplicate)
+        ],
+        "questions": [
+            "RAW_MARKET_STRUCTURE",
+            "RAW_20_SESSION_DIRECTION",
+            "RAW_COHORT_BREADTH",
+            "RAW_INDUSTRY_PARTICIPATION",
+        ],
+        "industry_archive_reference": None,
+    }
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(ValueError, match="request is invalid"):
+        current_price_context_request_from_canonical_json_bytes_v1(raw)
+
+    root = tmp_path / "root"
+    request_file = tmp_path / "request.json"
+    request_file.write_bytes(raw)
+    request_file.chmod(0o600)
+    wire = RecordedWire([])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        main(
+            [
+                "price-context-current",
+                "--input-file",
+                str(request_file),
+                "--storage-root",
+                str(root),
+                "--output",
+                "json",
+            ],
+            trusted_clock=_Clock(datetime(2026, 9, 15, 9, tzinfo=UTC)),
+        )
+        == 2
+    )
+    emitted = capsys.readouterr()
+    assert (emitted.out, emitted.err, wire.attempts, FixtureTokenProvider.calls) == (
+        "",
+        "request_invalid\n",
+        0,
+        0,
+    )
+
+
+@pytest.mark.parametrize("isin", ("", "0", "ine467b01029", "INE467B0102"))
+def test_public_member_requires_strict_ascii_isin_and_alphanumeric_symbol(
+    isin: str,
+) -> None:
+    with pytest.raises(ValueError, match="member is invalid"):
+        CurrentPriceContextMemberV1(
+            isin,
+            "NSE",
+            "EQUITY",
+            "EQ",
+            "ACME",
+            date(2020, 1, 1),
+            date(2030, 1, 1),
+        )
+    with pytest.raises(ValueError, match="member is invalid"):
+        CurrentPriceContextMemberV1(
+            _member_isin(1),
+            "NSE",
+            "EQUITY",
+            "EQ",
+            ".&_-",
+            date(2020, 1, 1),
+            date(2030, 1, 1),
+        )
 
 
 def _classification_isin(index: int) -> str:
@@ -571,7 +665,43 @@ def test_acquire_missing_public_exposes_only_safe_accounting(
     assert result.acquisition_outcome == "ACQUISITION_COMPLETED"
     assert result.acquisition_provider_calls == wire.attempts == 2
     assert result.members[0].state == "OBSERVED"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
     assert "fixture-token" not in result.canonical_json_bytes().decode()
+
+
+def test_public_calendar_prerequisite_acquisition_outcome_round_trips(
+    tmp_path: Path,
+) -> None:
+    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    request = CurrentPriceContextRequestV1(
+        "current-price-context-request@v1",
+        selected_at,
+        selected_at + timedelta(minutes=30),
+        "a" * 64,
+        (_member(1),),
+        (
+            "RAW_MARKET_STRUCTURE",
+            "RAW_20_SESSION_DIRECTION",
+            "RAW_COHORT_BREADTH",
+            "RAW_INDUSTRY_PARTICIPATION",
+        ),
+        None,
+    )
+    result = research_current_price_context_v1(
+        request, tmp_path / "missing", acquire_missing=True, clock=_Clock(selected_at)
+    )
+    assert result.acquisition_outcome == "CALENDAR_PREREQUISITE_MISSING"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
 
 
 def _acquire_retained_raw(
@@ -700,10 +830,66 @@ def test_public_action_observed_withholds_only_affected_member_comparison(
         None,
         None,
     )
+    assert member.screen_identity_sha256 is None
+    assert (
+        member.screen_knowledge_at is not None
+        and member.screen_knowledge_at <= result.evidence_cutoff
+    )
     assert result.breadth is not None
     assert result.breadth.requested_count == result.breadth.insufficient_count == 1
     assert result.breadth.observed_count == 0
     assert result.features[1].readiness == "WITHHELD"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    (
+        ("missing", "RAW_BAR_MISSING"),
+        ("conflicted", "RAW_BAR_CONFLICTED"),
+        ("invalid", "RAW_BAR_INVALID"),
+    ),
+)
+def test_public_real_retained_rows_round_trip_all_raw_bar_refusals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    original_member_rows = cast(Any, raw_context_module._member_rows)  # pyright: ignore[reportPrivateUsage]
+
+    def retained_rows(
+        *args: object, **kwargs: object
+    ) -> tuple[tuple[object, ...], tuple[str, ...], tuple[datetime, ...]]:
+        rows, checksums, source_times = original_member_rows(*args, **kwargs)
+        if mutation == "missing":
+            rows = rows[1:]
+        elif mutation == "conflicted":
+            rows = (rows[0], *rows)
+        else:
+            rows = (object(), *rows[1:])
+        return rows, checksums, source_times
+
+    monkeypatch.setattr(raw_context_module, "_member_rows", retained_rows)
+    result = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    member = result.members[0]
+    assert (member.state, member.reason, member.structure, member.direction) == (
+        "INSUFFICIENT_EVIDENCE",
+        expected_reason,
+        None,
+        None,
+    )
     assert (
         current_price_context_result_from_canonical_json_bytes_v1(
             result.canonical_json_bytes()
@@ -1002,6 +1188,24 @@ def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
             partial.canonical_json_bytes()
         )
         == partial
+    )
+
+    blocked_root = tmp_path / "blocked"
+    blocked_request = seed_root(blocked_root, retained_action=True)
+    blocked_wire = RecordedWire([WireReply(status=404)])
+    monkeypatch.setattr(transport_module, "build_opener", blocked_wire.build_opener)
+    blocked = research_current_price_context_v1(
+        _public_request(blocked_request),
+        blocked_root,
+        acquire_missing=True,
+        clock=_Clock(blocked_request.data_selection_time),
+    )
+    assert blocked.acquisition_outcome == "ACQUISITION_BLOCKED"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            blocked.canonical_json_bytes()
+        )
+        == blocked
     )
 
     stopped_root = tmp_path / "stopped"
@@ -1383,6 +1587,19 @@ def test_legacy_industry_archive_remains_reconstructible_but_is_local_current_un
     )
 
 
+def test_reader_accepts_a_current_schema_archive_with_base_industry_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    assert classification._CLASSIFICATION_RUNTIME_IDENTITY == (  # pyright: ignore[reportPrivateUsage]
+        "2f44dceac8b9b6ff2ab7abbd263429aab8fc39db24c296ed32333c22d137d778"
+    )
+    result = _read_retained_industry(root, raw_request, reference)
+    assert isinstance(result, AdmittedCurrentIndustryProjectionV1)
+
+
 def test_industry_reader_cleanup_preserves_primary_and_propagates_standalone_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1731,6 +1948,78 @@ def test_public_result_decoder_rejects_rehashed_arbitrary_member_breadth_and_fea
         lambda value: value["features"][0].__setitem__("reasons", ["ARBITRARY"]),
     )
     for mutate in mutations:
+        forged: Any = json.loads(json.dumps(original))
+        mutate(forged)
+        with pytest.raises(ValueError, match="result is invalid"):
+            current_price_context_result_from_canonical_json_bytes_v1(
+                _rehashed_result_bytes(forged)
+            )
+
+
+def test_public_result_decoder_rejects_rehashed_acquisition_and_identifier_counterfeits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    retained = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    acquired = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        acquire_missing=True,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            retained.canonical_json_bytes()
+        )
+        == retained
+    )
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            acquired.canonical_json_bytes()
+        )
+        == acquired
+    )
+
+    def short_isin(value: Any) -> None:
+        member = value["members"][0]
+        member["isin"] = "0"
+        structure = member["structure"]
+        structure["isin"] = "0"
+        structure["member_identity_sha256"] = packet_module._digest_value(  # pyright: ignore[reportPrivateUsage]
+            {
+                key: item
+                for key, item in structure.items()
+                if key != "member_identity_sha256"
+            }
+        )
+
+    mutations: tuple[tuple[dict[str, object], Callable[[Any], None]], ...] = (
+        (json.loads(retained.canonical_json_bytes()), short_isin),
+        (
+            json.loads(retained.canonical_json_bytes()),
+            lambda value: value.__setitem__("acquisition_provider_calls", 1),
+        ),
+        (
+            json.loads(retained.canonical_json_bytes()),
+            lambda value: value.update(
+                acquisition_mode="ACQUIRE_MISSING", acquisition_outcome="NOT_ATTEMPTED"
+            ),
+        ),
+        (
+            json.loads(acquired.canonical_json_bytes()),
+            lambda value: value.__setitem__("acquisition_provider_calls", 7),
+        ),
+        (
+            json.loads(acquired.canonical_json_bytes()),
+            lambda value: value.__setitem__("acquisition_outcome", "STOPPED"),
+        ),
+    )
+    for original, mutate in mutations:
         forged: Any = json.loads(json.dumps(original))
         mutate(forged)
         with pytest.raises(ValueError, match="result is invalid"):

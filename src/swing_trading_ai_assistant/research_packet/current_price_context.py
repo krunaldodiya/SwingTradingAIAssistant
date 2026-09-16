@@ -86,6 +86,9 @@ _MEMBER_REASON_STATES = {
     "RAW_MAPPING_STALE": "INSUFFICIENT_EVIDENCE",
     "RAW_MAPPING_CORRUPT": "INSUFFICIENT_EVIDENCE",
     "RAW_PARTITION_CORRUPT": "INSUFFICIENT_EVIDENCE",
+    "RAW_BAR_MISSING": "INSUFFICIENT_EVIDENCE",
+    "RAW_BAR_CONFLICTED": "INSUFFICIENT_EVIDENCE",
+    "RAW_BAR_INVALID": "INSUFFICIENT_EVIDENCE",
     "SCREEN_UNAVAILABLE": "INSUFFICIENT_EVIDENCE",
     "ACTION_IN_WINDOW": "INSUFFICIENT_EVIDENCE",
 }
@@ -193,6 +196,8 @@ class CurrentPriceContextRequestV1:
                 for member in self.members
             )
             or len({member.isin for member in self.members}) != len(self.members)
+            or len({member.effective_symbol for member in self.members})
+            != len(self.members)
             or self.questions != _QUESTIONS
             or type(self.industry_archive_reference)
             not in (CurrentIndustryArchiveReferenceV1, type(None))
@@ -302,6 +307,10 @@ class CurrentPriceContextMemberResultV1:
                 char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
                 for char in self.effective_symbol
             )
+            or not any(
+                char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                for char in self.effective_symbol
+            )
             or self.state
             not in (
                 "OBSERVED",
@@ -375,7 +384,17 @@ class CurrentPriceContextMemberResultV1:
                     or self.partition_checksums
                     or self.raw_source_times
                     or self.screen_identity_sha256 is not None
-                    or self.screen_knowledge_at is not None
+                    or (
+                        self.screen_knowledge_at is not None
+                        and self.reason != "ACTION_IN_WINDOW"
+                    )
+                )
+            )
+            or (
+                self.reason == "ACTION_IN_WINDOW"
+                and (
+                    self.screen_identity_sha256 is not None
+                    or self.screen_knowledge_at is None
                 )
             )
         ):
@@ -655,7 +674,18 @@ class CurrentPriceContextResultV1:
                 "STOPPED",
             )
             or type(self.acquisition_provider_calls) is not int
-            or not 0 <= self.acquisition_provider_calls <= 251
+            or not 0 <= self.acquisition_provider_calls <= 5 * self.requested_count + 1
+            or (
+                self.acquisition_mode == "RETAINED_ONLY"
+                and (
+                    self.acquisition_outcome != "NOT_ATTEMPTED"
+                    or self.acquisition_provider_calls != 0
+                )
+            )
+            or (
+                self.acquisition_mode == "ACQUIRE_MISSING"
+                and self.acquisition_outcome == "NOT_ATTEMPTED"
+            )
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= 50
             or len(self.members) != self.requested_count
@@ -776,6 +806,19 @@ class CurrentPriceContextResultV1:
                     or self.industry_known_at is not None
                     or self.industry_groups
                 )
+            )
+        ):
+            raise ValueError("current price context result is invalid")
+        if self.acquisition_outcome == "STOPPED" and (
+            self.acquisition_mode != "ACQUIRE_MISSING"
+            or self.breadth is not None
+            or self.industry_evidence_state != "NOT_ATTEMPTED"
+            or any(
+                item.state != "DEPENDENCY_BLOCKED"
+                or item.reason != "ACQUISITION_STOPPED"
+                or item.structure is not None
+                or item.direction is not None
+                for item in self.members
             )
         ):
             raise ValueError("current price context result is invalid")

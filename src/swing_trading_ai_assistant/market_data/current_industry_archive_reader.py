@@ -9,9 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import weakref
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 from zoneinfo import ZoneInfo
@@ -243,12 +244,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 marker_raw = _read(directory, marker_name, 16_384)
                 if snapshot_raw is None or receipt_raw is None or marker_raw is None:
                     _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING")
-                try:
-                    candidate = classification._retained_candidate_from_receipt(  # pyright: ignore[reportPrivateUsage]
-                        receipt_raw
-                    )
-                except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
-                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+                _validate_snapshot_bytes(snapshot_raw, reference)
+                _validate_receipt_bytes(receipt_raw, reference)
+                candidate = classification._retained_candidate_from_receipt(  # pyright: ignore[reportPrivateUsage]
+                    receipt_raw
+                )
                 candidate_value = cast(Any, candidate)
                 if (
                     candidate_value.retained_identity_sha256
@@ -328,13 +328,16 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     or reproduced.canonical_json_bytes() != snapshot_raw
                 ):
                     _refuse("CONFLICTED", "CLASSIFICATION_PROJECTION_SUBSTITUTED")
-                try:
-                    marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
-                        marker_raw, receipt_raw, snapshot
-                    )
-                except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
-                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
-                if marker_known_at != candidate.known_at:
+                expected_known_at = _validate_marker_bytes(
+                    marker_raw, receipt_raw, reference.snapshot_identity_sha256
+                )
+                marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
+                    marker_raw, receipt_raw, snapshot
+                )
+                if (
+                    marker_known_at != expected_known_at
+                    or marker_known_at != candidate.known_at
+                ):
                     _refuse("CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED")
                 rows = tuple(
                     (row.isin, row.exchange, row.effective_symbol, row.industry)
@@ -361,8 +364,12 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 _reread_exact(directory, snapshot_name, snapshot_raw, 262_144)
                 _reread_exact(directory, receipt_name, receipt_raw, 262_144)
                 _reread_exact(directory, marker_name, marker_raw, 16_384)
-                classification._validate_archive_directory(root, directory)  # pyright: ignore[reportPrivateUsage]
-                classification._validate_archive_root(root)  # pyright: ignore[reportPrivateUsage]
+                if not _marker_mtime_at_or_before(
+                    directory, marker_name, candidate.known_at
+                ):
+                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+                _validate_archive_directory(root, directory)
+                _validate_archive_root(root)
                 operation.ensure_live()
             except BaseException as error:
                 active_error = error
@@ -422,9 +429,318 @@ def _canonical(value: object) -> bytes:
 
 
 def _read(directory: int, name: str, maximum: int) -> bytes | None:
-    """Translate only the archive reader's stable-object validation refusal."""
-    try:
-        value = classification._read_stable_private_object(directory, name, maximum)  # pyright: ignore[reportPrivateUsage]
-    except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
-        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    """Read one stable existing-only archive object with reader-owned validation."""
+    value = _read_stable_private_object(directory, name, maximum)
     return None if value is None else value[0]
+
+
+def _read_stable_private_object(
+    parent: int, name: str, maximum: int
+) -> tuple[bytes, os.stat_result] | None:
+    """Reject malformed named private files without borrowing writer error wrappers."""
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+    except FileNotFoundError:
+        return None
+    active_error: BaseException | None = None
+    try:
+        named_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        opened_before = os.fstat(descriptor)
+        if (
+            maximum < 0
+            or opened_before.st_size > maximum
+            or not _private_regular_object(opened_before, opened_before.st_size)
+            or not _same_metadata(named_before, opened_before)
+        ):
+            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+        chunks: list[bytes] = []
+        remaining = opened_before.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        opened_after = os.fstat(descriptor)
+        named_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not _same_metadata(opened_before, opened_after)
+            or not _same_metadata(named_before, named_after)
+            or not _same_metadata(opened_after, named_after)
+            or not _private_regular_object(named_after, len(raw))
+        ):
+            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+        return raw, named_after
+    except BaseException as error:
+        active_error = error
+        raise
+    finally:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            if active_error is None:
+                raise
+
+
+def _private_regular_object(info: os.stat_result, size: int) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o400
+        and info.st_nlink == 1
+        and info.st_size == size
+    )
+
+
+def _same_metadata(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        first.st_uid,
+        first.st_nlink,
+        first.st_size,
+        first.st_mtime_ns,
+        first.st_ctime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        second.st_uid,
+        second.st_nlink,
+        second.st_size,
+        second.st_mtime_ns,
+        second.st_ctime_ns,
+    )
+
+
+def _object_bytes(raw: bytes) -> dict[str, object]:
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    if type(decoded) is not dict:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    value = cast(dict[str, object], decoded)
+    if _canonical(value) != raw:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    return value
+
+
+def _digest(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _private_rows(value: object, cohort_size: int) -> None:
+    if type(value) is not list or not 1 <= cohort_size <= 50:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    rows = cast(list[object], value)
+    if len(rows) != cohort_size:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    expected = {"effective_symbol", "exchange", "industry", "isin", "symbol"}
+    parsed_rows: list[dict[str, str]] = []
+    for row in rows:
+        if type(row) is not dict:
+            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+        candidate = cast(dict[str, object], row)
+        if set(candidate) != expected or any(
+            type(candidate[field]) is not str for field in expected
+        ):
+            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+        parsed = cast(dict[str, str], candidate)
+        if (
+            parsed["exchange"] != "NSE"
+            or parsed["effective_symbol"] != parsed["symbol"]
+        ):
+            _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+        parsed_rows.append(parsed)
+    identities = tuple(row["isin"] for row in parsed_rows)
+    if identities != tuple(sorted(identities)) or len(set(identities)) != len(rows):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+
+
+def _validate_snapshot_bytes(
+    raw: bytes, reference: CurrentIndustryArchiveReferenceV1
+) -> None:
+    if hashlib.sha256(raw).hexdigest() != reference.snapshot_identity_sha256:
+        _refuse("CONFLICTED", "CLASSIFICATION_SNAPSHOT_SUBSTITUTED")
+    value = _object_bytes(raw)
+    expected = {
+        "artifact_sha256",
+        "artifact_revision",
+        "cohort_identity_sha256",
+        "cohort_size",
+        "evidence_state",
+        "input_identity_sha256",
+        "private_rows",
+        "runtime_code_identity_sha256",
+        "schema_identity_sha256",
+    }
+    if (
+        set(value) != expected
+        or value["evidence_state"] != "PROJECTED"
+        or value["schema_identity_sha256"]
+        not in classification._CLASSIFICATION_SCHEMA_IDENTITIES  # pyright: ignore[reportPrivateUsage]
+        or value["runtime_code_identity_sha256"]
+        != classification._CLASSIFICATION_RUNTIME_IDENTITY  # pyright: ignore[reportPrivateUsage]
+        or any(
+            not _digest(value[field])
+            for field in (
+                "artifact_sha256",
+                "cohort_identity_sha256",
+                "input_identity_sha256",
+                "runtime_code_identity_sha256",
+                "schema_identity_sha256",
+            )
+        )
+        or type(value["artifact_revision"]) is not str
+        or value["artifact_revision"] != f"sha256:{value['artifact_sha256']}"
+        or type(value["cohort_size"]) is not int
+    ):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    _private_rows(value["private_rows"], value["cohort_size"])
+
+
+def _validate_receipt_bytes(
+    raw: bytes, reference: CurrentIndustryArchiveReferenceV1
+) -> None:
+    value = _object_bytes(raw)
+    expected = {
+        "archive_identity_sha256",
+        "archive_receipt_identity_sha256",
+        "artifact_revision",
+        "artifact_sha256",
+        "cohort_identity_sha256",
+        "cohort_size",
+        "evidence_state",
+        "input_identity_sha256",
+        "known_at",
+        "private_rows",
+        "publisher_effective_from",
+        "publisher_effective_through",
+        "publisher_published_at",
+        "publisher_revision",
+        "receipt_version",
+        "retained_identity_sha256",
+        "schema_identity_sha256",
+        "snapshot_identity_sha256",
+        "snapshot_runtime_code_identity_sha256",
+    }
+    if (
+        set(value) != expected
+        or value["receipt_version"] != "retained-current-industry-receipt@v1"
+        or value["evidence_state"] != "RETAINED"
+        or value["schema_identity_sha256"]
+        not in classification._CLASSIFICATION_SCHEMA_IDENTITIES  # pyright: ignore[reportPrivateUsage]
+        or value["snapshot_runtime_code_identity_sha256"]
+        != classification._CLASSIFICATION_RUNTIME_IDENTITY  # pyright: ignore[reportPrivateUsage]
+        or any(
+            not _digest(value[field])
+            for field in (
+                "archive_identity_sha256",
+                "archive_receipt_identity_sha256",
+                "artifact_sha256",
+                "cohort_identity_sha256",
+                "input_identity_sha256",
+                "retained_identity_sha256",
+                "schema_identity_sha256",
+                "snapshot_identity_sha256",
+                "snapshot_runtime_code_identity_sha256",
+            )
+        )
+        or value["snapshot_identity_sha256"] != reference.snapshot_identity_sha256
+        or value["retained_identity_sha256"] != reference.retained_identity_sha256
+        or type(value["artifact_revision"]) is not str
+        or value["artifact_revision"] != f"sha256:{value['artifact_sha256']}"
+        or type(value["cohort_size"]) is not int
+        or any(
+            value[field] is not None
+            for field in (
+                "publisher_effective_from",
+                "publisher_effective_through",
+                "publisher_published_at",
+                "publisher_revision",
+            )
+        )
+    ):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    _private_rows(value["private_rows"], value["cohort_size"])
+    _parse_known_at(value["known_at"])
+
+
+def _parse_known_at(value: object) -> datetime:
+    if type(value) is not str:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    try:
+        known_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    if known_at.tzinfo is not UTC or known_at.utcoffset() != UTC.utcoffset(known_at):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    if known_at.isoformat(timespec="microseconds").replace("+00:00", "Z") != value:
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    return known_at
+
+
+def _validate_marker_bytes(
+    raw: bytes, receipt_raw: bytes, snapshot_identity: str
+) -> datetime:
+    value = _object_bytes(raw)
+    if (
+        set(value)
+        != {
+            "completion_marker_version",
+            "known_at",
+            "receipt_sha256",
+            "snapshot_identity_sha256",
+        }
+        or value["completion_marker_version"]
+        != "retained-current-industry-completion@v1"
+        or value["receipt_sha256"] != hashlib.sha256(receipt_raw).hexdigest()
+        or value["snapshot_identity_sha256"] != snapshot_identity
+    ):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+    return _parse_known_at(value["known_at"])
+
+
+def _marker_mtime_at_or_before(directory: int, name: str, known_at: datetime) -> bool:
+    info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    epoch = datetime(1970, 1, 1, tzinfo=known_at.tzinfo)
+    delta = known_at - epoch
+    deadline_ns = (
+        delta.days * 86_400 + delta.seconds
+    ) * 1_000_000_000 + delta.microseconds * 1_000
+    return max(info.st_mtime_ns, info.st_ctime_ns) <= deadline_ns
+
+
+def _validate_archive_root(root: int) -> None:
+    info = os.fstat(root)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
+
+
+def _validate_archive_directory(root: int, directory: int) -> None:
+    opened = os.fstat(directory)
+    named = os.stat(
+        ".current-industry-classification-v1", dir_fd=root, follow_symlinks=False
+    )
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_uid != os.geteuid()
+        or stat.S_IMODE(opened.st_mode) != 0o700
+        or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+    ):
+        _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")

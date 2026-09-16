@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
     CurrentRawInvocationControlV1,
+    CurrentRawInvocationStoppedV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
@@ -409,6 +411,74 @@ def test_missing_mapping_retains_once_then_freshly_replans_with_native_provider_
         and result.accounting.members[0][0].disposition.value
         == "NOT_ATTEMPTED_SHARED_STOP"
     )
+
+
+def test_mapping_cancellation_immediately_before_open_has_no_provider_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True)
+    plan = acquisition_module._read_plan(  # pyright: ignore[reportPrivateUsage]
+        root, request, fixture_control(request)
+    )
+    assert plan is not None
+    forced = replace(
+        plan,
+        mapping=replace(
+            plan.mapping,
+            disposition=acquisition_module.PlannedSlotDispositionV1.MISSING,
+            reason="RAW_MAPPING_MISSING",
+        ),
+    )
+    ledger = acquisition_module._AcquisitionLedgerV1(forced)  # pyright: ignore[reportPrivateUsage]
+
+    class CancelAtOpen:
+        calls = 0
+
+        def is_cancelled(self) -> bool:
+            self.calls += 1
+            return self.calls >= 2
+
+    cancellation = CancelAtOpen()
+    mapping = gzip.compress(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "name": "Acme Limited",
+                    "exchange": "NSE",
+                    "isin": request.members[0].isin,
+                    "instrument_type": "EQ",
+                    "instrument_key": f"NSE_EQ|{request.members[0].isin}",
+                    "trading_symbol": request.members[0].effective_symbol,
+                }
+            ],
+            separators=(",", ":"),
+        ).encode(),
+        mtime=0,
+    )
+    wire = RecordedWire(
+        [WireReply(body=mapping, headers=(("Content-Type", "application/gzip"),))]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    control = CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=cancellation,
+    )
+
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    with pytest.raises(CurrentRawInvocationStoppedV1, match="CANCELLATION_REQUESTED"):
+        acquisition_module._retain_missing_mapping(  # pyright: ignore[reportPrivateUsage]
+            root,
+            identity,
+            request,
+            control,
+            ledger,
+        )
+    assert (cancellation.calls, wire.attempts) == (2, 0)
 
 
 def test_closed_month_acquisition_retains_real_partition_and_reuses_it(
@@ -948,6 +1018,11 @@ def test_current_interruption_discards_all_staged_current_rows(
         cancellation, "cancelled", True
     )
     wire = RecordedWire([history, intraday, WireReply(body=action_body())])
+    files_before_interruption = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
     monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
     monkeypatch.setattr(
         acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
@@ -969,6 +1044,11 @@ def test_current_interruption_discards_all_staged_current_rows(
         else "ABORTED_BEFORE_CATALOG_COMMIT",
     ]
     assert slots[-1].attempts == 0
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    } == files_before_interruption
 
 
 def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitting_stage(
@@ -1001,6 +1081,11 @@ def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitti
         )
     raw_bytes = tuple(path.read_bytes() for path in root.rglob("*.parquet"))
     remove_action_metadata(root)
+    files_before_interrupted_action = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
     cancellation = MutableCancellation()
     interrupted = WireReply(
         body=action_body(), on_read=lambda: setattr(cancellation, "cancelled", True)
@@ -1017,6 +1102,11 @@ def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitti
     assert stopped.outcome == "STOPPED"
     assert stopped.provider_calls == interrupted_wire.attempts == 1
     assert tuple(path.read_bytes() for path in root.rglob("*.parquet")) == raw_bytes
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    } == files_before_interrupted_action
     retry_wire = RecordedWire([WireReply(body=action_body())])
     monkeypatch.setattr(transport_module, "build_opener", retry_wire.build_opener)
     retried = acquire_missing_current_raw_evidence_v1(

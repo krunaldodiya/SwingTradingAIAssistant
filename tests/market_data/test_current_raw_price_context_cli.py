@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -165,17 +164,11 @@ def test_price_context_current_maps_invalid_and_stopped_outcomes_to_frozen_exits
     request = current_price_context_request_from_canonical_json_bytes_v1(
         request_file.read_bytes()
     )
-    prior = research_current_price_context_v1(request, root, clock=_Clock())
-    stopped = replace(
-        prior,
-        acquisition_mode="ACQUIRE_MISSING",
-        acquisition_outcome="STOPPED",
-        features=(
-            *prior.features[:3],
-            replace(prior.features[3], reasons=("INDUSTRY_NOT_ATTEMPTED",)),
-        ),
-        result_identity_sha256="",
+    root.chmod(0o755)
+    stopped = research_current_price_context_v1(
+        request, root, acquire_missing=True, clock=_Clock()
     )
+    assert stopped.acquisition_outcome == "STOPPED"
 
     def stopped_result(
         *_args: object, **_kwargs: object
