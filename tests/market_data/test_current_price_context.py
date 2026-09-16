@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import os
+import shutil
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
@@ -27,9 +28,12 @@ from current_raw_acquisition_fixtures import schedule as fixture_schedule
 import swing_trading_ai_assistant.market_data.current_industry_archive_reader as reader_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
+import swing_trading_ai_assistant.research_packet.current_price_context as packet_module
 from swing_trading_ai_assistant.market_data import (
     current_industry_classification as classification,
 )
+from swing_trading_ai_assistant.market_data.catalog import CatalogStorageError
+from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
     AdmittedCurrentIndustryProjectionV1,
     read_current_industry_archive_exact_v1,
@@ -42,6 +46,7 @@ from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
 )
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     AdmittedCurrentRawContextV1,
+    CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
@@ -59,6 +64,9 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     current_price_context_request_from_canonical_json_bytes_v1,
     current_price_context_result_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
+)
+from swing_trading_ai_assistant.research_packet.current_price_context_runtime_identity_manifest import (
+    CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1,
 )
 from swing_trading_ai_assistant.sector_analysis.current_raw_industry_participation import (
     reduce_current_raw_industry_participation_v1,
@@ -446,6 +454,74 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
     payload = result.canonical_json_bytes().decode()
     for private in (str(root), "fixture-token", "https://", "Authorization", "raw-"):
         assert private not in payload
+
+
+def test_sdk_and_inprocess_cli_emit_identical_retained_public_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = (tmp_path / "retained").resolve()
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    request = _public_request(raw_request, reference)
+    sdk = research_current_price_context_v1(
+        request, root, clock=_Clock(raw_request.data_selection_time)
+    )
+    input_file = (tmp_path / "request.json").resolve()
+    input_file.write_bytes(
+        json.dumps(
+            {
+                "contract_version": request.contract_version,
+                "data_selection_time": request.data_selection_time.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "admission_deadline": request.admission_deadline.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "schedule_identity_sha256": request.schedule_identity_sha256,
+                "members": [
+                    {
+                        "isin": member.isin,
+                        "exchange": member.exchange,
+                        "instrument_type": member.instrument_type,
+                        "segment": member.segment,
+                        "effective_symbol": member.effective_symbol,
+                        "valid_from": member.valid_from.isoformat(),
+                        "valid_through": member.valid_through.isoformat(),
+                    }
+                    for member in request.members
+                ],
+                "questions": list(request.questions),
+                "industry_archive_reference": {
+                    "contract_version": reference.contract_version,
+                    "snapshot_identity_sha256": reference.snapshot_identity_sha256,
+                    "retained_identity_sha256": reference.retained_identity_sha256,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    input_file.chmod(0o600)
+
+    assert (
+        main(
+            [
+                "price-context-current",
+                "--input-file",
+                str(input_file),
+                "--storage-root",
+                str(root),
+                "--output",
+                "json",
+            ],
+            trusted_clock=_Clock(raw_request.data_selection_time),
+        )
+        == 0
+    )
+    emitted = capsys.readouterr()
+    assert emitted.err == ""
+    assert emitted.out.encode() == sdk.canonical_json_bytes()
 
 
 def test_acquire_missing_public_exposes_only_safe_accounting(
@@ -992,6 +1068,98 @@ def test_industry_reader_rejects_substitution_after_initial_real_object_read(
 
 
 @pytest.mark.parametrize(
+    ("target_name", "pattern", "error"),
+    (
+        ("mapping-catalog", "catalog.duckdb", CatalogStorageError),
+        ("raw-partition", "*.parquet", StorageRootLeaseError),
+    ),
+)
+def test_public_mint_rechecks_real_mapping_and_raw_partition_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    pattern: str,
+    error: type[Exception],
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    target = next(root.rglob(pattern))
+    original_recheck = packet_module.recheck_retained_current_raw_context_v1
+
+    def replace_then_recheck(
+        value: AdmittedCurrentRawContextV1,
+        storage_root: Path,
+        *,
+        lease: StorageRootLease,
+        control: CurrentRawInvocationControlV1,
+    ) -> None:
+        target.chmod(0o600)
+        target.write_bytes(b"replaced retained authority")
+        target.chmod(0o400)
+        original_recheck(value, storage_root, lease=lease, control=control)
+
+    monkeypatch.setattr(
+        packet_module, "recheck_retained_current_raw_context_v1", replace_then_recheck
+    )
+
+    with pytest.raises(error):
+        research_current_price_context_v1(
+            _public_request(raw_request),
+            root,
+            clock=_Clock(raw_request.data_selection_time),
+        )
+    assert target_name in {"mapping-catalog", "raw-partition"}
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected_state"),
+    (
+        ("raw-*.csv", "CONFLICTED"),
+        ("snapshot-*.json", "CONFLICTED"),
+        ("retained-*.json", "INSUFFICIENT_EVIDENCE"),
+        ("completion-*.json", "INSUFFICIENT_EVIDENCE"),
+    ),
+)
+def test_public_mint_rereads_every_industry_artifact_after_raw_calculation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pattern: str,
+    expected_state: str,
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    target = next((root / ".current-industry-classification-v1").glob(pattern))
+    original_recheck = packet_module.recheck_retained_current_raw_context_v1
+
+    def recheck_then_replace(
+        value: AdmittedCurrentRawContextV1,
+        storage_root: Path,
+        *,
+        lease: StorageRootLease,
+        control: CurrentRawInvocationControlV1,
+    ) -> None:
+        original_recheck(value, storage_root, lease=lease, control=control)
+        target.chmod(0o600)
+        target.write_bytes(b"replaced after raw calculation")
+        target.chmod(0o400)
+
+    monkeypatch.setattr(
+        packet_module, "recheck_retained_current_raw_context_v1", recheck_then_replace
+    )
+
+    result = research_current_price_context_v1(
+        _public_request(raw_request, reference),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+
+    assert result.members[0].state == "OBSERVED"
+    assert result.industry_evidence_state == expected_state
+    assert result.industry_groups == ()
+
+
+@pytest.mark.parametrize(
     "helper_name",
     ("_retained_candidate_from_receipt", "_completion_marker_known_at"),
 )
@@ -1012,6 +1180,92 @@ def test_industry_reader_propagates_injected_receipt_and_marker_faults(
     monkeypatch.setattr(classification, helper_name, unexpected)
     with pytest.raises(error_type, match="injected decoder fault"):
         _read_retained_industry(root, raw_request, reference)
+
+
+def test_legacy_industry_archive_remains_reconstructible_but_is_local_current_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        raw_outcome = read_retained_current_raw_context_v1(
+            root, request=raw_request, lease=lease, control=fixture_control(raw_request)
+        )
+        assert raw_outcome.admitted is not None
+        raw_projection = validate_admitted_current_raw_context_v1(raw_outcome.admitted)
+    artifact = _classification_artifact(raw_request.members)
+    legacy_value = json.loads(_classification_input(artifact).canonical_json_bytes())
+    legacy_value.update(
+        {
+            "schema_identity_sha256": classification.LEGACY_CLASSIFICATION_SCHEMA_IDENTITY_SHA256,
+            "source_url": classification._LEGACY_SOURCE_URL,  # pyright: ignore[reportPrivateUsage]
+            "source_domain": "www.niftyindices.com",
+            "acquisition_method": "OPERATOR_ACQUIRED",
+            "licence_policy_identity_sha256": "a" * 64,
+        }
+    )
+    legacy_input = (
+        classification.CurrentIndustryClassificationInputV1.from_canonical_json_bytes(
+            json.dumps(legacy_value, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+    )
+    parsed = classification.parse_current_industry_artifact_v1(legacy_input, artifact)
+    assert isinstance(parsed, classification.ParsedCurrentIndustryArtifactV1)
+    snapshot = classification.project_current_supplied_cohort_industry_v1(
+        parsed,
+        raw_projection.canonical_cohort_identity_sha256,
+        tuple(
+            classification.CurrentIndustryCohortMemberV1(
+                member.isin, member.exchange, member.effective_symbol
+            )
+            for member in raw_request.members
+        ),
+    )
+    assert isinstance(snapshot, classification.PrivateCurrentIndustrySnapshotV1)
+    writer = StorageRootLease.try_acquire_existing(root)
+    assert writer.lease is not None
+    known_at = raw_projection.evidence_cutoff - timedelta(seconds=30)
+    marker_ns = int(raw_projection.evidence_cutoff.timestamp()) * 1_000_000_000
+
+    def marker_mtime(_: int) -> int:
+        return marker_ns
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(classification, "_trusted_utc_now", lambda: known_at)  # pyright: ignore[reportPrivateUsage]
+        patch.setattr(
+            classification,
+            "_marker_filesystem_mtime_ns",
+            marker_mtime,
+        )  # pyright: ignore[reportPrivateUsage]
+        try:
+            first = classification.FileCurrentIndustryArchiveV1(root).archive_exact(
+                legacy_input, artifact, snapshot, writer.lease
+            )
+            second = classification.FileCurrentIndustryArchiveV1(root).archive_exact(
+                legacy_input, artifact, snapshot, writer.lease
+            )
+        finally:
+            writer.lease.close()
+    assert isinstance(first, classification.RetainedCurrentIndustrySnapshotV1)
+    assert isinstance(second, classification.RetainedCurrentIndustrySnapshotV1)
+    reference = CurrentIndustryArchiveReferenceV1(
+        "current-industry-archive-reference@v1",
+        first.snapshot_identity_sha256,
+        first.retained_identity_sha256,
+    )
+
+    result = research_current_price_context_v1(
+        _public_request(raw_request, reference),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+
+    assert result.members[0].state == "OBSERVED"
+    assert result.industry_evidence_state == "UNSUPPORTED"
+    assert result.industry_groups == ()
 
 
 def test_industry_reader_cleanup_preserves_primary_and_propagates_standalone_failure(
@@ -1070,6 +1324,36 @@ def test_industry_local_refusal_never_masks_replaced_root_authority(
                 "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
+        "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
+        "src/swing_trading_ai_assistant/market_data/credentials.py",
+        "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport.py",
+        "src/swing_trading_ai_assistant/market_data/provisional_metadata.py",
+    ),
+)
+def test_public_runtime_identity_rejects_representative_copied_source_substitutions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    source_root = Path(packet_module.__file__).parents[3]
+    copied = tmp_path / relative
+    copied.parent.mkdir(parents=True)
+    shutil.copyfile(source_root / relative, copied)
+    copied.write_bytes(copied.read_bytes() + b"\n")
+
+    def copied_digest(_module: str, _root: Path, item: str) -> str:
+        if item == relative:
+            return hashlib.sha256(copied.read_bytes()).hexdigest()
+        return CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1[item]
+
+    monkeypatch.setattr(packet_module, "runtime_source_sha256", copied_digest)
+
+    with pytest.raises(ValueError, match="runtime identity"):
+        packet_module.current_price_context_runtime_code_identity_v1()
 
 
 def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations(

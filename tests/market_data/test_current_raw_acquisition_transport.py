@@ -39,10 +39,6 @@ class _Opener:
         return self._response
 
 
-def _opener(*_handlers: object) -> _Opener:
-    return _Opener(_UnauthorizedResponse())
-
-
 class _MappingResponse:
     def __init__(self, body: bytes) -> None:
         self._body = body
@@ -125,13 +121,37 @@ def test_operation_descriptor_rejects_an_unplanned_url_before_opening(
     assert not opened
 
 
-def test_unauthorized_status_stops_before_response_body_read(
+@pytest.mark.parametrize(
+    ("status", "error"),
+    (
+        (401, transport.CurrentRawAuthenticationError),
+        (403, transport.CurrentRawAuthorizationError),
+        (429, transport.CurrentRawRateLimitedError),
+    ),
+)
+def test_status_first_shared_stops_never_read_oversized_or_misleading_bodies(
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    error: type[Exception],
 ) -> None:
-    monkeypatch.setattr(transport, "build_opener", _opener)
+    class Response(_ForbiddenBody):
+        headers = SimpleNamespace(items=lambda: (("Content-Type", "application/json"),))
+
+        def getcode(self) -> int:
+            return status
+
+        def geturl(self) -> str:
+            return (
+                "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions"
+            )
+
+    def opener(*_handlers: object) -> _Opener:
+        return _Opener(Response())
+
+    monkeypatch.setattr(transport, "build_opener", opener)
     now = datetime(2026, 9, 15, 9, tzinfo=UTC)
 
-    with pytest.raises(transport.CurrentRawAuthenticationError):
+    with pytest.raises(error):
         transport.get_strict_current_raw_v1(
             "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions",
             headers={},

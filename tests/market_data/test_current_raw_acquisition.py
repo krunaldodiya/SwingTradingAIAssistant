@@ -211,6 +211,101 @@ def test_n50_has_exact_three_month_251_bound_and_n51_is_rejected_before_effects(
         _request(selection, members + (_member(50),))
 
 
+def test_four_month_64_day_schedule_stops_before_credentials_or_provider_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selection = datetime(2026, 4, 3, 10, 1, tzinfo=UTC)
+    selected_dates = tuple(
+        date(2026, 1, 31) + timedelta(days=index * 3) for index in range(20)
+    ) + (date(2026, 4, 3),)
+    schedule = ExpectedSessionSchedule(
+        SCHEDULE_SCHEMA_VERSION_V3,
+        "nse-authoritative-calendar",
+        "sha256:" + "a" * 64,
+        selection,
+        "Asia/Kolkata",
+        selected_dates[0],
+        selected_dates[-1],
+        tuple(
+            ScheduleSession(
+                day,
+                datetime.combine(day, datetime.min.time(), UTC) + timedelta(hours=3),
+                datetime.combine(day, datetime.min.time(), UTC) + timedelta(hours=9),
+                "REGULAR",
+            )
+            for day in selected_dates
+        ),
+        (),
+    )
+    request = CurrentRawPriceContextInputV1(
+        "a" * 64,
+        selection,
+        selection + timedelta(minutes=30),
+        schedule_digest(schedule),
+        (_member(),),
+    )
+    root = tmp_path / "retained"
+    seed_root(root, schedule_value=schedule, request_value=request)
+    wire = RecordedWire([])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request,
+        root,
+        control=CurrentRawInvocationControlV1(
+            _Clock(selection), selection=selection, deadline=request.admission_deadline
+        ),
+    )
+
+    assert result.outcome == "CALENDAR_PREREQUISITE_MISSING"
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 0
+    mapping = acquisition_module._PhysicalSlotV1(  # pyright: ignore[reportPrivateUsage]
+        "mapping",
+        "MAPPING",
+        acquisition_module.PlannedSlotDispositionV1.REUSABLE,
+        None,
+    )
+    action = acquisition_module._PhysicalSlotV1(  # pyright: ignore[reportPrivateUsage]
+        "action",
+        "ACTION",
+        acquisition_module.PlannedSlotDispositionV1.MISSING,
+        "ACTION_MISSING",
+    )
+    closed = tuple(
+        acquisition_module._PhysicalSlotV1(  # pyright: ignore[reportPrivateUsage]
+            f"closed-{index}",
+            "CLOSED",
+            acquisition_module.PlannedSlotDispositionV1.MISSING,
+            "RAW_PARTITION_MISSING",
+        )
+        for index in range(4)
+    )
+    member = acquisition_module._MemberPlanV1(  # pyright: ignore[reportPrivateUsage]
+        0,
+        _member(),
+        None,
+        acquisition_module.PlannedSlotDispositionV1.REUSABLE,
+        None,
+        closed,
+        None,
+        None,
+        action,
+    )
+    with pytest.raises(ValueError, match="acquisition plan is invalid"):
+        acquisition_module._AcquisitionPlanV1(  # pyright: ignore[reportPrivateUsage]
+            _sessions(date(2026, 1, 1)),
+            "a" * 64,
+            selection,
+            (member,),
+            mapping,
+        )
+    assert wire.attempts == FixtureTokenProvider.calls == 0
+
+
 def test_missing_calendar_prerequisite_is_zero_effect(tmp_path: Path) -> None:
     now = datetime(2026, 9, 15, 9, tzinfo=UTC)
     result = acquire_missing_current_raw_evidence_v1(
@@ -876,6 +971,72 @@ def test_current_interruption_discards_all_staged_current_rows(
     assert slots[-1].attempts == 0
 
 
+def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitting_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root)
+    bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            request, root, control=fixture_control(request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    with StorageRootLease.try_admit_read_existing(root).lease as lease:  # type: ignore[union-attr]
+        before = read_retained_current_raw_context_v1(
+            root, request=request, lease=lease, control=fixture_control(request)
+        )
+        assert before.admitted is not None
+        before_source_times = (
+            validate_admitted_current_raw_context_v1(before.admitted)
+            .members[0]
+            .raw_source_times
+        )
+    raw_bytes = tuple(path.read_bytes() for path in root.rglob("*.parquet"))
+    remove_action_metadata(root)
+    cancellation = MutableCancellation()
+    interrupted = WireReply(
+        body=action_body(), on_read=lambda: setattr(cancellation, "cancelled", True)
+    )
+    interrupted_wire = RecordedWire([interrupted])
+    monkeypatch.setattr(transport_module, "build_opener", interrupted_wire.build_opener)
+
+    stopped = acquire_missing_current_raw_evidence_v1(
+        request,
+        root,
+        control=_current_control(request, cancellation),
+    )
+
+    assert stopped.outcome == "STOPPED"
+    assert stopped.provider_calls == interrupted_wire.attempts == 1
+    assert tuple(path.read_bytes() for path in root.rglob("*.parquet")) == raw_bytes
+    retry_wire = RecordedWire([WireReply(body=action_body())])
+    monkeypatch.setattr(transport_module, "build_opener", retry_wire.build_opener)
+    retried = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+    assert retried.outcome == "ACQUISITION_COMPLETED"
+    assert retried.provider_calls == retry_wire.attempts == 1
+    with StorageRootLease.try_admit_read_existing(root).lease as lease:  # type: ignore[union-attr]
+        after = read_retained_current_raw_context_v1(
+            root, request=request, lease=lease, control=fixture_control(request)
+        )
+        assert after.admitted is not None
+        assert (
+            validate_admitted_current_raw_context_v1(after.admitted)
+            .members[0]
+            .raw_source_times
+            == before_source_times
+        )
+
+
 def test_current_root_replacement_before_publication_stops_without_catalog_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1063,6 +1224,97 @@ def test_two_members_deadline_or_cancellation_stops_before_every_later_opener(
         for member in result.accounting.members[1:]
         for slot in member
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("name", "UNKNOWN"),
+        ("event_details", []),
+        ("expiry_date", "not-a-date"),
+        ("amount", "not-a-value"),
+    ),
+    ids=("unknown-kind", "missing-details", "invalid-date", "invalid-value"),
+)
+def test_action_provider_data_defects_stay_local_but_parser_defects_propagate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root)
+    bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            request, root, control=fixture_control(request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    remove_action_metadata(root)
+    event: dict[str, object] = {
+        "name": "DIVIDEND",
+        "expiry_date": "2026-09-30",
+        "amount": 5.0,
+        "ratio": None,
+        "event_details": [
+            {"name": "Record date", "value": "2026-09-30"},
+            {"name": "Announcement date", "value": "2026-09-01"},
+            {"name": "Dividend type", "value": "Final"},
+            {"name": "Amount", "value": "5"},
+        ],
+    }
+    event[field] = value
+    wire = RecordedWire(
+        [WireReply(body=json.dumps({"status": "success", "data": [event]}).encode())]
+    )
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert result.accounting is not None
+    assert result.accounting.members[0][-1].reason == "PROVIDER_OR_DATA_FAILURE"
+
+    defect_root = tmp_path / "defect"
+    defect_request = seed_root(defect_root)
+    defect_bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", defect_bootstrap.build_opener)
+    assert (
+        acquire_missing_current_raw_evidence_v1(
+            defect_request, defect_root, control=fixture_control(defect_request)
+        ).outcome
+        == "ACQUISITION_COMPLETED"
+    )
+    remove_action_metadata(defect_root)
+    defect_wire = RecordedWire([WireReply(body=action_body())])
+    monkeypatch.setattr(transport_module, "build_opener", defect_wire.build_opener)
+
+    def unexpected_parser(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("injected action parser defect")
+
+    monkeypatch.setattr(
+        corporate_actions_module, "_parse_upstox_response_strict", unexpected_parser
+    )
+    with pytest.raises(RuntimeError, match="injected action parser defect"):
+        acquire_missing_current_raw_evidence_v1(
+            defect_request,
+            defect_root,
+            control=fixture_control(defect_request),
+        )
+    assert defect_wire.attempts == 1
 
 
 def test_strict_action_parser_classifies_unknown_kind_and_missing_details_as_provider_data() -> (

@@ -1128,6 +1128,41 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                 recheck_retained_current_raw_context_v1(
                     raw_value, storage_root, lease=lease, control=control
                 )
+                reference = request.industry_archive_reference
+                if (
+                    type(archive) is AdmittedCurrentIndustryProjectionV1
+                    and reference is not None
+                ):
+                    final_archive = read_current_industry_archive_exact_v1(
+                        ArchivedIndustryReferenceV1(
+                            reference.contract_version,
+                            reference.snapshot_identity_sha256,
+                            reference.retained_identity_sha256,
+                        ),
+                        storage_root=storage_root,
+                        lease=lease,
+                        raw=raw_value,
+                    )
+                    if type(final_archive) is CurrentIndustryReadFailureV1:
+                        industry_state, industry_reasons = (
+                            final_archive.state
+                            if final_archive.state != "MALFORMED_EVIDENCE"
+                            else "INSUFFICIENT_EVIDENCE",
+                            (final_archive.reason,),
+                        )
+                        industry_groups = ()
+                        industry_known_at = None
+                    else:
+                        grouped = reduce_current_raw_industry_participation_v1(
+                            raw_value,
+                            cast(AdmittedCurrentIndustryProjectionV1, final_archive),
+                        )
+                        industry_state = grouped.evidence_state
+                        industry_reasons = grouped.reasons
+                        industry_groups = grouped.groups
+                        industry_known_at = admitted_current_industry_binding_v1(
+                            cast(AdmittedCurrentIndustryProjectionV1, final_archive)
+                        )[0].known_at
             control.ensure_live()
     return CurrentPriceContextResultV1(
         contract_version=_RESULT_CONTRACT,

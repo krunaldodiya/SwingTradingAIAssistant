@@ -183,3 +183,68 @@ def test_price_context_current_maps_invalid_and_stopped_outcomes_to_frozen_exits
     captured = capsys.readouterr()
     assert captured.out.encode("utf-8") == stopped.canonical_json_bytes()
     assert captured.err == ""
+
+
+def test_price_context_current_unexpected_fault_is_the_fixed_internal_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = (tmp_path / "retained").resolve()
+    root.mkdir(mode=0o700)
+    input_file = (tmp_path / "request.json").resolve()
+    input_file.write_text(
+        json.dumps(
+            {
+                "contract_version": "current-price-context-request@v1",
+                "data_selection_time": "2026-09-15T09:00:00.000000Z",
+                "admission_deadline": "2026-09-15T09:30:00.000000Z",
+                "schedule_identity_sha256": "a" * 64,
+                "members": [
+                    {
+                        "isin": "INE467B01029",
+                        "exchange": "NSE",
+                        "instrument_type": "EQUITY",
+                        "segment": "EQ",
+                        "effective_symbol": "AAA",
+                        "valid_from": "2020-01-01",
+                        "valid_through": "2030-01-01",
+                    }
+                ],
+                "questions": [
+                    "RAW_MARKET_STRUCTURE",
+                    "RAW_20_SESSION_DIRECTION",
+                    "RAW_COHORT_BREADTH",
+                    "RAW_INDUSTRY_PARTICIPATION",
+                ],
+                "industry_archive_reference": None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    input_file.chmod(0o600)
+
+    def unexpected(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("injected service defect")
+
+    monkeypatch.setattr(cli_module, "research_current_price_context_v1", unexpected)
+
+    assert (
+        main(
+            [
+                "price-context-current",
+                "--input-file",
+                str(input_file),
+                "--storage-root",
+                str(root),
+                "--output",
+                "json",
+            ],
+            trusted_clock=_Clock(),
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
