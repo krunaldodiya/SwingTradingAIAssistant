@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import pickle
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -71,19 +72,49 @@ def test_raw_capability_cannot_be_constructed_or_serialized() -> None:
             operation()
 
 
-def test_reader_propagates_unexpected_archive_reader_faults(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (ValueError("injected value fault"), "injected value fault"),
+        (TypeError("injected type fault"), "injected type fault"),
+        (RuntimeError("reader implementation fault"), "reader implementation fault"),
+    ],
+)
+def test_reader_propagates_injected_stable_object_helper_faults(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, message: str
 ) -> None:
     def unexpected(*_: object) -> tuple[bytes, object] | None:
-        raise RuntimeError("reader implementation fault")
+        raise error
 
     monkeypatch.setattr(
         reader_module.classification, "_read_stable_private_object", unexpected
     )
-    with pytest.raises(RuntimeError, match="implementation fault"):
+    with pytest.raises(type(error), match=message):
         reader_module._read(  # pyright: ignore[reportPrivateUsage]
             0, "snapshot-any.json", 1
         )
+
+
+def test_reader_closes_real_oversized_archive_object_as_malformed(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "archive"
+    archive.mkdir(mode=0o700)
+    object_path = archive / "snapshot.json"
+    object_path.write_bytes(b"malformed")
+    object_path.chmod(0o400)
+    directory = os.open(archive, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        with pytest.raises(reader_module._IndustryLocalRefusal) as raised:  # pyright: ignore[reportPrivateUsage]
+            reader_module._read(  # pyright: ignore[reportPrivateUsage]
+                directory, object_path.name, 1
+            )
+    finally:
+        os.close(directory)
+    assert (raised.value.state, raised.value.reason) == (
+        "MALFORMED_EVIDENCE",
+        "CLASSIFICATION_ARCHIVE_MALFORMED",
+    )
 
 
 def test_reader_refuses_a_caller_forged_raw_authority_before_archive_io(

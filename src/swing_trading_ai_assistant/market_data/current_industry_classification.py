@@ -80,6 +80,10 @@ class _ConflictingArtifactIdentity(ValueError):
     pass
 
 
+class _CurrentIndustryArchiveDataError(ValueError):
+    """Expected malformed bytes or stable-object validation at archive boundaries."""
+
+
 def _canonical(value: object) -> bytes:
     return (
         json.dumps(
@@ -1168,7 +1172,7 @@ def _candidate_from_snapshot(
         publisher_effective_from=None,
         publisher_effective_through=None,
         publisher_revision=None,
-        _private_rows=snapshot.private_rows,
+        _private_rows=snapshot.private_rows,  # pyright: ignore[reportPrivateUsage]
     )
     return _RetainedCurrentIndustryCandidateV1(
         evidence_state=provisional.evidence_state,
@@ -1254,6 +1258,17 @@ def _completion_marker_bytes(
 def _completion_marker_known_at(
     raw: bytes, receipt_raw: bytes, snapshot: PrivateCurrentIndustrySnapshotV1
 ) -> datetime:
+    try:
+        return _completion_marker_known_at_value(raw, receipt_raw, snapshot)
+    except (TypeError, ValueError):
+        raise _CurrentIndustryArchiveDataError(
+            "classification completion marker invalid"
+        ) from None
+
+
+def _completion_marker_known_at_value(
+    raw: bytes, receipt_raw: bytes, snapshot: PrivateCurrentIndustrySnapshotV1
+) -> datetime:
     if type(raw) is not bytes or len(raw) > _MAX_COMPLETION_MARKER_BYTES:
         raise ValueError("classification completion marker invalid")
     try:
@@ -1281,6 +1296,17 @@ def _completion_marker_known_at(
 
 
 def _retained_candidate_from_receipt(
+    raw: bytes,
+) -> _RetainedCurrentIndustryCandidateV1:
+    try:
+        return _retained_candidate_from_receipt_value(raw)
+    except (TypeError, ValueError):
+        raise _CurrentIndustryArchiveDataError(
+            "classification retained receipt invalid"
+        ) from None
+
+
+def _retained_candidate_from_receipt_value(
     raw: bytes,
 ) -> _RetainedCurrentIndustryCandidateV1:
     value = _retention_receipt_value(raw)
@@ -1433,7 +1459,7 @@ def _retention_receipt_private_rows(value: object) -> tuple[_PrivateIndustryRow,
             )
     except (KeyError, TypeError, ValueError):
         raise ValueError("classification retained receipt invalid") from None
-    return tuple(rows)
+    return tuple(rows)  # pyright: ignore[reportPrivateUsage]
 
 
 def _candidate_matches_snapshot(
@@ -1681,6 +1707,17 @@ def _marker_mtime_at_or_before(info: os.stat_result, known_at: datetime) -> bool
 
 
 def _read_stable_private_object(
+    parent: int, name: str, maximum_size: int
+) -> tuple[bytes, os.stat_result] | None:
+    try:
+        return _read_stable_private_object_value(parent, name, maximum_size)
+    except ValueError:
+        raise _CurrentIndustryArchiveDataError(
+            "classification stable archive object invalid"
+        ) from None
+
+
+def _read_stable_private_object_value(
     parent: int, name: str, maximum_size: int
 ) -> tuple[bytes, os.stat_result] | None:
     try:

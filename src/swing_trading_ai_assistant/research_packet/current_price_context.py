@@ -203,6 +203,16 @@ class CurrentPriceContextFeatureV1:
     def __post_init__(self) -> None:
         if (
             self.question not in _QUESTIONS
+            or self.state
+            not in (
+                "OBSERVED",
+                "UNSUPPORTED",
+                "DEPENDENCY_BLOCKED",
+                "INSUFFICIENT_EVIDENCE",
+                "NOT_ATTEMPTED",
+            )
+            or type(self.reasons) is not tuple
+            or any(type(reason) is not str or not reason for reason in self.reasons)
             or self.support not in ("SUPPORTED", "UNSUPPORTED")
             or self.readiness not in ("READY", "WITHHELD")
             or (
@@ -253,8 +263,20 @@ class CurrentPriceContextMemberResultV1:
                 "INSUFFICIENT_EVIDENCE",
             )
             or (self.state == "OBSERVED") != (self.reason is None)
+            or (
+                self.reason is not None
+                and (type(self.reason) is not str or not self.reason)
+            )
             or (self.structure is None) != (self.direction is None)
             or (self.state == "OBSERVED") != (self.structure is not None)
+            or (
+                self.structure is not None
+                and type(self.structure) is not CurrentMarketStructureMemberV1
+            )
+            or (
+                self.direction is not None
+                and self.direction not in {"ADVANCE", "DECLINE", "UNCHANGED"}
+            )
             or (
                 self.mapping_retrieved_at is not None
                 and not _utc(self.mapping_retrieved_at)
@@ -272,11 +294,40 @@ class CurrentPriceContextMemberResultV1:
                 and not _digest(self.mapping_observation_sha256)
             )
             or (
+                (self.mapping_observation_sha256 is None)
+                != (self.mapping_retrieved_at is None)
+            )
+            or len(self.partition_checksums) != len(self.raw_source_times)
+            or (
                 self.screen_identity_sha256 is not None
                 and not _digest(self.screen_identity_sha256)
             )
+            or (
+                self.screen_identity_sha256 is not None
+                and self.screen_knowledge_at is None
+            )
+            or (
+                self.state == "OBSERVED"
+                and (
+                    self.mapping_observation_sha256 is None
+                    or not self.partition_checksums
+                    or self.screen_knowledge_at is None
+                )
+            )
         ):
             raise ValueError("current price context member result is invalid")
+
+
+def _member_source_times_at_or_before(
+    member: CurrentPriceContextMemberResultV1, cutoff: datetime
+) -> bool:
+    return all(
+        value is None or value <= cutoff
+        for value in (
+            member.mapping_retrieved_at,
+            member.screen_knowledge_at,
+        )
+    ) and all(value <= cutoff for value in member.raw_source_times)
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +359,15 @@ class CurrentPriceContextBreadthV1:
             )
             or self.observed_count + self.insufficient_count != self.requested_count
             or self.advances + self.declines + self.unchanged != self.observed_count
+            or type(self.reasons) is not tuple
+            or any(type(reason) is not str or not reason for reason in self.reasons)
+            or self.label
+            not in (
+                "BROAD_ADVANCE",
+                "BROAD_DECLINE",
+                "MIXED_PARTICIPATION",
+                None,
+            )
             or (self.label is not None)
             != (self.insufficient_count == 0 and not self.reasons)
             or (self.label is None and not self.reasons)
@@ -386,9 +446,24 @@ class CurrentPriceContextResultV1:
             or not _utc(self.data_selection_time)
             or not _utc(self.evidence_cutoff)
             or self.evidence_cutoff < self.data_selection_time
+            or (
+                self.schedule_as_of is not None
+                and self.schedule_as_of > self.evidence_cutoff
+            )
             or self.provider != "UPSTOX"
             or self.price_basis != "RAW"
             or self.bar_basis != "1d-derived-from-retained-1m"
+            or self.acquisition_mode not in ("RETAINED_ONLY", "ACQUIRE_MISSING")
+            or self.acquisition_outcome
+            not in (
+                "NOT_ATTEMPTED",
+                "CALENDAR_PREREQUISITE_MISSING",
+                "RETAINED_EVIDENCE_READY",
+                "ACQUISITION_COMPLETED",
+                "ACQUISITION_PARTIAL",
+                "ACQUISITION_BLOCKED",
+                "STOPPED",
+            )
             or type(self.acquisition_provider_calls) is not int
             or not 0 <= self.acquisition_provider_calls <= 251
             or type(self.members) is not tuple
@@ -401,6 +476,10 @@ class CurrentPriceContextResultV1:
             or tuple(item.position for item in self.members)
             != tuple(range(len(self.members)))
             or len({item.isin for item in self.members}) != len(self.members)
+            or any(
+                not _member_source_times_at_or_before(item, self.evidence_cutoff)
+                for item in self.members
+            )
             or (
                 self.breadth is not None
                 and (
@@ -421,7 +500,9 @@ class CurrentPriceContextResultV1:
             or any(
                 type(item) is not CurrentPriceContextFeatureV1 for item in self.features
             )
+            or type(self.limitations) is not tuple
             or not self.limitations
+            or any(type(item) is not str or not item for item in self.limitations)
             or not _digest(self.runtime_code_identity_sha256)
             or self.industry_evidence_state
             not in (
@@ -443,13 +524,36 @@ class CurrentPriceContextResultV1:
                     or not _utc(self.industry_known_at)
                 )
             )
+            or (
+                self.industry_known_at is not None
+                and (
+                    not _utc(self.industry_known_at)
+                    or self.industry_known_at > self.evidence_cutoff
+                )
+            )
             or type(self.industry_groups) is not tuple
             or any(
                 type(item) is not CurrentRawIndustryGroupV1
                 for item in self.industry_groups
             )
-            or (self.industry_evidence_state == "OBSERVED")
-            != bool(self.industry_groups)
+            or (
+                self.industry_evidence_state == "OBSERVED"
+                and (
+                    self.industry_snapshot_identity_sha256 is None
+                    or self.industry_retained_identity_sha256 is None
+                    or self.industry_known_at is None
+                    or not self.industry_groups
+                )
+            )
+            or (
+                self.industry_evidence_state != "OBSERVED"
+                and (
+                    self.industry_snapshot_identity_sha256 is not None
+                    or self.industry_retained_identity_sha256 is not None
+                    or self.industry_known_at is not None
+                    or self.industry_groups
+                )
+            )
         ):
             raise ValueError("current price context result is invalid")
         identity = _digest_value(_without_identity(self))

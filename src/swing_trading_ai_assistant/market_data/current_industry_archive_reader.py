@@ -243,7 +243,12 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 marker_raw = _read(directory, marker_name, 16_384)
                 if snapshot_raw is None or receipt_raw is None or marker_raw is None:
                     _refuse("INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING")
-                candidate = classification._retained_candidate_from_receipt(receipt_raw)  # pyright: ignore[reportPrivateUsage]
+                try:
+                    candidate = classification._retained_candidate_from_receipt(  # pyright: ignore[reportPrivateUsage]
+                        receipt_raw
+                    )
+                except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
+                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
                 candidate_value = cast(Any, candidate)
                 if (
                     candidate_value.retained_identity_sha256
@@ -323,9 +328,12 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     or reproduced.canonical_json_bytes() != snapshot_raw
                 ):
                     _refuse("CONFLICTED", "CLASSIFICATION_PROJECTION_SUBSTITUTED")
-                marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
-                    marker_raw, receipt_raw, snapshot
-                )
+                try:
+                    marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
+                        marker_raw, receipt_raw, snapshot
+                    )
+                except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
+                    _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
                 if marker_known_at != candidate.known_at:
                     _refuse("CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED")
                 rows = tuple(
@@ -417,6 +425,6 @@ def _read(directory: int, name: str, maximum: int) -> bytes | None:
     """Translate only the archive reader's stable-object validation refusal."""
     try:
         value = classification._read_stable_private_object(directory, name, maximum)  # pyright: ignore[reportPrivateUsage]
-    except ValueError:
+    except classification._CurrentIndustryArchiveDataError:  # pyright: ignore[reportPrivateUsage]
         _refuse("MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED")
     return None if value is None else value[0]

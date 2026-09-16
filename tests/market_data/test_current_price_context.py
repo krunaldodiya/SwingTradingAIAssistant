@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from current_raw_acquisition_fixtures import (
@@ -21,6 +24,7 @@ from current_raw_acquisition_fixtures import (
 from current_raw_acquisition_fixtures import control as fixture_control
 from current_raw_acquisition_fixtures import schedule as fixture_schedule
 
+import swing_trading_ai_assistant.market_data.current_industry_archive_reader as reader_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
 from swing_trading_ai_assistant.market_data import (
@@ -42,7 +46,10 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     read_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
 )
-from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentIndustryArchiveReferenceV1,
     CurrentPriceContextBreadthV1,
@@ -897,6 +904,222 @@ def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
     payload = stopped.canonical_json_bytes().decode()
     assert "AUTHENTICATION_FAILED" not in payload
     assert "fixture-token" not in payload
+
+
+def _read_retained_industry(
+    root: Path,
+    raw_request: CurrentRawPriceContextInputV1,
+    reference: CurrentIndustryArchiveReferenceV1,
+) -> AdmittedCurrentIndustryProjectionV1 | reader_module.CurrentIndustryReadFailureV1:
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    with admitted.lease as lease:
+        retained = read_retained_current_raw_context_v1(
+            root, request=raw_request, lease=lease, control=fixture_control(raw_request)
+        )
+        assert retained.admitted is not None
+        return read_current_industry_archive_exact_v1(
+            ReaderIndustryReferenceV1(
+                reference.contract_version,
+                reference.snapshot_identity_sha256,
+                reference.retained_identity_sha256,
+            ),
+            storage_root=root,
+            lease=lease,
+            raw=retained.admitted,
+        )
+
+
+def _rehashed_result_bytes(value: dict[str, object]) -> bytes:
+    preimage = {
+        key: item for key, item in value.items() if key != "result_identity_sha256"
+    }
+    value["result_identity_sha256"] = hashlib.sha256(
+        json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    ).hexdigest()
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+@pytest.mark.parametrize("pattern", ("retained-*.json", "completion-*.json"))
+def test_industry_reader_closes_real_malformed_receipt_and_marker_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    archive = root / ".current-industry-classification-v1"
+
+    target = next(archive.glob(pattern))
+    target.chmod(0o600)
+    target.write_bytes(b"malformed archive bytes")
+    target.chmod(0o400)
+    result = _read_retained_industry(root, raw_request, reference)
+    assert isinstance(result, reader_module.CurrentIndustryReadFailureV1)
+    assert (result.state, result.reason) == (
+        "MALFORMED_EVIDENCE",
+        "CLASSIFICATION_ARCHIVE_MALFORMED",
+    )
+
+
+def test_industry_reader_rejects_substitution_after_initial_real_object_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    archive = root / ".current-industry-classification-v1"
+    original_read = reader_module._read  # pyright: ignore[reportPrivateUsage]
+    substituted = False
+
+    def read_then_substitute(directory: int, name: str, maximum: int) -> bytes | None:
+        nonlocal substituted
+        value = original_read(directory, name, maximum)
+        if name.startswith("raw-") and not substituted:
+            substituted = True
+            target = archive / name
+            target.chmod(0o600)
+            target.write_bytes(b"substituted archive bytes")
+            target.chmod(0o400)
+        return value
+
+    monkeypatch.setattr(reader_module, "_read", read_then_substitute)
+    result = _read_retained_industry(root, raw_request, reference)
+    assert isinstance(result, reader_module.CurrentIndustryReadFailureV1)
+    assert (result.state, result.reason) == (
+        "CONFLICTED",
+        "CLASSIFICATION_ARCHIVE_SUBSTITUTED",
+    )
+
+
+@pytest.mark.parametrize(
+    "helper_name",
+    ("_retained_candidate_from_receipt", "_completion_marker_known_at"),
+)
+@pytest.mark.parametrize("error_type", (ValueError, TypeError))
+def test_industry_reader_propagates_injected_receipt_and_marker_faults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper_name: str,
+    error_type: type[Exception],
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+
+    def unexpected(*_: object) -> object:
+        raise error_type("injected decoder fault")
+
+    monkeypatch.setattr(classification, helper_name, unexpected)
+    with pytest.raises(error_type, match="injected decoder fault"):
+        _read_retained_industry(root, raw_request, reference)
+
+
+def test_industry_reader_cleanup_preserves_primary_and_propagates_standalone_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    archive_stat = (root / ".current-industry-classification-v1").stat()
+    real_close = os.close
+
+    def close_directory_then_fail(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        real_close(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == (
+            archive_stat.st_dev,
+            archive_stat.st_ino,
+        ):
+            raise OSError("directory cleanup fault")
+
+    monkeypatch.setattr(reader_module.os, "close", close_directory_then_fail)
+    with pytest.raises(OSError, match="directory cleanup fault"):
+        _read_retained_industry(root, raw_request, reference)
+
+    primary = RuntimeError("primary archive failure")
+
+    def fail_primary(*_: object) -> object:
+        raise primary
+
+    monkeypatch.setattr(
+        classification, "_retained_candidate_from_receipt", fail_primary
+    )
+    with pytest.raises(RuntimeError, match="primary archive failure") as raised:
+        _read_retained_industry(root, raw_request, reference)
+    assert raised.value is primary
+
+
+def test_industry_local_refusal_never_masks_replaced_root_authority(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire_private_empty(root)
+    assert acquired.lease is not None
+    acquired.lease.close()
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    root.rename(tmp_path / "replaced")
+    root.mkdir(mode=0o700)
+
+    with pytest.raises(StorageRootLeaseError, match="root authority lost"):
+        reader_module._local_failure(  # pyright: ignore[reportPrivateUsage]
+            root,
+            identity,
+            reader_module._IndustryLocalRefusal(  # pyright: ignore[reportPrivateUsage]
+                "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
+            ),
+        )
+
+
+def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    result = research_current_price_context_v1(
+        _public_request(raw_request, reference),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+    original: Any = json.loads(result.canonical_json_bytes())
+
+    mutations: tuple[Callable[[Any], None], ...] = (
+        lambda value: value.__setitem__(
+            "schedule_as_of", "2030-01-01T00:00:00.000000Z"
+        ),
+        lambda value: value["members"][0].__setitem__(
+            "mapping_retrieved_at", "2030-01-01T00:00:00.000000Z"
+        ),
+        lambda value: value["members"][0]["raw_source_times"].__setitem__(
+            0, "2030-01-01T00:00:00.000000Z"
+        ),
+        lambda value: value["members"][0].__setitem__(
+            "screen_knowledge_at", "2030-01-01T00:00:00.000000Z"
+        ),
+        lambda value: value.__setitem__(
+            "industry_known_at", "2030-01-01T00:00:00.000000Z"
+        ),
+        lambda value: value["members"][0].__setitem__(
+            "mapping_observation_sha256", None
+        ),
+        lambda value: value["members"][0].__setitem__("mapping_retrieved_at", None),
+        lambda value: value["members"][0].__setitem__("screen_knowledge_at", None),
+        lambda value: value.__setitem__(
+            "industry_evidence_state", "INSUFFICIENT_EVIDENCE"
+        ),
+        lambda value: value["members"][0]["partition_checksums"].append("a" * 64),
+        lambda value: value["members"][0].__setitem__("direction", "SIDEWAYS"),
+        lambda value: value["features"][0].__setitem__("state", "NOT_A_STATE"),
+    )
+    for mutate in mutations:
+        forged: Any = json.loads(json.dumps(original))
+        mutate(forged)
+        with pytest.raises(ValueError, match="result is invalid"):
+            current_price_context_result_from_canonical_json_bytes_v1(
+                _rehashed_result_bytes(forged)
+            )
 
 
 def test_public_request_decoder_rejects_malformed_oversize_nested_and_enum_values() -> (
