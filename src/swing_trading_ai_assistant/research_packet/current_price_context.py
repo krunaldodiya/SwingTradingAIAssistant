@@ -7,12 +7,13 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
     AdmittedCurrentIndustryProjectionV1,
     CurrentIndustryReadFailureV1,
+    admitted_current_industry_binding_v1,
     read_current_industry_archive_exact_v1,
 )
 from swing_trading_ai_assistant.market_data.current_industry_archive_reader import (
@@ -25,10 +26,10 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     AdmittedCurrentRawContextV1,
     CurrentPriceContextClockV1,
     CurrentPriceContextMemberV1,
-    CurrentRawCancellationV1,
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
+    recheck_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
@@ -63,6 +64,22 @@ _QUESTIONS = (
 _IST = ZoneInfo("Asia/Kolkata")
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_RESULT_BYTES = 1_048_576
+
+
+class _ResultBindingsV1(TypedDict):
+    schema_identity_sha256: str
+    calculation_identity_sha256: str
+    configuration_identity_sha256: str
+    schedule_identity_sha256: str
+    ordered_selection_identity_sha256: str
+    canonical_cohort_identity_sha256: str
+    questions: tuple[str, ...]
+    data_selection_time: datetime
+    evidence_cutoff: datetime
+    provider: Literal["UPSTOX"]
+    price_basis: Literal["RAW"]
+    bar_basis: Literal["1d-derived-from-retained-1m"]
+    source_bindings_identity_sha256: str
 
 
 def current_price_context_runtime_code_identity_v1() -> str:
@@ -286,8 +303,19 @@ class CurrentPriceContextBreadthV1:
 class CurrentPriceContextResultV1:
     contract_version: Literal["current-price-context@v1"]
     request_identity_sha256: str
+    schema_identity_sha256: str
+    calculation_identity_sha256: str
+    configuration_identity_sha256: str
     schedule_identity_sha256: str
     ordered_selection_identity_sha256: str
+    canonical_cohort_identity_sha256: str
+    questions: tuple[str, ...]
+    data_selection_time: datetime
+    evidence_cutoff: datetime
+    provider: Literal["UPSTOX"]
+    price_basis: Literal["RAW"]
+    bar_basis: Literal["1d-derived-from-retained-1m"]
+    source_bindings_identity_sha256: str
     acquisition_mode: Literal["RETAINED_ONLY", "ACQUIRE_MISSING"]
     acquisition_outcome: Literal[
         "NOT_ATTEMPTED",
@@ -305,8 +333,15 @@ class CurrentPriceContextResultV1:
     limitations: tuple[str, ...]
     runtime_code_identity_sha256: str
     industry_evidence_state: Literal[
-        "OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"
+        "OBSERVED",
+        "NOT_ATTEMPTED",
+        "UNSUPPORTED",
+        "INSUFFICIENT_EVIDENCE",
+        "CONFLICTED",
     ] = "NOT_ATTEMPTED"
+    industry_snapshot_identity_sha256: str | None = None
+    industry_retained_identity_sha256: str | None = None
+    industry_known_at: datetime | None = None
     industry_groups: tuple[CurrentRawIndustryGroupV1, ...] = ()
     result_identity_sha256: str = ""
 
@@ -314,8 +349,25 @@ class CurrentPriceContextResultV1:
         if (
             self.contract_version != _RESULT_CONTRACT
             or not _digest(self.request_identity_sha256)
-            or not _digest(self.schedule_identity_sha256)
-            or not _digest(self.ordered_selection_identity_sha256)
+            or any(
+                not _digest(value)
+                for value in (
+                    self.schema_identity_sha256,
+                    self.calculation_identity_sha256,
+                    self.configuration_identity_sha256,
+                    self.schedule_identity_sha256,
+                    self.ordered_selection_identity_sha256,
+                    self.canonical_cohort_identity_sha256,
+                    self.source_bindings_identity_sha256,
+                )
+            )
+            or self.questions != _QUESTIONS
+            or not _utc(self.data_selection_time)
+            or not _utc(self.evidence_cutoff)
+            or self.evidence_cutoff < self.data_selection_time
+            or self.provider != "UPSTOX"
+            or self.price_basis != "RAW"
+            or self.bar_basis != "1d-derived-from-retained-1m"
             or type(self.acquisition_provider_calls) is not int
             or not 0 <= self.acquisition_provider_calls <= 251
             or type(self.members) is not tuple
@@ -350,7 +402,25 @@ class CurrentPriceContextResultV1:
             or not self.limitations
             or not _digest(self.runtime_code_identity_sha256)
             or self.industry_evidence_state
-            not in ("OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE")
+            not in (
+                "OBSERVED",
+                "NOT_ATTEMPTED",
+                "UNSUPPORTED",
+                "INSUFFICIENT_EVIDENCE",
+                "CONFLICTED",
+            )
+            or (
+                (self.industry_snapshot_identity_sha256 is None)
+                != (self.industry_retained_identity_sha256 is None)
+            )
+            or (
+                self.industry_snapshot_identity_sha256 is not None
+                and (
+                    not _digest(self.industry_snapshot_identity_sha256)
+                    or not _digest(self.industry_retained_identity_sha256)
+                    or not _utc(self.industry_known_at)
+                )
+            )
             or type(self.industry_groups) is not tuple
             or any(
                 type(item) is not CurrentRawIndustryGroupV1
@@ -431,24 +501,98 @@ def current_price_context_request_from_canonical_json_bytes_v1(
         raise ValueError("current price context request is invalid") from None
 
 
+_RESULT_SCHEMA_IDENTITY_SHA256 = hashlib.sha256(
+    b"current-price-context-result-schema@v1"
+).hexdigest()
+_RESULT_CALCULATION_IDENTITY_SHA256 = hashlib.sha256(
+    b"current-price-context-calculation@v1"
+).hexdigest()
+_RESULT_CONFIGURATION_IDENTITY_SHA256 = hashlib.sha256(
+    b"current-price-context-configuration@v1"
+).hexdigest()
+
+
+def _result_bindings(
+    request: CurrentPriceContextRequestV1,
+    raw_input: CurrentRawPriceContextInputV1,
+    *,
+    evidence_cutoff: datetime,
+    industry: CurrentIndustryArchiveReferenceV1 | None = None,
+) -> _ResultBindingsV1:
+    """One closed non-sensitive provenance binding for all public outcomes."""
+    return _ResultBindingsV1(
+        schema_identity_sha256=_RESULT_SCHEMA_IDENTITY_SHA256,
+        calculation_identity_sha256=_RESULT_CALCULATION_IDENTITY_SHA256,
+        configuration_identity_sha256=_RESULT_CONFIGURATION_IDENTITY_SHA256,
+        schedule_identity_sha256=request.schedule_identity_sha256,
+        ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
+        canonical_cohort_identity_sha256=raw_input.canonical_cohort_identity_sha256,
+        questions=request.questions,
+        data_selection_time=request.data_selection_time,
+        evidence_cutoff=evidence_cutoff,
+        provider="UPSTOX",
+        price_basis="RAW",
+        bar_basis="1d-derived-from-retained-1m",
+        source_bindings_identity_sha256=_digest_value(
+            {
+                "schedule": request.schedule_identity_sha256,
+                "members": tuple(
+                    (member.isin, member.effective_symbol) for member in request.members
+                ),
+                "industry": industry,
+            }
+        ),
+    )
+
+
+def current_price_context_result_from_canonical_json_bytes_v1(
+    raw: bytes,
+) -> dict[str, object]:
+    """Decode the closed public wire representation without minting admission."""
+    if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_RESULT_BYTES:
+        raise ValueError("current price context result is invalid")
+    try:
+        decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+        if type(decoded) is not dict:
+            raise ValueError
+        value = cast(dict[str, object], decoded)
+        if _canonical(value) != raw:
+            raise ValueError
+        expected = {item.name for item in fields(CurrentPriceContextResultV1)}
+        if set(value) != expected or value.get("contract_version") != _RESULT_CONTRACT:
+            raise ValueError
+        identity = value.get("result_identity_sha256")
+        if not _digest(identity):
+            raise ValueError
+        preimage = {
+            key: item for key, item in value.items() if key != "result_identity_sha256"
+        }
+        if _digest_value(preimage) != identity:
+            raise ValueError
+        # A decoded mapping is deliberately not an admitted raw/Industry capability.
+        return value
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
+        raise ValueError("current price context result is invalid") from None
+
+
 def research_current_price_context_v1(  # noqa: C901 -- one bounded public composition
     request: CurrentPriceContextRequestV1,
     storage_root: Path,
     *,
     acquire_missing: bool = False,
     clock: CurrentPriceContextClockV1 | None = None,
-    cancellation: CurrentRawCancellationV1 | None = None,
 ) -> CurrentPriceContextResultV1:
     """Return only verified raw facts and local Industry availability."""
     if type(request) is not CurrentPriceContextRequestV1:
         raise ValueError("current price context input is invalid")
-    if (
-        type(acquire_missing) is not bool
-        or (clock is not None and not callable(getattr(clock, "now", None)))
-        or (
-            cancellation is not None
-            and not callable(getattr(cancellation, "is_cancelled", None))
-        )
+    if type(acquire_missing) is not bool or (
+        clock is not None and not callable(getattr(clock, "now", None))
     ):
         raise ValueError("current price context options are invalid")
     observed_now = datetime.now(UTC) if clock is None else clock.now()
@@ -473,7 +617,6 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
         _SystemClock() if clock is None else clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
-        cancellation=cancellation,
     )
     acquisition_outcome: Literal[
         "NOT_ATTEMPTED",
@@ -498,8 +641,7 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
             return CurrentPriceContextResultV1(
                 contract_version=_RESULT_CONTRACT,
                 request_identity_sha256=request.request_identity_sha256,
-                schedule_identity_sha256=request.schedule_identity_sha256,
-                ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
+                **_result_bindings(request, raw_input, evidence_cutoff=observed_now),
                 acquisition_mode="ACQUIRE_MISSING",
                 acquisition_outcome=acquisition_outcome,
                 acquisition_provider_calls=acquisition_provider_calls,
@@ -520,11 +662,19 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                 ),
                 runtime_code_identity_sha256=runtime_identity,
             )
-    industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"] = (
-        "NOT_ATTEMPTED"
-    )
+    industry_state: Literal[
+        "OBSERVED",
+        "NOT_ATTEMPTED",
+        "UNSUPPORTED",
+        "INSUFFICIENT_EVIDENCE",
+        "CONFLICTED",
+    ] = "NOT_ATTEMPTED"
     industry_reasons: tuple[str, ...] = ("INDUSTRY_REFERENCE_NOT_PROVIDED",)
     industry_groups: tuple[CurrentRawIndustryGroupV1, ...] = ()
+    industry_known_at: datetime | None = None
+    archive: (
+        AdmittedCurrentIndustryProjectionV1 | CurrentIndustryReadFailureV1 | None
+    ) = None
     admitted = StorageRootLease.try_admit_read_existing(storage_root)
     if (
         admitted.lease is None
@@ -594,7 +744,9 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                     )
                     if type(archive) is CurrentIndustryReadFailureV1:
                         industry_state, industry_reasons = (
-                            "INSUFFICIENT_EVIDENCE",
+                            archive.state
+                            if archive.state != "MALFORMED_EVIDENCE"
+                            else "INSUFFICIENT_EVIDENCE",
                             (archive.reason,),
                         )
                     else:
@@ -605,12 +757,26 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                         industry_state = grouped.evidence_state
                         industry_reasons = grouped.reasons
                         industry_groups = grouped.groups
+                        industry_known_at = admitted_current_industry_binding_v1(
+                            cast(AdmittedCurrentIndustryProjectionV1, archive)
+                        )[0].known_at
+                recheck_retained_current_raw_context_v1(
+                    raw_value, storage_root, lease=lease, control=control
+                )
             control.ensure_live()
     return CurrentPriceContextResultV1(
         contract_version=_RESULT_CONTRACT,
         request_identity_sha256=request.request_identity_sha256,
-        schedule_identity_sha256=request.schedule_identity_sha256,
-        ordered_selection_identity_sha256=raw_input.ordered_selection_identity_sha256,
+        **_result_bindings(
+            request,
+            raw_input,
+            evidence_cutoff=(
+                raw_projection.evidence_cutoff
+                if raw_projection is not None
+                else observed_now
+            ),
+            industry=request.industry_archive_reference,
+        ),
         acquisition_mode="ACQUIRE_MISSING" if acquire_missing else "RETAINED_ONLY",
         acquisition_outcome=cast(Any, acquisition_outcome),
         acquisition_provider_calls=acquisition_provider_calls,
@@ -631,6 +797,19 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
         ),
         runtime_code_identity_sha256=runtime_identity,
         industry_evidence_state=industry_state,
+        industry_snapshot_identity_sha256=(
+            request.industry_archive_reference.snapshot_identity_sha256
+            if industry_state == "OBSERVED"
+            and request.industry_archive_reference is not None
+            else None
+        ),
+        industry_retained_identity_sha256=(
+            request.industry_archive_reference.retained_identity_sha256
+            if industry_state == "OBSERVED"
+            and request.industry_archive_reference is not None
+            else None
+        ),
+        industry_known_at=industry_known_at,
         industry_groups=industry_groups,
     )
 
@@ -689,7 +868,13 @@ def _features(
     reasons: tuple[str, ...],
     members: tuple[CurrentPriceContextMemberResultV1, ...],
     breadth: CurrentPriceContextBreadthV1 | None,
-    industry_state: Literal["OBSERVED", "NOT_ATTEMPTED", "INSUFFICIENT_EVIDENCE"],
+    industry_state: Literal[
+        "OBSERVED",
+        "NOT_ATTEMPTED",
+        "UNSUPPORTED",
+        "INSUFFICIENT_EVIDENCE",
+        "CONFLICTED",
+    ],
     industry_reasons: tuple[str, ...],
 ) -> tuple[CurrentPriceContextFeatureV1, ...]:
     structure_ready = state == "OBSERVED" and all(
@@ -719,11 +904,20 @@ def _features(
         raw_feature("RAW_COHORT_BREADTH", breadth_ready),
         CurrentPriceContextFeatureV1(
             "RAW_INDUSTRY_PARTICIPATION",
-            industry_state
-            if industry_state != "NOT_ATTEMPTED"
-            else "INSUFFICIENT_EVIDENCE",
+            cast(
+                Literal[
+                    "OBSERVED",
+                    "UNSUPPORTED",
+                    "DEPENDENCY_BLOCKED",
+                    "INSUFFICIENT_EVIDENCE",
+                    "NOT_ATTEMPTED",
+                ],
+                "INSUFFICIENT_EVIDENCE"
+                if industry_state in ("NOT_ATTEMPTED", "CONFLICTED")
+                else industry_state,
+            ),
             () if industry_state == "OBSERVED" else industry_reasons,
-            support="SUPPORTED",
+            support="UNSUPPORTED" if industry_state == "UNSUPPORTED" else "SUPPORTED",
             readiness="READY" if industry_state == "OBSERVED" else "WITHHELD",
         ),
     )

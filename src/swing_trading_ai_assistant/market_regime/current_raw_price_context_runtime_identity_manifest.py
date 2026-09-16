@@ -1,4 +1,4 @@
-"""Reviewed source map for independent raw direction and breadth arithmetic."""
+"""Reviewed fixed-point source map for Issue #188 runtime behavior."""
 
 from typing import Final
 

@@ -226,6 +226,10 @@ class CurrentRawInvocationControlV1:
     def selection_ist_date(self) -> date:
         return self._selection.astimezone(_IST).date()
 
+    @property
+    def deadline(self) -> datetime:
+        return self._deadline
+
     def ensure_live(self) -> None:
         if self.shared_stop is not None:
             raise CurrentRawInvocationStoppedV1(self.shared_stop)
@@ -268,7 +272,9 @@ class CurrentRawContextProjectionV1:
     ordered_selection_identity_sha256: str
     canonical_cohort_identity_sha256: str
     schedule_identity_sha256: str
+    data_selection_time: datetime
     evidence_cutoff: datetime
+    member_inputs: tuple[CurrentPriceContextMemberV1, ...]
     sessions: tuple[CurrentSamePassRawSessionV1, ...]
     members: tuple[CurrentRawMemberProjectionV1, ...]
     breadth: RawCohortBreadthV1
@@ -613,7 +619,9 @@ def read_retained_current_raw_context_v1(  # noqa: C901
         request.ordered_selection_identity_sha256,
         request.canonical_cohort_identity_sha256,
         request.schedule_identity_sha256,
+        request.data_selection_time,
         cutoff,
+        request.members,
         sessions,
         tuple(members),
         breadth,
@@ -803,13 +811,25 @@ def recheck_retained_current_raw_context_v1(
 ) -> None:
     projection = validate_admitted_current_raw_context_v1(value)
     control.ensure_live()
-    resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
-        projection.schedule_identity_sha256, deadline=control
+    # Re-read through the same admitted reader: this compares every mapping,
+    # closed/current partition, action-screen and schedule binding used to mint.
+    fresh = read_retained_current_raw_context_v1(
+        storage_root,
+        request=CurrentRawPriceContextInputV1(
+            projection.request_identity_sha256,
+            projection.data_selection_time,
+            control.deadline,
+            projection.schedule_identity_sha256,
+            projection.member_inputs,
+        ),
+        lease=lease,
+        control=control,
     )
-    if resolved.schedule is None:
-        raise StorageRootLeaseError("retained raw schedule unavailable")
-    with DuckDBCatalog(storage_root, read_only=True, lease=lease) as catalog:
-        catalog.ensure_read_identity()
+    if fresh.admitted is None:
+        raise StorageRootLeaseError("retained raw source authority changed")
+    refreshed = validate_admitted_current_raw_context_v1(fresh.admitted)
+    if _canonical(refreshed) != _canonical(projection):
+        raise StorageRootLeaseError("retained raw source authority changed")
     control.ensure_live()
 
 

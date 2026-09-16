@@ -213,6 +213,7 @@ class _AcquisitionPlanV1:
     def __post_init__(self) -> None:
         if (
             len(self.selected) != 21
+            or not 1 <= len(_selected_months(self.selected)) <= 3
             or not 1 <= len(self.members) <= 50
             or self.mapping.kind != "MAPPING"
             or tuple(member.position for member in self.members)
@@ -223,7 +224,10 @@ class _AcquisitionPlanV1:
             raise ValueError("current raw acquisition plan is invalid")
         keys = [self.mapping.key]
         for member in self.members:
-            if len(member.closed) > 3 or member.action.kind != "ACTION":
+            if (
+                len(member.closed) + int(member.current_history is not None) > 3
+                or member.action.kind != "ACTION"
+            ):
                 raise ValueError("current raw acquisition plan is invalid")
             keys.extend(slot.key for slot in member.closed)
             keys.extend(
@@ -1385,6 +1389,7 @@ def _physical_calendar_prerequisite_is_proven(
         )
         or schedule.as_of > control.now()
         or selected[-1].trade_date - selected[0].trade_date > timedelta(days=63)
+        or not 1 <= len(_selected_months(selected)) <= 3
         or any(item.kind not in {"REGULAR", "SPECIAL"} for item in selected)
     ):
         return False

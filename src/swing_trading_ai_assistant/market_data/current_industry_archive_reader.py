@@ -169,6 +169,20 @@ def admitted_current_industry_binding_v1(
     return entry[1], entry[4], entry[5]
 
 
+def _local_failure(
+    storage_root: Path,
+    root_identity: tuple[int, int],
+    state: Literal[
+        "UNSUPPORTED", "INSUFFICIENT_EVIDENCE", "MALFORMED_EVIDENCE", "CONFLICTED"
+    ],
+    reason: str,
+) -> CurrentIndustryReadFailureV1:
+    """A local archive refusal never masks a concurrent shared-root loss."""
+    if StorageRootLease.admit_existing_private_identity(storage_root) != root_identity:
+        raise StorageRootLeaseError("current Industry root authority lost")
+    return CurrentIndustryReadFailureV1(state, reason)
+
+
 def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existing-only verification transaction
     reference: CurrentIndustryArchiveReferenceV1,
     *,
@@ -210,8 +224,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     16_384,
                 )
                 if snapshot_raw is None or receipt_raw is None or marker_raw is None:
-                    return CurrentIndustryReadFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CLASSIFICATION_ARCHIVE_MISSING",
                     )
                 candidate = classification._retained_candidate_from_receipt(receipt_raw)  # pyright: ignore[reportPrivateUsage]
                 candidate_value = cast(Any, candidate)
@@ -219,8 +236,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     candidate_value.retained_identity_sha256
                     != reference.retained_identity_sha256
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_RECEIPT_SUBSTITUTED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_RECEIPT_SUBSTITUTED",
                     )
                 snapshot = classification._snapshot_with_identity(  # pyright: ignore[reportPrivateUsage]
                     classification._snapshot(  # pyright: ignore[reportPrivateUsage]
@@ -241,19 +261,28 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     != reference.snapshot_identity_sha256
                     or snapshot.canonical_json_bytes() != snapshot_raw
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_SNAPSHOT_SUBSTITUTED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_SNAPSHOT_SUBSTITUTED",
                     )
                 raw_bytes = _read(
                     directory, f"raw-{snapshot.artifact_sha256}.csv", 1_048_576
                 )
                 if raw_bytes is None:
-                    return CurrentIndustryReadFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARTIFACT_MISSING"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CLASSIFICATION_ARTIFACT_MISSING",
                     )
                 if hashlib.sha256(raw_bytes).hexdigest() != snapshot.artifact_sha256:
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_ARTIFACT_SUBSTITUTED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_ARTIFACT_SUBSTITUTED",
                     )
                 input_value = classification.CurrentIndustryClassificationInputV1(
                     {
@@ -275,8 +304,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     }
                 )
                 if input_value.input_identity_sha256 != snapshot.input_identity_sha256:
-                    return CurrentIndustryReadFailureV1(
-                        "UNSUPPORTED", "UNSUPPORTED_CLASSIFICATION_SCHEMA"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "UNSUPPORTED",
+                        "UNSUPPORTED_CLASSIFICATION_SCHEMA",
                     )
                 parsed = classification.parse_current_industry_artifact_v1(
                     input_value, raw_bytes
@@ -285,8 +317,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     type(parsed)
                     is classification.CurrentIndustryClassificationFailureV1
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "MALFORMED_EVIDENCE", "CLASSIFICATION_ARTIFACT_MALFORMED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "MALFORMED_EVIDENCE",
+                        "CLASSIFICATION_ARTIFACT_MALFORMED",
                     )
                 reproduced = classification.project_current_supplied_cohort_industry_v1(
                     cast(classification.ParsedCurrentIndustryArtifactV1, parsed),
@@ -305,15 +340,21 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                     is classification.CurrentIndustryClassificationFailureV1
                     or reproduced.canonical_json_bytes() != snapshot_raw
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_PROJECTION_SUBSTITUTED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_PROJECTION_SUBSTITUTED",
                     )
                 marker_known_at = classification._completion_marker_known_at(  # pyright: ignore[reportPrivateUsage]
                     marker_raw, receipt_raw, snapshot
                 )
                 if marker_known_at != candidate.known_at:
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_MARKER_SUBSTITUTED"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_MARKER_SUBSTITUTED",
                     )
                 rows = tuple(
                     (row.isin, row.exchange, row.effective_symbol, row.industry)
@@ -326,12 +367,18 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                 if len(rows) != len(expected) or {row[:3] for row in rows} != set(
                     expected
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "CONFLICTED", "CLASSIFICATION_COHORT_BINDING_MISMATCH"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "CONFLICTED",
+                        "CLASSIFICATION_COHORT_BINDING_MISMATCH",
                     )
                 if candidate.known_at > raw_projection.evidence_cutoff:
-                    return CurrentIndustryReadFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_FUTURE_KNOWN"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CLASSIFICATION_FUTURE_KNOWN",
                     )
                 if (
                     candidate.known_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
@@ -339,8 +386,11 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
                         ZoneInfo("Asia/Kolkata")
                     ).date()
                 ):
-                    return CurrentIndustryReadFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_STALE"
+                    return _local_failure(
+                        storage_root,
+                        raw_root_identity,
+                        "INSUFFICIENT_EVIDENCE",
+                        "CLASSIFICATION_STALE",
                     )
                 classification._validate_archive_directory(root, directory)  # pyright: ignore[reportPrivateUsage]
                 classification._validate_archive_root(root)  # pyright: ignore[reportPrivateUsage]
@@ -353,14 +403,20 @@ def read_current_industry_archive_exact_v1(  # noqa: C901 -- one ordered existin
             finally:
                 os.close(directory)
     except FileNotFoundError:
-        return CurrentIndustryReadFailureV1(
-            "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
+        return _local_failure(
+            storage_root,
+            raw_root_identity,
+            "INSUFFICIENT_EVIDENCE",
+            "CLASSIFICATION_ARCHIVE_MISSING",
         )
     except (StorageRootLeaseError, OSError):
         raise
     except (AttributeError, TypeError, ValueError):
-        return CurrentIndustryReadFailureV1(
-            "MALFORMED_EVIDENCE", "CLASSIFICATION_ARCHIVE_MALFORMED"
+        return _local_failure(
+            storage_root,
+            raw_root_identity,
+            "MALFORMED_EVIDENCE",
+            "CLASSIFICATION_ARCHIVE_MALFORMED",
         )
     return _mint_admitted_current_industry_projection_v1(
         snapshot_identity_sha256=reference.snapshot_identity_sha256,

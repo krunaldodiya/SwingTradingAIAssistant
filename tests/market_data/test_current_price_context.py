@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
@@ -48,6 +49,7 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextMemberV1,
     CurrentPriceContextRequestV1,
     current_price_context_request_from_canonical_json_bytes_v1,
+    current_price_context_result_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
 )
 from swing_trading_ai_assistant.sector_analysis.current_raw_industry_participation import (
@@ -389,6 +391,33 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
     assert result.breadth is not None and result.breadth.requested_count == 1
     assert result.industry_evidence_state == "OBSERVED"
     assert result.industry_groups[0].member_count == 1
+    assert result.canonical_cohort_identity_sha256
+    assert result.schema_identity_sha256 and result.calculation_identity_sha256
+    assert (
+        result.configuration_identity_sha256 and result.source_bindings_identity_sha256
+    )
+    assert result.questions == (
+        "RAW_MARKET_STRUCTURE",
+        "RAW_20_SESSION_DIRECTION",
+        "RAW_COHORT_BREADTH",
+        "RAW_INDUSTRY_PARTICIPATION",
+    )
+    assert result.data_selection_time == raw_request.data_selection_time
+    assert result.provider == "UPSTOX"
+    assert result.price_basis == "RAW"
+    assert result.bar_basis == "1d-derived-from-retained-1m"
+    assert (
+        result.industry_snapshot_identity_sha256 == reference.snapshot_identity_sha256
+    )
+    assert (
+        result.industry_retained_identity_sha256 == reference.retained_identity_sha256
+    )
+    assert result.industry_known_at is not None
+    decoded = current_price_context_result_from_canonical_json_bytes_v1(
+        result.canonical_json_bytes()
+    )
+    assert decoded["result_identity_sha256"] == result.result_identity_sha256
+    assert type(decoded) is dict
     payload = result.canonical_json_bytes().decode()
     for private in (str(root), "fixture-token", "https://", "Authorization", "raw-"):
         assert private not in payload
@@ -778,22 +807,12 @@ def test_public_deadline_cancellation_and_unsafe_root_stop_before_effects(
             clock=_Clock(raw_request.admission_deadline),
         )
 
-    class _Cancelled:
-        def is_cancelled(self) -> bool:
-            return True
-
-    cancelled = research_current_price_context_v1(
-        request,
-        root,
-        acquire_missing=True,
-        clock=_Clock(raw_request.data_selection_time),
-        cancellation=_Cancelled(),
+    assert tuple(inspect.signature(research_current_price_context_v1).parameters) == (
+        "request",
+        "storage_root",
+        "acquire_missing",
+        "clock",
     )
-    assert (
-        cancelled.acquisition_outcome,
-        cancelled.acquisition_provider_calls,
-        cancelled.members[0].reason,
-    ) == ("STOPPED", 0, "ACQUISITION_STOPPED")
     root.chmod(0o755)
     unsafe = research_current_price_context_v1(
         request,

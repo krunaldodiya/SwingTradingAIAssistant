@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -784,6 +784,7 @@ def _parse_upstox_response(payload: bytes) -> tuple[CorporateActionEventV1, ...]
 
 
 def _upstox_event(value: object) -> CorporateActionEventV1:
+    """Convert only documented provider-data failures to the strict validator error."""
     if type(value) is not dict or set(cast(dict[str, object], value)) != {
         "name",
         "expiry_date",
@@ -791,37 +792,44 @@ def _upstox_event(value: object) -> CorporateActionEventV1:
         "ratio",
         "event_details",
     }:
-        raise ValueError
+        raise _CorporateActionSnapshotValidationError
     raw = cast(dict[str, object], value)
     if type(raw["name"]) is not str or type(raw["event_details"]) is not list:
-        raise ValueError
-    kind = CorporateActionKindV1[raw["name"].strip().upper()]
-    details = _event_details(cast(list[object], raw["event_details"]))
-    announced = _provider_date(details.pop("Announcement date"))
-    effective = _provider_date(raw["expiry_date"])
-    record_text = details.pop("Record date", None)
-    record_date = _provider_date(record_text) if record_text is not None else None
-    _validate_details_for_kind(kind, details, effective)
-    announced_at = datetime.combine(announced, time.min, _IST).astimezone(UTC)
-    if kind is CorporateActionKindV1.DIVIDEND:
-        amount = _amount(raw["amount"])
-        detail_amount = details.get("Amount")
-        if detail_amount is not None and _amount_text(detail_amount) != amount:
-            raise ValueError
-        numerator = denominator = None
-        if raw["ratio"] is not None:
-            raise ValueError
-    else:
-        if raw["amount"] is not None or type(raw["ratio"]) is not str:
-            raise ValueError
-        numerator, denominator = _ratio(raw["ratio"])
-        detail_ratio = details.get("Ratio")
-        if detail_ratio is not None and _ratio(detail_ratio) != (
-            numerator,
-            denominator,
-        ):
-            raise ValueError
-        amount = None
+        raise _CorporateActionSnapshotValidationError
+    try:
+        kind = CorporateActionKindV1[raw["name"].strip().upper()]
+    except KeyError:
+        raise _CorporateActionSnapshotValidationError from None
+    try:
+        details = _event_details(cast(list[object], raw["event_details"]))
+        announced_text = details.pop("Announcement date")
+        announced = _provider_date(announced_text)
+        effective = _provider_date(raw["expiry_date"])
+        record_text = details.pop("Record date", None)
+        record_date = _provider_date(record_text) if record_text is not None else None
+        _validate_details_for_kind(kind, details, effective)
+        announced_at = datetime.combine(announced, time.min, _IST).astimezone(UTC)
+        if kind is CorporateActionKindV1.DIVIDEND:
+            amount = _amount(raw["amount"])
+            detail_amount = details.get("Amount")
+            if detail_amount is not None and _amount_text(detail_amount) != amount:
+                raise ValueError
+            numerator = denominator = None
+            if raw["ratio"] is not None:
+                raise ValueError
+        else:
+            if raw["amount"] is not None or type(raw["ratio"]) is not str:
+                raise ValueError
+            numerator, denominator = _ratio(raw["ratio"])
+            detail_ratio = details.get("Ratio")
+            if detail_ratio is not None and _ratio(detail_ratio) != (
+                numerator,
+                denominator,
+            ):
+                raise ValueError
+            amount = None
+    except (KeyError, ValueError, InvalidOperation):
+        raise _CorporateActionSnapshotValidationError from None
     digest = _event_digest_fields(
         kind,
         announced_at,

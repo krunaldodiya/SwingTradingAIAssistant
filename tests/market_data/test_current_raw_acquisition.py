@@ -32,9 +32,13 @@ from current_raw_acquisition_fixtures import control as fixture_control
 from current_raw_acquisition_fixtures import members as fixture_members
 from current_raw_acquisition_fixtures import schedule as fixture_schedule
 
+import swing_trading_ai_assistant.market_data.corporate_actions as corporate_actions_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
+from swing_trading_ai_assistant.market_data.corporate_actions import (
+    CorporateActionCorruptError,
+)
 from swing_trading_ai_assistant.market_data.credentials import (
     AccessToken,
     CredentialNotFoundError,
@@ -1059,3 +1063,30 @@ def test_two_members_deadline_or_cancellation_stops_before_every_later_opener(
         for member in result.accounting.members[1:]
         for slot in member
     )
+
+
+def test_strict_action_parser_classifies_unknown_kind_and_missing_details_as_provider_data() -> (
+    None
+):
+    """Known provider shape defects must not reach the internal-error boundary."""
+    events: tuple[dict[str, object], ...] = (
+        {
+            "name": "UNKNOWN",
+            "expiry_date": "2026-09-30",
+            "amount": None,
+            "ratio": "1:2",
+            "event_details": [{"name": "Announcement date", "value": "2026-09-01"}],
+        },
+        {
+            "name": "BONUS",
+            "expiry_date": "2026-09-30",
+            "amount": None,
+            "ratio": "1:2",
+            "event_details": [],
+        },
+    )
+    for event in events:
+        with pytest.raises(CorporateActionCorruptError):
+            corporate_actions_module._parse_upstox_response_strict(  # pyright: ignore[reportPrivateUsage]
+                json.dumps({"status": "success", "data": [event]}).encode()
+            )
