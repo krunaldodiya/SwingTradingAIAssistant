@@ -101,7 +101,7 @@ class CurrentPriceContextMemberV1:
         if (
             type(self.isin) is not str
             or len(self.isin) != 12
-            or not _valid_isin_checksum(self.isin)
+            or not is_valid_current_price_context_isin_v1(self.isin)
             or self.exchange != "NSE"
             or self.instrument_type != "EQUITY"
             or self.segment != "EQ"
@@ -212,6 +212,7 @@ class CurrentRawInvocationControlV1:
         self._selection = selection
         self._deadline = deadline
         self._last: datetime | None = None
+        self._evidence_cutoff: datetime | None = None
         self._cancellation = cancellation
         self.shared_stop: str | None = None
 
@@ -221,6 +222,16 @@ class CurrentRawInvocationControlV1:
             raise RuntimeError("current price context clock is invalid")
         self._last = value
         return value
+
+    def retain_evidence_cutoff(self) -> datetime:
+        """Pin the first retained-source admission instant for this invocation."""
+        if self._evidence_cutoff is None:
+            self._evidence_cutoff = self.now()
+        return self._evidence_cutoff
+
+    @property
+    def evidence_cutoff(self) -> datetime | None:
+        return self._evidence_cutoff
 
     @property
     def selection_ist_date(self) -> date:
@@ -411,7 +422,9 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     ):
         return _outcome("DEPENDENCY_BLOCKED", "CALENDAR_PREREQUISITE_MISSING")
     schedule = schedule_result.schedule
-    cutoff = control.now()
+    # Source projections and their final rereads must share one evidence cutoff;
+    # liveness still samples the live monotonic clock at every ensure_live seam.
+    cutoff = control.retain_evidence_cutoff()
     if schedule.as_of > cutoff:
         return _outcome("INSUFFICIENT_EVIDENCE", "CALENDAR_FUTURE_KNOWN")
     completed = tuple(
@@ -854,7 +867,7 @@ def recheck_retained_current_raw_context_v1(
     control.ensure_live()
 
 
-def _valid_isin_checksum(value: str) -> bool:
+def is_valid_current_price_context_isin_v1(value: str) -> bool:
     """Require the canonical ISIN check digit before it reaches a public request."""
     encoded = "".join(str(ord(item) - 55) if item.isalpha() else item for item in value)
     total = 0

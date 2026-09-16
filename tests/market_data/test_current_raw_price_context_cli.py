@@ -165,10 +165,15 @@ def test_price_context_current_maps_invalid_and_stopped_outcomes_to_frozen_exits
     request = current_price_context_request_from_canonical_json_bytes_v1(
         request_file.read_bytes()
     )
+    prior = research_current_price_context_v1(request, root, clock=_Clock())
     stopped = replace(
-        research_current_price_context_v1(request, root, clock=_Clock()),
+        prior,
         acquisition_mode="ACQUIRE_MISSING",
         acquisition_outcome="STOPPED",
+        features=(
+            *prior.features[:3],
+            replace(prior.features[3], reasons=("INDUSTRY_NOT_ATTEMPTED",)),
+        ),
         result_identity_sha256="",
     )
 

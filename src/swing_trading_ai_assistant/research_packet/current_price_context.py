@@ -29,6 +29,7 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentPriceContextMemberV1,
     CurrentRawInvocationControlV1,
     CurrentRawPriceContextInputV1,
+    is_valid_current_price_context_isin_v1,
     read_retained_current_raw_context_v1,
     recheck_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
@@ -67,6 +68,48 @@ _QUESTIONS = (
 _IST = ZoneInfo("Asia/Kolkata")
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_RESULT_BYTES = 1_048_576
+_LIMITATIONS = (
+    "UPSTOX_RAW_ONLY",
+    "RETAINED_EVIDENCE_REQUIRED",
+    "CURRENT_MAPPING_SCOPE",
+)
+_MEMBER_REASON_STATES = {
+    "CALENDAR_PREREQUISITE_MISSING": "DEPENDENCY_BLOCKED",
+    "CALENDAR_FUTURE_KNOWN": "INSUFFICIENT_EVIDENCE",
+    "COMPLETED_SESSION_WINDOW_UNAVAILABLE": "INSUFFICIENT_EVIDENCE",
+    "CALENDAR_UNSUPPORTED": "UNSUPPORTED",
+    "RAW_WINDOW_LIMIT_EXCEEDED": "UNSUPPORTED",
+    "SCHEDULE_AUTHORITY_CHANGED": "INSUFFICIENT_EVIDENCE",
+    "ACQUISITION_STOPPED": "DEPENDENCY_BLOCKED",
+    "RAW_MAPPING_MISSING": "DEPENDENCY_BLOCKED",
+    "RAW_MAPPING_UNSUPPORTED": "UNSUPPORTED",
+    "RAW_MAPPING_STALE": "INSUFFICIENT_EVIDENCE",
+    "RAW_MAPPING_CORRUPT": "INSUFFICIENT_EVIDENCE",
+    "RAW_PARTITION_CORRUPT": "INSUFFICIENT_EVIDENCE",
+    "SCREEN_UNAVAILABLE": "INSUFFICIENT_EVIDENCE",
+    "ACTION_IN_WINDOW": "INSUFFICIENT_EVIDENCE",
+}
+_INDUSTRY_REASONS = frozenset(
+    {
+        "INDUSTRY_REFERENCE_NOT_PROVIDED",
+        "INDUSTRY_NOT_ATTEMPTED",
+        "MEMBER_DIRECTION_UNAVAILABLE",
+        "UNSUPPORTED_CLASSIFICATION_SCHEMA",
+        "CLASSIFICATION_ARCHIVE_MISSING",
+        "CLASSIFICATION_ARCHIVE_MALFORMED",
+        "CLASSIFICATION_ARCHIVE_SUBSTITUTED",
+        "CLASSIFICATION_ARTIFACT_MISSING",
+        "CLASSIFICATION_ARTIFACT_MALFORMED",
+        "CLASSIFICATION_ARTIFACT_SUBSTITUTED",
+        "CLASSIFICATION_COHORT_BINDING_MISMATCH",
+        "CLASSIFICATION_FUTURE_KNOWN",
+        "CLASSIFICATION_MARKER_SUBSTITUTED",
+        "CLASSIFICATION_PROJECTION_SUBSTITUTED",
+        "CLASSIFICATION_RECEIPT_SUBSTITUTED",
+        "CLASSIFICATION_SNAPSHOT_SUBSTITUTED",
+        "CLASSIFICATION_STALE",
+    }
+)
 
 
 class _ResultBindingsV1(TypedDict):
@@ -251,10 +294,14 @@ class CurrentPriceContextMemberResultV1:
             type(self.position) is not int
             or self.position < 0
             or type(self.isin) is not str
-            or not self.isin
+            or not is_valid_current_price_context_isin_v1(self.isin)
             or self.exchange != "NSE"
             or type(self.effective_symbol) is not str
-            or not self.effective_symbol
+            or not 1 <= len(self.effective_symbol) <= 64
+            or any(
+                char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
+                for char in self.effective_symbol
+            )
             or self.state
             not in (
                 "OBSERVED",
@@ -265,7 +312,11 @@ class CurrentPriceContextMemberResultV1:
             or (self.state == "OBSERVED") != (self.reason is None)
             or (
                 self.reason is not None
-                and (type(self.reason) is not str or not self.reason)
+                and (
+                    type(self.reason) is not str
+                    or self.reason not in _MEMBER_REASON_STATES
+                    or _MEMBER_REASON_STATES[self.reason] != self.state
+                )
             )
             or (self.structure is None) != (self.direction is None)
             or (self.state == "OBSERVED") != (self.structure is not None)
@@ -312,6 +363,19 @@ class CurrentPriceContextMemberResultV1:
                     self.mapping_observation_sha256 is None
                     or not self.partition_checksums
                     or self.screen_knowledge_at is None
+                )
+            )
+            or (
+                self.state != "OBSERVED"
+                and (
+                    self.structure is not None
+                    or self.direction is not None
+                    or self.mapping_observation_sha256 is not None
+                    or self.mapping_retrieved_at is not None
+                    or self.partition_checksums
+                    or self.raw_source_times
+                    or self.screen_identity_sha256 is not None
+                    or self.screen_knowledge_at is not None
                 )
             )
         ):
@@ -375,6 +439,128 @@ class CurrentPriceContextBreadthV1:
             raise ValueError("current price context breadth is invalid")
 
 
+def _expected_breadth_label(
+    advances: int, declines: int, requested_count: int
+) -> Literal["BROAD_ADVANCE", "BROAD_DECLINE", "MIXED_PARTICIPATION"]:
+    if advances * 5 >= requested_count * 3:
+        return "BROAD_ADVANCE"
+    if declines * 5 >= requested_count * 3:
+        return "BROAD_DECLINE"
+    return "MIXED_PARTICIPATION"
+
+
+def _raw_feature_state_and_reasons(
+    members: tuple[CurrentPriceContextMemberResultV1, ...],
+) -> tuple[
+    Literal["OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"],
+    tuple[str, ...],
+]:
+    reasons = tuple(
+        dict.fromkeys(member.reason for member in members if member.reason is not None)
+    )
+    if (
+        len(reasons) == 1
+        and all(member.state != "OBSERVED" for member in members)
+        and reasons[0]
+        in {
+            "CALENDAR_PREREQUISITE_MISSING",
+            "CALENDAR_FUTURE_KNOWN",
+            "COMPLETED_SESSION_WINDOW_UNAVAILABLE",
+            "CALENDAR_UNSUPPORTED",
+            "RAW_WINDOW_LIMIT_EXCEEDED",
+            "SCHEDULE_AUTHORITY_CHANGED",
+            "ACQUISITION_STOPPED",
+        }
+    ):
+        return cast(
+            Literal[
+                "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+            ],
+            _MEMBER_REASON_STATES[reasons[0]],
+        ), reasons
+    return "OBSERVED", ()
+
+
+def _expected_raw_feature(
+    question: str,
+    ready: bool,
+    state: Literal[
+        "OBSERVED", "UNSUPPORTED", "DEPENDENCY_BLOCKED", "INSUFFICIENT_EVIDENCE"
+    ],
+    reasons: tuple[str, ...],
+    members: tuple[CurrentPriceContextMemberResultV1, ...],
+) -> CurrentPriceContextFeatureV1:
+    member_reasons = tuple(
+        dict.fromkeys(member.reason for member in members if member.reason is not None)
+    )
+    withheld_reasons = reasons or member_reasons or ("MEMBER_EVIDENCE_UNAVAILABLE",)
+    return CurrentPriceContextFeatureV1(
+        question,
+        "OBSERVED"
+        if ready
+        else (state if state != "OBSERVED" else "INSUFFICIENT_EVIDENCE"),
+        () if ready else withheld_reasons,
+        readiness="READY" if ready else "WITHHELD",
+    )
+
+
+def _expected_features(
+    members: tuple[CurrentPriceContextMemberResultV1, ...],
+    breadth: CurrentPriceContextBreadthV1 | None,
+    industry_state: Literal[
+        "OBSERVED",
+        "NOT_ATTEMPTED",
+        "UNSUPPORTED",
+        "INSUFFICIENT_EVIDENCE",
+        "CONFLICTED",
+    ],
+    industry_feature_reasons: tuple[str, ...],
+) -> tuple[CurrentPriceContextFeatureV1, ...]:
+    raw_state, raw_reasons = _raw_feature_state_and_reasons(members)
+    industry_feature = CurrentPriceContextFeatureV1(
+        "RAW_INDUSTRY_PARTICIPATION",
+        cast(
+            Literal[
+                "OBSERVED",
+                "UNSUPPORTED",
+                "DEPENDENCY_BLOCKED",
+                "INSUFFICIENT_EVIDENCE",
+                "NOT_ATTEMPTED",
+            ],
+            "INSUFFICIENT_EVIDENCE"
+            if industry_state in ("NOT_ATTEMPTED", "CONFLICTED")
+            else industry_state,
+        ),
+        () if industry_state == "OBSERVED" else industry_feature_reasons,
+        support="UNSUPPORTED" if industry_state == "UNSUPPORTED" else "SUPPORTED",
+        readiness="READY" if industry_state == "OBSERVED" else "WITHHELD",
+    )
+    return (
+        _expected_raw_feature(
+            "RAW_MARKET_STRUCTURE",
+            all(member.structure is not None for member in members),
+            raw_state,
+            raw_reasons,
+            members,
+        ),
+        _expected_raw_feature(
+            "RAW_20_SESSION_DIRECTION",
+            all(member.direction is not None for member in members),
+            raw_state,
+            raw_reasons,
+            members,
+        ),
+        _expected_raw_feature(
+            "RAW_COHORT_BREADTH",
+            breadth is not None and breadth.label is not None,
+            raw_state,
+            raw_reasons,
+            members,
+        ),
+        industry_feature,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentPriceContextResultV1:
     contract_version: Literal["current-price-context@v1"]
@@ -427,12 +613,16 @@ class CurrentPriceContextResultV1:
         if (
             self.contract_version != _RESULT_CONTRACT
             or not _digest(self.request_identity_sha256)
+            or (
+                self.schema_identity_sha256 != _RESULT_SCHEMA_IDENTITY_SHA256
+                or self.calculation_identity_sha256
+                != _RESULT_CALCULATION_IDENTITY_SHA256
+                or self.configuration_identity_sha256
+                != _RESULT_CONFIGURATION_IDENTITY_SHA256
+            )
             or any(
                 not _digest(value)
                 for value in (
-                    self.schema_identity_sha256,
-                    self.calculation_identity_sha256,
-                    self.configuration_identity_sha256,
                     self.schedule_identity_sha256,
                     self.ordered_selection_identity_sha256,
                     self.canonical_cohort_identity_sha256,
@@ -480,6 +670,15 @@ class CurrentPriceContextResultV1:
                 not _member_source_times_at_or_before(item, self.evidence_cutoff)
                 for item in self.members
             )
+            or any(
+                item.structure is not None
+                and (
+                    item.structure.isin != item.isin
+                    or item.structure.exchange != item.exchange
+                    or item.structure.effective_symbol != item.effective_symbol
+                )
+                for item in self.members
+            )
             or (
                 self.breadth is not None
                 and (
@@ -493,6 +692,24 @@ class CurrentPriceContextResultV1:
                     != sum(item.direction == "DECLINE" for item in self.members)
                     or self.breadth.unchanged
                     != sum(item.direction == "UNCHANGED" for item in self.members)
+                    or self.breadth.insufficient_count
+                    != sum(item.direction is None for item in self.members)
+                    or (
+                        self.breadth.label is not None
+                        and (
+                            self.breadth.reasons
+                            or self.breadth.label
+                            != _expected_breadth_label(
+                                self.breadth.advances,
+                                self.breadth.declines,
+                                self.breadth.requested_count,
+                            )
+                        )
+                    )
+                    or (
+                        self.breadth.label is None
+                        and self.breadth.reasons != ("MEMBER_DIRECTION_UNAVAILABLE",)
+                    )
                 )
             )
             or type(self.features) is not tuple
@@ -500,10 +717,16 @@ class CurrentPriceContextResultV1:
             or any(
                 type(item) is not CurrentPriceContextFeatureV1 for item in self.features
             )
+            or any(
+                reason not in _INDUSTRY_REASONS
+                for item in self.features
+                if item.question == "RAW_INDUSTRY_PARTICIPATION"
+                for reason in item.reasons
+            )
             or type(self.limitations) is not tuple
-            or not self.limitations
-            or any(type(item) is not str or not item for item in self.limitations)
-            or not _digest(self.runtime_code_identity_sha256)
+            or self.limitations != _LIMITATIONS
+            or self.runtime_code_identity_sha256
+            != current_price_context_runtime_code_identity_v1()
             or self.industry_evidence_state
             not in (
                 "OBSERVED",
@@ -554,6 +777,44 @@ class CurrentPriceContextResultV1:
                     or self.industry_groups
                 )
             )
+        ):
+            raise ValueError("current price context result is invalid")
+        raw_state, _ = _raw_feature_state_and_reasons(self.members)
+        if (self.breadth is None) != (raw_state != "OBSERVED"):
+            raise ValueError("current price context result is invalid")
+        if self.industry_evidence_state == "OBSERVED" and (
+            self.breadth is None
+            or self.breadth.label is None
+            or tuple(group.industry for group in self.industry_groups)
+            != tuple(sorted(group.industry for group in self.industry_groups))
+            or len({group.industry for group in self.industry_groups})
+            != len(self.industry_groups)
+            or sum(group.member_count for group in self.industry_groups)
+            != self.requested_count
+            or sum(group.advances for group in self.industry_groups)
+            != self.breadth.advances
+            or sum(group.declines for group in self.industry_groups)
+            != self.breadth.declines
+            or sum(group.unchanged for group in self.industry_groups)
+            != self.breadth.unchanged
+        ):
+            raise ValueError("current price context result is invalid")
+        industry_feature_reasons = self.features[-1].reasons
+        if (
+            self.industry_evidence_state == "NOT_ATTEMPTED"
+            and industry_feature_reasons
+            != (
+                ("INDUSTRY_NOT_ATTEMPTED",)
+                if self.acquisition_outcome == "STOPPED"
+                else ("INDUSTRY_REFERENCE_NOT_PROVIDED",)
+            )
+        ):
+            raise ValueError("current price context result is invalid")
+        if self.features != _expected_features(
+            self.members,
+            self.breadth,
+            self.industry_evidence_state,
+            industry_feature_reasons,
         ):
             raise ValueError("current price context result is invalid")
         identity = _digest_value(_without_identity(self))
@@ -1017,11 +1278,7 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
                     "NOT_ATTEMPTED",
                     ("INDUSTRY_NOT_ATTEMPTED",),
                 ),
-                limitations=(
-                    "UPSTOX_RAW_ONLY",
-                    "RETAINED_EVIDENCE_REQUIRED",
-                    "CURRENT_MAPPING_SCOPE",
-                ),
+                limitations=_LIMITATIONS,
                 runtime_code_identity_sha256=runtime_identity,
             )
     industry_state: Literal[
@@ -1194,11 +1451,7 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
             industry_state,
             industry_reasons,
         ),
-        limitations=(
-            "UPSTOX_RAW_ONLY",
-            "RETAINED_EVIDENCE_REQUIRED",
-            "CURRENT_MAPPING_SCOPE",
-        ),
+        limitations=_LIMITATIONS,
         runtime_code_identity_sha256=runtime_identity,
         industry_evidence_state=industry_state,
         industry_snapshot_identity_sha256=(

@@ -51,8 +51,10 @@ from swing_trading_ai_assistant.market_data.current_raw_acquisition import (
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     AdmittedCurrentRawContextV1,
     CurrentRawInvocationControlV1,
+    CurrentRawInvocationStoppedV1,
     CurrentRawPriceContextInputV1,
     read_retained_current_raw_context_v1,
+    recheck_retained_current_raw_context_v1,
     validate_admitted_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
@@ -83,6 +85,18 @@ class _Clock:
 
     def now(self) -> datetime:
         return self.value
+
+
+class _AdvancingClock:
+    """Deterministic monotonic clock that exposes cutoff/liveness confusion."""
+
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def now(self) -> datetime:
+        value = self.value
+        self.value += timedelta(microseconds=1)
+        return value
 
 
 def _member_isin(index: int) -> str:
@@ -346,6 +360,12 @@ def test_retained_only_public_call_never_attempts_acquisition(tmp_path: Path) ->
 
     assert result.acquisition_mode == "RETAINED_ONLY"
     assert result.acquisition_outcome == "NOT_ATTEMPTED"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
     assert "RETained" not in result.canonical_json_bytes().decode()
 
 
@@ -684,6 +704,12 @@ def test_public_action_observed_withholds_only_affected_member_comparison(
     assert result.breadth.requested_count == result.breadth.insufficient_count == 1
     assert result.breadth.observed_count == 0
     assert result.features[1].readiness == "WITHHELD"
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
 
 
 def test_public_industry_failures_never_suppress_retained_raw_facts(
@@ -930,6 +956,12 @@ def test_public_deadline_cancellation_and_unsafe_root_stop_before_effects(
         unsafe.acquisition_provider_calls,
         unsafe.members[0].reason,
     ) == ("STOPPED", 0, "ACQUISITION_STOPPED")
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            unsafe.canonical_json_bytes()
+        )
+        == unsafe
+    )
     assert wire.attempts == FixtureTokenProvider.calls == 0
 
 
@@ -965,6 +997,12 @@ def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
         partial.members[0].state,
         partial.members[1].state,
     ) == ("ACQUISITION_PARTIAL", 2, "INSUFFICIENT_EVIDENCE", "OBSERVED")
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            partial.canonical_json_bytes()
+        )
+        == partial
+    )
 
     stopped_root = tmp_path / "stopped"
     seed_root(stopped_root, retained_action=True, request_value=raw_request)
@@ -981,6 +1019,12 @@ def test_public_explicit_acquisition_reports_partial_and_shared_stop_safely(
         stopped.acquisition_provider_calls,
         stopped_wire.attempts,
     ) == ("STOPPED", 1, 1)
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            stopped.canonical_json_bytes()
+        )
+        == stopped
+    )
     payload = stopped.canonical_json_bytes().decode()
     assert "AUTHENTICATION_FAILED" not in payload
     assert "fixture-token" not in payload
@@ -1331,6 +1375,12 @@ def test_legacy_industry_archive_remains_reconstructible_but_is_local_current_un
     assert result.members[0].state == "OBSERVED"
     assert result.industry_evidence_state == "UNSUPPORTED"
     assert result.industry_groups == ()
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
 
 
 def test_industry_reader_cleanup_preserves_primary_and_propagates_standalone_failure(
@@ -1421,6 +1471,152 @@ def test_public_runtime_identity_rejects_representative_copied_source_substituti
         packet_module.current_price_context_runtime_code_identity_v1()
 
 
+def test_advancing_clock_pins_retained_cutoff_without_freezing_liveness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = (tmp_path / "retained").resolve()
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    request = _public_request(raw_request)
+
+    sdk = research_current_price_context_v1(
+        request, root, clock=_AdvancingClock(raw_request.data_selection_time)
+    )
+
+    assert sdk.members[0].state == "OBSERVED"
+    assert sdk.evidence_cutoff >= sdk.data_selection_time
+    assert all(
+        source_time <= sdk.evidence_cutoff
+        for member in sdk.members
+        for source_time in member.raw_source_times
+    )
+
+    input_file = (tmp_path / "request.json").resolve()
+    input_file.write_text(
+        json.dumps(
+            {
+                "contract_version": request.contract_version,
+                "data_selection_time": request.data_selection_time.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "admission_deadline": request.admission_deadline.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "schedule_identity_sha256": request.schedule_identity_sha256,
+                "members": [
+                    {
+                        "isin": member.isin,
+                        "exchange": member.exchange,
+                        "instrument_type": member.instrument_type,
+                        "segment": member.segment,
+                        "effective_symbol": member.effective_symbol,
+                        "valid_from": member.valid_from.isoformat(),
+                        "valid_through": member.valid_through.isoformat(),
+                    }
+                    for member in request.members
+                ],
+                "questions": list(request.questions),
+                "industry_archive_reference": None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    input_file.chmod(0o600)
+    assert (
+        main(
+            [
+                "price-context-current",
+                "--input-file",
+                str(input_file),
+                "--storage-root",
+                str(root),
+                "--output",
+                "json",
+            ],
+            trusted_clock=_AdvancingClock(raw_request.data_selection_time),
+        )
+        == 0
+    )
+    emitted = capsys.readouterr()
+    cli = current_price_context_result_from_canonical_json_bytes_v1(
+        emitted.out.encode()
+    )
+    assert cli.evidence_cutoff >= cli.data_selection_time
+    assert all(
+        source_time <= cli.evidence_cutoff
+        for member in cli.members
+        for source_time in member.raw_source_times
+    )
+
+    admitted = StorageRootLease.try_admit_read_existing(root)
+    assert admitted.lease is not None
+    control = CurrentRawInvocationControlV1(
+        _AdvancingClock(raw_request.data_selection_time),
+        selection=raw_request.data_selection_time,
+        deadline=raw_request.admission_deadline,
+    )
+    with admitted.lease as lease:
+        initial = read_retained_current_raw_context_v1(
+            root, request=raw_request, lease=lease, control=control
+        )
+        assert initial.admitted is not None
+        cutoff = validate_admitted_current_raw_context_v1(
+            initial.admitted
+        ).evidence_cutoff
+        assert control.evidence_cutoff == cutoff
+        recheck_retained_current_raw_context_v1(
+            initial.admitted, root, lease=lease, control=control
+        )
+        assert control.evidence_cutoff == cutoff
+
+    deadline_control = CurrentRawInvocationControlV1(
+        _AdvancingClock(raw_request.data_selection_time),
+        selection=raw_request.data_selection_time,
+        deadline=raw_request.data_selection_time + timedelta(microseconds=1),
+    )
+    deadline_control.ensure_live()
+    with pytest.raises(CurrentRawInvocationStoppedV1, match="DEADLINE_EXCEEDED"):
+        deadline_control.ensure_live()
+
+    rollover_selection = datetime(2026, 9, 15, 18, 29, 59, 999999, tzinfo=UTC)
+    rollover_control = CurrentRawInvocationControlV1(
+        _AdvancingClock(rollover_selection),
+        selection=rollover_selection,
+        deadline=rollover_selection + timedelta(minutes=1),
+    )
+    rollover_control.ensure_live()
+    with pytest.raises(CurrentRawInvocationStoppedV1, match="IST_ROLLOVER"):
+        rollover_control.ensure_live()
+
+
+def test_acquire_missing_establishes_cutoff_only_after_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = seed_root(root)
+    wire = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=action_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        acquire_missing=True,
+        clock=_AdvancingClock(raw_request.data_selection_time),
+    )
+
+    assert result.acquisition_outcome == "ACQUISITION_COMPLETED"
+    assert result.acquisition_provider_calls == wire.attempts == 2
+    assert result.members[0].state == "OBSERVED"
+    assert result.evidence_cutoff >= result.data_selection_time
+
+
 def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1433,6 +1629,22 @@ def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violation
         clock=_Clock(raw_request.data_selection_time),
     )
     original: Any = json.loads(result.canonical_json_bytes())
+
+    def change_nested_member_identity(value: Any) -> None:
+        structure = value["members"][0]["structure"]
+        structure["isin"] = _member_isin(2)
+        structure["member_identity_sha256"] = packet_module._digest_value(  # pyright: ignore[reportPrivateUsage]
+            {
+                key: item
+                for key, item in structure.items()
+                if key != "member_identity_sha256"
+            }
+        )
+
+    def change_industry_totals(value: Any) -> None:
+        value["industry_groups"][0].update(
+            member_count=2, advances=2, declines=0, unchanged=0
+        )
 
     mutations: tuple[Callable[[Any], None], ...] = (
         lambda value: value.__setitem__(
@@ -1461,6 +1673,62 @@ def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violation
         lambda value: value["members"][0]["partition_checksums"].append("a" * 64),
         lambda value: value["members"][0].__setitem__("direction", "SIDEWAYS"),
         lambda value: value["features"][0].__setitem__("state", "NOT_A_STATE"),
+        lambda value: value["breadth"].__setitem__("label", "BROAD_ADVANCE"),
+        lambda value: value["features"][2].update(
+            state="UNSUPPORTED",
+            reasons=["RAW_PARTITION_CORRUPT"],
+            support="UNSUPPORTED",
+            readiness="WITHHELD",
+        ),
+        change_industry_totals,
+        lambda value: value.__setitem__("schema_identity_sha256", "b" * 64),
+        lambda value: value.__setitem__("calculation_identity_sha256", "b" * 64),
+        lambda value: value.__setitem__("configuration_identity_sha256", "b" * 64),
+        lambda value: value.__setitem__("runtime_code_identity_sha256", "b" * 64),
+        lambda value: value["members"][0].__setitem__("isin", _member_isin(2)),
+        change_nested_member_identity,
+        lambda value: value["members"][0].__setitem__("reason", "ARBITRARY"),
+        lambda value: value.__setitem__("limitations", ["ARBITRARY"]),
+    )
+    for mutate in mutations:
+        forged: Any = json.loads(json.dumps(original))
+        mutate(forged)
+        with pytest.raises(ValueError, match="result is invalid"):
+            current_price_context_result_from_canonical_json_bytes_v1(
+                _rehashed_result_bytes(forged)
+            )
+
+
+def test_public_result_decoder_rejects_rehashed_arbitrary_member_breadth_and_feature_reasons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = seed_root(tmp_path / "base", retained_action=True)
+    request = CurrentRawPriceContextInputV1(
+        base.request_identity_sha256,
+        base.data_selection_time,
+        base.admission_deadline,
+        base.schedule_identity_sha256,
+        (base.members[0], _member(2)),
+    )
+    root = tmp_path / "partial"
+    seed_root(root, retained_action=True, request_value=request)
+    wire = RecordedWire([WireReply(status=404), WireReply(body=historical_body())])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    partial = research_current_price_context_v1(
+        _public_request(request),
+        root,
+        acquire_missing=True,
+        clock=_Clock(request.data_selection_time),
+    )
+    original: Any = json.loads(partial.canonical_json_bytes())
+
+    mutations: tuple[Callable[[Any], None], ...] = (
+        lambda value: value["members"][0].__setitem__("reason", "ARBITRARY"),
+        lambda value: value["breadth"].__setitem__("reasons", ["ARBITRARY"]),
+        lambda value: value["features"][0].__setitem__("reasons", ["ARBITRARY"]),
     )
     for mutate in mutations:
         forged: Any = json.loads(json.dumps(original))
