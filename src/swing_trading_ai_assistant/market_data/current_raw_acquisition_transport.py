@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.client import IncompleteRead
 from typing import Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -209,8 +210,6 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         response = opener.open(request, timeout=min(float(timeout_seconds), remaining))
     except HTTPError as error:
         try:
-            if response_completed is not None:
-                response_completed()
             _raise_status(error.code)
             raise CurrentRawProviderResponseError(
                 "current raw provider refused request"
@@ -220,15 +219,13 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
             # subordinate to the status classification.
             with suppress(BaseException):
                 error.close()
-    except URLError as error:
+    except (URLError, TimeoutError, ConnectionResetError, IncompleteRead) as error:
         raise CurrentRawProviderResponseError(
             "current raw provider unavailable"
         ) from error
 
     primary: BaseException | None = None
     try:
-        if response_completed is not None:
-            response_completed()
         status = response.getcode()
         if type(status) is not int:
             raise CurrentRawProviderResponseError("current raw status is invalid")
@@ -247,9 +244,22 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
             raise CurrentRawProviderResponseError(
                 "current raw response headers invalid"
             )
-        body = response.read(maximum_body_bytes + 1)
+        try:
+            body = response.read(maximum_body_bytes + 1)
+        except (
+            URLError,
+            TimeoutError,
+            ConnectionResetError,
+            IncompleteRead,
+            OSError,
+        ) as error:
+            raise CurrentRawProviderResponseError(
+                "current raw response body unavailable"
+            ) from error
         if type(body) is not bytes or len(body) > maximum_body_bytes:
             raise CurrentRawProviderResponseError("current raw response too large")
+        if response_completed is not None:
+            response_completed()
         completed = now()
         if type(completed) is not datetime or completed.tzinfo is not UTC:
             raise ValueError("strict current raw clock is invalid")

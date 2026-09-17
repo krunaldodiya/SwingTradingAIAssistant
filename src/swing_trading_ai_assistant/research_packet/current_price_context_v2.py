@@ -41,7 +41,10 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleEvidenceStore,
 )
-from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentIndustryArchiveReferenceV1,
     CurrentPriceContextRequestV1,
@@ -675,6 +678,36 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentPriceContextPhysicalPlanEntryV2:
+    """One public, schedule-derived physical ledger key; not an attestation."""
+
+    source: Literal[
+        "CALENDAR",
+        "MAPPING",
+        "CLOSED_MONTH",
+        "CURRENT_HISTORY",
+        "CURRENT_SESSION",
+        "CORPORATE_ACTION",
+        "INDUSTRY",
+    ]
+    slot: str
+    position: int | None
+
+    def __post_init__(self) -> None:
+        if (
+            self.source not in _LEDGER_SOURCES
+            or type(self.slot) is not str
+            or not 1 <= len(self.slot) <= 32
+            or re.fullmatch(r"[a-z0-9-]+", self.slot) is None
+            or (
+                self.position is not None
+                and (type(self.position) is not int or self.position < 0)
+            )
+        ):
+            raise ValueError("current price context physical plan entry is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentPriceContextResultV2:
     contract_version: Literal["current-price-context@v2"]
     request_identity_sha256: str
@@ -697,6 +730,7 @@ class CurrentPriceContextResultV2:
     refreshed_physical_objects: int
     completed_context: CurrentPriceContextResultV1
     current_session: tuple[CurrentSessionPriceContextMemberV2, ...]
+    physical_plan: tuple[CurrentPriceContextPhysicalPlanEntryV2, ...]
     freshness_ledger: tuple[CurrentPriceContextFreshnessEntryV2, ...]
     runtime_code_identity_sha256: str
     result_identity_sha256: str = ""
@@ -730,11 +764,14 @@ class CurrentPriceContextResultV2:
             or self.evidence_cutoff < self.inspection_time
             or self.evidence_cutoff >= self.admission_deadline
             or (
-                (self.acquisition_started_at is None)
-                != (self.acquisition_completed_at is None)
+                (calls == 0)
+                != (
+                    self.acquisition_started_at is None
+                    and self.acquisition_completed_at is None
+                )
             )
             or (
-                self.acquisition_started_at is not None
+                calls > 0
                 and not _valid_acquisition_window(
                     self.acquisition_started_at,
                     self.acquisition_completed_at,
@@ -800,6 +837,19 @@ class CurrentPriceContextResultV2:
                 for item in self.current_session
                 for clock in (item.source_cutoff, item.published_at, item.known_at)
             )
+            or type(self.physical_plan) is not tuple
+            or len(self.physical_plan) != len(self.freshness_ledger)
+            or any(
+                type(item) is not CurrentPriceContextPhysicalPlanEntryV2
+                for item in self.physical_plan
+            )
+            or tuple(
+                (item.source, item.slot, item.position) for item in self.physical_plan
+            )
+            != tuple(
+                (item.source, item.slot, item.position)
+                for item in self.freshness_ledger
+            )
             or type(self.freshness_ledger) is not tuple
             or not 2 <= len(self.freshness_ledger) <= 5 * len(self.request_members) + 3
             or any(
@@ -810,6 +860,13 @@ class CurrentPriceContextResultV2:
             != calls
             or sum(item.provider_calls_completed for item in self.freshness_ledger)
             != self.provider_calls_completed
+            or self.reused_physical_objects
+            != sum(item.state == "REUSED" for item in self.freshness_ledger)
+            or self.refreshed_physical_objects
+            != sum(
+                item.state in {"REFRESHED", "APPENDED"}
+                for item in self.freshness_ledger
+            )
             or any(
                 clock is not None and clock > self.evidence_cutoff
                 for item in self.freshness_ledger
@@ -1061,10 +1118,13 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
     control: CurrentRawInvocationControlV1,
     evidence_cutoff: datetime,
     inspection: CurrentRawAcquisitionResultV1,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> tuple[CurrentSessionPriceContextMemberV2, ...]:
     if not request.include_current_session:
         return _uniform_current_session(request, "NOT_REQUESTED", "NOT_REQUESTED")
-    admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    admitted = StorageRootLease.try_admit_read_existing(
+        storage_root, expected_root_identity
+    )
     if admitted.lease is None:
         return _uniform_current_session(
             request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
@@ -1124,7 +1184,7 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
                     security_id=member.isin,
                     year=active.trade_date.year,
                     month=active.trade_date.month,
-                    cutoff_lte=evidence_cutoff,
+                    cutoff_lte=target,
                     published_at_lte=evidence_cutoff,
                     schedule_digest_sha256=schedule_digest,
                 )
@@ -1225,6 +1285,7 @@ def _current_session_cutoff_identities(
     control: CurrentRawInvocationControlV1,
     evidence_cutoff: datetime,
     inspection: CurrentRawAcquisitionResultV1,
+    expected_root_identity: tuple[int, int] | None = None,
 ) -> tuple[tuple[datetime, str] | None, ...]:
     """Read validated pre-pass provisional cutoffs without accepting stale rows."""
     unavailable: tuple[tuple[datetime, str] | None, ...] = (None,) * len(
@@ -1232,7 +1293,9 @@ def _current_session_cutoff_identities(
     )
     if not request.include_current_session or inspection.plan is None:
         return unavailable
-    admitted = StorageRootLease.try_admit_read_existing(storage_root)
+    admitted = StorageRootLease.try_admit_read_existing(
+        storage_root, expected_root_identity
+    )
     if admitted.lease is None:
         return unavailable
     with admitted.lease as lease:
@@ -1274,7 +1337,7 @@ def _current_session_cutoff_identities(
                     security_id=member.isin,
                     year=active.trade_date.year,
                     month=active.trade_date.month,
-                    cutoff_lte=evidence_cutoff,
+                    cutoff_lte=target,
                     published_at_lte=evidence_cutoff,
                     schedule_digest_sha256=schedule_digest,
                 )
@@ -1330,6 +1393,38 @@ def _conflicted_positions(
     )
 
 
+def _failed_current_positions(
+    result: CurrentRawAcquisitionResultV1 | None,
+) -> frozenset[int]:
+    """Project a failed attempted current slot without rewriting retained bytes."""
+    if result is None or result.accounting is None:
+        return frozenset()
+    return frozenset(
+        position
+        for position, slots in enumerate(result.accounting.members)
+        if any(
+            ":intraday:" in slot.key
+            and slot.attempts == 1
+            and slot.disposition.value
+            not in {"RETAINED", "RETAINED_INCOMPLETE", "REUSED"}
+            for slot in slots
+        )
+    )
+
+
+def _root_identity_guard(storage_root: Path) -> tuple[int, int] | None:
+    """Capture one invocation-owned root identity; absence cannot become a root."""
+    return StorageRootLease.admit_existing_private_identity(storage_root)
+
+
+def _ensure_root_identity(storage_root: Path, expected: tuple[int, int] | None) -> None:
+    actual = StorageRootLease.admit_existing_private_identity(storage_root)
+    if actual != expected or (expected is None and storage_root.exists()):
+        raise StorageRootLeaseError(
+            "current price context V2 root authority unavailable"
+        )
+
+
 class _CancellationClockV2:
     def __init__(
         self,
@@ -1380,6 +1475,23 @@ def _merged_accounting_slots(
             if previous is None or slot.attempts or not previous.attempts:
                 merged[slot.key] = slot
     return merged
+
+
+def _acquisition_window(
+    *results: CurrentRawAcquisitionResultV1 | None,
+) -> tuple[datetime | None, datetime | None]:
+    slots = tuple(
+        slot for slot in _merged_accounting_slots(*results).values() if slot.attempts
+    )
+    if not slots:
+        return None, None
+    starts = tuple(slot.attempted_at for slot in slots)
+    ends = tuple(slot.settled_at or slot.attempted_at for slot in slots)
+    if any(value is None for value in (*starts, *ends)):
+        raise ValueError("current price context acquisition accounting is invalid")
+    return min(cast(tuple[datetime, ...], starts)), max(
+        cast(tuple[datetime, ...], ends)
+    )
 
 
 def _ledger_state(
@@ -1586,7 +1698,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                         else None
                     ),
                     0 if account is None else account.attempts,
-                    0 if account is None else int(account.completed),
+                    0 if account is None else int(account.settled_at is not None),
                     cast(Any, correction),
                 )
             )
@@ -1626,7 +1738,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                     current.published_at,
                     current.known_at,
                     0 if account is None else account.attempts,
-                    0 if account is None else int(account.completed),
+                    0 if account is None else int(account.settled_at is not None),
                     "CURRENT_SESSION_IDENTICAL_OVERLAP_APPEND_OR_CONFLICT",
                 )
             )
@@ -1723,6 +1835,8 @@ def research_current_price_context_v2(
         raise ValueError("current price context V2 deadline exceeded")
     runtime_identity = current_price_context_runtime_code_identity_v2()
     current_price_context_runtime_code_identity_v1()
+    root_identity = _root_identity_guard(storage_root)
+    _ensure_root_identity(storage_root, root_identity)
     request_v1 = _v1_request(request)
     raw_request = CurrentRawPriceContextInputV1(
         request_v1.request_identity_sha256,
@@ -1741,17 +1855,21 @@ def research_current_price_context_v2(
         raw_request,
         storage_root,
         control=inspection_control,
+        expected_root_identity=root_identity,
     )
+    _ensure_root_identity(storage_root, root_identity)
     current_inspection = (
         inspect_current_raw_evidence_v1(
             raw_request,
             storage_root,
             control=inspection_control,
             include_current_session=True,
+            expected_root_identity=root_identity,
         )
         if request.include_current_session
         else completed_inspection
     )
+    _ensure_root_identity(storage_root, root_identity)
     prepass_cutoff = trusted_clock.now()
     prepass_control = CurrentRawInvocationControlV1(
         trusted_clock,
@@ -1765,13 +1883,16 @@ def research_current_price_context_v2(
         control=prepass_control,
         evidence_cutoff=prepass_cutoff,
         inspection=current_inspection,
+        expected_root_identity=root_identity,
     )
+    _ensure_root_identity(storage_root, root_identity)
     acquisition_started_at: datetime | None = None
     acquisition_completed_at: datetime | None = None
     completed_acquisition: CurrentRawAcquisitionResultV1 | None = None
     current_acquisition: CurrentRawAcquisitionResultV1 | None = None
     completed_acquisition_calls = 0
     if request.execution_mode != "RETAINED_ONLY":
+        _ensure_root_identity(storage_root, root_identity)
         acquisition_started_at = trusted_clock.now()
         completed_control = CurrentRawInvocationControlV1(
             trusted_clock,
@@ -1783,6 +1904,7 @@ def research_current_price_context_v2(
             raw_request,
             storage_root,
             control=completed_control,
+            expected_root_identity=root_identity,
         )
         completed_acquisition_calls = completed_acquisition.provider_calls
         if (
@@ -1806,11 +1928,14 @@ def research_current_price_context_v2(
                 current_session_only=True,
                 provider_call_budget=min(5 * len(request.members) + 1, 251)
                 - completed_acquisition_calls,
+                expected_root_identity=root_identity,
             )
         acquisition_completed_at = trusted_clock.now()
+        _ensure_root_identity(storage_root, root_identity)
     completed = research_current_price_context_v1(
         request_v1, storage_root, acquire_missing=False, clock=trusted_clock
     )
+    _ensure_root_identity(storage_root, root_identity)
     evidence_cutoff = trusted_clock.now()
     if evidence_cutoff >= request.admission_deadline:
         raise ValueError("current price context V2 deadline exceeded")
@@ -1831,9 +1956,12 @@ def research_current_price_context_v2(
         control=control,
         evidence_cutoff=evidence_cutoff,
         inspection=final_current_inspection,
+        expected_root_identity=root_identity,
     )
+    _ensure_root_identity(storage_root, root_identity)
     conflicted = _conflicted_positions(current_acquisition)
-    if conflicted:
+    failed_current = _failed_current_positions(current_acquisition)
+    if conflicted or failed_current:
         current_session = tuple(
             _unavailable_member(
                 item.position,
@@ -1842,6 +1970,13 @@ def research_current_price_context_v2(
                 "PROVISIONAL_EVIDENCE_CONFLICTED",
             )
             if item.position in conflicted
+            else _unavailable_member(
+                item.position,
+                request.members[item.position],
+                "UNAVAILABLE",
+                "PROVISIONAL_EVIDENCE_UNAVAILABLE",
+            )
+            if item.position in failed_current
             else item
             for item in current_session
         )
@@ -1858,14 +1993,15 @@ def research_current_price_context_v2(
     )
     attempted = sum(item.provider_calls_attempted for item in ledger)
     completed_calls = sum(item.provider_calls_completed for item in ledger)
-    accounting_slots = _merged_accounting_slots(
+    acquisition_started_at, acquisition_completed_at = _acquisition_window(
         completed_inspection,
         current_inspection,
         completed_acquisition,
         current_acquisition,
-    ).values()
-    reused = sum(slot.disposition.value == "REUSED" for slot in accounting_slots)
+    )
+    reused = sum(item.state == "REUSED" for item in ledger)
     refreshed = sum(item.state in {"REFRESHED", "APPENDED"} for item in ledger)
+    _ensure_root_identity(storage_root, root_identity)
     return CurrentPriceContextResultV2(
         _RESULT_CONTRACT,
         request.request_identity_sha256,
@@ -1888,8 +2024,29 @@ def research_current_price_context_v2(
         refreshed,
         completed,
         current_session,
+        tuple(
+            CurrentPriceContextPhysicalPlanEntryV2(
+                item.source, item.slot, item.position
+            )
+            for item in ledger
+        ),
         ledger,
         runtime_identity,
+    )
+
+
+def _physical_plan_entry_from_value(
+    value: object,
+) -> CurrentPriceContextPhysicalPlanEntryV2:
+    if type(value) is not dict:
+        raise ValueError
+    item = cast(dict[str, object], value)
+    if set(item) != {"source", "slot", "position"}:
+        raise ValueError
+    return CurrentPriceContextPhysicalPlanEntryV2(
+        cast(Any, item["source"]),
+        cast(str, item["slot"]),
+        cast(int | None, item["position"]),
     )
 
 
@@ -1949,11 +2106,13 @@ def current_price_context_result_from_canonical_json_bytes_v2(
         member_values = value["request_members"]
         question_values = value["questions"]
         ledger_values = value["freshness_ledger"]
+        physical_plan_values = value["physical_plan"]
         if (
             type(current) is not list
             or type(member_values) is not list
             or type(question_values) is not list
             or type(ledger_values) is not list
+            or type(physical_plan_values) is not list
         ):
             raise ValueError
         provisional = tuple(
@@ -1962,6 +2121,10 @@ def current_price_context_result_from_canonical_json_bytes_v2(
         )
         request_members = tuple(
             _member_from_value(item) for item in cast(list[object], member_values)
+        )
+        physical_plan = tuple(
+            _physical_plan_entry_from_value(item)
+            for item in cast(list[object], physical_plan_values)
         )
         freshness_ledger = tuple(
             _freshness_entry_from_value(item)
@@ -1996,6 +2159,7 @@ def current_price_context_result_from_canonical_json_bytes_v2(
             cast(int, value["refreshed_physical_objects"]),
             completed,
             provisional,
+            physical_plan,
             freshness_ledger,
             cast(str, value["runtime_code_identity_sha256"]),
             cast(str, value["result_identity_sha256"]),

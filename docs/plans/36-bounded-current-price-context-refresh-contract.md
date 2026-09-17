@@ -57,14 +57,20 @@ credentials, provider bodies, or private archive contents. Ledger call totals
 must equal top-level totals and its size is at most `5N+3`. A shared mapping
 acquisition is one global `MAPPING` ledger entry, not one entry per member.
 Decoder validation rebinds completed partition digest/cutoff order, source
-correction rule, chronological unique month slots, and the 64-day bound; exact
-physical source/slot planning is established by the retained schedule during
-runtime inspection and is not reconstructed from a schedule digest alone.
+correction rule, chronological unique month slots, and the 64-day bound. The
+response also carries the exact ordered `physical_plan`; runtime constructs it
+from the retained calendar/planning rules before effects and revalidates the
+same plan against the schedule before return. It is never inferred merely from
+ledger keys or a schedule digest.
 
-Nullable clocks are emitted only when the corresponding event occurred;
-all non-null clocks are UTC, monotonic within the pass, and at or before the
-request deadline. A completed synchronous HTTP response is counted even when a
-later cancellation or publication refusal prevents retention.
+Nullable clocks are emitted only when the corresponding event occurred; all
+non-null clocks are UTC, monotonic within the pass, and at or before the request
+deadline. Acquisition start is the first opener attempt and completion is the
+settlement of the last attempted opener. A terminal non-success status is an
+attempted and completed transport call but never reads its body; the
+body-success callback runs only after the bounded body read succeeds. A failed
+current-session attempt overlays that member as `UNAVAILABLE` without changing
+retained provisional bytes or catalog rows.
 
 There is exactly one current-session result per requested member, in input
 order. Its state is one of `OBSERVED`, `NOT_APPLICABLE`, `NOT_REQUESTED`,
@@ -110,9 +116,10 @@ generation is published. The only accepted source transition is the existing
 Intraday V3 to Historical V3 finalization after a complete historical grid; it
 publishes a new immutable generation and never rewrites prior bytes.
 
-Current-session provisional planning begins only after the first full scheduled
-minute and ends strictly before the exact sourced close. At or after exact close,
-the day enters completed facts only through the existing Plan-06
+Current-session provisional planning derives its target exclusively from the
+request-owned selection time (never a later clock), begins only after the first
+full scheduled minute, and ends strictly before the exact sourced close. At or
+after exact close, the day enters completed facts only through the existing Plan-06
 `session_complete` admission with every scheduled minute present; no provisional
 Intraday pass is planned. After IST rollover, prior Intraday V3 rows must first
 finalize to Historical V3. No correction epoch or negative-completeness claim
@@ -134,13 +141,17 @@ cancellation; root/catalog authority; retained calendar; mapping; shared
 auth/authorization/rate/deadline stop; member-local provider/data failure;
 optional provisional state; local Industry; final root/schedule/source reread.
 Shared stops prevent later openers but do not erase earlier completed facts that
-still revalidate. Root or catalog loss remains fatal. Cancellation is checked
-before each opener, after each response, before publication, and before return.
+still revalidate. Root or catalog loss remains fatal. One invocation-owned root device/inode
+identity (including absent-root semantics) is checked at every V2 inspection,
+acquisition, final read, publication boundary, and return; a replacement is
+never adopted. Cancellation is checked before each opener, after each response,
+before publication, and before return.
 
 The accepted bounds remain: exactly 21 completed sessions, at most 64 inclusive
-calendar days, at most three physical months, at most 10,000 selected minutes
-per member, 1–50 members, one exclusive writer, and an invocation deadline no
-later than 30 minutes or IST rollover. Provider accounting is per invocation
+calendar days, at most three physical months, and at most 10,000 selected
+minutes per member (rejected before any credential or provider effect), 1–50
+members, one exclusive writer, and an invocation deadline no later than 30
+minutes or IST rollover. Provider accounting is per invocation
 and process only. The existing `5N+1` budget, hard-capped at 251, includes V2
 current-session effects and is checked before every opener; the implementation
 makes no cross-process quota claim.

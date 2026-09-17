@@ -34,6 +34,7 @@ from .current_price_context import (
 )
 from .current_price_context_v2 import (
     CurrentPriceContextFreshnessEntryV2,
+    CurrentPriceContextPhysicalPlanEntryV2,
     CurrentPriceContextRequestV2,
     CurrentPriceContextResultV2,
     CurrentRawCancellationV1,
@@ -80,6 +81,7 @@ __all__ = [
     "CurrentPriceContextResultV1",
     "research_current_price_context_v1",
     "CurrentPriceContextFreshnessEntryV2",
+    "CurrentPriceContextPhysicalPlanEntryV2",
     "CurrentPriceContextRequestV2",
     "CurrentPriceContextResultV2",
     "CurrentRawCancellationV1",

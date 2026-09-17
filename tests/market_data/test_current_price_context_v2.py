@@ -1505,6 +1505,35 @@ def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
     assert wire.attempts == 0
 
 
+def test_v2_result_requires_an_exact_ordered_physical_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
+    )
+    value = json.loads(result.canonical_json_bytes())
+
+    assert value["physical_plan"] == [
+        {
+            "source": item.source,
+            "slot": item.slot,
+            "position": item.position,
+        }
+        for item in result.freshness_ledger
+    ]
+
+    del value["physical_plan"][1]
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(value)
+        )
+
+
 def test_v2_latches_transient_cancellation_across_inner_controls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

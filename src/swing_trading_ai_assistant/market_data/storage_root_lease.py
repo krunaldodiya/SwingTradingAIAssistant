@@ -183,14 +183,26 @@ class StorageRootLease:
         return identity
 
     @classmethod
-    def try_admit_read_existing(cls, root: object) -> LeaseResult:
+    def try_admit_read_existing(
+        cls, root: object, expected_root_identity: tuple[int, int] | None = None
+    ) -> LeaseResult:
         """Pin an existing safe root for reads without waiting on its writer.
 
         The returned authority cannot authorize a mutating ``root_operation``.
         Immutable objects and a private catalog snapshot remain readable while
         an exclusive writer prepares an atomic replacement.
         """
-        if not isinstance(root, Path):
+        if not isinstance(root, Path) or (
+            expected_root_identity is not None
+            and (
+                type(expected_root_identity) is not tuple
+                or len(expected_root_identity) != 2
+                or any(
+                    type(value) is not int or value < 0
+                    for value in expected_root_identity
+                )
+            )
+        ):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
         root_descriptor: int | None = None
         lock_descriptor: int | None = None
@@ -199,7 +211,11 @@ class StorageRootLease:
         try:
             root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
-            if not stat.S_ISDIR(root_descriptor_stat.st_mode):
+            if not stat.S_ISDIR(root_descriptor_stat.st_mode) or (
+                expected_root_identity is not None
+                and (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino)
+                != expected_root_identity
+            ):
                 raise StorageRootLeaseError
             lock_descriptor = os.open(
                 _LOCK_NAME,

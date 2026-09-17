@@ -9,7 +9,7 @@ CURRENT_RESEARCH_BINDING_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "9dff899d47241382f769998f03f92a28445f21399d2c30ebf2431d43cb23e70f",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "a7ee71ba62218ef40546e2ba421ba6b048b624ca9f8eaec70f38065b2b5383e4",
-    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "809939131dbddcdf8524be86663003c0f2dada59eb4bd3461def2125f4f14ae4",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "201b36042130dd8a25dc2a50cb7fae3dcee98c80a8b44f30deb02522e1c646dd",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4.py": "dfeadb455c2a8b0e99d2efe5bcb33a590d0d31c17e0965f531a2f30474822c3d",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_v4_runtime_identity_manifest.py": "d6295d91c90f6afe6930b03716d1f9aee2314c857bf21b840222d3d4d9c06806",
