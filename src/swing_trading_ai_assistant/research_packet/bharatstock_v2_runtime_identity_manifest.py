@@ -10,6 +10,6 @@ BHARATSTOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "a7ee71ba62218ef40546e2ba421ba6b048b624ca9f8eaec70f38065b2b5383e4",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "386d44fea45fd65aa0424be8e4cce23874fe0beaa77c36c6068adbec55b6a847",
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",
-    "src/swing_trading_ai_assistant/market_data/current_research_binding_v2_runtime_identity_manifest.py": "dc9159d6f59ce7d3f29cfe3683128bbe50f807e9cb578bd6a543b23e034726b0",
+    "src/swing_trading_ai_assistant/market_data/current_research_binding_v2_runtime_identity_manifest.py": "c35b0b9838a880faade6bebf94d4cfb7bac5b66eac74ec2845b5000970bb52a4",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
 }

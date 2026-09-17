@@ -1101,6 +1101,15 @@ def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitti
 
     assert stopped.outcome == "STOPPED"
     assert stopped.provider_calls == interrupted_wire.attempts == 1
+    assert stopped.accounting is not None
+    attempted_slot = next(
+        slot
+        for member in stopped.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert attempted_slot.completed is True
+    assert stopped.accounting.completed_calls == 1
     assert tuple(path.read_bytes() for path in root.rglob("*.parquet")) == raw_bytes
     assert {
         path.relative_to(root): path.read_bytes()
@@ -1309,6 +1318,14 @@ def test_two_members_deadline_or_cancellation_stops_before_every_later_opener(
     assert result.outcome == "STOPPED"
     assert result.provider_calls == wire.attempts == 1
     assert result.accounting is not None
+    first_attempt = next(
+        slot
+        for member in result.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert first_attempt.completed is True
+    assert result.accounting.completed_calls == 1
     assert all(
         slot.attempts == 0
         for member in result.accounting.members[1:]

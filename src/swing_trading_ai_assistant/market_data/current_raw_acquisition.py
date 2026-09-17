@@ -77,8 +77,10 @@ from .historical import (
     UpstoxV3HistoricalClient,
 )
 from .http import (
+    HttpResponse,
     HttpResponseBodyTooLarge,
     HttpResponseHeadersInvalid,
+    HttpTransport,
     HttpTransportError,
 )
 from .instrument_snapshot import (
@@ -117,6 +119,7 @@ from .provisional_store import (
     load_provisional_partition,
 )
 from .provisional_validation import (
+    ProvisionalValidationCodeV1,
     ProvisionalValidationFailureV1,
     validate_provisional_advance,
 )
@@ -261,6 +264,7 @@ class _LedgerSlotV1:
     key: str
     disposition: LedgerSlotDispositionV1
     attempts: int
+    completed: bool
     reason: str | None
 
 
@@ -269,16 +273,32 @@ class _AcquisitionAccountingV1:
     mapping: _LedgerSlotV1
     members: tuple[tuple[_LedgerSlotV1, ...], ...]
     total_calls: int
+    completed_calls: int
 
 
 class _AcquisitionLedgerV1:
     """A finite opener ledger; only inspection-admitted missing slots can open."""
 
-    def __init__(self, plan: _AcquisitionPlanV1) -> None:
+    def __init__(
+        self,
+        plan: _AcquisitionPlanV1,
+        *,
+        maximum_calls: int | None = None,
+        include_current_session: bool = False,
+        refresh_once: bool = False,
+    ) -> None:
         self._plan = plan
+        self.include_current_session = include_current_session
+        self.refresh_once = refresh_once
+        self._maximum_calls = (
+            plan.maximum_calls if maximum_calls is None else maximum_calls
+        )
+        if not 0 <= self._maximum_calls <= plan.maximum_calls:
+            raise ValueError("current raw acquisition call budget is invalid")
         self._slots: dict[str, _LedgerSlotV1] = {}
         self._eligible: dict[str, PlannedSlotDispositionV1] = {}
         self._member_keys: list[list[str]] = []
+        self._completed_responses: set[str] = set()
         self._add(plan.mapping)
         for member in plan.members:
             keys: list[str] = []
@@ -308,7 +328,7 @@ class _AcquisitionLedgerV1:
         else:
             terminal = LedgerSlotDispositionV1.NOT_ATTEMPTED_BLOCKED
         self._eligible[slot.key] = slot.disposition
-        self._slots[slot.key] = _LedgerSlotV1(slot.key, terminal, 0, slot.reason)
+        self._slots[slot.key] = _LedgerSlotV1(slot.key, terminal, 0, False, slot.reason)
 
     def replan(self, plan: _AcquisitionPlanV1) -> None:
         """Refresh unattempted entries after an intentional transaction closes."""
@@ -334,7 +354,9 @@ class _AcquisitionLedgerV1:
                 if slot.disposition is PlannedSlotDispositionV1.REUSABLE
                 else LedgerSlotDispositionV1.NOT_ATTEMPTED_BLOCKED
             )
-            self._slots[slot.key] = _LedgerSlotV1(slot.key, terminal, 0, slot.reason)
+            self._slots[slot.key] = _LedgerSlotV1(
+                slot.key, terminal, 0, False, slot.reason
+            )
 
     def before_open(self, key: str) -> None:
         slot = self._slots.get(key)
@@ -351,9 +373,16 @@ class _AcquisitionLedgerV1:
             }
         ):
             raise RuntimeError("current raw acquisition attempt rejected")
-        if self.snapshot().total_calls >= min(self._plan.maximum_calls, 251):
+        if self.snapshot().total_calls >= min(self._maximum_calls, 251):
             raise RuntimeError("current raw acquisition attempt budget exceeded")
         self._slots[key] = replace(slot, attempts=1)
+
+    def response_completed(self, key: str) -> None:
+        slot = self._slots.get(key)
+        if slot is None or slot.attempts != 1 or key in self._completed_responses:
+            raise RuntimeError("current raw acquisition response accounting rejected")
+        self._completed_responses.add(key)
+        self._slots[key] = replace(slot, completed=True)
 
     def retained(self, key: str, *, incomplete: bool = False) -> None:
         slot = self._slots.get(key)
@@ -419,9 +448,15 @@ class _AcquisitionLedgerV1:
         total = mapping.attempts + sum(
             slot.attempts for member in members for slot in member
         )
-        if total > self._plan.maximum_calls or total > 251:
+        if total > self._maximum_calls or total > 251:
             raise RuntimeError("current raw acquisition accounting invalid")
-        return _AcquisitionAccountingV1(mapping, members, total)
+        completed = sum(
+            slot.completed
+            for slot in (mapping, *(slot for member in members for slot in member))
+        )
+        if completed != len(self._completed_responses) or completed > total:
+            raise RuntimeError("current raw acquisition response accounting invalid")
+        return _AcquisitionAccountingV1(mapping, members, total, completed)
 
 
 class _SharedAcquisitionStop(RuntimeError):
@@ -467,16 +502,78 @@ class CurrentRawAcquisitionResultV1:
             raise ValueError("current raw acquisition result is invalid")
 
 
+def inspect_current_raw_evidence_v1(
+    request: CurrentRawPriceContextInputV1,
+    storage_root: Path,
+    *,
+    control: CurrentRawInvocationControlV1,
+    include_current_session: bool = False,
+) -> CurrentRawAcquisitionResultV1:
+    """Return the finite safe retained-evidence plan without opening a provider."""
+    if (
+        type(request) is not CurrentRawPriceContextInputV1
+        or type(control) is not CurrentRawInvocationControlV1
+        or type(include_current_session) is not bool
+    ):
+        raise ValueError("current raw acquisition inspection input is invalid")
+    try:
+        control.ensure_live()
+    except CurrentRawInvocationStoppedV1:
+        return CurrentRawAcquisitionResultV1("STOPPED", 0)
+    root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
+    if root_identity is None:
+        return CurrentRawAcquisitionResultV1(
+            "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING",
+            0,
+        )
+    plan = _read_plan(
+        storage_root,
+        request,
+        control,
+        include_current_session=include_current_session,
+    )
+    if plan is None:
+        return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
+    accounting = _AcquisitionLedgerV1(
+        plan, include_current_session=include_current_session
+    ).snapshot()
+    ready = all(
+        slot.disposition is PlannedSlotDispositionV1.REUSABLE
+        for slot in _plan_slots(plan)
+    )
+    return CurrentRawAcquisitionResultV1(
+        "RETAINED_EVIDENCE_READY" if ready else "ACQUISITION_BLOCKED",
+        0,
+        accounting,
+        plan,
+    )
+
+
 def acquire_missing_current_raw_evidence_v1(  # noqa: C901
     request: CurrentRawPriceContextInputV1,
     storage_root: Path,
     *,
     control: CurrentRawInvocationControlV1,
+    include_current_session: bool = False,
+    refresh_once: bool = False,
+    current_session_only: bool = False,
+    provider_call_budget: int | None = None,
 ) -> CurrentRawAcquisitionResultV1:
     """Execute only the finite inspection-admitted mapping/raw/action effects."""
     if (
         type(request) is not CurrentRawPriceContextInputV1
         or type(control) is not CurrentRawInvocationControlV1
+        or type(include_current_session) is not bool
+        or type(refresh_once) is not bool
+        or (refresh_once or current_session_only)
+        and not include_current_session
+        or (
+            provider_call_budget is not None
+            and (
+                type(provider_call_budget) is not int
+                or not 0 <= provider_call_budget <= 251
+            )
+        )
     ):
         raise ValueError("current raw acquisition input is invalid")
     try:
@@ -488,13 +585,24 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
         return CurrentRawAcquisitionResultV1(
             "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING", 0
         )
-    plan = _read_plan(storage_root, request, control)
+    plan = _read_plan(
+        storage_root,
+        request,
+        control,
+        include_current_session=include_current_session,
+        refresh_once=refresh_once,
+    )
     if plan is None:
         return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
-    ledger = _AcquisitionLedgerV1(plan)
+    ledger = _AcquisitionLedgerV1(
+        plan,
+        maximum_calls=provider_call_budget,
+        include_current_session=include_current_session,
+        refresh_once=refresh_once,
+    )
     token = _InvocationTokenV1()
     try:
-        if plan.mapping.disposition in {
+        if not current_session_only and plan.mapping.disposition in {
             PlannedSlotDispositionV1.MISSING,
             PlannedSlotDispositionV1.STALE,
         }:
@@ -517,7 +625,20 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 )
                 continue
             failed = False
-            for slot in member.closed:
+            if current_session_only and (
+                any(
+                    slot.disposition is not PlannedSlotDispositionV1.REUSABLE
+                    for slot in member.closed
+                )
+                or (
+                    member.current_history is not None
+                    and member.current_history.disposition
+                    is not PlannedSlotDispositionV1.REUSABLE
+                )
+            ):
+                ledger.member_stop(position, "RAW_COMPLETED_DEPENDENCIES_BLOCKED")
+                continue
+            for slot in () if current_session_only else member.closed:
                 if slot.disposition is not PlannedSlotDispositionV1.MISSING:
                     if slot.disposition is not PlannedSlotDispositionV1.REUSABLE:
                         failed = True
@@ -554,6 +675,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 not in {
                     PlannedSlotDispositionV1.REUSABLE,
                     PlannedSlotDispositionV1.MISSING,
+                    PlannedSlotDispositionV1.STALE,
                     PlannedSlotDispositionV1.VALID_PREFIX_INCOMPLETE,
                 }
                 for slot in current_slots
@@ -565,6 +687,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 and slot.disposition
                 in {
                     PlannedSlotDispositionV1.MISSING,
+                    PlannedSlotDispositionV1.STALE,
                     PlannedSlotDispositionV1.VALID_PREFIX_INCOMPLETE,
                 }
                 for slot in current_slots
@@ -594,6 +717,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
         for position in range(len(plan.members)):
             plan = _reinspect_after_effect(storage_root, request, control, ledger)
             member = plan.members[position]
+            if current_session_only:
+                continue
             if not _raw_dependencies_reusable(member):
                 ledger.member_stop(position, "RAW_DEPENDENCIES_BLOCKED")
                 continue
@@ -678,7 +803,7 @@ class _ExactHistoricalSessionV1:
     def __init__(
         self,
         expected: HistoricalRequest,
-        transport: StrictCurrentRawHttpTransportV1,
+        transport: HttpTransport,
         token: _InvocationTokenV1,
     ) -> None:
         self._expected, self._client, self._token = (
@@ -700,7 +825,7 @@ class _ExactHistoricalSessionFactoryV1:
     def __init__(
         self,
         expected: HistoricalRequest,
-        transport: StrictCurrentRawHttpTransportV1,
+        transport: HttpTransport,
         token: _InvocationTokenV1,
         guard: _EffectGuardV1,
     ) -> None:
@@ -779,6 +904,21 @@ class _GuardedCatalogContextV1(AbstractContextManager[DuckDBCatalog]):
         return self._catalog.__exit__(*args)  # type: ignore[arg-type]
 
 
+class _CompletedResponseTransportV1:
+    def __init__(
+        self,
+        transport: StrictCurrentRawHttpTransportV1,
+        guard: _EffectGuardV1,
+    ) -> None:
+        self._transport = transport
+        self._guard = guard
+
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        response = self._transport.get(url, headers)
+        self._guard.ensure_live()
+        return response
+
+
 def _strict_transport(
     kind: Literal["HISTORICAL", "INTRADAY", "ACTION"],
     url: str,
@@ -786,18 +926,22 @@ def _strict_transport(
     request: CurrentRawPriceContextInputV1,
     guard: _EffectGuardV1,
     ledger: _AcquisitionLedgerV1,
-) -> StrictCurrentRawHttpTransportV1:
+) -> _CompletedResponseTransportV1:
     def before_open() -> None:
         guard.ensure_live()
         ledger.before_open(key)
 
-    return StrictCurrentRawHttpTransportV1(
-        deadline=request.admission_deadline,
-        now=guard.now,
-        operation=StrictCurrentRawOperationV1(
-            kind, url, 1_048_576 if kind == "ACTION" else 1_000_000
+    return _CompletedResponseTransportV1(
+        StrictCurrentRawHttpTransportV1(
+            deadline=request.admission_deadline,
+            now=guard.now,
+            operation=StrictCurrentRawOperationV1(
+                kind, url, 1_048_576 if kind == "ACTION" else 1_000_000
+            ),
+            before_open=before_open,
+            response_completed=lambda: ledger.response_completed(key),
         ),
-        before_open=before_open,
+        guard,
     )
 
 
@@ -807,7 +951,13 @@ def _reinspect_after_effect(
     control: CurrentRawInvocationControlV1,
     ledger: _AcquisitionLedgerV1,
 ) -> _AcquisitionPlanV1:
-    plan = _read_plan(root, request, control)
+    plan = _read_plan(
+        root,
+        request,
+        control,
+        include_current_session=ledger.include_current_session,
+        refresh_once=ledger.refresh_once,
+    )
     if plan is None:
         raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
     ledger.replan(plan)
@@ -1034,10 +1184,10 @@ def _advance_current_month_once(
                 history_rows = canonicalize_upstox_equity_candles(
                     normalize_candles(response.candles), instrument, guard.now()
                 )
-            if (
-                intraday is not None
-                and intraday.disposition is PlannedSlotDispositionV1.MISSING
-            ):
+            if intraday is not None and intraday.disposition in {
+                PlannedSlotDispositionV1.MISSING,
+                PlannedSlotDispositionV1.STALE,
+            }:
                 url = f"https://api.upstox.com/v3/historical-candle/intraday/{quote(instrument.instrument_key, safe='')}/minutes/1"
                 response = UpstoxV3IntradayClient(
                     _strict_transport(
@@ -1109,13 +1259,16 @@ def member_slot_selected(
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
 ) -> tuple[ScheduleSession, ...]:
-    del member
     resolved = ScheduleEvidenceStore(root, lease).resolve(
         request.schedule_identity_sha256, deadline=control
     )
     if resolved.schedule is None:
         raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
-    selected = _selected_sessions(resolved.schedule, request)
+    selected = _selected_sessions(
+        resolved.schedule,
+        request,
+        include_current_session=member.intraday is not None,
+    )
     if len(selected) != 21:
         raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
     return selected
@@ -1181,6 +1334,11 @@ def _record_effect_failure(
 def _local_effect_reason(error: BaseException) -> str:
     if isinstance(error, _SharedAcquisitionStop):
         raise error
+    if (
+        isinstance(error, ProvisionalValidationFailureV1)
+        and error.code is ProvisionalValidationCodeV1.PREFIX_CONFLICT
+    ):
+        return "CONFLICTED_EVIDENCE"
     if isinstance(
         error, (CurrentRawAuthenticationError, CorporateActionAuthenticationError)
     ):
@@ -1236,7 +1394,14 @@ def _fresh_final_admission(
     ):
         raise _SharedAcquisitionStop("ROOT_OR_CATALOG_UNAVAILABLE")
     with inspected.lease as lease:
-        plan = _inspect_plan_v1(root, request=request, lease=lease, control=control)
+        plan = _inspect_plan_v1(
+            root,
+            request=request,
+            lease=lease,
+            control=control,
+            include_current_session=ledger.include_current_session,
+            refresh_once=ledger.refresh_once,
+        )
         if plan is None:
             raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
         ledger.replan(plan)
@@ -1293,6 +1458,9 @@ def _read_plan(
     root: Path,
     request: CurrentRawPriceContextInputV1,
     control: CurrentRawInvocationControlV1,
+    *,
+    include_current_session: bool = False,
+    refresh_once: bool = False,
 ) -> _AcquisitionPlanV1 | None:
     admitted = StorageRootLease.try_admit_read_existing(root)
     if admitted.lease is None:
@@ -1300,7 +1468,14 @@ def _read_plan(
     with admitted.lease as lease:
         if StorageRootLease.admit_existing_private_identity(root) is None:
             raise StorageRootLeaseError("current raw acquisition root authority lost")
-        return _inspect_plan_v1(root, request=request, lease=lease, control=control)
+        return _inspect_plan_v1(
+            root,
+            request=request,
+            lease=lease,
+            control=control,
+            include_current_session=include_current_session,
+            refresh_once=refresh_once,
+        )
 
 
 def _inspect_plan_v1(
@@ -1309,6 +1484,8 @@ def _inspect_plan_v1(
     request: CurrentRawPriceContextInputV1,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
+    include_current_session: bool = False,
+    refresh_once: bool = False,
 ) -> _AcquisitionPlanV1 | None:
     control.ensure_live()
     resolved = ScheduleEvidenceStore(root, lease).resolve(
@@ -1317,7 +1494,14 @@ def _inspect_plan_v1(
     if resolved.outcome is ScheduleOutcome.FAILED or resolved.schedule is None:
         return None
     schedule = resolved.schedule
-    selected = _selected_sessions(schedule, request)
+    active_provisional = (
+        include_current_session
+        and _active_provisional_session(schedule, request.data_selection_time)
+        is not None
+    )
+    selected = _selected_sessions(
+        schedule, request, include_current_session=active_provisional
+    )
     if not _physical_calendar_prerequisite_is_proven(schedule, selected, control):
         return None
     cutoff = control.now()
@@ -1336,6 +1520,9 @@ def _inspect_plan_v1(
                 catalog,
                 snapshots,
                 control,
+                active_provisional=active_provisional,
+                include_current_session=include_current_session,
+                refresh_once=refresh_once,
             )
             for position, member in enumerate(request.members)
         )
@@ -1369,14 +1556,40 @@ def _inspect_plan_v1(
     )
 
 
+def _active_provisional_session(
+    schedule: ExpectedSessionSchedule, selection: datetime
+) -> ScheduleSession | None:
+    selection_date = selection.astimezone(_IST).date()
+    return next(
+        (
+            item
+            for item in schedule.sessions
+            if item.trade_date == selection_date
+            and item.open_at + timedelta(minutes=1) <= selection < item.close_at
+        ),
+        None,
+    )
+
+
 def _selected_sessions(
-    schedule: ExpectedSessionSchedule, request: CurrentRawPriceContextInputV1
+    schedule: ExpectedSessionSchedule,
+    request: CurrentRawPriceContextInputV1,
+    *,
+    include_current_session: bool = False,
 ) -> tuple[ScheduleSession, ...]:
-    selected = tuple(
+    completed = tuple(
         item
         for item in schedule.sessions
         if item.close_at <= request.data_selection_time
-    )[-21:]
+    )
+    active = (
+        _active_provisional_session(schedule, request.data_selection_time)
+        if include_current_session
+        else None
+    )
+    if active is not None:
+        completed = (*completed, active)
+    selected = completed[-21:]
     return selected if len(selected) == 21 else ()
 
 
@@ -1425,6 +1638,10 @@ def _inspect_member(
     catalog: DuckDBCatalog,
     snapshots: InstrumentSnapshotStoreV1,
     control: CurrentRawInvocationControlV1,
+    *,
+    active_provisional: bool = False,
+    include_current_session: bool = False,
+    refresh_once: bool = False,
 ) -> _MemberPlanV1:
     mapping_state, mapping_reason, instrument = _resolve_mapping(
         snapshots, member, cutoff, control
@@ -1467,7 +1684,10 @@ def _inspect_member(
                 mapping_reason,
             )
             if current in months
-            and selected[-1].trade_date == control.selection_ist_date
+            and (
+                active_provisional
+                or selected[-1].trade_date == control.selection_ist_date
+            )
             else None
         )
         return _MemberPlanV1(
@@ -1490,7 +1710,18 @@ def _inspect_member(
         if (year, month) != current
     )
     history, intraday = _inspect_current(
-        root, lease, catalog, position, instrument, selected, current, cutoff, control
+        root,
+        lease,
+        catalog,
+        position,
+        instrument,
+        selected,
+        current,
+        cutoff,
+        control,
+        active_provisional=active_provisional,
+        include_current_session=include_current_session,
+        refresh_once=refresh_once,
     )
     return _MemberPlanV1(
         position,
@@ -1671,7 +1902,7 @@ def _inspect_closed(
     )
 
 
-def _inspect_current(
+def _inspect_current(  # noqa: C901 -- closed mutable-month admission matrix
     root: Path,
     lease: StorageRootLease,
     catalog: DuckDBCatalog,
@@ -1681,6 +1912,10 @@ def _inspect_current(
     current: tuple[int, int],
     cutoff: datetime,
     control: CurrentRawInvocationControlV1,
+    *,
+    active_provisional: bool = False,
+    include_current_session: bool = False,
+    refresh_once: bool = False,
 ) -> tuple[_PhysicalSlotV1 | None, _PhysicalSlotV1 | None]:
     if current not in _selected_months(selected):
         return None, None
@@ -1699,9 +1934,9 @@ def _inspect_current(
         if historical_dates
         else None
     )
-    metadata = catalog.latest_provisional_partition_for_symbol(
+    metadata = catalog.latest_provisional_partition_for_security_id(
         segment="NSE_EQ",
-        symbol=instrument.symbol,
+        security_id=instrument.security_id,
         year=year,
         month=month,
         cutoff_lte=cutoff,
@@ -1759,6 +1994,56 @@ def _inspect_current(
             "RAW_CURRENT_MONTH_CORRUPT",
             history_plan,
         ), None
+    if include_current_session and active_provisional:
+        active = required[-1]
+        target = min(
+            cutoff.replace(second=0, microsecond=0) - timedelta(minutes=1),
+            active.close_at - timedelta(minutes=1),
+        )
+        historical_days = tuple(item.trade_date for item in required[:-1])
+        present_days = {row.ts.astimezone(_IST).date() for row in rows}
+        if all(day in present_days for day in historical_days):
+            active_rows = {
+                row.ts: row
+                for row in rows
+                if row.ts.astimezone(_IST).date() == active.trade_date
+            }
+            expected_minutes = tuple(
+                active.open_at + timedelta(minutes=offset)
+                for offset in range(
+                    int((target - active.open_at).total_seconds() // 60) + 1
+                )
+            )
+            if any(timestamp not in active_rows for timestamp in expected_minutes):
+                intraday_state = PlannedSlotDispositionV1.MISSING
+                intraday_reason = "RAW_CURRENT_INTRADAY_MISSING"
+            elif refresh_once:
+                intraday_state = PlannedSlotDispositionV1.STALE
+                intraday_reason = "RAW_CURRENT_INTRADAY_REFRESH_REQUESTED"
+            else:
+                intraday_state = PlannedSlotDispositionV1.REUSABLE
+                intraday_reason = None
+            return (
+                _slot(
+                    position,
+                    "CURRENT_HISTORY",
+                    year,
+                    month,
+                    PlannedSlotDispositionV1.REUSABLE,
+                    None,
+                    history_plan,
+                )
+                if history_plan is not None
+                else None,
+                _slot(
+                    position,
+                    "INTRADAY",
+                    year,
+                    month,
+                    intraday_state,
+                    intraday_reason,
+                ),
+            )
     present = {row.ts.astimezone(_IST).date() for row in rows}
     expected = tuple(item.trade_date for item in required)
     prefix = 0
@@ -1987,15 +2272,19 @@ def _retain_missing_mapping(
                 ledger.before_open("mapping")
 
             client = InstrumentSnapshotClientV1(
-                StrictCurrentRawHttpTransportV1(
-                    deadline=request.admission_deadline,
-                    now=guard.now,
-                    operation=StrictCurrentRawOperationV1(
-                        "MAPPING",
-                        "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
-                        4_000_000,
+                _CompletedResponseTransportV1(
+                    StrictCurrentRawHttpTransportV1(
+                        deadline=request.admission_deadline,
+                        now=guard.now,
+                        operation=StrictCurrentRawOperationV1(
+                            "MAPPING",
+                            "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
+                            4_000_000,
+                        ),
+                        before_open=before_open,
+                        response_completed=lambda: ledger.response_completed("mapping"),
                     ),
-                    before_open=before_open,
+                    guard,
                 ),
                 clock=guard.now,
             )

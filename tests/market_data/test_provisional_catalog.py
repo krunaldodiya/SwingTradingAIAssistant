@@ -300,6 +300,50 @@ def test_latest_public_identity_selection_is_bounded_and_cutoff_aware(tmp_path) 
         assert selected == earlier
 
 
+def test_latest_security_id_selection_reuses_an_admitted_physical_alias(
+    tmp_path,
+) -> None:
+    alias = replace(_metadata(cutoff_minute=58), symbol="RELIANCEOLD")
+    current = _metadata(cutoff_minute=59)
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.save_provisional_partition(alias)
+        catalog.save_provisional_partition(current)
+
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01018",
+                year=2026,
+                month=8,
+                cutoff_lte=alias.cutoff,
+                published_at_lte=alias.published_at,
+            )
+            == alias
+        )
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01018",
+                year=2026,
+                month=8,
+                cutoff_lte=current.cutoff,
+                published_at_lte=current.published_at,
+            )
+            == current
+        )
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01026",
+                year=2026,
+                month=8,
+                cutoff_lte=alias.cutoff,
+                published_at_lte=alias.published_at,
+            )
+            is None
+        )
+
+
 def test_latest_symbol_selection_has_total_order_across_physical_aliases(
     tmp_path,
 ) -> None:

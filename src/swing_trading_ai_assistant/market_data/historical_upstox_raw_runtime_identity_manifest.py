@@ -3,7 +3,7 @@
 from typing import Final
 
 HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/catalog.py": "52a5b5cfe6a04c5a6fe781f09236f867e7cff095c8dba3132556cd30d093a28a",
+    "src/swing_trading_ai_assistant/market_data/catalog.py": "d40b6b0d0ed12d24e37d284fcf9281099a5bb04cb502ca6c16dadcbf91345c0b",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3dbb44af9ba07efc1e6306890269c005ce36947bd471b1e0db8b68f611abc13d",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "03e2674ae8e931d1d78c37ecb51903a2006338a5ff940af0ad352a0306859071",

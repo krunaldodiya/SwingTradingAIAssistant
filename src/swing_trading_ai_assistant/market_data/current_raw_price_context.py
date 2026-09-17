@@ -682,9 +682,9 @@ def _member_rows(  # noqa: C901
     for plan in plans:
         control.ensure_live()
         if (plan.year, plan.month) == (current.year, current.month):
-            metadata = catalog.latest_provisional_partition_for_symbol(
+            metadata = catalog.latest_provisional_partition_for_security_id(
                 segment="NSE_EQ",
-                symbol=plan.symbol,
+                security_id=plan.security_id,
                 year=plan.year,
                 month=plan.month,
                 cutoff_lte=cutoff,
