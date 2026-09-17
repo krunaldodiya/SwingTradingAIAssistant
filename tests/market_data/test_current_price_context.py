@@ -1974,6 +1974,31 @@ def test_acquire_missing_establishes_cutoff_only_after_effects(
     assert result.evidence_cutoff >= result.data_selection_time
 
 
+def test_v1_result_decoder_rejects_resealed_foreign_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    result = research_current_price_context_v1(
+        _public_request(raw_request),
+        root,
+        clock=_Clock(raw_request.data_selection_time),
+    )
+
+    assert (
+        current_price_context_result_from_canonical_json_bytes_v1(
+            result.canonical_json_bytes()
+        )
+        == result
+    )
+    forged: dict[str, object] = json.loads(result.canonical_json_bytes())
+    forged["runtime_code_identity_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="result is invalid"):
+        current_price_context_result_from_canonical_json_bytes_v1(
+            _rehashed_result_bytes(forged)
+        )
+
+
 def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

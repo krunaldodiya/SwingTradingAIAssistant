@@ -34,6 +34,7 @@ import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport 
 import swing_trading_ai_assistant.research_packet as research_packet
 import swing_trading_ai_assistant.research_packet.current_price_context as packet_v1
 import swing_trading_ai_assistant.research_packet.current_price_context_v2 as packet_v2
+from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.cli import build_parser, main
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentRawInvocationControlV1,
@@ -48,6 +49,10 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleClosure,
     ScheduleSession,
     schedule_digest,
+)
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
 )
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextMemberV1,
@@ -72,6 +77,20 @@ class _Clock:
 
     def now(self) -> datetime:
         return self.value
+
+
+class _AdvancingClock:
+    def __init__(self, value: datetime, step: timedelta, maximum: datetime) -> None:
+        self.value = value
+        self.step = step
+        self.maximum = maximum
+        self.observed: list[datetime] = []
+
+    def now(self) -> datetime:
+        value = self.value
+        self.observed.append(value)
+        self.value = min(self.value + self.step, self.maximum)
+        return value
 
 
 def _member() -> CurrentPriceContextMemberV1:
@@ -707,6 +726,59 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
     assert schedule_digest(schedule_value) == refresh_raw.schedule_identity_sha256
 
 
+def test_v2_advancing_clock_keeps_current_session_target_selection_owned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule_value, through=date(2026, 9, 29))
+            ),
+            WireReply(body=action_body()),
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0, 102.0))),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    clock = _AdvancingClock(
+        selected_at, timedelta(seconds=5), selected_at + timedelta(minutes=2)
+    )
+
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"), root, clock=clock
+    )
+
+    target = datetime(2026, 9, 30, 3, 46, tzinfo=UTC)
+    current = result.current_session[0]
+    ledger = next(
+        item for item in result.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert wire.attempts == result.provider_calls_attempted == 3
+    assert wire.requests[-1].full_url.endswith("/NSE_EQ%7CINE467B01029/minutes/1")
+    assert clock.observed[-1] - clock.observed[0] >= timedelta(minutes=1)
+    assert max(clock.observed) < request_value.admission_deadline
+    assert result.acquisition_started_at is not None
+    assert result.acquisition_completed_at is not None
+    assert result.inspection_time < result.acquisition_started_at
+    assert result.acquisition_started_at <= result.acquisition_completed_at
+    assert result.acquisition_completed_at <= result.evidence_cutoff
+    assert result.evidence_cutoff < request_value.admission_deadline
+    assert current.last_completed_minute == target
+    assert current.observed_price == "101.0"
+    assert current.source_cutoff == target
+    assert ledger.source_cutoff == target
+    assert current.known_at is not None
+    assert current.known_at <= result.evidence_cutoff
+
+
 @pytest.mark.parametrize(
     ("action_reply", "member_reason", "action_state", "completed_calls"),
     (
@@ -1261,6 +1333,134 @@ def test_v2_alias_only_reuses_canonical_provisional_but_identity_drift_blocks(
     assert sentinel.attempts == 0
     assert drift.completed_context.members[0].state != "OBSERVED"
     assert drift.current_session[0].state != "OBSERVED"
+
+
+def test_v2_competing_schedule_provisional_remains_unadmitted_and_unmodified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    initial_wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule_value, through=date(2026, 9, 29))
+            ),
+            WireReply(body=action_body()),
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0))),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", initial_wire.build_opener)
+    initial = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+        root,
+        clock=_Clock(selected_at),
+    )
+    expected_schedule = schedule_digest(schedule_value)
+    wrong_schedule = "f" * 64
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            current = catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id=request_value.members[0].isin,
+                year=2026,
+                month=9,
+                cutoff_lte=request_value.admission_deadline,
+                published_at_lte=request_value.admission_deadline,
+                schedule_digest_sha256=expected_schedule,
+            )
+            assert current is not None
+            competing = replace(
+                current,
+                schedule_digest_sha256=wrong_schedule,
+                relative_path=provisional_partition_relative_path(
+                    current.plan,
+                    current.cutoff,
+                    wrong_schedule,
+                    current.checksum_sha256,
+                ),
+            )
+            competing_path = root / competing.relative_path
+            competing_path.parent.mkdir(parents=True, exist_ok=True)
+            competing_path.write_bytes((root / current.relative_path).read_bytes())
+            catalog.save_provisional_partition(competing)
+            assert (
+                catalog.latest_provisional_partition_for_security_id(
+                    segment="NSE_EQ",
+                    security_id=request_value.members[0].isin,
+                    year=2026,
+                    month=9,
+                    cutoff_lte=request_value.admission_deadline,
+                    published_at_lte=request_value.admission_deadline,
+                    schedule_digest_sha256=wrong_schedule,
+                )
+                == competing
+            )
+            before = catalog.list_provisional_partitions(current.plan)
+    finally:
+        acquired.lease.close()
+
+    retained_wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", retained_wire.build_opener)
+    retained = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"),
+        root,
+        clock=_Clock(selected_at),
+    )
+    assert retained_wire.attempts == 0
+    assert retained.current_session[0].state == "OBSERVED"
+    assert (
+        retained.current_session[0].partition_checksum_sha256
+        == initial.current_session[0].partition_checksum_sha256
+    )
+
+    refresh_wire = RecordedWire(
+        [WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", refresh_wire.build_opener)
+    refreshed = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "REFRESH_ONCE"),
+        root,
+        clock=_Clock(selected_at),
+    )
+    assert refresh_wire.attempts == 1
+    assert refreshed.current_session[0].state == "OBSERVED"
+    assert (
+        refreshed.current_session[0].partition_checksum_sha256
+        == initial.current_session[0].partition_checksum_sha256
+    )
+
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            assert catalog.list_provisional_partitions(current.plan) == before
+            assert (
+                catalog.latest_provisional_partition_for_security_id(
+                    segment="NSE_EQ",
+                    security_id=request_value.members[0].isin,
+                    year=2026,
+                    month=9,
+                    cutoff_lte=request_value.admission_deadline,
+                    published_at_lte=request_value.admission_deadline,
+                    schedule_digest_sha256=wrong_schedule,
+                )
+                == competing
+            )
+    finally:
+        acquired.lease.close()
 
 
 def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
