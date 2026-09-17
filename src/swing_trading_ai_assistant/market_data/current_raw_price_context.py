@@ -53,6 +53,10 @@ from swing_trading_ai_assistant.market_data.instruments import Instrument
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     plan_upstox_equity_months,
 )
+from swing_trading_ai_assistant.market_data.open_month import (
+    open_month_schedule_digest,
+    open_month_schedule_from_evidence,
+)
 from swing_trading_ai_assistant.market_data.provisional_store import (
     ProvisionalPartitionUnavailableV1,
     load_provisional_partition,
@@ -504,6 +508,9 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                         sessions,
                         cutoff,
                         control,
+                        open_month_schedule_digest(
+                            open_month_schedule_from_evidence(schedule)
+                        ),
                     )
                     aggregate = _aggregate_retained_minutes(sessions, rows)
                     if isinstance(aggregate, str):
@@ -668,6 +675,7 @@ def _member_rows(  # noqa: C901
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     cutoff: datetime,
     control: CurrentRawInvocationControlV1,
+    schedule_digest_sha256: str,
 ) -> tuple[tuple[object, ...], tuple[str, ...], tuple[datetime, ...]]:
     if type(instrument) is not Instrument:
         raise ValueError("resolved instrument is invalid")
@@ -689,6 +697,7 @@ def _member_rows(  # noqa: C901
                 month=plan.month,
                 cutoff_lte=cutoff,
                 published_at_lte=cutoff,
+                schedule_digest_sha256=schedule_digest_sha256,
             )
             if metadata is None:
                 raise ProvisionalPartitionUnavailableV1("missing")

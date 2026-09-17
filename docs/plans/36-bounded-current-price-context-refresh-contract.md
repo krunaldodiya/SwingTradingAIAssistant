@@ -54,7 +54,12 @@ physical digest when available, a closed state (`REUSED`, `ACQUIRED`,
 source/publication/knowledge clocks, exact zero-or-one attempted/completed call
 counts, and its closed correction rule. It never exposes paths, URLs,
 credentials, provider bodies, or private archive contents. Ledger call totals
-must equal top-level totals and its size is at most `5N+3`.
+must equal top-level totals and its size is at most `5N+3`. A shared mapping
+acquisition is one global `MAPPING` ledger entry, not one entry per member.
+Decoder validation rebinds completed partition digest/cutoff order, source
+correction rule, chronological unique month slots, and the 64-day bound; exact
+physical source/slot planning is established by the retained schedule during
+runtime inspection and is not reconstructed from a schedule digest alone.
 
 Nullable clocks are emitted only when the corresponding event occurred;
 all non-null clocks are UTC, monotonic within the pass, and at or before the
@@ -143,8 +148,12 @@ makes no cross-process quota claim.
 ## Compatibility, evidence, and rollback
 
 Historical Upstox, Yahoo, BharatStock, current-stock-research, regime, Structure,
-price-action, Industry, V1 public schemas/canonical bytes, the default V1 CLI,
-and old retained evidence remain compatible; none is a fallback or substitute.
+price-action, Industry, V1 public schemas/canonical encoding and decoder, the
+default V1 CLI, and old retained evidence remain compatible; none is a fallback
+or substitute. V1 results retain their existing runtime-source identity binding,
+so otherwise identical output may legitimately carry a different runtime identity
+across reviewed source revisions; this does not promise that an old V1 binary can
+decode a V2 response with unknown fields.
 The internal V1 current-month reader has the same narrow additive security-ID
 alias lookup and exact provider-instrument/cutoff validation described above.
 This is neither a retained-data migration nor a dual write. Deterministic
@@ -199,7 +208,7 @@ executed provider claim.
 | Combined local defect, shared auth, and optional failure | Frozen precedence is applied in the explicit orchestration order; later effects stop and earlier facts still require final reread; no dictionary/exception-order winner | V1 ordered local/shared tests above plus V2 orchestration inspection; no single test is represented as proving all three injected faults simultaneously | INHERITED + INSPECTION |
 | Industry absent, malformed, or slow | Raw completed/provisional facts survive; Industry remains local and retained-only | V1 `test_public_industry_failures_never_suppress_retained_raw_facts`, `test_industry_reader_closes_real_malformed_receipt_and_marker_bytes`, `test_industry_reader_rejects_substitution_after_initial_real_object_read`; exact embedded V1 result | INHERITED |
 | Request/response terminology | One request/response and refresh-once fields only; no poll/stream/subscription field or claim | `test_v2_request_accepts_only_the_three_one_shot_modes`; schema/Plan/README inspection | DIRECT PASS + INSPECTION |
-| V1 old request/result/reader/CLI | Byte/semantic compatibility and default V1 selector remain; no alias/migration/dual write | `test_price_context_cli_adds_v2_selector_without_changing_v1_default`, V1 `test_sdk_and_inprocess_cli_emit_identical_retained_public_facts`, decoder golden/adversary tests | DIRECT PASS + INHERITED |
+| V1 old request/result/reader/CLI | Canonical encoding/decoder and semantic compatibility plus the default V1 selector remain; runtime identity remains revision-sensitive; no alias/migration/dual write | `test_price_context_cli_adds_v2_selector_without_changing_v1_default`, V1 `test_sdk_and_inprocess_cli_emit_identical_retained_public_facts`, decoder golden/adversary tests | DIRECT PASS + INHERITED |
 | Historical Upstox, Yahoo, and BharatStock readers/calculations | Existing evidence remains readable and uninterpreted; no fallback/backdating | `test_real_retained_reliance_july_initial_and_exact_retry`, `test_price_correction_keeps_original_immutable_evidence_readable`, plus unchanged-source inspection | INHERITED + INSPECTION |
 | Interruption after retained-write preparation | No partial publication; clean retry/recovery; no mutable overwrite or sticky false success | V1 `test_current_interruption_discards_all_staged_current_rows`, `test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitting_stage`; Plan-06 interruption/finalization tests | INHERITED |
 | Runtime/provenance substitution | Runtime/import/public binding fails closed before provider effects; no type/display-text substitution | `test_v2_runtime_manifest_rejects_source_substitution_before_effects`; V1 `test_public_runtime_identity_rejects_representative_copied_source_substitutions` | DIRECT PASS + INHERITED |

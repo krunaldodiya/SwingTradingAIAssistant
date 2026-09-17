@@ -96,7 +96,11 @@ from .instruments import Instrument
 from .intraday import IntradayPayloadError, IntradayRequest, UpstoxV3IntradayClient
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
 from .normalization import CandleSchemaError, normalize_candles
-from .open_month import open_month_schedule_from_evidence, plan_open_month
+from .open_month import (
+    open_month_schedule_digest,
+    open_month_schedule_from_evidence,
+    plan_open_month,
+)
 from .partition_ingestion import (
     PartitionCatalogFailure,
     PartitionIngestionExecutor,
@@ -1137,7 +1141,7 @@ def _advance_current_month_once(
                 ),
                 selected_to,
                 schedule,
-                guard.now(),
+                request.data_selection_time,
             )
             instrument = _instrument_for_member(member, history)
             physical = plan_upstox_equity_months(
@@ -1146,13 +1150,15 @@ def _advance_current_month_once(
                 selected_to,
                 "1m",
             )[0]
-            metadata = catalog.latest_provisional_partition_for_symbol(
+            schedule_digest = open_month_schedule_digest(schedule)
+            metadata = catalog.latest_provisional_partition_for_security_id(
                 segment="NSE_EQ",
-                symbol=instrument.symbol,
+                security_id=instrument.security_id,
                 year=physical.year,
                 month=physical.month,
-                cutoff_lte=control.now(),
+                cutoff_lte=request.data_selection_time,
                 published_at_lte=control.now(),
+                schedule_digest_sha256=schedule_digest,
             )
             existing = (
                 ()
@@ -1719,6 +1725,7 @@ def _inspect_member(
         current,
         cutoff,
         control,
+        open_month_schedule_digest(open_month_schedule_from_evidence(schedule)),
         active_provisional=active_provisional,
         include_current_session=include_current_session,
         refresh_once=refresh_once,
@@ -1912,6 +1919,7 @@ def _inspect_current(  # noqa: C901 -- closed mutable-month admission matrix
     current: tuple[int, int],
     cutoff: datetime,
     control: CurrentRawInvocationControlV1,
+    schedule_digest_sha256: str,
     *,
     active_provisional: bool = False,
     include_current_session: bool = False,
@@ -1941,6 +1949,7 @@ def _inspect_current(  # noqa: C901 -- closed mutable-month admission matrix
         month=month,
         cutoff_lte=cutoff,
         published_at_lte=cutoff,
+        schedule_digest_sha256=schedule_digest_sha256,
     )
     intraday_missing = (
         _slot(

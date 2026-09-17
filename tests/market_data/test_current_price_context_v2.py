@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import pytest
 from current_raw_acquisition_fixtures import (
@@ -31,6 +32,7 @@ from current_raw_acquisition_fixtures import (
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition_module
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport_module
 import swing_trading_ai_assistant.research_packet as research_packet
+import swing_trading_ai_assistant.research_packet.current_price_context as packet_v1
 import swing_trading_ai_assistant.research_packet.current_price_context_v2 as packet_v2
 from swing_trading_ai_assistant.market_data.cli import build_parser, main
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
@@ -49,6 +51,9 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 )
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextMemberV1,
+)
+from swing_trading_ai_assistant.research_packet.current_price_context_runtime_identity_manifest import (
+    CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1,
 )
 
 _Mode = Literal["RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"]
@@ -271,11 +276,18 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
     assert wire.attempts == 5
     assert result.provider_call_budget == 5 * len(members) + 1 == 11
     assert result.provider_calls_attempted == result.provider_calls_completed == 5
-    assert tuple(item.state for item in mapping_entries) == ("ACQUIRED", "REUSED")
+    assert len(result.freshness_ledger) <= 5 * len(members) + 3
+    assert tuple(item.state for item in mapping_entries) == ("ACQUIRED",)
     assert tuple(
-        (item.provider_calls_attempted, item.provider_calls_completed)
+        (
+            item.position,
+            item.isin,
+            item.effective_symbol,
+            item.provider_calls_attempted,
+            item.provider_calls_completed,
+        )
         for item in mapping_entries
-    ) == ((1, 1), (0, 0))
+    ) == ((None, None, None, 1, 1),)
     assert (
         sum(item.provider_calls_attempted for item in result.freshness_ledger)
         == result.provider_calls_attempted
@@ -294,9 +306,6 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
     ]
     moved_entries[0].update(
         state="REUSED", provider_calls_attempted=0, provider_calls_completed=0
-    )
-    moved_entries[1].update(
-        state="ACQUIRED", provider_calls_attempted=1, provider_calls_completed=1
     )
     with pytest.raises(ValueError, match="result is invalid"):
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
@@ -701,7 +710,7 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
 @pytest.mark.parametrize(
     ("action_reply", "member_reason", "action_state", "completed_calls"),
     (
-        (WireReply(status=404), "SCREEN_UNAVAILABLE", "UNAVAILABLE", 5),
+        (WireReply(status=404), "SCREEN_UNAVAILABLE", "UNAVAILABLE", 6),
         (
             WireReply(body=action_body(in_window=True)),
             "ACTION_IN_WINDOW",
@@ -785,10 +794,7 @@ def test_v2_action_non_admission_preserves_provisional_and_truthful_ledger(
         1,
     )
     assert action.state == action_state
-    assert (action.provider_calls_attempted, action.provider_calls_completed) == (
-        1,
-        int(action_state == "ACQUIRED"),
-    )
+    assert (action.provider_calls_attempted, action.provider_calls_completed) == (1, 1)
     assert provisional.state == "ACQUIRED"
     assert provisional.physical_identity_sha256 is not None
     assert (
@@ -855,7 +861,7 @@ def test_v2_retained_schedule_boundaries_never_open_intraday(
     full_schedule = current_month_schedule(
         max(selected_at, datetime(2026, 9, 30, 3, 45, tzinfo=UTC))
     )
-    selection_date = selected_at.astimezone().date()
+    selection_date = selected_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
     schedule_value = replace(
         full_schedule,
         as_of=selected_at,
@@ -1095,9 +1101,24 @@ def test_v2_cross_month_ledger_uses_completed_plan_partition_order(
     ledger[2], ledger[3] = ledger[3], ledger[2]
     malformed.append(reordered_partitions)
 
-    for mutated in malformed:
-        with pytest.raises(ValueError, match="result is invalid"):
+    resealed_source = value()
+    resealed_source["freshness_ledger"][2].update(
+        source="CURRENT_HISTORY",
+        correction_rule="CURRENT_MONTH_IDENTICAL_OVERLAP_OR_INTRADAY_TO_HISTORICAL_FINALIZATION",
+    )
+    malformed.append(resealed_source)
+
+    resealed_slot = value()
+    resealed_slot["freshness_ledger"][2]["slot"] = "2026-06"
+    malformed.append(resealed_slot)
+
+    for index, mutated in enumerate(malformed):
+        try:
             decoder(_reseal_result(mutated))
+        except ValueError as error:
+            assert "result is invalid" in str(error)
+        else:
+            pytest.fail(f"resealed ledger mutation {index} was accepted")
 
 
 def test_v2_alias_only_reuses_canonical_provisional_but_identity_drift_blocks(
@@ -1209,3 +1230,88 @@ def test_v2_alias_only_reuses_canonical_provisional_but_identity_drift_blocks(
     assert sentinel.attempts == 0
     assert drift.completed_context.members[0].state != "OBSERVED"
     assert drift.current_session[0].state != "OBSERVED"
+
+
+def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    members = raw_members(1)
+    request_value = raw_request(schedule_value, selection=selected_at, members=members)
+    root = tmp_path / "root"
+    seed_root(
+        root,
+        schedule_value=schedule_value,
+        request_value=request_value,
+        retain_mapping=False,
+    )
+    wire = RecordedWire(
+        [
+            WireReply(
+                body=mapping_body(members),
+                headers=(("Content-Type", "application/gzip"),),
+            )
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    def substituted_hash(*args: object) -> str:
+        relative = args[-1]
+        assert isinstance(relative, str)
+        if relative.endswith("corporate_actions.py"):
+            return "0" * 64
+        return CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1[relative]
+
+    monkeypatch.setattr(packet_v1, "runtime_source_sha256", substituted_hash)
+
+    with pytest.raises(ValueError, match="runtime identity is invalid"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+            root,
+            clock=_Clock(selected_at),
+        )
+    assert wire.attempts == 0
+
+
+def test_v2_latches_transient_cancellation_across_inner_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        selected_at,
+        selected_at + timedelta(minutes=30),
+        "a" * 64,
+        (_member(),),
+        _QUESTIONS,
+        None,
+        "ACQUIRE_MISSING",
+        False,
+    )
+    cancellation_seen = {"value": False}
+
+    class TransientCancellation:
+        def is_cancelled(self) -> bool:
+            return cancellation_seen["value"]
+
+    def interrupted_acquisition(
+        *_: object, control: CurrentRawInvocationControlV1, **__: object
+    ) -> acquisition_module.CurrentRawAcquisitionResultV1:
+        cancellation_seen["value"] = True
+        with pytest.raises(packet_v2.CurrentRawInvocationStoppedV1):
+            control.ensure_live()
+        cancellation_seen["value"] = False
+        return acquisition_module.CurrentRawAcquisitionResultV1("STOPPED", 0)
+
+    monkeypatch.setattr(
+        packet_v2, "acquire_missing_current_raw_evidence_v1", interrupted_acquisition
+    )
+
+    with pytest.raises(packet_v2.CurrentRawInvocationStoppedV1):
+        packet_v2.research_current_price_context_v2(
+            request,
+            tmp_path / "missing-root",
+            clock=_Clock(selected_at),
+            cancellation=TransientCancellation(),
+        )

@@ -47,6 +47,7 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextRequestV1,
     CurrentPriceContextResultV1,
     current_price_context_result_from_canonical_json_bytes_v1,
+    current_price_context_runtime_code_identity_v1,
     research_current_price_context_v1,
 )
 from swing_trading_ai_assistant.research_packet.current_price_context_v2_runtime_identity_manifest import (
@@ -476,7 +477,7 @@ class CurrentPriceContextFreshnessEntryV2:
     ]
 
     def __post_init__(self) -> None:
-        member_scoped = self.source not in {"CALENDAR", "INDUSTRY"}
+        member_scoped = self.source not in {"CALENDAR", "MAPPING", "INDUSTRY"}
         clocks = (self.source_cutoff, self.published_at, self.known_at)
         present_clocks = tuple(item for item in clocks if item is not None)
         if (
@@ -550,49 +551,65 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         return False
 
     mapping_entries = tuple(item for item in ledger if item.source == "MAPPING")
-    mapping_call_entries = tuple(
-        item for item in mapping_entries if item.provider_calls_attempted
-    )
-    mapped_positions = tuple(
-        position
-        for position, item in enumerate(value.completed_context.members)
-        if item.mapping_observation_sha256 is not None
-    )
-    expected_mapping_call_position = mapped_positions[0] if mapped_positions else 0
-    if len(mapping_call_entries) > 1 or (
-        mapping_call_entries
-        and mapping_call_entries[0].position != expected_mapping_call_position
+    mapping = None if len(mapping_entries) != 1 else mapping_entries[0]
+    if (
+        mapping is None
+        or mapping.slot != "mapping"
+        or mapping.position is not None
+        or mapping.isin is not None
+        or mapping.effective_symbol is not None
+        or mapping.physical_identity_sha256 is not None
+        or mapping.source_cutoff is not None
+        or mapping.published_at is not None
+        or mapping.known_at is not None
+        or mapping.provider_calls_completed > mapping.provider_calls_attempted
     ):
         return False
 
     for position, completed_member in enumerate(value.completed_context.members):
         scoped = tuple(item for item in ledger if item.position == position)
-        if not scoped or scoped[0].source != "MAPPING":
+        if not scoped:
             return False
-        mapping = scoped[0]
-        if (
-            mapping.physical_identity_sha256
-            != completed_member.mapping_observation_sha256
-            or mapping.source_cutoff is not None
-            or mapping.published_at is not None
-            or mapping.known_at != completed_member.mapping_retrieved_at
-        ):
-            return False
-        expected_mapping_state = (
-            "UNAVAILABLE"
-            if completed_member.mapping_observation_sha256 is None
-            else "ACQUIRED"
-            if mapping.provider_calls_attempted
-            else "REUSED"
-        )
-        if mapping.state != expected_mapping_state:
-            return False
-
         partitions = tuple(
             item
             for item in scoped
             if item.source in {"CLOSED_MONTH", "CURRENT_HISTORY"}
         )
+        slot_months: list[date] = []
+        sources: list[str] = []
+        for partition in partitions:
+            matched = re.fullmatch(r"(\d{4})-(\d{2})", partition.slot)
+            if matched is None:
+                return False
+            try:
+                slot_month = date(int(matched.group(1)), int(matched.group(2)), 1)
+            except ValueError:
+                return False
+            slot_months.append(slot_month)
+            sources.append(partition.source)
+        selection_month = (
+            value.data_selection_time.astimezone(_IST).date().replace(day=1)
+        )
+        earliest_month = (
+            value.data_selection_time.astimezone(_IST).date() - timedelta(days=63)
+        ).replace(day=1)
+        if (
+            slot_months != sorted(slot_months)
+            or len(set(slot_months)) != len(slot_months)
+            or any(
+                month < earliest_month or month > selection_month
+                for month in slot_months
+            )
+            or any(
+                (source == "CURRENT_HISTORY") != (month == selection_month)
+                for source, month in zip(sources, slot_months, strict=True)
+            )
+            or sources
+            != ["CLOSED_MONTH"] * sources.count("CLOSED_MONTH")
+            + ["CURRENT_HISTORY"] * sources.count("CURRENT_HISTORY")
+            or sources.count("CURRENT_HISTORY") > 1
+        ):
+            return False
         if completed_member.state == "OBSERVED":
             expected = tuple(
                 zip(
@@ -807,13 +824,14 @@ class CurrentPriceContextResultV2:
             != len(self.freshness_ledger)
             or sum(item.source == "CALENDAR" for item in self.freshness_ledger) != 1
             or sum(item.source == "INDUSTRY" for item in self.freshness_ledger) != 1
+            or sum(item.source == "MAPPING" for item in self.freshness_ledger) != 1
             or any(
                 sum(
                     item.source == source and item.position == position
                     for item in self.freshness_ledger
                 )
                 != 1
-                for source in ("MAPPING", "CURRENT_SESSION", "CORPORATE_ACTION")
+                for source in ("CURRENT_SESSION", "CORPORATE_ACTION")
                 for position in range(len(self.request_members))
             )
             or any(
@@ -827,14 +845,6 @@ class CurrentPriceContextResultV2:
                 for item in self.freshness_ledger
             )
             or not _freshness_ledger_is_bound(self)
-            or any(
-                item.source == "MAPPING"
-                and item.physical_identity_sha256
-                != self.completed_context.members[
-                    cast(int, item.position)
-                ].mapping_observation_sha256
-                for item in self.freshness_ledger
-            )
             or any(
                 item.source == "CORPORATE_ACTION"
                 and (
@@ -1116,6 +1126,7 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
                     month=active.trade_date.month,
                     cutoff_lte=evidence_cutoff,
                     published_at_lte=evidence_cutoff,
+                    schedule_digest_sha256=schedule_digest,
                 )
                 if metadata is None:
                     results.append(
@@ -1265,6 +1276,7 @@ def _current_session_cutoff_identities(
                     month=active.trade_date.month,
                     cutoff_lte=evidence_cutoff,
                     published_at_lte=evidence_cutoff,
+                    schedule_digest_sha256=schedule_digest,
                 )
                 if (
                     metadata is None
@@ -1326,6 +1338,7 @@ class _CancellationClockV2:
     ) -> None:
         self._clock = clock
         self._cancellation = cancellation
+        self._cancelled = False
 
     def now(self) -> datetime:
         try:
@@ -1336,7 +1349,8 @@ class _CancellationClockV2:
             )
             if type(cancelled) is not bool:
                 raise ValueError("current price context V2 callback is invalid")
-            if cancelled:
+            self._cancelled = self._cancelled or cancelled
+            if self._cancelled:
                 raise CurrentRawInvocationStoppedV1("CANCELLATION_REQUESTED")
             return self._clock.now()
         except CurrentRawInvocationStoppedV1:
@@ -1455,50 +1469,25 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
         if mapping is not None
         else "UNAVAILABLE"
     )
-    mapped_positions = tuple(
-        position
-        for position, item in enumerate(completed.members)
-        if item.mapping_observation_sha256 is not None
-    )
-    mapping_call_position = (
-        mapped_positions[0]
-        if mapping is not None and mapping.attempts and mapped_positions
-        else 0
+    entries.append(
+        CurrentPriceContextFreshnessEntryV2(
+            "MAPPING",
+            "mapping",
+            None,
+            None,
+            None,
+            None,
+            cast(Any, mapping_state),
+            None,
+            None,
+            None,
+            0 if mapping is None else mapping.attempts,
+            0 if mapping is None else int(mapping.completed),
+            "SELECTION_DATE_MAPPING",
+        )
     )
     for position, member in enumerate(request.members):
         completed_member = completed.members[position]
-        member_mapping_state = (
-            "UNAVAILABLE"
-            if completed_member.mapping_observation_sha256 is None
-            else "REUSED"
-            if mapping_state == "ACQUIRED" and position != mapping_call_position
-            else mapping_state
-        )
-        entries.append(
-            CurrentPriceContextFreshnessEntryV2(
-                "MAPPING",
-                "mapping",
-                position,
-                member.isin,
-                member.effective_symbol,
-                completed_member.mapping_observation_sha256,
-                cast(Any, member_mapping_state),
-                None,
-                None,
-                completed_member.mapping_retrieved_at,
-                (
-                    0
-                    if mapping is None or position != mapping_call_position
-                    else mapping.attempts
-                ),
-                (
-                    0
-                    if mapping is None or position != mapping_call_position
-                    else int(mapping.completed)
-                ),
-                "SELECTION_DATE_MAPPING",
-            )
-        )
         completed_member_plan = None
         if completed_plan_result.plan is not None:
             completed_member_plan = cast(Any, completed_plan_result.plan).members[
@@ -1733,6 +1722,7 @@ def research_current_price_context_v2(
     ):
         raise ValueError("current price context V2 deadline exceeded")
     runtime_identity = current_price_context_runtime_code_identity_v2()
+    current_price_context_runtime_code_identity_v1()
     request_v1 = _v1_request(request)
     raw_request = CurrentRawPriceContextInputV1(
         request_v1.request_identity_sha256,
@@ -1745,7 +1735,7 @@ def research_current_price_context_v2(
         trusted_clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
-        cancellation=cancellation,
+        cancellation=None,
     )
     completed_inspection = inspect_current_raw_evidence_v1(
         raw_request,
@@ -1767,7 +1757,7 @@ def research_current_price_context_v2(
         trusted_clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
-        cancellation=cancellation,
+        cancellation=None,
     )
     initial_current_identities = _current_session_cutoff_identities(
         request,
@@ -1787,7 +1777,7 @@ def research_current_price_context_v2(
             trusted_clock,
             selection=request.data_selection_time,
             deadline=request.admission_deadline,
-            cancellation=cancellation,
+            cancellation=None,
         )
         completed_acquisition = acquire_missing_current_raw_evidence_v1(
             raw_request,
@@ -1805,7 +1795,7 @@ def research_current_price_context_v2(
                 trusted_clock,
                 selection=request.data_selection_time,
                 deadline=request.admission_deadline,
-                cancellation=cancellation,
+                cancellation=None,
             )
             current_acquisition = acquire_missing_current_raw_evidence_v1(
                 raw_request,
@@ -1828,7 +1818,7 @@ def research_current_price_context_v2(
         trusted_clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
-        cancellation=cancellation,
+        cancellation=None,
     )
     final_current_inspection = (
         current_acquisition

@@ -1361,6 +1361,7 @@ class DuckDBCatalog:
         month: int,
         cutoff_lte: datetime,
         published_at_lte: datetime,
+        schedule_digest_sha256: str | None = None,
     ) -> ProvisionalPartitionMetadataV1 | None:
         """Resolve one canonical equity identity across admitted symbol aliases."""
         if (
@@ -1376,6 +1377,17 @@ class DuckDBCatalog:
             or not 2022 <= year <= date.max.year
             or type(month) is not int
             or not 1 <= month <= 12
+            or (
+                schedule_digest_sha256 is not None
+                and (
+                    type(schedule_digest_sha256) is not str
+                    or len(schedule_digest_sha256) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in schedule_digest_sha256
+                    )
+                )
+            )
             or any(
                 type(value) is not datetime
                 or value.tzinfo is None
@@ -1390,7 +1402,12 @@ class DuckDBCatalog:
                 "AND instrument_type = 'EQ' AND interval = '1m' "
                 "AND segment = ? AND security_id = ? AND year = ? AND month = ? "
                 "AND cutoff <= ? AND published_at <= ? "
-                "ORDER BY cutoff DESC, published_at DESC, "
+                + (
+                    "AND schedule_digest_sha256 = ? "
+                    if schedule_digest_sha256 is not None
+                    else ""
+                )
+                + "ORDER BY cutoff DESC, published_at DESC, "
                 "schedule_digest_sha256 ASC, checksum_sha256 ASC, "
                 "symbol ASC, instrument_key ASC, relative_path ASC LIMIT 1",
                 (
@@ -1400,6 +1417,11 @@ class DuckDBCatalog:
                     month,
                     cutoff_lte,
                     published_at_lte,
+                    *(
+                        (schedule_digest_sha256,)
+                        if schedule_digest_sha256 is not None
+                        else ()
+                    ),
                 ),
             ).fetchone()
         except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):

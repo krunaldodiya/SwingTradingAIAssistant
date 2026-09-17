@@ -597,8 +597,14 @@ def test_closed_month_shared_provider_stops_preserve_opened_slot_accounting(
     assert result.provider_calls == wire.attempts == 1
     assert result.accounting is not None
     closed = result.accounting.members[0][0]
-    assert (closed.attempts, closed.disposition.value, closed.reason) == (
+    assert (
+        closed.attempts,
+        closed.completed,
+        closed.disposition.value,
+        closed.reason,
+    ) == (
         1,
+        True,
         "FAILED",
         reason,
     )
