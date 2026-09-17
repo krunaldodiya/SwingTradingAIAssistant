@@ -1147,7 +1147,7 @@ def _advance_current_month_once(
             physical = plan_upstox_equity_months(
                 instrument,
                 date(open_plan.month_start.year, open_plan.month_start.month, 1),
-                selected_to,
+                open_plan.requested_to,
                 "1m",
             )[0]
             schedule_digest = open_month_schedule_digest(schedule)
@@ -1160,10 +1160,29 @@ def _advance_current_month_once(
                 published_at_lte=control.now(),
                 schedule_digest_sha256=schedule_digest,
             )
+            if metadata is not None and (
+                metadata.plan.security_id != instrument.security_id
+                or metadata.plan.instrument_key != instrument.instrument_key
+            ):
+                raise _MemberEffectFailure("CURRENT_MONTH_IDENTITY_CHANGED")
             existing = (
                 ()
                 if metadata is None
                 else load_provisional_partition(root, lease, metadata)
+            )
+            physical = (
+                physical
+                if metadata is None
+                else replace(metadata.plan, to_date=open_plan.requested_to)
+            )
+            validation_instrument = (
+                instrument
+                if metadata is None
+                else replace(
+                    instrument,
+                    instrument_key=physical.instrument_key,
+                    symbol=physical.symbol,
+                )
             )
             history_rows = ()
             intraday_rows = ()
@@ -1188,7 +1207,9 @@ def _advance_current_month_once(
                 ).fetch(historical_request, token.get())
                 attempted.append(history.key)
                 history_rows = canonicalize_upstox_equity_candles(
-                    normalize_candles(response.candles), instrument, guard.now()
+                    normalize_candles(response.candles),
+                    validation_instrument,
+                    guard.now(),
                 )
             if intraday is not None and intraday.disposition in {
                 PlannedSlotDispositionV1.MISSING,
@@ -1204,7 +1225,9 @@ def _advance_current_month_once(
                 intraday_rows = tuple(
                     replace(row, source_version="upstox-intraday-v3")
                     for row in canonicalize_upstox_equity_candles(
-                        normalize_candles(response.candles), instrument, guard.now()
+                        normalize_candles(response.candles),
+                        validation_instrument,
+                        guard.now(),
                     )
                 )
             validation = validate_provisional_advance(

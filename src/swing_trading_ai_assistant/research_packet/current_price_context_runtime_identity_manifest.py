@@ -23,7 +23,7 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "7ed22c33eed7ab906c5c198089f213edb3d64a3b58d85b54035282fe208b1b74",
     "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader.py": "257d0dc354bec0548490f52a5bdc25121ee56aba278418b5a75758baa0fe83e1",
     "src/swing_trading_ai_assistant/market_data/current_industry_classification.py": "c5692c886048885e33b36b68f9c63ac8ca9c3860e719585f9058b77a69fe1089",
-    "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "5fb48110099c7cf70bff95c426b201775f746c52e729f44bb3a2a86f1287103f",
+    "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "932f5b0e888af2800f1582f6d2d449527285f1e361d4cb5589e2fff3e67269ad",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport.py": "9fc61856282a7ca4c9ac34edb1bbc024b9712926f510de5249ce02c1f6b0c317",
     "src/swing_trading_ai_assistant/market_data/current_raw_price_context.py": "32592e4c60aab15e146547a17cbda9e1501a0266aebd2cdb45b7b7d2909f4c8c",
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",

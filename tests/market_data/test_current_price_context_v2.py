@@ -1177,6 +1177,37 @@ def test_v2_alias_only_reuses_canonical_provisional_but_identity_drift_blocks(
     assert alias.current_session[0].effective_symbol == "TCSNEW"
     assert alias.current_session[0].partition_checksum_sha256 == old_checksum
 
+    def unexpected_symbol_lookup(*_: object, **__: object) -> object:
+        raise AssertionError(
+            "refresh selected the current symbol instead of security ID"
+        )
+
+    monkeypatch.setattr(
+        acquisition_module.DuckDBCatalog,
+        "latest_provisional_partition_for_symbol",
+        unexpected_symbol_lookup,
+    )
+    refresh_wire = RecordedWire(
+        [WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", refresh_wire.build_opener)
+    alias_refresh = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(alias_raw, "REFRESH_ONCE"),
+        root,
+        clock=_Clock(selected_at),
+    )
+    assert refresh_wire.attempts == 1
+    assert alias_refresh.current_session[0].state == "OBSERVED"
+    assert alias_refresh.current_session[0].partition_checksum_sha256 == old_checksum
+    assert (
+        next(
+            item
+            for item in alias_refresh.freshness_ledger
+            if item.source == "CURRENT_SESSION"
+        ).state
+        == "REFRESHED"
+    )
+
     original_lookup = (
         packet_v2.DuckDBCatalog.latest_provisional_partition_for_security_id
     )
