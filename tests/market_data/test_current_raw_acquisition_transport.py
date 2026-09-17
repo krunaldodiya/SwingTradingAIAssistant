@@ -122,6 +122,65 @@ def test_operation_descriptor_rejects_an_unplanned_url_before_opening(
 
 
 @pytest.mark.parametrize(
+    ("kind", "expected_callback"),
+    (("terminal-status", 0), ("body-timeout", 0), ("complete-success", 1)),
+)
+def test_response_completion_callback_only_follows_a_bounded_successful_body_read(
+    monkeypatch: pytest.MonkeyPatch, kind: str, expected_callback: int
+) -> None:
+    now = datetime(2026, 9, 15, 9, tzinfo=UTC)
+
+    class Response(_ForbiddenBody):
+        headers = SimpleNamespace(items=lambda: (("Content-Type", "application/json"),))
+
+        def getcode(self) -> int:
+            return 404 if kind == "terminal-status" else 200
+
+        def geturl(self) -> str:
+            return (
+                "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions"
+            )
+
+        def read(self, *_: object) -> bytes:
+            if kind == "body-timeout":
+                raise TimeoutError("deterministic body timeout")
+            if kind == "terminal-status":
+                raise AssertionError("terminal status must not read its body")
+            return b'{"status":"success","data":[]}'
+
+    def opener(*_: object) -> _Opener:
+        return _Opener(Response())
+
+    monkeypatch.setattr(transport, "build_opener", opener)
+    completed: list[None] = []
+
+    def response_completed() -> None:
+        completed.append(None)
+
+    if kind == "complete-success":
+        response = transport.get_strict_current_raw_v1(
+            "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions",
+            headers={},
+            timeout_seconds=1,
+            deadline=now + timedelta(minutes=1),
+            now=lambda: now,
+            response_completed=response_completed,
+        )
+        assert response.body
+    else:
+        with pytest.raises(transport.CurrentRawProviderResponseError):
+            transport.get_strict_current_raw_v1(
+                "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions",
+                headers={},
+                timeout_seconds=1,
+                deadline=now + timedelta(minutes=1),
+                now=lambda: now,
+                response_completed=response_completed,
+            )
+    assert len(completed) == expected_callback
+
+
+@pytest.mark.parametrize(
     ("status", "error"),
     (
         (401, transport.CurrentRawAuthenticationError),

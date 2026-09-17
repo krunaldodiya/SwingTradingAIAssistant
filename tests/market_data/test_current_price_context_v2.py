@@ -6,8 +6,9 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from http.client import IncompleteRead
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -53,6 +54,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentPriceContextMemberV1,
@@ -387,6 +389,19 @@ def test_v2_result_decoder_rejects_resealed_request_reason_price_and_time_mutati
     with pytest.raises(ValueError, match="result is invalid"):
         decoder(_reseal_result(changed_time))
 
+    for field, value in (
+        ("provider_calls_attempted", 1),
+        ("provider_calls_completed", 1),
+        ("reused_physical_objects", 1),
+        ("refreshed_physical_objects", 1),
+        ("acquisition_started_at", "2026-09-15T09:00:00.000000Z"),
+        ("acquisition_completed_at", "2026-09-15T09:00:00.000000Z"),
+    ):
+        changed_accounting = json.loads(result.canonical_json_bytes())
+        changed_accounting[field] = value
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(changed_accounting))
+
 
 def test_v2_sdk_cancellation_is_public_sticky_and_normalizes_callback_defects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -565,6 +580,43 @@ def _intraday_payload(day: date, closes: tuple[float, ...]) -> bytes:
         for offset, close in enumerate(closes)
     ]
     return json.dumps({"status": "success", "data": {"candles": candles}}).encode()
+
+
+def _retain_active_v2_prefix(
+    root: Path,
+    schedule_value: ExpectedSessionSchedule,
+    request_value: CurrentRawPriceContextInputV1,
+    monkeypatch: pytest.MonkeyPatch,
+) -> packet_v2.CurrentPriceContextResultV2:
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    wire = RecordedWire(
+        [
+            *(
+                WireReply(
+                    body=current_history_body(schedule_value, through=date(2026, 9, 29))
+                )
+                for _ in request_value.members
+            ),
+            *(WireReply(body=action_body()) for _ in request_value.members),
+            *(
+                WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))
+                for _ in request_value.members
+            ),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+        root,
+        clock=_Clock(request_value.data_selection_time),
+    )
+    assert wire.attempts == 3 * len(request_value.members)
+    assert all(item.state == "OBSERVED" for item in result.completed_context.members)
+    assert all(item.state == "OBSERVED" for item in result.current_session)
+    return result
 
 
 def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
@@ -1505,8 +1557,20 @@ def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
     assert wire.attempts == 0
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "in-range-false-month",
+        "omission",
+        "duplicate",
+        "reorder",
+        "wrong-source",
+        "wrong-correction",
+        "unavailable-member-plan-and-ledger-omission",
+    ),
+)
 def test_v2_result_requires_an_exact_ordered_physical_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
 ) -> None:
     selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
     schedule_value = current_month_schedule(selected_at)
@@ -1527,11 +1591,294 @@ def test_v2_result_requires_an_exact_ordered_physical_plan(
         for item in result.freshness_ledger
     ]
 
-    del value["physical_plan"][1]
+    if mutation == "in-range-false-month":
+        value["physical_plan"][1]["source"] = "CLOSED_MONTH"
+        value["physical_plan"][1]["slot"] = "2026-09"
+    elif mutation == "omission":
+        del value["physical_plan"][1]
+    elif mutation == "duplicate":
+        value["physical_plan"].insert(1, value["physical_plan"][0].copy())
+    elif mutation == "reorder":
+        value["physical_plan"].reverse()
+    elif mutation == "wrong-source":
+        value["physical_plan"][0]["source"] = "MAPPING"
+        value["physical_plan"][0]["slot"] = "mapping"
+    elif mutation == "wrong-correction":
+        value["freshness_ledger"][0]["correction_rule"] = "SELECTION_DATE_MAPPING"
+    else:
+        current = next(
+            index
+            for index, item in enumerate(value["freshness_ledger"])
+            if item["source"] == "CURRENT_SESSION"
+        )
+        del value["freshness_ledger"][current]
+        del value["physical_plan"][current]
+
     with pytest.raises(ValueError, match="result is invalid"):
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
             _reseal_result(value)
         )
+
+
+def test_v2_selection_owned_exact_provisional_generation_reuses_before_later_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    exact_request = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=exact_request)
+    first = _retain_active_v2_prefix(root, schedule_value, exact_request, monkeypatch)
+    assert first.current_session[0].source_cutoff == datetime(
+        2026, 9, 30, 3, 46, tzinfo=UTC
+    )
+
+    later_selection = selected_at + timedelta(minutes=1)
+    later_request = _active_raw_request(schedule_value, later_selection)
+    later_wire = RecordedWire(
+        [WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0, 102.0)))]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", later_wire.build_opener)
+    later = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(later_request, "REFRESH_ONCE"),
+        root,
+        clock=_Clock(later_selection),
+    )
+    assert later_wire.attempts == 1
+    assert later.current_session[0].source_cutoff == datetime(
+        2026, 9, 30, 3, 47, tzinfo=UTC
+    )
+
+    reused_wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", reused_wire.build_opener)
+    advanced = _AdvancingClock(
+        selected_at + timedelta(minutes=2),
+        timedelta(seconds=5),
+        exact_request.admission_deadline - timedelta(seconds=1),
+    )
+    reused = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(exact_request, "ACQUIRE_MISSING"), root, clock=advanced
+    )
+    current = reused.current_session[0]
+    ledger = next(
+        item for item in reused.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert reused_wire.attempts == reused.provider_calls_attempted == 0
+    assert current.state == "OBSERVED"
+    assert (
+        current.source_cutoff
+        == current.last_completed_minute
+        == datetime(2026, 9, 30, 3, 46, tzinfo=UTC)
+    )
+    assert ledger.state == "REUSED" and ledger.source_cutoff == current.source_cutoff
+    assert max(advanced.observed) > later_selection
+
+
+@pytest.mark.parametrize(
+    ("failure", "reply", "completed_calls"),
+    (
+        ("terminal-404", WireReply(status=404), 1),
+        ("malformed", WireReply(body=b"{}"), 1),
+        (
+            "body-timeout",
+            WireReply(
+                body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)),
+                on_read=lambda: (_ for _ in ()).throw(TimeoutError("fixture")),
+            ),
+            0,
+        ),
+        (
+            "incomplete-body",
+            WireReply(
+                body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)),
+                on_read=lambda: (_ for _ in ()).throw(IncompleteRead(b"partial", 10)),
+            ),
+            0,
+        ),
+    ),
+)
+def test_v2_refresh_failure_overlays_only_current_member_and_preserves_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    reply: WireReply,
+    completed_calls: int,
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    first = _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+    retained_bytes = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    wire = RecordedWire([reply])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    refreshed = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "REFRESH_ONCE"), root, clock=_Clock(selected_at)
+    )
+
+    current = refreshed.current_session[0]
+    current_ledger = next(
+        item for item in refreshed.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert wire.attempts == refreshed.provider_calls_attempted == 1
+    assert refreshed.provider_calls_completed == completed_calls
+    assert refreshed.completed_context.members[0].state == "OBSERVED"
+    assert (
+        refreshed.completed_context.members[0].partition_checksums
+        == first.completed_context.members[0].partition_checksums
+    )
+    assert current.state == "UNAVAILABLE"
+    assert current.reason == "PROVISIONAL_EVIDENCE_UNAVAILABLE"
+    assert all(
+        value is None
+        for value in (
+            current.last_completed_minute,
+            current.observed_price,
+            current.cumulative_source_volume,
+            current.source_version,
+            current.partition_checksum_sha256,
+            current.source_cutoff,
+            current.published_at,
+            current.known_at,
+        )
+    )
+    assert (
+        current_ledger.provider_calls_attempted,
+        current_ledger.provider_calls_completed,
+    ) == (
+        1,
+        completed_calls,
+    )
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    } == retained_bytes, failure
+
+
+@pytest.mark.parametrize(
+    "status", (404, 401, 403, 429), ids=("local", "401", "403", "429")
+)
+def test_v2_refresh_failure_precedence_keeps_prior_members_and_stops_only_shared_openers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = raw_request(
+        schedule_value, selection=selected_at, members=raw_members(2)
+    )
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+    replies = [WireReply(status=status)]
+    if status == 404:
+        replies.append(
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))
+        )
+    wire = RecordedWire(replies)
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "REFRESH_ONCE"), root, clock=_Clock(selected_at)
+    )
+
+    assert wire.attempts == (2 if status == 404 else 1)
+    assert all(item.state == "OBSERVED" for item in result.completed_context.members)
+    assert result.current_session[0].state == "UNAVAILABLE"
+    assert result.current_session[1].state == "OBSERVED"
+    assert result.provider_calls_attempted == wire.attempts
+    assert result.provider_calls_completed == wire.attempts
+
+
+def test_v2_root_replacement_at_retained_and_effectful_seams_is_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+
+    retained_root = tmp_path / "retained-root"
+    seed_root(retained_root, schedule_value=schedule_value, request_value=request_value)
+    retained_wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", retained_wire.build_opener)
+    original_cutoffs = packet_v2._current_session_cutoff_identities  # pyright: ignore[reportPrivateUsage]
+
+    def replace_after_retained_read(*args: object, **kwargs: object) -> object:
+        result = original_cutoffs(*cast(Any, args), **cast(Any, kwargs))
+        retained_root.rename(tmp_path / "retained-displaced")
+        retained_root.mkdir(mode=0o700)
+        replacement = StorageRootLease.try_acquire_private_empty(retained_root)
+        assert replacement.lease is not None
+        replacement.lease.close()
+        return result
+
+    monkeypatch.setattr(
+        packet_v2,
+        "_current_session_cutoff_identities",
+        replace_after_retained_read,
+    )
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "RETAINED_ONLY"),
+            retained_root,
+            clock=_Clock(selected_at),
+        )
+    assert retained_wire.attempts == 0
+    assert not (retained_root / "market_data.duckdb").exists()
+    monkeypatch.setattr(
+        packet_v2,
+        "_current_session_cutoff_identities",
+        original_cutoffs,
+    )
+
+    effectful_root = tmp_path / "effectful-root"
+    seed_root(
+        effectful_root, schedule_value=schedule_value, request_value=request_value
+    )
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    effectful_wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule_value, through=date(2026, 9, 29))
+            ),
+            WireReply(body=action_body()),
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0))),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", effectful_wire.build_opener)
+    original_publish = acquisition_module.publish_provisional_partition_under_lease
+
+    def replace_before_publication(*args: object, **kwargs: object) -> object:
+        effectful_root.rename(tmp_path / "effectful-displaced")
+        effectful_root.mkdir(mode=0o700)
+        replacement = StorageRootLease.try_acquire_private_empty(effectful_root)
+        assert replacement.lease is not None
+        replacement.lease.close()
+        return original_publish(*cast(Any, args), **cast(Any, kwargs))
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "publish_provisional_partition_under_lease",
+        replace_before_publication,
+    )
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+            effectful_root,
+            clock=_Clock(selected_at),
+        )
+    assert effectful_wire.attempts == FixtureTokenProvider.calls == 1
+    assert len(effectful_wire.replies) == 2
+    assert not (effectful_root / "market_data.duckdb").exists()
 
 
 def test_v2_latches_transient_cancellation_across_inner_controls(

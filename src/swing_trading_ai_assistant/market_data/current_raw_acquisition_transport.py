@@ -106,6 +106,7 @@ class StrictCurrentRawHttpTransportV1:
         operation: StrictCurrentRawOperationV1 | None = None,
         before_open: Callable[[], None] | None = None,
         response_completed: Callable[[], None] | None = None,
+        terminal_response: Callable[[], None] | None = None,
     ) -> None:
         if (
             type(deadline) is not datetime
@@ -117,6 +118,7 @@ class StrictCurrentRawHttpTransportV1:
             )
             or (before_open is not None and not callable(before_open))
             or (response_completed is not None and not callable(response_completed))
+            or (terminal_response is not None and not callable(terminal_response))
         ):
             raise ValueError("strict current raw transport is invalid")
         self._deadline = deadline
@@ -124,6 +126,7 @@ class StrictCurrentRawHttpTransportV1:
         self._operation = operation
         self._before_open = before_open
         self._response_completed = response_completed
+        self._terminal_response = terminal_response
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         operation = self._operation
@@ -146,6 +149,7 @@ class StrictCurrentRawHttpTransportV1:
             ),
             before_open=self._before_open,
             response_completed=self._response_completed,
+            terminal_response=self._terminal_response,
         )
         return HttpResponse(
             status_code=response.status_code,
@@ -174,6 +178,7 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
     maximum_body_bytes: int = _MAX_BODY_BYTES,
     before_open: Callable[[], None] | None = None,
     response_completed: Callable[[], None] | None = None,
+    terminal_response: Callable[[], None] | None = None,
 ) -> StrictCurrentRawResponseV1:
     """Perform one exact, bounded GET with status-first failure handling."""
     if (
@@ -187,6 +192,7 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         or not _valid_headers(headers)
         or (before_open is not None and not callable(before_open))
         or (response_completed is not None and not callable(response_completed))
+        or (terminal_response is not None and not callable(terminal_response))
     ):
         raise ValueError("strict current raw request is invalid")
     current = now()
@@ -230,6 +236,8 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         if type(status) is not int:
             raise CurrentRawProviderResponseError("current raw status is invalid")
         if status != 200:
+            if terminal_response is not None:
+                terminal_response()
             _raise_status(status)
             raise CurrentRawProviderResponseError(
                 "current raw provider refused request"

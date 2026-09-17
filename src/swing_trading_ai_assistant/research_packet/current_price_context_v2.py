@@ -1472,7 +1472,18 @@ def _merged_accounting_slots(
         for opaque in _accounting_slots(result):
             slot = cast(Any, opaque)
             previous = merged.get(slot.key)
-            if previous is None or slot.attempts or not previous.attempts:
+            if (
+                previous is None
+                or slot.attempts > previous.attempts
+                or (
+                    slot.attempts == previous.attempts == 0
+                    and slot.disposition.value == "REUSED"
+                    and previous.disposition.value != "REUSED"
+                )
+            ):
+                # A current-session-only reinspection may mark an otherwise
+                # reusable historical slot not required.  That must not erase
+                # the completed-context provenance from the combined ledger.
                 merged[slot.key] = slot
     return merged
 
@@ -1510,8 +1521,11 @@ def _ledger_state(
         and "CONFLICT" in str(slot.reason)
     ):
         return "CONFLICTED"
-    if source == "CURRENT_SESSION" and not current_observed:
-        return "UNAVAILABLE"
+    if source == "CURRENT_SESSION":
+        if not current_observed:
+            return "UNAVAILABLE"
+        if slot.attempts == 0:
+            return "REUSED"
     if disposition == "REUSED":
         return "REUSED"
     if disposition in {"RETAINED", "RETAINED_INCOMPLETE"}:

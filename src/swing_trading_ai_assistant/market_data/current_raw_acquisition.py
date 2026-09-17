@@ -453,9 +453,9 @@ class _AcquisitionLedgerV1:
                 if aborted
                 else LedgerSlotDispositionV1.FAILED
             ),
-            completed=True,
+            completed=settled_at is not None or slot.settled_at is not None,
             reason=reason,
-            settled_at=settled_at or slot.settled_at or slot.attempted_at,
+            settled_at=settled_at or slot.settled_at,
         )
 
     def shared_stop(self, reason: str) -> None:
@@ -679,9 +679,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                     storage_root, root_identity, request, control, ledger
                 )
             except BaseException as error:
-                ledger.failed(
-                    "mapping", _local_effect_reason(error), settled_at=control.now()
-                )
+                ledger.failed("mapping", _local_effect_reason(error))
             else:
                 plan = _reinspect_after_effect(
                     storage_root, root_identity, request, control, ledger
@@ -874,6 +872,14 @@ class _EffectGuardV1:
         self.ensure_live()
         return self._control.now()
 
+    def accounting_now(self) -> datetime:
+        """Sample the invocation clock after a response has completed.
+
+        Response accounting records bytes/status already received even when a
+        later cancellation or deadline check prevents publication.
+        """
+        return self._control.now()
+
     def is_cancelled(self) -> bool:
         self.ensure_live()
         return False
@@ -1019,7 +1025,12 @@ def _strict_transport(
                 kind, url, 1_048_576 if kind == "ACTION" else 1_000_000
             ),
             before_open=before_open,
-            response_completed=lambda: ledger.response_completed(key, guard.now()),
+            response_completed=lambda: ledger.response_completed(
+                key, guard.accounting_now()
+            ),
+            terminal_response=lambda: ledger.response_completed(
+                key, guard.accounting_now()
+            ),
         ),
         guard,
     )
@@ -1446,7 +1457,7 @@ def _mark_current_failed(
 ) -> None:
     for slot in (member.current_history, member.intraday):
         if slot is not None and ledger.opened(slot.key):
-            ledger.failed(slot.key, reason, aborted=True, settled_at=control.now())
+            ledger.failed(slot.key, reason, aborted=True)
     ledger.member_stop(position, reason)
 
 
@@ -1460,9 +1471,9 @@ def _record_effect_failure(
         reason = _local_effect_reason(error)
     except _SharedAcquisitionStop as stop:
         if ledger.opened(key):
-            ledger.failed(key, stop.reason, settled_at=control.now())
+            ledger.failed(key, stop.reason)
         raise
-    ledger.failed(key, reason, settled_at=control.now())
+    ledger.failed(key, reason)
 
 
 def _local_effect_reason(error: BaseException) -> str:
@@ -2440,7 +2451,10 @@ def _retain_missing_mapping(
                         ),
                         before_open=before_open,
                         response_completed=lambda: ledger.response_completed(
-                            "mapping", guard.now()
+                            "mapping", guard.accounting_now()
+                        ),
+                        terminal_response=lambda: ledger.response_completed(
+                            "mapping", guard.accounting_now()
                         ),
                     ),
                     guard,
