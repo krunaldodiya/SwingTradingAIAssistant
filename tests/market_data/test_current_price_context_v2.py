@@ -1980,3 +1980,271 @@ def test_v2_latches_transient_cancellation_across_inner_controls(
             clock=_Clock(selected_at),
             cancellation=TransientCancellation(),
         )
+
+
+def test_v2_decoder_rebinds_planning_witness_minutes_close_and_topology(
+    tmp_path: Path,
+) -> None:
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
+    )
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    exact_limit = json.loads(result.canonical_json_bytes())
+    minute_counts = (476,) * 20 + (480,)
+    for session, minutes in zip(
+        exact_limit["planning_witness"]["completed_sessions"],
+        minute_counts,
+        strict=True,
+    ):
+        opened = datetime.fromisoformat(session["open_at"].replace("Z", "+00:00"))
+        session["close_at"] = (
+            (opened + timedelta(minutes=minutes))
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+    exact_decoded = decoder(_reseal_result(exact_limit))
+    assert (
+        sum(
+            int((item.close_at - item.open_at).total_seconds() // 60)
+            for item in exact_decoded.planning_witness.completed_sessions
+        )
+        == 10_000
+    )
+
+    subminute_shift = json.loads(result.canonical_json_bytes())
+    session = subminute_shift["planning_witness"]["completed_sessions"][0]
+    for field in ("open_at", "close_at"):
+        instant = datetime.fromisoformat(session[field].replace("Z", "+00:00"))
+        session[field] = (
+            (instant + timedelta(microseconds=1))
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+
+    chronology = json.loads(result.canonical_json_bytes())
+    sessions = chronology["planning_witness"]["completed_sessions"]
+    sessions[0], sessions[1] = sessions[1], sessions[0]
+
+    overnight_close = json.loads(result.canonical_json_bytes())
+    session = overnight_close["planning_witness"]["completed_sessions"][0]
+    opened = datetime.fromisoformat(session["open_at"].replace("Z", "+00:00"))
+    session["close_at"] = (
+        (opened + timedelta(hours=20, minutes=45))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+    above_limit = json.loads(_reseal_result(exact_limit))
+    final = above_limit["planning_witness"]["completed_sessions"][-1]
+    closed = datetime.fromisoformat(final["close_at"].replace("Z", "+00:00"))
+    final["close_at"] = (
+        (closed + timedelta(minutes=1))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+    for value in (subminute_shift, chronology, overnight_close, above_limit):
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(value))
+
+    unavailable_root = tmp_path / "unavailable-root"
+    seed_root(
+        unavailable_root,
+        schedule_value=schedule_value,
+        request_value=request_value,
+        retain_mapping=False,
+    )
+    unavailable = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"),
+        unavailable_root,
+        clock=_Clock(selected_at),
+    )
+    topology = json.loads(unavailable.canonical_json_bytes())
+    topology["planning_witness"].update(completed_sessions=[], selection_session=None)
+    retained = [
+        item
+        for item in topology["freshness_ledger"]
+        if item["source"] not in {"CLOSED_MONTH", "CURRENT_HISTORY"}
+    ]
+    topology["freshness_ledger"] = retained
+    topology["physical_plan"] = [
+        item
+        for item in topology["physical_plan"]
+        if item["source"] not in {"CLOSED_MONTH", "CURRENT_HISTORY"}
+    ]
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(topology))
+
+
+def test_v2_first_trading_day_exact_close_projects_intraday_into_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 10, 1, 3, 49, tzinfo=UTC)
+    schedule_value = _cross_month_active_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    september = tuple(
+        item for item in schedule_value.sessions if item.trade_date.month == 9
+    )
+
+    for action, expected_state in (
+        (WireReply(body=action_body()), "OBSERVED"),
+        (WireReply(status=404), "INSUFFICIENT_EVIDENCE"),
+    ):
+        root = tmp_path / expected_state
+        seed_root(root, schedule_value=schedule_value, request_value=request_value)
+        FixtureTokenProvider.calls = 0
+        monkeypatch.setattr(
+            acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+        )
+        wire = RecordedWire(
+            [
+                WireReply(body=historical_body(september)),
+                WireReply(
+                    body=_intraday_payload(
+                        date(2026, 10, 1), (100.0, 101.0, 102.0, 103.0)
+                    )
+                ),
+                action,
+            ]
+        )
+        monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+        result = packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+            root,
+            clock=_Clock(selected_at),
+        )
+
+        history = next(
+            item for item in result.freshness_ledger if item.source == "CURRENT_HISTORY"
+        )
+        current = next(
+            item for item in result.freshness_ledger if item.source == "CURRENT_SESSION"
+        )
+        assert wire.attempts == result.provider_calls_attempted == 3
+        assert (history.slot, history.provider_calls_attempted) == ("2026-10", 1)
+        assert history.provider_calls_completed == 1
+        assert (current.provider_calls_attempted, current.provider_calls_completed) == (
+            0,
+            0,
+        )
+        assert result.current_session[0].state == "NOT_APPLICABLE"
+        assert result.completed_context.members[0].state == expected_state
+
+
+def test_v2_combined_local_provisional_failure_shared_stop_and_industry_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    members = (
+        *raw_members(2),
+        replace(raw_members(2)[1], isin="INE009A01021", effective_symbol="ICICIBANK"),
+    )
+    request_value = raw_request(schedule_value, selection=selected_at, members=members)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    bootstrap = RecordedWire(
+        [
+            *(
+                WireReply(
+                    body=current_history_body(schedule_value, through=date(2026, 9, 29))
+                )
+                for _ in members
+            ),
+            *(WireReply(body=action_body()) for _ in members),
+            *(
+                WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))
+                for _ in members
+            ),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    reference = packet_v1.CurrentIndustryArchiveReferenceV1(
+        "current-industry-archive-reference@v1", "a" * 64, "b" * 64
+    )
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        request_value.data_selection_time,
+        request_value.admission_deadline,
+        request_value.schedule_identity_sha256,
+        members,
+        _QUESTIONS,
+        reference,
+        "ACQUIRE_MISSING",
+        True,
+    )
+    initial = packet_v2.research_current_price_context_v2(
+        request, root, clock=_Clock(selected_at)
+    )
+    assert bootstrap.attempts == 3 * len(members)
+    assert all(item.state == "OBSERVED" for item in initial.completed_context.members)
+    assert initial.completed_context.industry_evidence_state == "INSUFFICIENT_EVIDENCE"
+
+    refresh = replace(
+        request, execution_mode="REFRESH_ONCE", request_identity_sha256=""
+    )
+    wire = RecordedWire([WireReply(status=404), WireReply(status=401)])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    result = packet_v2.research_current_price_context_v2(
+        refresh, root, clock=_Clock(selected_at)
+    )
+
+    current = tuple(
+        item for item in result.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert wire.attempts == result.provider_calls_attempted == 2
+    assert result.provider_calls_completed == 2
+    assert all(item.state == "OBSERVED" for item in result.completed_context.members)
+    assert tuple(item.state for item in result.current_session) == (
+        "UNAVAILABLE",
+        "UNAVAILABLE",
+        "OBSERVED",
+    )
+    assert tuple(item.provider_calls_attempted for item in current) == (1, 1, 0)
+    assert tuple(item.provider_calls_completed for item in current) == (1, 1, 0)
+    assert result.completed_context.industry_evidence_state == "INSUFFICIENT_EVIDENCE"
+    assert result.freshness_ledger[-1].state == "UNAVAILABLE"
+
+
+def test_v2_final_return_rechecks_root_identity_after_witness_reread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    original = packet_v2._planning_witness_from_retained  # pyright: ignore[reportPrivateUsage]
+    calls = 0
+
+    def replace_after_final_witness(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        witness = original(*cast(Any, args), **cast(Any, kwargs))
+        calls += 1
+        if calls == 2:
+            root.rename(tmp_path / "displaced")
+            root.mkdir(mode=0o700)
+            replacement = StorageRootLease.try_acquire_private_empty(root)
+            assert replacement.lease is not None
+            replacement.lease.close()
+        return witness
+
+    monkeypatch.setattr(
+        packet_v2, "_planning_witness_from_retained", replace_after_final_witness
+    )
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "RETAINED_ONLY"),
+            root,
+            clock=_Clock(selected_at),
+        )

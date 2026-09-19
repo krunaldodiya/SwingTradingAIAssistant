@@ -58,6 +58,7 @@ from .current_raw_acquisition_transport import (
     CurrentRawDeadlineError,
     CurrentRawProviderResponseError,
     CurrentRawRateLimitedError,
+    CurrentRawTransportError,
     StrictCurrentRawHttpTransportV1,
     StrictCurrentRawOperationV1,
 )
@@ -1022,11 +1023,26 @@ class _CompletedResponseTransportV1:
         self._key = key
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        primary: BaseException | None = None
         try:
             response = self._transport.get(url, headers)
+        except BaseException as error:
+            primary = error
+            raise
         finally:
             if self._ledger.opened(self._key):
-                self._ledger.settled(self._key, self._guard.accounting_now())
+                try:
+                    self._ledger.settled(self._key, self._guard.accounting_now())
+                except BaseException as settlement_error:
+                    if primary is not None:
+                        if isinstance(primary, CurrentRawTransportError):
+                            primary.accounting_callback_failed = True
+                    else:
+                        accounting_error = CurrentRawProviderResponseError(
+                            "current raw acquisition settlement unavailable"
+                        )
+                        accounting_error.accounting_callback_failed = True
+                        raise accounting_error from settlement_error
         self._guard.ensure_live()
         return response
 
@@ -1522,14 +1538,14 @@ def _local_effect_reason(error: BaseException) -> str:
         raise _SharedAcquisitionStop("AUTHORIZATION_FAILED") from error
     if isinstance(error, (CurrentRawRateLimitedError, CorporateActionRateLimitedError)):
         raise _SharedAcquisitionStop("RATE_LIMITED") from error
-    if getattr(error, "accounting_callback_failed", False):
-        raise _SharedAcquisitionStop("ACCOUNTING_INVALID") from error
     if isinstance(error, (CurrentRawDeadlineError, CurrentRawInvocationStoppedV1)):
         raise _SharedAcquisitionStop(
             "DEADLINE_EXCEEDED"
             if isinstance(error, CurrentRawDeadlineError)
             else error.reason
         ) from error
+    if getattr(error, "accounting_callback_failed", False):
+        raise _SharedAcquisitionStop("ACCOUNTING_INVALID") from error
     if isinstance(
         error, (StorageRootLeaseError, CatalogError, PartitionCatalogFailure)
     ):

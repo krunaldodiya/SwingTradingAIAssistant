@@ -7,9 +7,13 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from email.message import Message
 from http.client import IncompleteRead
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
+from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
@@ -1607,6 +1611,85 @@ def test_action_provider_data_defects_stay_local_but_parser_defects_propagate(
             control=fixture_control(defect_request),
         )
     assert defect_wire.attempts == 1
+
+
+def test_settlement_failure_preserves_shared_raised_http_status_and_stops_later_openers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Settlement uncertainty cannot replace an authenticated shared stop."""
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    error = HTTPError(
+        "https://api.upstox.com/v3/historical-candle/fixture",
+        401,
+        "fixture",
+        Message(),
+        BytesIO(),
+    )
+    wire = RecordedWire([WireReply(error=error)])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    class BrokenAccountingClock:
+        def now(self) -> datetime:
+            raise RuntimeError("settlement clock failed")
+
+    control = CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        accounting_clock=BrokenAccountingClock(),
+    )
+    result = acquire_missing_current_raw_evidence_v1(request, root, control=control)
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    opened = next(
+        slot
+        for member in result.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert opened.reason == "AUTHENTICATION_FAILED"
+    assert opened.settled_at is None
+    assert all(
+        slot.attempts == 0
+        for member in result.accounting.members[1:]
+        for slot in member
+    )
+
+
+def test_settlement_failure_preserves_deadline_primary_error() -> None:
+    """A broken settlement clock must not convert deadline exhaustion to local data."""
+    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        _request(selection), _sessions(date(2026, 9, 10)), mapping_reusable=False
+    )
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    ledger.before_open("mapping", selection)
+
+    class DeadlineTransport:
+        def get(self, _url: str, _headers: dict[str, str]) -> object:
+            raise transport_module.CurrentRawDeadlineError("fixture deadline")
+
+    class BrokenGuard:
+        def accounting_now(self) -> datetime:
+            raise RuntimeError("settlement clock failed")
+
+    wrapped = acquisition_module._CompletedResponseTransportV1(  # pyright: ignore[reportPrivateUsage]
+        cast(acquisition_module.StrictCurrentRawHttpTransportV1, DeadlineTransport()),
+        cast(acquisition_module._EffectGuardV1, BrokenGuard()),  # pyright: ignore[reportPrivateUsage]
+        ledger,
+        "mapping",
+    )
+    with pytest.raises(transport_module.CurrentRawDeadlineError) as raised:
+        wrapped.get("https://api.upstox.com/v3/historical-candle/fixture", {})
+    assert raised.value.accounting_callback_failed is True
+    with pytest.raises(RuntimeError, match="DEADLINE_EXCEEDED"):
+        acquisition_module._local_effect_reason(raised.value)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_strict_action_parser_classifies_unknown_kind_and_missing_details_as_provider_data() -> (

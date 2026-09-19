@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -101,6 +103,50 @@ _CUTOFF = datetime(2026, 8, 17, 10, tzinfo=UTC)
 _PUBLISHED_AT = datetime(2026, 8, 17, 8, tzinfo=UTC)
 _FIRST_BAR = datetime(2026, 8, 14, 3, 45, tzinfo=UTC)
 _LAST_BAR = datetime(2026, 8, 14, 3, 46, tzinfo=UTC)
+
+
+def test_all_runtime_identity_manifests_bind_every_supported_path_form() -> None:
+    """Verify every reviewed manifest against its declared source path form."""
+    repository = Path(__file__).parents[2]
+    source_root = repository / "src"
+    forms: set[str] = set()
+    entries = 0
+    for manifest in sorted(source_root.rglob("*runtime_identity_manifest.py")):
+        tree = ast.parse(manifest.read_text(encoding="utf-8"), filename=str(manifest))
+        mappings = [
+            (key.value, value.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for key, value in zip(node.keys, node.values, strict=True)
+            if isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and key.value.endswith(".py")
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+            and len(value.value) == 64
+        ]
+        assert mappings, manifest
+        for relative, expected in mappings:
+            if relative.startswith("src/"):
+                forms.add("source-root")
+                assert Path(relative).parts[:2] == ("src", "swing_trading_ai_assistant")
+                target = repository / relative
+            else:
+                forms.add("package-relative")
+                assert not Path(relative).is_absolute()
+                assert all(part not in {"", ".", ".."} for part in Path(relative).parts)
+                target = manifest.parent / relative
+            assert target.is_relative_to(source_root) and target.is_file(), (
+                manifest,
+                relative,
+            )
+            assert hashlib.sha256(target.read_bytes()).hexdigest() == expected, (
+                manifest,
+                relative,
+            )
+            entries += 1
+    assert forms == {"source-root", "package-relative"}
+    assert entries >= 700
 
 
 def test_manifest_identity_is_independent_of_supplied_member_order() -> None:

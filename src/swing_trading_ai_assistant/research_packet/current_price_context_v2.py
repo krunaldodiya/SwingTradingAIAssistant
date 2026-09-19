@@ -122,6 +122,16 @@ _CORRECTION_BY_SOURCE = {
     "INDUSTRY": "RETAINED_ONLY_EXACT_INDUSTRY",
 }
 _CORRECTION_RULES = frozenset(_CORRECTION_BY_SOURCE.values())
+_ABSENT_PLANNING_WITNESS_REASONS = frozenset(
+    {
+        "CALENDAR_PREREQUISITE_MISSING",
+        "CALENDAR_FUTURE_KNOWN",
+        "CALENDAR_UNSUPPORTED",
+        "COMPLETED_SESSION_WINDOW_UNAVAILABLE",
+        "RAW_WINDOW_LIMIT_EXCEEDED",
+        "SCHEDULE_AUTHORITY_CHANGED",
+    }
+)
 
 
 class _SystemClock:
@@ -733,10 +743,12 @@ class CurrentPriceContextPlanningSessionV2:
             or not _utc(self.close_at)
             or self.open_at >= self.close_at
             or self.kind not in {"REGULAR", "SPECIAL"}
+            or self.open_at.second != 0
+            or self.open_at.microsecond != 0
+            or self.close_at.second != 0
+            or self.close_at.microsecond != 0
             or self.open_at.astimezone(_IST).date() != self.trade_date
-            or (self.close_at - timedelta(microseconds=1)).astimezone(_IST).date()
-            != self.trade_date
-            or (self.close_at - self.open_at).total_seconds() % 60
+            or self.close_at.astimezone(_IST).date() != self.trade_date
         ):
             raise ValueError("current price context planning session is invalid")
 
@@ -902,6 +914,10 @@ def _witness_is_bound(
         return (
             witness.selection_session is None
             and witness.schedule_as_of == completed.schedule_as_of
+            and all(
+                item.reason in _ABSENT_PLANNING_WITNESS_REASONS
+                for item in completed.members
+            )
         )
     selection_day = request.data_selection_time.astimezone(_IST).date()
     dates = tuple(item.trade_date for item in sessions)
@@ -916,6 +932,11 @@ def _witness_is_bound(
         and dates == tuple(sorted(dates))
         and len(set(dates)) == len(dates)
         and all(item.close_at <= request.data_selection_time for item in sessions)
+        and sum(
+            int((item.close_at - item.open_at).total_seconds() // 60)
+            for item in sessions
+        )
+        <= 10_000
         and dates[-1] - dates[0] <= timedelta(days=63)
         and 1 <= len(months) <= 3
         and witness.schedule_as_of == completed.schedule_as_of
@@ -1914,11 +1935,8 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
             if entry.position == position
             and entry.source in {"CLOSED_MONTH", "CURRENT_HISTORY", "CORPORATE_ACTION"}
         )
-        physical = tuple(
-            item
-            for item in physical
-            if item is not None
-            and (
+        available_physical = {
+            (
                 {
                     "CLOSED": "CLOSED_MONTH",
                     "CURRENT_HISTORY": "CURRENT_HISTORY",
@@ -1927,11 +1945,13 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 "action"
                 if item.key.rsplit(":", maxsplit=1)[-1] == "singleton"
                 else item.key.rsplit(":", maxsplit=1)[-1],
-            )
-            in {(entry.source, entry.slot) for entry in expected_completed}
-        )
-        if not physical:
-            physical = tuple(
+            ): item
+            for item in physical
+            if item is not None
+        }
+        physical = tuple(
+            available_physical.get(
+                (entry.source, entry.slot),
                 _PhysicalPlanSlotV2(
                     f"{position}:unavailable:{entry.slot}",
                     {
@@ -1939,9 +1959,10 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                         "CURRENT_HISTORY": "CURRENT_HISTORY",
                         "CORPORATE_ACTION": "ACTION",
                     }[entry.source],
-                )
-                for entry in expected_completed
+                ),
             )
+            for entry in expected_completed
+        )
         emitted_sources: set[str] = set()
         completed_partition_plans = tuple(
             item
@@ -2390,8 +2411,7 @@ def research_current_price_context_v2(
         != planning_witness
     ):
         raise ValueError("current price context V2 planning witness changed")
-    final_planning_control.ensure_live()
-    return CurrentPriceContextResultV2(
+    result = CurrentPriceContextResultV2(
         _RESULT_CONTRACT,
         request.request_identity_sha256,
         request.execution_mode,
@@ -2418,6 +2438,9 @@ def research_current_price_context_v2(
         ledger,
         runtime_identity,
     )
+    final_planning_control.ensure_live()
+    _ensure_root_identity(storage_root, root_identity)
+    return result
 
 
 def _planning_session_from_value(value: object) -> CurrentPriceContextPlanningSessionV2:
