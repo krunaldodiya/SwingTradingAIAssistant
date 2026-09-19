@@ -51,11 +51,18 @@ current-history, current-session, corporate-action, and Industry source. Each
 entry carries only the requested member identity where applicable, an immutable
 physical digest when available, a closed state (`REUSED`, `ACQUIRED`,
 `REFRESHED`, `APPENDED`, `CONFLICTED`, `UNAVAILABLE`, or `NOT_REQUESTED`),
-source/publication/knowledge clocks, exact zero-or-one attempted/completed call
-counts, and its closed correction rule. It never exposes paths, URLs,
-credentials, provider bodies, or private archive contents. Ledger call totals
-must equal top-level totals and its size is at most `5N+3`. A shared mapping
-acquisition is one global `MAPPING` ledger entry, not one entry per member.
+source/publication/knowledge clocks, bounded attempted/completed call counts,
+and its closed correction rule. Counts are exactly zero or one except that a
+`CURRENT_HISTORY` entry may aggregate zero, one, or two completed-context
+provider calls when the retained schedule proves that the 21-session window
+ends on the completed selection-day session. This narrow exception represents
+the existing Plan-06 split of prior-day Historical V3 evidence and the completed
+selection-day Intraday V3 evidence in one current-month physical partition;
+`CURRENT_SESSION` remains exclusively active/provisional. It never exposes
+paths, URLs, credentials, provider bodies, or private archive contents. Ledger
+call totals must equal top-level totals and its size is at most `5N+3`. A shared
+mapping acquisition is one global `MAPPING` ledger entry, not one entry per
+member.
 Decoder validation rebinds completed partition digest/cutoff order, source
 correction rule, chronological unique month slots, and the 64-day bound. The
 response also carries the exact ordered `physical_plan`; runtime constructs it
@@ -119,11 +126,15 @@ publishes a new immutable generation and never rewrites prior bytes.
 Current-session provisional planning derives its target exclusively from the
 request-owned selection time (never a later clock), begins only after the first
 full scheduled minute, and ends strictly before the exact sourced close. At or
-after exact close, the day enters completed facts only through the existing Plan-06
-`session_complete` admission with every scheduled minute present; no provisional
-Intraday pass is planned. After IST rollover, prior Intraday V3 rows must first
-finalize to Historical V3. No correction epoch or negative-completeness claim
-is invented.
+after exact close, the day enters completed facts only through the existing
+Plan-06 `session_complete` admission with every scheduled minute present; its
+completed-context acquisition may use the Plan-06 Historical-prior-days plus
+Intraday-selection-day split, but no separate provisional Intraday pass is
+planned. When that completed split requires two openers, both are projected onto
+the one `CURRENT_HISTORY` physical-partition entry under the bounded exception
+above and remain separate in private opener accounting. After IST rollover,
+prior Intraday V3 rows must first finalize to Historical V3. No correction epoch
+or negative-completeness claim is invented.
 
 Mapping and corporate-action handling retain V1 identity and cutoff rules.
 Alias-only drift may reuse physical evidence only when canonical/security
@@ -151,10 +162,24 @@ The accepted bounds remain: exactly 21 completed sessions, at most 64 inclusive
 calendar days, at most three physical months, and at most 10,000 selected
 minutes per member (rejected before any credential or provider effect), 1–50
 members, one exclusive writer, and an invocation deadline no later than 30
-minutes or IST rollover. Provider accounting is per invocation
-and process only. The existing `5N+1` budget, hard-capped at 251, includes V2
-current-session effects and is checked before every opener; the implementation
-makes no cross-process quota claim.
+minutes or IST rollover. Provider accounting is per invocation and process only.
+The existing `5N+1` budget, hard-capped at 251, includes V2 current-session
+effects and is checked before every opener; aggregating the two authorized
+exact-close completed-context calls does not increase this budget or the public
+ledger cardinality. The implementation makes no cross-process quota claim.
+
+### Accepted exact-close accounting amendment
+
+On 2026-09-19 the repository owner authorized the narrow exception above after
+reconciling Plan 36 with the retained Plan-06 provider boundary. The alternatives
+were to add a new public completed-session opener entry, which would enlarge the
+source vocabulary and ledger bounds, or to claim Historical V3 supplies the
+selection-day session, which contradicts Plan 06 and was rejected. The selected
+option keeps one public row per physical current-month partition, preserves
+separate private opener records and exact top-level totals, and permits two calls
+only when schedule-owned planning proves the completed-selection-day case. The
+amendment must be reconsidered if Plan-06 provider routing or the one-row-per-
+physical-object ledger contract changes.
 
 ## Compatibility, evidence, and rollback
 
