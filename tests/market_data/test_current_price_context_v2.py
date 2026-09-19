@@ -1074,6 +1074,55 @@ def test_v2_exact_close_uses_only_v1_completed_session_admission(
     assert result.provider_calls_attempted == 0
 
 
+def test_v2_fresh_exact_close_projects_completed_history_calls_without_provisional_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selection_day = date(2026, 9, 30)
+    selected_at = datetime(2026, 9, 30, 3, 49, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    wire_replies = [
+        WireReply(
+            body=current_history_body(
+                schedule_value, through=selection_day - timedelta(days=1)
+            )
+        ),
+        WireReply(body=_intraday_payload(selection_day, (100.0, 101.0, 102.0, 103.0))),
+        WireReply(body=action_body()),
+    ]
+    expected_calls = 3
+    wire = RecordedWire(wire_replies)
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"), root, clock=_Clock(selected_at)
+    )
+
+    history = next(
+        entry for entry in result.freshness_ledger if entry.source == "CURRENT_HISTORY"
+    )
+    current = next(
+        entry for entry in result.freshness_ledger if entry.source == "CURRENT_SESSION"
+    )
+    assert wire.attempts == result.provider_calls_attempted == expected_calls
+    assert result.provider_calls_completed == expected_calls
+    assert (history.provider_calls_attempted, history.provider_calls_completed) == (
+        2,
+        2,
+    )
+    assert (current.provider_calls_attempted, current.provider_calls_completed) == (
+        0,
+        0,
+    )
+    assert result.current_session[0].state == "NOT_APPLICABLE"
+
+
 def _cross_month_active_schedule(selection: datetime) -> ExpectedSessionSchedule:
     first = date(2026, 8, 1)
     last = date(2026, 10, 1)
@@ -1566,6 +1615,7 @@ def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
         "reorder",
         "wrong-source",
         "wrong-correction",
+        "paired-month-substitution",
         "unavailable-member-plan-and-ledger-omission",
     ),
 )
@@ -1605,14 +1655,22 @@ def test_v2_result_requires_an_exact_ordered_physical_plan(
         value["physical_plan"][0]["slot"] = "mapping"
     elif mutation == "wrong-correction":
         value["freshness_ledger"][0]["correction_rule"] = "SELECTION_DATE_MAPPING"
-    else:
-        current = next(
+    elif mutation == "paired-month-substitution":
+        closed = next(
             index
             for index, item in enumerate(value["freshness_ledger"])
-            if item["source"] == "CURRENT_SESSION"
+            if item["source"] == "CLOSED_MONTH"
         )
-        del value["freshness_ledger"][current]
-        del value["physical_plan"][current]
+        value["freshness_ledger"][closed]["slot"] = "2026-08"
+        value["physical_plan"][closed]["slot"] = "2026-08"
+    else:
+        closed = next(
+            index
+            for index, item in enumerate(value["freshness_ledger"])
+            if item["source"] == "CLOSED_MONTH"
+        )
+        del value["freshness_ledger"][closed]
+        del value["physical_plan"][closed]
 
     with pytest.raises(ValueError, match="result is invalid"):
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(

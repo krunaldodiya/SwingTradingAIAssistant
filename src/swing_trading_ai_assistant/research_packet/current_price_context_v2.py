@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from calendar import monthrange
 from contextlib import suppress
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -40,6 +41,9 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleEvidenceStore,
+    ScheduleSession,
+    exact_nse_schedule_source_release_pair_v1,
+    schedule_covers_full_calendar_range,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     StorageRootLease,
@@ -504,11 +508,17 @@ class CurrentPriceContextFreshnessEntryV2:
                 for left, right in zip(present_clocks, present_clocks[1:], strict=False)
             )
             or type(self.provider_calls_attempted) is not int
-            or not 0 <= self.provider_calls_attempted <= 1
+            or not 0
+            <= self.provider_calls_attempted
+            <= (2 if self.source == "CURRENT_HISTORY" else 1)
             or type(self.provider_calls_completed) is not int
             or not 0 <= self.provider_calls_completed <= self.provider_calls_attempted
             or self.state in {"ACQUIRED", "REFRESHED", "APPENDED"}
-            and self.provider_calls_completed != 1
+            and not (
+                1
+                <= self.provider_calls_completed
+                <= (2 if self.source == "CURRENT_HISTORY" else 1)
+            )
             or self.state in {"REUSED", "NOT_REQUESTED"}
             and self.provider_calls_attempted != 0
             or self.state == "NOT_REQUESTED"
@@ -527,7 +537,37 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
     value: CurrentPriceContextResultV2,
 ) -> bool:
     ledger = value.freshness_ledger
-    if ledger[0].source != "CALENDAR" or ledger[-1].source != "INDUSTRY":
+    expected = _expected_physical_plan(
+        CurrentPriceContextRequestV2(
+            _REQUEST_CONTRACT,
+            value.data_selection_time,
+            value.admission_deadline,
+            value.schedule_identity_sha256,
+            value.request_members,
+            value.questions,
+            value.industry_archive_reference,
+            value.execution_mode,
+            value.include_current_session,
+            value.request_identity_sha256,
+        ),
+        value.planning_witness,
+    )
+    if (
+        tuple((item.source, item.slot, item.position) for item in ledger)
+        != tuple((item.source, item.slot, item.position) for item in expected)
+        or ledger[0].source != "CALENDAR"
+        or ledger[-1].source != "INDUSTRY"
+        or any(
+            item.source == "CURRENT_HISTORY"
+            and item.provider_calls_attempted > 1
+            and (
+                not value.planning_witness.completed_sessions
+                or value.planning_witness.completed_sessions[-1].trade_date
+                != value.data_selection_time.astimezone(_IST).date()
+            )
+            for item in ledger
+        )
+    ):
         return False
     member_positions = tuple(
         item.position for item in ledger if item.position is not None
@@ -678,6 +718,62 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentPriceContextPlanningSessionV2:
+    """Bounded public projection of one retained schedule session."""
+
+    trade_date: date
+    open_at: datetime
+    close_at: datetime
+    kind: Literal["REGULAR", "SPECIAL"]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.trade_date) is not date
+            or not _utc(self.open_at)
+            or not _utc(self.close_at)
+            or self.open_at >= self.close_at
+            or self.kind not in {"REGULAR", "SPECIAL"}
+            or self.open_at.astimezone(_IST).date() != self.trade_date
+            or (self.close_at - timedelta(microseconds=1)).astimezone(_IST).date()
+            != self.trade_date
+            or (self.close_at - self.open_at).total_seconds() % 60
+        ):
+            raise ValueError("current price context planning session is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentPriceContextPlanningWitnessV2:
+    """Structural schedule rebinding evidence; not calendar attestation."""
+
+    schedule_as_of: datetime | None
+    completed_sessions: tuple[CurrentPriceContextPlanningSessionV2, ...]
+    selection_session: CurrentPriceContextPlanningSessionV2 | None
+
+    def __post_init__(self) -> None:
+        if (
+            (self.schedule_as_of is not None and not _utc(self.schedule_as_of))
+            or type(self.completed_sessions) is not tuple
+            or any(
+                type(item) is not CurrentPriceContextPlanningSessionV2
+                for item in self.completed_sessions
+            )
+            or (
+                self.selection_session is not None
+                and type(self.selection_session)
+                is not CurrentPriceContextPlanningSessionV2
+            )
+            or (not self.completed_sessions and self.selection_session is not None)
+        ):
+            raise ValueError("current price context planning witness is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class _PhysicalPlanSlotV2:
+    key: str
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentPriceContextPhysicalPlanEntryV2:
     """One public, schedule-derived physical ledger key; not an attestation."""
 
@@ -707,6 +803,181 @@ class CurrentPriceContextPhysicalPlanEntryV2:
             raise ValueError("current price context physical plan entry is invalid")
 
 
+def _planning_session(value: ScheduleSession) -> CurrentPriceContextPlanningSessionV2:
+    return CurrentPriceContextPlanningSessionV2(
+        value.trade_date,
+        value.open_at,
+        value.close_at,
+        cast(Literal["REGULAR", "SPECIAL"], value.kind),
+    )
+
+
+def _absent_planning_witness(
+    schedule_as_of: datetime | None = None,
+) -> CurrentPriceContextPlanningWitnessV2:
+    return CurrentPriceContextPlanningWitnessV2(schedule_as_of, (), None)
+
+
+def _planning_witness_from_retained(
+    request: CurrentPriceContextRequestV2,
+    raw_request: CurrentRawPriceContextInputV1,
+    storage_root: Path,
+    control: CurrentRawInvocationControlV1,
+    expected_root_identity: tuple[int, int] | None,
+) -> CurrentPriceContextPlanningWitnessV2:
+    admitted = StorageRootLease.try_admit_read_existing(
+        storage_root, expected_root_identity
+    )
+    if admitted.lease is None:
+        return _absent_planning_witness()
+    with admitted.lease as lease:
+        resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
+            request.schedule_identity_sha256, deadline=control
+        )
+        if resolved.schedule is None:
+            return _absent_planning_witness()
+        selected = tuple(
+            item
+            for item in resolved.schedule.sessions
+            if item.close_at <= raw_request.data_selection_time
+        )[-21:]
+        months = tuple(
+            dict.fromkeys(
+                (item.trade_date.year, item.trade_date.month) for item in selected
+            )
+        )
+        if (
+            len(selected) != 21
+            or sum(
+                int((item.close_at - item.open_at).total_seconds() // 60)
+                for item in selected
+            )
+            > 10_000
+            or not exact_nse_schedule_source_release_pair_v1(
+                resolved.schedule.source, resolved.schedule.source_release
+            )
+            or resolved.schedule.as_of > control.now()
+            or selected[-1].trade_date - selected[0].trade_date > timedelta(days=63)
+            or not 1 <= len(months) <= 3
+            or any(item.kind not in {"REGULAR", "SPECIAL"} for item in selected)
+            or any(
+                not schedule_covers_full_calendar_range(
+                    resolved.schedule,
+                    date(year, month, 1),
+                    selected[-1].trade_date
+                    if (year, month)
+                    == (
+                        raw_request.data_selection_time.astimezone(_IST).year,
+                        raw_request.data_selection_time.astimezone(_IST).month,
+                    )
+                    else date(year, month, monthrange(year, month)[1]),
+                )
+                for year, month in months
+            )
+        ):
+            return _absent_planning_witness()
+        completed = tuple(_planning_session(item) for item in selected)
+        selection_day = request.data_selection_time.astimezone(_IST).date()
+        selection = next(
+            (
+                _planning_session(item)
+                for item in resolved.schedule.sessions
+                if item.trade_date == selection_day
+                and item.trade_date not in {row.trade_date for row in completed}
+            ),
+            None,
+        )
+        return CurrentPriceContextPlanningWitnessV2(
+            resolved.schedule.as_of, completed, selection
+        )
+
+
+def _witness_is_bound(
+    witness: CurrentPriceContextPlanningWitnessV2,
+    request: CurrentPriceContextRequestV2,
+    completed: CurrentPriceContextResultV1,
+) -> bool:
+    sessions = witness.completed_sessions
+    if not sessions:
+        return (
+            witness.selection_session is None
+            and witness.schedule_as_of == completed.schedule_as_of
+        )
+    selection_day = request.data_selection_time.astimezone(_IST).date()
+    dates = tuple(item.trade_date for item in sessions)
+    months = tuple(
+        dict.fromkeys(
+            (item.trade_date.year, item.trade_date.month) for item in sessions
+        )
+    )
+    selection = witness.selection_session
+    return (
+        len(sessions) == 21
+        and dates == tuple(sorted(dates))
+        and len(set(dates)) == len(dates)
+        and all(item.close_at <= request.data_selection_time for item in sessions)
+        and dates[-1] - dates[0] <= timedelta(days=63)
+        and 1 <= len(months) <= 3
+        and witness.schedule_as_of == completed.schedule_as_of
+        and witness.schedule_as_of is not None
+        and (
+            selection is None
+            or (
+                selection.trade_date == selection_day
+                and selection.trade_date not in set(dates)
+            )
+        )
+    )
+
+
+def _expected_physical_plan(
+    request: CurrentPriceContextRequestV2,
+    witness: CurrentPriceContextPlanningWitnessV2,
+) -> tuple[CurrentPriceContextPhysicalPlanEntryV2, ...]:
+    entries = [
+        CurrentPriceContextPhysicalPlanEntryV2("CALENDAR", "calendar", None),
+        CurrentPriceContextPhysicalPlanEntryV2("MAPPING", "mapping", None),
+    ]
+    completed_months = tuple(
+        dict.fromkeys(
+            f"{item.trade_date.year:04d}-{item.trade_date.month:02d}"
+            for item in witness.completed_sessions
+        )
+    )
+    selection_month = request.data_selection_time.astimezone(_IST).strftime("%Y-%m")
+    active = witness.selection_session
+    active_slot = (
+        f"{active.trade_date.year:04d}-{active.trade_date.month:02d}"
+        if request.include_current_session
+        and active is not None
+        and active.open_at + timedelta(minutes=1)
+        <= request.data_selection_time
+        < active.close_at
+        else "current-session"
+    )
+    for position in range(len(request.members)):
+        entries.extend(
+            CurrentPriceContextPhysicalPlanEntryV2(
+                "CURRENT_HISTORY" if month == selection_month else "CLOSED_MONTH",
+                month,
+                position,
+            )
+            for month in completed_months
+        )
+        entries.append(
+            CurrentPriceContextPhysicalPlanEntryV2(
+                "CORPORATE_ACTION", "action", position
+            )
+        )
+        entries.append(
+            CurrentPriceContextPhysicalPlanEntryV2(
+                "CURRENT_SESSION", active_slot, position
+            )
+        )
+    entries.append(CurrentPriceContextPhysicalPlanEntryV2("INDUSTRY", "industry", None))
+    return tuple(entries)
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentPriceContextResultV2:
     contract_version: Literal["current-price-context@v2"]
@@ -730,6 +1001,7 @@ class CurrentPriceContextResultV2:
     refreshed_physical_objects: int
     completed_context: CurrentPriceContextResultV1
     current_session: tuple[CurrentSessionPriceContextMemberV2, ...]
+    planning_witness: CurrentPriceContextPlanningWitnessV2
     physical_plan: tuple[CurrentPriceContextPhysicalPlanEntryV2, ...]
     freshness_ledger: tuple[CurrentPriceContextFreshnessEntryV2, ...]
     runtime_code_identity_sha256: str
@@ -837,12 +1109,18 @@ class CurrentPriceContextResultV2:
                 for item in self.current_session
                 for clock in (item.source_cutoff, item.published_at, item.known_at)
             )
+            or type(self.planning_witness) is not CurrentPriceContextPlanningWitnessV2
+            or not _witness_is_bound(
+                self.planning_witness, bound_request, self.completed_context
+            )
             or type(self.physical_plan) is not tuple
             or len(self.physical_plan) != len(self.freshness_ledger)
             or any(
                 type(item) is not CurrentPriceContextPhysicalPlanEntryV2
                 for item in self.physical_plan
             )
+            or self.physical_plan
+            != _expected_physical_plan(bound_request, self.planning_witness)
             or tuple(
                 (item.source, item.slot, item.position) for item in self.physical_plan
             )
@@ -1497,7 +1775,7 @@ def _acquisition_window(
     if not slots:
         return None, None
     starts = tuple(slot.attempted_at for slot in slots)
-    ends = tuple(slot.settled_at or slot.attempted_at for slot in slots)
+    ends = tuple(slot.settled_at for slot in slots)
     if any(value is None for value in (*starts, *ends)):
         raise ValueError("current price context acquisition accounting is invalid")
     return min(cast(tuple[datetime, ...], starts)), max(
@@ -1551,6 +1829,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
     completed_acquisition: CurrentRawAcquisitionResultV1 | None,
     current_acquisition: CurrentRawAcquisitionResultV1 | None,
     initial_current_identities: tuple[tuple[datetime, str] | None, ...],
+    planning_witness: CurrentPriceContextPlanningWitnessV2,
 ) -> tuple[CurrentPriceContextFreshnessEntryV2, ...]:
     entries: list[CurrentPriceContextFreshnessEntryV2] = [
         CurrentPriceContextFreshnessEntryV2(
@@ -1575,6 +1854,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
         completed_acquisition,
         current_acquisition,
     )
+    public_plan = _expected_physical_plan(request, planning_witness)
     completed_plan_result = (
         completed_acquisition
         if completed_acquisition is not None and completed_acquisition.plan is not None
@@ -1628,6 +1908,40 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 completed_member_plan.action,
             )
         )
+        expected_completed = tuple(
+            entry
+            for entry in public_plan
+            if entry.position == position
+            and entry.source in {"CLOSED_MONTH", "CURRENT_HISTORY", "CORPORATE_ACTION"}
+        )
+        physical = tuple(
+            item
+            for item in physical
+            if item is not None
+            and (
+                {
+                    "CLOSED": "CLOSED_MONTH",
+                    "CURRENT_HISTORY": "CURRENT_HISTORY",
+                    "ACTION": "CORPORATE_ACTION",
+                }[item.kind],
+                "action"
+                if item.key.rsplit(":", maxsplit=1)[-1] == "singleton"
+                else item.key.rsplit(":", maxsplit=1)[-1],
+            )
+            in {(entry.source, entry.slot) for entry in expected_completed}
+        )
+        if not physical:
+            physical = tuple(
+                _PhysicalPlanSlotV2(
+                    f"{position}:unavailable:{entry.slot}",
+                    {
+                        "CLOSED_MONTH": "CLOSED",
+                        "CURRENT_HISTORY": "CURRENT_HISTORY",
+                        "CORPORATE_ACTION": "ACTION",
+                    }[entry.source],
+                )
+                for entry in expected_completed
+            )
         emitted_sources: set[str] = set()
         completed_partition_plans = tuple(
             item
@@ -1653,6 +1967,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
         partition_index = 0
         for planned in (item for item in physical if item is not None):
             account = accounts.get(planned.key)
+            logical_accounts = () if account is None else (account,)
             kind = planned.kind
             if kind == "CLOSED":
                 source = "CLOSED_MONTH"
@@ -1680,13 +1995,28 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 physical_identity = completed_member.screen_identity_sha256
                 partition_source = None
             slot = planned.key.rsplit(":", maxsplit=1)[-1]
-            state = (
+            if (
+                source == "CURRENT_HISTORY"
+                and planning_witness.completed_sessions
+                and planning_witness.completed_sessions[-1].trade_date
+                == request.data_selection_time.astimezone(_IST).date()
+            ):
+                intraday_account = accounts.get(f"{position}:intraday:{slot}")
+                if intraday_account is not None:
+                    logical_accounts = (*logical_accounts, intraday_account)
+            account_states = tuple(
                 _ledger_state(
-                    account,
-                    source=source,
-                    execution_mode=request.execution_mode,
+                    item, source=source, execution_mode=request.execution_mode
                 )
-                if account is not None
+                for item in logical_accounts
+            )
+            state = (
+                "CONFLICTED"
+                if "CONFLICTED" in account_states
+                else "ACQUIRED"
+                if "ACQUIRED" in account_states
+                else "REUSED"
+                if account_states and all(item == "REUSED" for item in account_states)
                 else "UNAVAILABLE"
             )
             if source in {"CLOSED_MONTH", "CURRENT_HISTORY"} and not partition_admitted:
@@ -1711,8 +2041,8 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                         if source == "CORPORATE_ACTION"
                         else None
                     ),
-                    0 if account is None else account.attempts,
-                    0 if account is None else int(account.settled_at is not None),
+                    sum(item.attempts for item in logical_accounts),
+                    sum(int(item.completed) for item in logical_accounts),
                     cast(Any, correction),
                 )
             )
@@ -1752,17 +2082,22 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                     current.published_at,
                     current.known_at,
                     0 if account is None else account.attempts,
-                    0 if account is None else int(account.settled_at is not None),
+                    0 if account is None else int(account.completed),
                     "CURRENT_SESSION_IDENTICAL_OVERLAP_APPEND_OR_CONFLICT",
                 )
             )
+        fallback_current_slot = next(
+            entry.slot
+            for entry in public_plan
+            if entry.source == "CURRENT_SESSION" and entry.position == position
+        )
         for source, slot, correction in (
+            ("CORPORATE_ACTION", "action", "LATEST_RETAINED_ACTION_AT_CUTOFF"),
             (
                 "CURRENT_SESSION",
-                "current-session",
+                fallback_current_slot,
                 "CURRENT_SESSION_IDENTICAL_OVERLAP_APPEND_OR_CONFLICT",
             ),
-            ("CORPORATE_ACTION", "action", "LATEST_RETAINED_ACTION_AT_CUTOFF"),
         ):
             if source in emitted_sources:
                 continue
@@ -1859,11 +2194,27 @@ def research_current_price_context_v2(
         request.schedule_identity_sha256,
         request.members,
     )
+    planning_control = CurrentRawInvocationControlV1(
+        trusted_clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=None,
+        accounting_clock=base_clock,
+    )
+    planning_witness = _planning_witness_from_retained(
+        request,
+        raw_request,
+        storage_root,
+        planning_control,
+        root_identity,
+    )
+    _ensure_root_identity(storage_root, root_identity)
     inspection_control = CurrentRawInvocationControlV1(
         trusted_clock,
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
         cancellation=None,
+        accounting_clock=base_clock,
     )
     completed_inspection = inspect_current_raw_evidence_v1(
         raw_request,
@@ -1890,6 +2241,7 @@ def research_current_price_context_v2(
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
         cancellation=None,
+        accounting_clock=base_clock,
     )
     initial_current_identities = _current_session_cutoff_identities(
         request,
@@ -1913,6 +2265,7 @@ def research_current_price_context_v2(
             selection=request.data_selection_time,
             deadline=request.admission_deadline,
             cancellation=None,
+            accounting_clock=base_clock,
         )
         completed_acquisition = acquire_missing_current_raw_evidence_v1(
             raw_request,
@@ -1932,6 +2285,7 @@ def research_current_price_context_v2(
                 selection=request.data_selection_time,
                 deadline=request.admission_deadline,
                 cancellation=None,
+                accounting_clock=base_clock,
             )
             current_acquisition = acquire_missing_current_raw_evidence_v1(
                 raw_request,
@@ -1958,6 +2312,7 @@ def research_current_price_context_v2(
         selection=request.data_selection_time,
         deadline=request.admission_deadline,
         cancellation=None,
+        accounting_clock=base_clock,
     )
     final_current_inspection = (
         current_acquisition
@@ -2004,6 +2359,7 @@ def research_current_price_context_v2(
         completed_acquisition,
         current_acquisition,
         initial_current_identities,
+        planning_witness,
     )
     attempted = sum(item.provider_calls_attempted for item in ledger)
     completed_calls = sum(item.provider_calls_completed for item in ledger)
@@ -2016,6 +2372,25 @@ def research_current_price_context_v2(
     reused = sum(item.state == "REUSED" for item in ledger)
     refreshed = sum(item.state in {"REFRESHED", "APPENDED"} for item in ledger)
     _ensure_root_identity(storage_root, root_identity)
+    final_planning_control = CurrentRawInvocationControlV1(
+        trusted_clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        cancellation=None,
+        accounting_clock=base_clock,
+    )
+    if (
+        _planning_witness_from_retained(
+            request,
+            raw_request,
+            storage_root,
+            final_planning_control,
+            root_identity,
+        )
+        != planning_witness
+    ):
+        raise ValueError("current price context V2 planning witness changed")
+    final_planning_control.ensure_live()
     return CurrentPriceContextResultV2(
         _RESULT_CONTRACT,
         request.request_identity_sha256,
@@ -2038,14 +2413,45 @@ def research_current_price_context_v2(
         refreshed,
         completed,
         current_session,
-        tuple(
-            CurrentPriceContextPhysicalPlanEntryV2(
-                item.source, item.slot, item.position
-            )
-            for item in ledger
-        ),
+        planning_witness,
+        _expected_physical_plan(request, planning_witness),
         ledger,
         runtime_identity,
+    )
+
+
+def _planning_session_from_value(value: object) -> CurrentPriceContextPlanningSessionV2:
+    if type(value) is not dict:
+        raise ValueError
+    item = cast(dict[str, object], value)
+    if set(item) != {"trade_date", "open_at", "close_at", "kind"}:
+        raise ValueError
+    return CurrentPriceContextPlanningSessionV2(
+        _parse_date(item["trade_date"]),
+        _parse_instant(item["open_at"]),
+        _parse_instant(item["close_at"]),
+        cast(Literal["REGULAR", "SPECIAL"], item["kind"]),
+    )
+
+
+def _planning_witness_from_value(value: object) -> CurrentPriceContextPlanningWitnessV2:
+    if type(value) is not dict:
+        raise ValueError
+    item = cast(dict[str, object], value)
+    if set(item) != {"schedule_as_of", "completed_sessions", "selection_session"}:
+        raise ValueError
+    sessions = item["completed_sessions"]
+    if type(sessions) is not list:
+        raise ValueError
+    selection = item["selection_session"]
+    return CurrentPriceContextPlanningWitnessV2(
+        None
+        if item["schedule_as_of"] is None
+        else _parse_instant(item["schedule_as_of"]),
+        tuple(
+            _planning_session_from_value(row) for row in cast(list[object], sessions)
+        ),
+        None if selection is None else _planning_session_from_value(selection),
     )
 
 
@@ -2121,12 +2527,14 @@ def current_price_context_result_from_canonical_json_bytes_v2(
         question_values = value["questions"]
         ledger_values = value["freshness_ledger"]
         physical_plan_values = value["physical_plan"]
+        planning_witness_value = value["planning_witness"]
         if (
             type(current) is not list
             or type(member_values) is not list
             or type(question_values) is not list
             or type(ledger_values) is not list
             or type(physical_plan_values) is not list
+            or type(planning_witness_value) is not dict
         ):
             raise ValueError
         provisional = tuple(
@@ -2135,6 +2543,9 @@ def current_price_context_result_from_canonical_json_bytes_v2(
         )
         request_members = tuple(
             _member_from_value(item) for item in cast(list[object], member_values)
+        )
+        planning_witness = _planning_witness_from_value(
+            cast(dict[str, object], planning_witness_value)
         )
         physical_plan = tuple(
             _physical_plan_entry_from_value(item)
@@ -2173,6 +2584,7 @@ def current_price_context_result_from_canonical_json_bytes_v2(
             cast(int, value["refreshed_physical_objects"]),
             completed,
             provisional,
+            planning_witness,
             physical_plan,
             freshness_ledger,
             cast(str, value["runtime_code_identity_sha256"]),

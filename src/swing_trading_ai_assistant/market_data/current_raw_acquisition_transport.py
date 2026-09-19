@@ -31,6 +31,8 @@ _UPSTOX_HOST = "api.upstox.com"
 class CurrentRawTransportError(RuntimeError):
     """Base typed strict-transport failure."""
 
+    accounting_callback_failed: bool = False
+
 
 class CurrentRawAuthenticationError(CurrentRawTransportError):
     pass
@@ -215,14 +217,27 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
     try:
         response = opener.open(request, timeout=min(float(timeout_seconds), remaining))
     except HTTPError as error:
+        callback_failure: BaseException | None = None
+        try:
+            if terminal_response is not None:
+                terminal_response()
+        except BaseException as callback_error:
+            callback_failure = callback_error
         try:
             _raise_status(error.code)
             raise CurrentRawProviderResponseError(
                 "current raw provider refused request"
             )
+        except CurrentRawTransportError as status_error:
+            if callback_failure is not None:
+                # Preserve the terminal HTTP status as the public failure while
+                # allowing the acquisition boundary to fail closed on invalid
+                # accounting for otherwise local statuses.
+                status_error.accounting_callback_failed = True
+            raise
         finally:
-            # An HTTP error body must never be inspected.  Its close failure is
-            # subordinate to the status classification.
+            # An HTTP error body must never be inspected. Its close failure is
+            # subordinate to terminal accounting and status classification.
             with suppress(BaseException):
                 error.close()
     except (URLError, TimeoutError, ConnectionResetError, IncompleteRead) as error:
@@ -236,12 +251,21 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         if type(status) is not int:
             raise CurrentRawProviderResponseError("current raw status is invalid")
         if status != 200:
-            if terminal_response is not None:
-                terminal_response()
-            _raise_status(status)
-            raise CurrentRawProviderResponseError(
-                "current raw provider refused request"
-            )
+            callback_failure: BaseException | None = None
+            try:
+                if terminal_response is not None:
+                    terminal_response()
+            except BaseException as callback_error:
+                callback_failure = callback_error
+            try:
+                _raise_status(status)
+                raise CurrentRawProviderResponseError(
+                    "current raw provider refused request"
+                )
+            except CurrentRawTransportError as status_error:
+                if callback_failure is not None:
+                    status_error.accounting_callback_failed = True
+                raise
         final_url = response.geturl()
         if final_url != trusted_url:
             raise CurrentRawProviderResponseError("current raw redirect refused")

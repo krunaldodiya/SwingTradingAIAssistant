@@ -211,12 +211,18 @@ class CurrentRawInvocationControlV1:
         selection: datetime,
         deadline: datetime,
         cancellation: CurrentRawCancellationV1 | None = None,
+        accounting_clock: CurrentPriceContextClockV1 | None = None,
     ) -> None:
-        if cancellation is not None and not callable(
-            getattr(cancellation, "is_cancelled", None)
+        if (
+            cancellation is not None
+            and not callable(getattr(cancellation, "is_cancelled", None))
+        ) or (
+            accounting_clock is not None
+            and not callable(getattr(accounting_clock, "now", None))
         ):
             raise ValueError("current raw invocation cancellation is invalid")
         self._clock = clock
+        self._accounting_clock = clock if accounting_clock is None else accounting_clock
         self._selection = selection
         self._deadline = deadline
         self._last: datetime | None = None
@@ -224,12 +230,19 @@ class CurrentRawInvocationControlV1:
         self._cancellation = cancellation
         self.shared_stop: str | None = None
 
-    def now(self) -> datetime:
-        value = self._clock.now()
+    def _sample(self, clock: CurrentPriceContextClockV1) -> datetime:
+        value = clock.now()
         if not _utc(value) or (self._last is not None and value < self._last):
             raise RuntimeError("current price context clock is invalid")
         self._last = value
         return value
+
+    def now(self) -> datetime:
+        return self._sample(self._clock)
+
+    def accounting_now(self) -> datetime:
+        """Sample time for an already-opened transport without stop admission."""
+        return self._sample(self._accounting_clock)
 
     def retain_evidence_cutoff(self) -> datetime:
         """Pin the first retained-source admission instant for this invocation."""

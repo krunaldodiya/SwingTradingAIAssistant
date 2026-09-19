@@ -271,6 +271,7 @@ class _LedgerSlotV1:
     completed: bool
     reason: str | None
     attempted_at: datetime | None = None
+    response_completed_at: datetime | None = None
     settled_at: datetime | None = None
 
 
@@ -386,20 +387,40 @@ class _AcquisitionLedgerV1:
             raise RuntimeError("current raw acquisition attempt clock rejected")
         self._slots[key] = replace(slot, attempts=1, attempted_at=attempted_at)
 
-    def response_completed(self, key: str, settled_at: datetime) -> None:
+    def response_completed(self, key: str, response_completed_at: datetime) -> None:
         slot = self._slots.get(key)
         if (
             slot is None
             or slot.attempts != 1
             or key in self._completed_responses
+            or type(response_completed_at) is not datetime
+            or response_completed_at.tzinfo is None
+            or slot.attempted_at is None
+            or response_completed_at < slot.attempted_at
+        ):
+            raise RuntimeError("current raw acquisition response accounting rejected")
+        self._completed_responses.add(key)
+        self._slots[key] = replace(
+            slot,
+            completed=True,
+            response_completed_at=response_completed_at,
+        )
+
+    def settled(self, key: str, settled_at: datetime) -> None:
+        slot = self._slots.get(key)
+        lower = slot.response_completed_at if slot is not None else None
+        if (
+            slot is None
+            or slot.attempts != 1
+            or slot.settled_at is not None
             or type(settled_at) is not datetime
             or settled_at.tzinfo is None
             or slot.attempted_at is None
             or settled_at < slot.attempted_at
+            or (lower is not None and settled_at < lower)
         ):
-            raise RuntimeError("current raw acquisition response accounting rejected")
-        self._completed_responses.add(key)
-        self._slots[key] = replace(slot, completed=True, settled_at=settled_at)
+            raise RuntimeError("current raw acquisition settlement rejected")
+        self._slots[key] = replace(slot, settled_at=settled_at)
 
     def retained(self, key: str, *, incomplete: bool = False) -> None:
         slot = self._slots.get(key)
@@ -453,7 +474,6 @@ class _AcquisitionLedgerV1:
                 if aborted
                 else LedgerSlotDispositionV1.FAILED
             ),
-            completed=settled_at is not None or slot.settled_at is not None,
             reason=reason,
             settled_at=settled_at or slot.settled_at,
         )
@@ -489,10 +509,8 @@ class _AcquisitionLedgerV1:
         if total > self._maximum_calls or total > 251:
             raise RuntimeError("current raw acquisition accounting invalid")
         settled_slots = (mapping, *(slot for member in members for slot in member))
-        completed = sum(
-            slot.attempts == 1 and slot.settled_at is not None for slot in settled_slots
-        )
-        if len(self._completed_responses) > completed or completed > total:
+        completed = sum(slot.attempts == 1 and slot.completed for slot in settled_slots)
+        if completed != len(self._completed_responses) or completed > total:
             raise RuntimeError("current raw acquisition response accounting invalid")
         return _AcquisitionAccountingV1(mapping, members, total, completed)
 
@@ -878,7 +896,7 @@ class _EffectGuardV1:
         Response accounting records bytes/status already received even when a
         later cancellation or deadline check prevents publication.
         """
-        return self._control.now()
+        return self._control.accounting_now()
 
     def is_cancelled(self) -> bool:
         self.ensure_live()
@@ -995,12 +1013,20 @@ class _CompletedResponseTransportV1:
         self,
         transport: StrictCurrentRawHttpTransportV1,
         guard: _EffectGuardV1,
+        ledger: _AcquisitionLedgerV1,
+        key: str,
     ) -> None:
         self._transport = transport
         self._guard = guard
+        self._ledger = ledger
+        self._key = key
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
-        response = self._transport.get(url, headers)
+        try:
+            response = self._transport.get(url, headers)
+        finally:
+            if self._ledger.opened(self._key):
+                self._ledger.settled(self._key, self._guard.accounting_now())
         self._guard.ensure_live()
         return response
 
@@ -1033,6 +1059,8 @@ def _strict_transport(
             ),
         ),
         guard,
+        ledger,
+        key,
     )
 
 
@@ -1494,6 +1522,8 @@ def _local_effect_reason(error: BaseException) -> str:
         raise _SharedAcquisitionStop("AUTHORIZATION_FAILED") from error
     if isinstance(error, (CurrentRawRateLimitedError, CorporateActionRateLimitedError)):
         raise _SharedAcquisitionStop("RATE_LIMITED") from error
+    if getattr(error, "accounting_callback_failed", False):
+        raise _SharedAcquisitionStop("ACCOUNTING_INVALID") from error
     if isinstance(error, (CurrentRawDeadlineError, CurrentRawInvocationStoppedV1)):
         raise _SharedAcquisitionStop(
             "DEADLINE_EXCEEDED"
@@ -2458,6 +2488,8 @@ def _retain_missing_mapping(
                         ),
                     ),
                     guard,
+                    ledger,
+                    "mapping",
                 ),
                 clock=guard.now,
             )

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import gzip
 from datetime import UTC, datetime, timedelta
+from email.message import Message
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
@@ -178,6 +181,60 @@ def test_response_completion_callback_only_follows_a_bounded_successful_body_rea
                 response_completed=response_completed,
             )
     assert len(completed) == expected_callback
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    (
+        (401, transport.CurrentRawAuthenticationError),
+        (403, transport.CurrentRawAuthorizationError),
+        (429, transport.CurrentRawRateLimitedError),
+        (404, transport.CurrentRawProviderResponseError),
+    ),
+)
+def test_raised_http_error_marks_one_terminal_response_without_reading_or_masking_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    error: type[Exception],
+) -> None:
+    """urllib raises HTTPError; it remains a completed terminal response."""
+    now = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    url = "https://api.upstox.com/v2/fundamentals/INE000A01001/corporate-actions"
+
+    class ForbiddenErrorBody(BytesIO):
+        close_calls = 0
+
+        def read(self, *_: object) -> bytes:
+            raise AssertionError("raised HTTPError body must not be read")
+
+        def close(self) -> None:
+            type(self).close_calls += 1
+            if type(self).close_calls == 1:
+                raise OSError("raised HTTPError close must be subordinate")
+            super().close()
+
+    class RaisedErrorOpener:
+        def open(self, _request: object, *, timeout: float) -> _ForbiddenBody:
+            assert timeout > 0
+            raise HTTPError(url, status, "fixture", Message(), ForbiddenErrorBody())
+
+    def raised_error_opener(*_handlers: object) -> RaisedErrorOpener:
+        return RaisedErrorOpener()
+
+    monkeypatch.setattr(transport, "build_opener", raised_error_opener)
+    terminal: list[None] = []
+
+    with pytest.raises(error):
+        transport.get_strict_current_raw_v1(
+            url,
+            headers={},
+            timeout_seconds=1,
+            deadline=now + timedelta(minutes=1),
+            now=lambda: now,
+            terminal_response=lambda: terminal.append(None),
+        )
+
+    assert terminal == [None]
 
 
 @pytest.mark.parametrize(
