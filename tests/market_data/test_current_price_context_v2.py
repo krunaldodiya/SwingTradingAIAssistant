@@ -319,6 +319,18 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
     )
     assert all(item.state == "OBSERVED" for item in result.completed_context.members)
 
+    contradicted_mapping = json.loads(result.canonical_json_bytes())
+    contradicted_entry = next(
+        item
+        for item in contradicted_mapping["freshness_ledger"]
+        if item["source"] == "MAPPING"
+    )
+    contradicted_entry["state"] = "UNAVAILABLE"
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(contradicted_mapping)
+        )
+
     moved_mapping_call = json.loads(result.canonical_json_bytes())
     moved_entries = [
         item
@@ -617,6 +629,50 @@ def _retain_active_v2_prefix(
     assert all(item.state == "OBSERVED" for item in result.completed_context.members)
     assert all(item.state == "OBSERVED" for item in result.current_session)
     return result
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("closed-session", "pre-open-session", "stale-completed-minute"),
+)
+def test_v2_decoder_rejects_resealed_non_active_or_stale_observed_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    result = _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+    value = json.loads(result.canonical_json_bytes())
+
+    if mutation in {"closed-session", "pre-open-session"}:
+        selection = value["planning_witness"]["selection_session"]
+        assert selection is not None
+        field = "close_at" if mutation == "closed-session" else "open_at"
+        selection[field] = "2026-09-30T03:47:00.000000Z"
+        for collection in ("physical_plan", "freshness_ledger"):
+            current = next(
+                item
+                for item in value[collection]
+                if item["source"] == "CURRENT_SESSION"
+            )
+            current["slot"] = "current-session"
+    else:
+        stale = "2026-09-30T03:45:00.000000Z"
+        value["current_session"][0]["last_completed_minute"] = stale
+        value["current_session"][0]["source_cutoff"] = stale
+        current = next(
+            item
+            for item in value["freshness_ledger"]
+            if item["source"] == "CURRENT_SESSION"
+        )
+        current["source_cutoff"] = stale
+
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(value)
+        )
 
 
 def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
@@ -952,6 +1008,20 @@ def test_v2_action_non_admission_preserves_provisional_and_truthful_ledger(
         sum(item.provider_calls_completed for item in result.freshness_ledger)
         == result.provider_calls_completed
     )
+
+    contradicted_action = json.loads(result.canonical_json_bytes())
+    action_entry = next(
+        item
+        for item in contradicted_action["freshness_ledger"]
+        if item["source"] == "CORPORATE_ACTION" and item["position"] == 0
+    )
+    action_entry["state"] = (
+        "ACQUIRED" if action_entry["state"] == "UNAVAILABLE" else "UNAVAILABLE"
+    )
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(contradicted_action)
+        )
 
 
 @pytest.mark.parametrize(
@@ -1616,6 +1686,7 @@ def test_v2_rejects_omitted_v1_runtime_source_before_acquisition_effects(
         "wrong-source",
         "wrong-correction",
         "paired-month-substitution",
+        "wrong-active-month-slot",
         "unavailable-member-plan-and-ledger-omission",
     ),
 )
@@ -1663,6 +1734,14 @@ def test_v2_result_requires_an_exact_ordered_physical_plan(
         )
         value["freshness_ledger"][closed]["slot"] = "2026-08"
         value["physical_plan"][closed]["slot"] = "2026-08"
+    elif mutation == "wrong-active-month-slot":
+        current = next(
+            index
+            for index, item in enumerate(value["freshness_ledger"])
+            if item["source"] == "CURRENT_SESSION"
+        )
+        value["freshness_ledger"][current]["slot"] = "2026-08"
+        value["physical_plan"][current]["slot"] = "2026-08"
     else:
         closed = next(
             index
@@ -1939,6 +2018,91 @@ def test_v2_root_replacement_at_retained_and_effectful_seams_is_fatal(
     assert not (effectful_root / "market_data.duckdb").exists()
 
 
+def test_v2_final_v1_read_never_adopts_a_restored_replacement_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+    original_identity = (root.stat().st_dev, root.stat().st_ino)
+
+    replacement = tmp_path / "replacement"
+    displaced = tmp_path / "displaced"
+    seed_root(
+        replacement,
+        schedule_value=schedule_value,
+        request_value=request_value,
+    )
+    replacement_identity = (replacement.stat().st_dev, replacement.stat().st_ino)
+    real_storage_root_lease = packet_v1.StorageRootLease
+    real_admit = real_storage_root_lease.try_admit_read_existing
+    real_identity = real_storage_root_lease.admit_existing_private_identity
+    real_recheck = packet_v1.recheck_retained_current_raw_context_v1
+    swapped = False
+
+    def restore_original_root() -> None:
+        nonlocal swapped
+        if not swapped:
+            return
+        root.rename(replacement)
+        displaced.rename(root)
+        swapped = False
+
+    class SwapBeforeV1Read:
+        @staticmethod
+        def try_admit_read_existing(
+            candidate: object,
+            expected_root_identity: tuple[int, int] | None = None,
+        ) -> object:
+            nonlocal swapped
+            assert candidate == root
+            root.rename(displaced)
+            replacement.rename(root)
+            swapped = True
+            admitted = real_admit(candidate, expected_root_identity)
+            if admitted.lease is None:
+                restore_original_root()
+            return admitted
+
+        @staticmethod
+        def admit_existing_private_identity(
+            candidate: object,
+        ) -> tuple[int, int] | None:
+            return real_identity(candidate)
+
+    def restore_after_recheck(*args: object, **kwargs: object) -> object:
+        try:
+            return real_recheck(*cast(Any, args), **cast(Any, kwargs))
+        finally:
+            restore_original_root()
+
+    monkeypatch.setattr(packet_v1, "StorageRootLease", SwapBeforeV1Read)
+    monkeypatch.setattr(
+        packet_v1,
+        "recheck_retained_current_raw_context_v1",
+        restore_after_recheck,
+    )
+    no_wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", no_wire.build_opener)
+
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "RETAINED_ONLY"),
+            root,
+            clock=_Clock(selected_at),
+        )
+
+    restore_original_root()
+    assert no_wire.attempts == 0
+    assert (root.stat().st_dev, root.stat().st_ino) == original_identity
+    assert (replacement.stat().st_dev, replacement.stat().st_ino) == (
+        replacement_identity
+    )
+
+
 def test_v2_latches_transient_cancellation_across_inner_controls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2135,6 +2299,55 @@ def test_v2_first_trading_day_exact_close_projects_intraday_into_history(
         )
         assert result.current_session[0].state == "NOT_APPLICABLE"
         assert result.completed_context.members[0].state == expected_state
+
+        retained_wire = RecordedWire([])
+        monkeypatch.setattr(
+            transport_module, "build_opener", retained_wire.build_opener
+        )
+        retained = packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "RETAINED_ONLY"),
+            root,
+            clock=_Clock(selected_at),
+        )
+        retained_history = next(
+            item
+            for item in retained.freshness_ledger
+            if item.source == "CURRENT_HISTORY"
+        )
+        retained_action = next(
+            item
+            for item in retained.freshness_ledger
+            if item.source == "CORPORATE_ACTION"
+        )
+        assert retained_wire.attempts == retained.provider_calls_attempted == 0
+        assert (
+            retained_history.state,
+            retained_history.provider_calls_attempted,
+            retained_history.provider_calls_completed,
+        ) == (
+            "REUSED" if expected_state == "OBSERVED" else "UNAVAILABLE",
+            0,
+            0,
+        )
+        assert retained_action.state == (
+            "REUSED" if expected_state == "OBSERVED" else "UNAVAILABLE"
+        )
+        assert retained.current_session[0].state == "NOT_APPLICABLE"
+        assert retained.completed_context.members[0].state == expected_state
+
+        contradicted_action = json.loads(retained.canonical_json_bytes())
+        action_entry = next(
+            item
+            for item in contradicted_action["freshness_ledger"]
+            if item["source"] == "CORPORATE_ACTION"
+        )
+        action_entry["state"] = (
+            "REUSED" if action_entry["state"] == "UNAVAILABLE" else "UNAVAILABLE"
+        )
+        with pytest.raises(ValueError, match="result is invalid"):
+            packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+                _reseal_result(contradicted_action)
+            )
 
 
 def test_v2_combined_local_provisional_failure_shared_stop_and_industry_absence(

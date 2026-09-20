@@ -53,9 +53,9 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     CurrentIndustryArchiveReferenceV1,
     CurrentPriceContextRequestV1,
     CurrentPriceContextResultV1,
+    _research_current_price_context_v1,  # pyright: ignore[reportPrivateUsage]
     current_price_context_result_from_canonical_json_bytes_v1,
     current_price_context_runtime_code_identity_v1,
-    research_current_price_context_v1,
 )
 from swing_trading_ai_assistant.research_packet.current_price_context_v2_runtime_identity_manifest import (
     CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V2,
@@ -618,6 +618,20 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         or mapping.provider_calls_completed > mapping.provider_calls_attempted
     ):
         return False
+    mapping_evidence_retained = any(
+        item.mapping_observation_sha256 is not None
+        for item in value.completed_context.members
+    )
+    if mapping_evidence_retained and mapping.state != (
+        "REUSED"
+        if (mapping.provider_calls_attempted, mapping.provider_calls_completed)
+        == (0, 0)
+        else "ACQUIRED"
+        if (mapping.provider_calls_attempted, mapping.provider_calls_completed)
+        == (1, 1)
+        else None
+    ):
+        return False
 
     for position, completed_member in enumerate(value.completed_context.members):
         scoped = tuple(item for item in ledger if item.position == position)
@@ -691,6 +705,31 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
             or item.state not in {"UNAVAILABLE", "CONFLICTED"}
             for item in partitions
         ):
+            return False
+        actions = tuple(item for item in scoped if item.source == "CORPORATE_ACTION")
+        if len(actions) != 1:
+            return False
+        action = actions[0]
+        action_evidence_retained = completed_member.screen_knowledge_at is not None
+        if action_evidence_retained:
+            expected_action_state = (
+                "REUSED"
+                if (
+                    action.provider_calls_attempted,
+                    action.provider_calls_completed,
+                )
+                == (0, 0)
+                else "ACQUIRED"
+                if (
+                    action.provider_calls_attempted,
+                    action.provider_calls_completed,
+                )
+                == (1, 1)
+                else None
+            )
+            if action.state != expected_action_state:
+                return False
+        elif action.state not in {"UNAVAILABLE", "CONFLICTED"}:
             return False
     industry = ledger[-1]
     reference = value.industry_archive_reference
@@ -946,6 +985,7 @@ def _witness_is_bound(
             or (
                 selection.trade_date == selection_day
                 and selection.trade_date not in set(dates)
+                and request.data_selection_time < selection.close_at
             )
         )
     )
@@ -997,6 +1037,39 @@ def _expected_physical_plan(
         )
     entries.append(CurrentPriceContextPhysicalPlanEntryV2("INDUSTRY", "industry", None))
     return tuple(entries)
+
+
+def _observed_current_session_is_bound(value: CurrentPriceContextResultV2) -> bool:
+    observed = tuple(item for item in value.current_session if item.state == "OBSERVED")
+    if not observed:
+        return True
+    selection = value.planning_witness.selection_session
+    if selection is None or not (
+        selection.open_at + timedelta(minutes=1)
+        <= value.data_selection_time
+        < selection.close_at
+    ):
+        return False
+    target = min(
+        value.data_selection_time.replace(second=0, microsecond=0)
+        - timedelta(minutes=1),
+        selection.close_at - timedelta(minutes=1),
+    )
+    active_slot = f"{selection.trade_date.year:04d}-{selection.trade_date.month:02d}"
+    for member in observed:
+        entries = tuple(
+            item
+            for item in value.freshness_ledger
+            if item.source == "CURRENT_SESSION" and item.position == member.position
+        )
+        if (
+            len(entries) != 1
+            or entries[0].slot != active_slot
+            or member.last_completed_minute != target
+            or member.source_cutoff != target
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -1244,6 +1317,7 @@ class CurrentPriceContextResultV2:
                 )
                 for item in self.freshness_ledger
             )
+            or not _observed_current_session_is_bound(self)
             or self.runtime_code_identity_sha256
             != current_price_context_runtime_code_identity_v2()
             or (self.execution_mode == "RETAINED_ONLY" and calls != 0)
@@ -2038,6 +2112,14 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 if "ACQUIRED" in account_states
                 else "REUSED"
                 if account_states and all(item == "REUSED" for item in account_states)
+                else "REUSED"
+                if not account_states
+                and (
+                    partition_admitted
+                    and source in {"CLOSED_MONTH", "CURRENT_HISTORY"}
+                    or source == "CORPORATE_ACTION"
+                    and completed_member.screen_knowledge_at is not None
+                )
                 else "UNAVAILABLE"
             )
             if source in {"CLOSED_MONTH", "CURRENT_HISTORY"} and not partition_admitted:
@@ -2045,6 +2127,12 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 partition_source = None
                 if state != "CONFLICTED":
                     state = "UNAVAILABLE"
+            if (
+                source == "CORPORATE_ACTION"
+                and completed_member.screen_knowledge_at is None
+                and state != "CONFLICTED"
+            ):
+                state = "UNAVAILABLE"
             emitted_sources.add(source)
             entries.append(
                 CurrentPriceContextFreshnessEntryV2(
@@ -2321,8 +2409,13 @@ def research_current_price_context_v2(
             )
         acquisition_completed_at = trusted_clock.now()
         _ensure_root_identity(storage_root, root_identity)
-    completed = research_current_price_context_v1(
-        request_v1, storage_root, acquire_missing=False, clock=trusted_clock
+    completed = _research_current_price_context_v1(
+        request_v1,
+        storage_root,
+        acquire_missing=False,
+        clock=trusted_clock,
+        expected_root_identity=root_identity,
+        root_identity_is_pinned=True,
     )
     _ensure_root_identity(storage_root, root_identity)
     evidence_cutoff = trusted_clock.now()

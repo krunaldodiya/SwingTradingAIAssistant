@@ -1260,7 +1260,7 @@ def _decimal(value: object) -> Decimal:
     return parsed
 
 
-def research_current_price_context_v1(  # noqa: C901 -- one bounded public composition
+def research_current_price_context_v1(
     request: CurrentPriceContextRequestV1,
     storage_root: Path,
     *,
@@ -1268,6 +1268,25 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
     clock: CurrentPriceContextClockV1 | None = None,
 ) -> CurrentPriceContextResultV1:
     """Return only verified raw facts and local Industry availability."""
+    return _research_current_price_context_v1(
+        request,
+        storage_root,
+        acquire_missing=acquire_missing,
+        clock=clock,
+        expected_root_identity=None,
+        root_identity_is_pinned=False,
+    )
+
+
+def _research_current_price_context_v1(  # noqa: C901 -- one bounded composition
+    request: CurrentPriceContextRequestV1,
+    storage_root: Path,
+    *,
+    acquire_missing: bool,
+    clock: CurrentPriceContextClockV1 | None,
+    expected_root_identity: tuple[int, int] | None,
+    root_identity_is_pinned: bool,
+) -> CurrentPriceContextResultV1:
     if type(request) is not CurrentPriceContextRequestV1:
         raise ValueError("current price context input is invalid")
     if type(acquire_missing) is not bool or (
@@ -1352,16 +1371,33 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
     archive: (
         AdmittedCurrentIndustryProjectionV1 | CurrentIndustryReadFailureV1 | None
     ) = None
-    admitted = StorageRootLease.try_admit_read_existing(storage_root)
-    if (
-        admitted.lease is None
+    admitted = (
+        None
+        if root_identity_is_pinned and expected_root_identity is None
+        else StorageRootLease.try_admit_read_existing(
+            storage_root,
+            expected_root_identity if root_identity_is_pinned else None,
+        )
+    )
+    if root_identity_is_pinned:
+        if (expected_root_identity is None and storage_root.exists()) or (
+            expected_root_identity is not None
+            and (admitted is None or admitted.lease is None)
+        ):
+            raise StorageRootLeaseError(
+                "current price context root authority unavailable"
+            )
+    elif (
+        admitted is not None
+        and admitted.lease is None
         and storage_root.exists()
         and StorageRootLease.admit_existing_private_identity(storage_root) is None
     ):
         raise StorageRootLeaseError("current price context root authority unavailable")
     raw_projection = None
     raw_value: AdmittedCurrentRawContextV1 | None = None
-    if admitted.lease is None:
+    admitted_lease = None if admitted is None else admitted.lease
+    if admitted_lease is None:
         member_results = _withheld_members(
             request.members, "DEPENDENCY_BLOCKED", "CALENDAR_PREREQUISITE_MISSING"
         )
@@ -1371,7 +1407,7 @@ def research_current_price_context_v1(  # noqa: C901 -- one bounded public compo
         reasons = ("CALENDAR_PREREQUISITE_MISSING",)
         breadth = None
     else:
-        with admitted.lease as lease:
+        with admitted_lease as lease:
             retained = read_retained_current_raw_context_v1(
                 storage_root, request=raw_input, lease=lease, control=control
             )
