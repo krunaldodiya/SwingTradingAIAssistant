@@ -65,6 +65,14 @@ shared interfaces, validation ownership, and integration points. Freeze schemas,
 identities, state transitions, and failure precedence before implementation.
 Keep small mechanical work local unless delegation has a concrete benefit.
 
+Before assigning work, record a brief routing decision under the canonical
+[task-based model-selection policy](mandatory-agent-instructions.md#capability-and-responsibility-selection): the task and risk, ambiguity or verification
+need, available and authorized settings, chosen requested or inherited
+model/effort and rationale, plus scope, validation, and escalation boundary.
+Record observed host telemetry separately when it exists. This is assignment
+evidence, not a second model-role table or a claim that the requested setting
+was applied.
+
 Every assignment states:
 
 - Outcome, intended consumer, risk, Issue, governing sources, and contracts.
