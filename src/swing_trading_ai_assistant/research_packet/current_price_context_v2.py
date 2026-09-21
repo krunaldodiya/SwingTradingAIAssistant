@@ -2351,6 +2351,13 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
         if planning_witness.completed_sessions and current_plan_result.plan is not None:
             current_member_plan = cast(Any, current_plan_result.plan).members[position]
         intraday = None if current_member_plan is None else current_member_plan.intraday
+        selection = planning_witness.selection_session
+        if (
+            selection is None
+            or request.data_selection_time < selection.open_at + timedelta(minutes=1)
+            or request.data_selection_time >= selection.close_at
+        ):
+            intraday = None
         if intraday is not None:
             account = accounts.get(intraday.key)
             current = current_session[position]
@@ -2560,6 +2567,13 @@ def research_current_price_context_v2(
     completed_acquisition: CurrentRawAcquisitionResultV1 | None = None
     current_acquisition: CurrentRawAcquisitionResultV1 | None = None
     completed_acquisition_calls = 0
+    active_selection_session = planning_witness.selection_session
+    may_acquire_current_session = (
+        active_selection_session is not None
+        and active_selection_session.open_at + timedelta(minutes=1)
+        <= request.data_selection_time
+        < active_selection_session.close_at
+    )
     if request.execution_mode != "RETAINED_ONLY":
         _ensure_root_identity(storage_root, root_identity)
         acquisition_started_at = trusted_clock.now()
@@ -2579,6 +2593,7 @@ def research_current_price_context_v2(
         completed_acquisition_calls = completed_acquisition.provider_calls
         if (
             request.include_current_session
+            and may_acquire_current_session
             and completed_acquisition.outcome
             not in {"STOPPED", "CALENDAR_PREREQUISITE_MISSING"}
             and completed_acquisition_calls < min(5 * len(request.members) + 1, 251)

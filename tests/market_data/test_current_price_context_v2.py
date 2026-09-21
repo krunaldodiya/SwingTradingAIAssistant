@@ -1653,6 +1653,80 @@ def test_v2_fresh_exact_close_projects_completed_history_calls_without_provision
     assert result.current_session[0].state == "NOT_APPLICABLE"
 
 
+@pytest.mark.parametrize("mode", ("ACQUIRE_MISSING", "REFRESH_ONCE"))
+def test_v2_exact_close_failed_completed_intraday_does_not_retry_provisional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: _Mode
+) -> None:
+    initial_selection = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    exact_close = datetime(2026, 9, 30, 3, 49, tzinfo=UTC)
+    schedule_value = _active_schedule(initial_selection)
+    initial_request = raw_request(schedule_value, selection=initial_selection)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=initial_request)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    initial_wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule_value, through=date(2026, 9, 29))
+            ),
+            WireReply(body=action_body()),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", initial_wire.build_opener)
+    initial_completed = acquisition_module.acquire_missing_current_raw_evidence_v1(
+        initial_request,
+        root,
+        control=CurrentRawInvocationControlV1(
+            _Clock(initial_selection),
+            selection=initial_request.data_selection_time,
+            deadline=initial_request.admission_deadline,
+        ),
+    )
+    assert initial_completed.provider_calls == initial_wire.attempts == 2
+
+    exact_close_request = raw_request(schedule_value, selection=exact_close)
+    retry_wire = RecordedWire(
+        [
+            WireReply(status=404),
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0))),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", retry_wire.build_opener)
+
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(exact_close_request, mode),
+        root,
+        clock=_Clock(exact_close),
+    )
+
+    history = next(
+        item for item in result.freshness_ledger if item.source == "CURRENT_HISTORY"
+    )
+    current = next(
+        item for item in result.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert retry_wire.attempts == 1
+    assert retry_wire.replies == [
+        WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))
+    ]
+    assert result.provider_calls_attempted == result.provider_calls_completed == 1
+    assert (history.provider_calls_attempted, history.provider_calls_completed) == (
+        1,
+        1,
+    )
+    assert (current.provider_calls_attempted, current.provider_calls_completed) == (
+        0,
+        0,
+    )
+    assert result.completed_context.members[0].state == "INSUFFICIENT_EVIDENCE"
+    assert result.current_session[0].state == "NOT_APPLICABLE"
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+
+
 def _cross_month_active_schedule(selection: datetime) -> ExpectedSessionSchedule:
     first = date(2026, 8, 1)
     last = date(2026, 10, 1)
