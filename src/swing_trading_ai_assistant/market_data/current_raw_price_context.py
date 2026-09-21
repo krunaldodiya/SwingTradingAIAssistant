@@ -53,6 +53,10 @@ from swing_trading_ai_assistant.market_data.instruments import Instrument
 from swing_trading_ai_assistant.market_data.monthly_request_planner import (
     plan_upstox_equity_months,
 )
+from swing_trading_ai_assistant.market_data.open_month import (
+    open_month_schedule_digest,
+    open_month_schedule_from_evidence,
+)
 from swing_trading_ai_assistant.market_data.provisional_store import (
     ProvisionalPartitionUnavailableV1,
     load_provisional_partition,
@@ -207,12 +211,18 @@ class CurrentRawInvocationControlV1:
         selection: datetime,
         deadline: datetime,
         cancellation: CurrentRawCancellationV1 | None = None,
+        accounting_clock: CurrentPriceContextClockV1 | None = None,
     ) -> None:
-        if cancellation is not None and not callable(
-            getattr(cancellation, "is_cancelled", None)
+        if (
+            cancellation is not None
+            and not callable(getattr(cancellation, "is_cancelled", None))
+        ) or (
+            accounting_clock is not None
+            and not callable(getattr(accounting_clock, "now", None))
         ):
             raise ValueError("current raw invocation cancellation is invalid")
         self._clock = clock
+        self._accounting_clock = clock if accounting_clock is None else accounting_clock
         self._selection = selection
         self._deadline = deadline
         self._last: datetime | None = None
@@ -220,12 +230,19 @@ class CurrentRawInvocationControlV1:
         self._cancellation = cancellation
         self.shared_stop: str | None = None
 
-    def now(self) -> datetime:
-        value = self._clock.now()
+    def _sample(self, clock: CurrentPriceContextClockV1) -> datetime:
+        value = clock.now()
         if not _utc(value) or (self._last is not None and value < self._last):
             raise RuntimeError("current price context clock is invalid")
         self._last = value
         return value
+
+    def now(self) -> datetime:
+        return self._sample(self._clock)
+
+    def accounting_now(self) -> datetime:
+        """Sample time for an already-opened transport without stop admission."""
+        return self._sample(self._accounting_clock)
 
     def retain_evidence_cutoff(self) -> datetime:
         """Pin the first retained-source admission instant for this invocation."""
@@ -504,6 +521,9 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                         sessions,
                         cutoff,
                         control,
+                        open_month_schedule_digest(
+                            open_month_schedule_from_evidence(schedule)
+                        ),
                     )
                     aggregate = _aggregate_retained_minutes(sessions, rows)
                     if isinstance(aggregate, str):
@@ -668,6 +688,7 @@ def _member_rows(  # noqa: C901
     sessions: tuple[CurrentSamePassRawSessionV1, ...],
     cutoff: datetime,
     control: CurrentRawInvocationControlV1,
+    schedule_digest_sha256: str,
 ) -> tuple[tuple[object, ...], tuple[str, ...], tuple[datetime, ...]]:
     if type(instrument) is not Instrument:
         raise ValueError("resolved instrument is invalid")
@@ -682,13 +703,14 @@ def _member_rows(  # noqa: C901
     for plan in plans:
         control.ensure_live()
         if (plan.year, plan.month) == (current.year, current.month):
-            metadata = catalog.latest_provisional_partition_for_symbol(
+            metadata = catalog.latest_provisional_partition_for_security_id(
                 segment="NSE_EQ",
-                symbol=plan.symbol,
+                security_id=plan.security_id,
                 year=plan.year,
                 month=plan.month,
                 cutoff_lte=cutoff,
                 published_at_lte=cutoff,
+                schedule_digest_sha256=schedule_digest_sha256,
             )
             if metadata is None:
                 raise ProvisionalPartitionUnavailableV1("missing")

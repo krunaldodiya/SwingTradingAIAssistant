@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.client import IncompleteRead
 from typing import Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -29,6 +30,8 @@ _UPSTOX_HOST = "api.upstox.com"
 
 class CurrentRawTransportError(RuntimeError):
     """Base typed strict-transport failure."""
+
+    accounting_callback_failed: bool = False
 
 
 class CurrentRawAuthenticationError(CurrentRawTransportError):
@@ -104,6 +107,8 @@ class StrictCurrentRawHttpTransportV1:
         now: Callable[[], datetime],
         operation: StrictCurrentRawOperationV1 | None = None,
         before_open: Callable[[], None] | None = None,
+        response_completed: Callable[[], None] | None = None,
+        terminal_response: Callable[[], None] | None = None,
     ) -> None:
         if (
             type(deadline) is not datetime
@@ -114,12 +119,16 @@ class StrictCurrentRawHttpTransportV1:
                 and type(operation) is not StrictCurrentRawOperationV1
             )
             or (before_open is not None and not callable(before_open))
+            or (response_completed is not None and not callable(response_completed))
+            or (terminal_response is not None and not callable(terminal_response))
         ):
             raise ValueError("strict current raw transport is invalid")
         self._deadline = deadline
         self._now = now
         self._operation = operation
         self._before_open = before_open
+        self._response_completed = response_completed
+        self._terminal_response = terminal_response
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         operation = self._operation
@@ -141,6 +150,8 @@ class StrictCurrentRawHttpTransportV1:
                 )
             ),
             before_open=self._before_open,
+            response_completed=self._response_completed,
+            terminal_response=self._terminal_response,
         )
         return HttpResponse(
             status_code=response.status_code,
@@ -168,6 +179,8 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
     now: Callable[[], datetime],
     maximum_body_bytes: int = _MAX_BODY_BYTES,
     before_open: Callable[[], None] | None = None,
+    response_completed: Callable[[], None] | None = None,
+    terminal_response: Callable[[], None] | None = None,
 ) -> StrictCurrentRawResponseV1:
     """Perform one exact, bounded GET with status-first failure handling."""
     if (
@@ -180,6 +193,8 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         or not _valid_body_limit(url, maximum_body_bytes)
         or not _valid_headers(headers)
         or (before_open is not None and not callable(before_open))
+        or (response_completed is not None and not callable(response_completed))
+        or (terminal_response is not None and not callable(terminal_response))
     ):
         raise ValueError("strict current raw request is invalid")
     current = now()
@@ -202,17 +217,30 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
     try:
         response = opener.open(request, timeout=min(float(timeout_seconds), remaining))
     except HTTPError as error:
+        callback_failure: BaseException | None = None
+        try:
+            if terminal_response is not None:
+                terminal_response()
+        except BaseException as callback_error:
+            callback_failure = callback_error
         try:
             _raise_status(error.code)
             raise CurrentRawProviderResponseError(
                 "current raw provider refused request"
             )
+        except CurrentRawTransportError as status_error:
+            if callback_failure is not None:
+                # Preserve the terminal HTTP status as the public failure while
+                # allowing the acquisition boundary to fail closed on invalid
+                # accounting for otherwise local statuses.
+                status_error.accounting_callback_failed = True
+            raise
         finally:
-            # An HTTP error body must never be inspected.  Its close failure is
-            # subordinate to the status classification.
+            # An HTTP error body must never be inspected. Its close failure is
+            # subordinate to terminal accounting and status classification.
             with suppress(BaseException):
                 error.close()
-    except URLError as error:
+    except (URLError, TimeoutError, ConnectionResetError, IncompleteRead) as error:
         raise CurrentRawProviderResponseError(
             "current raw provider unavailable"
         ) from error
@@ -223,10 +251,21 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
         if type(status) is not int:
             raise CurrentRawProviderResponseError("current raw status is invalid")
         if status != 200:
-            _raise_status(status)
-            raise CurrentRawProviderResponseError(
-                "current raw provider refused request"
-            )
+            callback_failure: BaseException | None = None
+            try:
+                if terminal_response is not None:
+                    terminal_response()
+            except BaseException as callback_error:
+                callback_failure = callback_error
+            try:
+                _raise_status(status)
+                raise CurrentRawProviderResponseError(
+                    "current raw provider refused request"
+                )
+            except CurrentRawTransportError as status_error:
+                if callback_failure is not None:
+                    status_error.accounting_callback_failed = True
+                raise
         final_url = response.geturl()
         if final_url != trusted_url:
             raise CurrentRawProviderResponseError("current raw redirect refused")
@@ -237,9 +276,22 @@ def get_strict_current_raw_v1(  # noqa: C901 -- ordered status-first trust bound
             raise CurrentRawProviderResponseError(
                 "current raw response headers invalid"
             )
-        body = response.read(maximum_body_bytes + 1)
+        try:
+            body = response.read(maximum_body_bytes + 1)
+        except (
+            URLError,
+            TimeoutError,
+            ConnectionResetError,
+            IncompleteRead,
+            OSError,
+        ) as error:
+            raise CurrentRawProviderResponseError(
+                "current raw response body unavailable"
+            ) from error
         if type(body) is not bytes or len(body) > maximum_body_bytes:
             raise CurrentRawProviderResponseError("current raw response too large")
+        if response_completed is not None:
+            response_completed()
         completed = now()
         if type(completed) is not datetime or completed.tzinfo is not UTC:
             raise ValueError("strict current raw clock is invalid")

@@ -7,8 +7,13 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from email.message import Message
+from http.client import IncompleteRead
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
+from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
@@ -308,6 +313,184 @@ def test_four_month_64_day_schedule_stops_before_credentials_or_provider_effects
     assert wire.attempts == FixtureTokenProvider.calls == 0
 
 
+@pytest.mark.parametrize(
+    ("scheduled_minutes", "expected_calls"),
+    ((10_000, 1), (10_001, 0)),
+    ids=("exact-limit", "limit-plus-one"),
+)
+def test_scheduled_minute_limit_is_checked_before_mapping_credentials_or_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scheduled_minutes: int,
+    expected_calls: int,
+) -> None:
+    base = fixture_schedule()
+    selected = base.sessions[-21:]
+    durations = (scheduled_minutes - 20 * 476, *(476 for _ in range(20)))
+    replacement_by_day = {
+        session.trade_date: duration
+        for session, duration in zip(selected, durations, strict=True)
+    }
+    schedule = replace(
+        base,
+        sessions=tuple(
+            replace(
+                session,
+                close_at=session.open_at
+                + timedelta(minutes=replacement_by_day[session.trade_date]),
+            )
+            if session.trade_date in replacement_by_day
+            else session
+            for session in base.sessions
+        ),
+    )
+    assert (
+        sum(
+            int((session.close_at - session.open_at).total_seconds() // 60)
+            for session in schedule.sessions[-21:]
+        )
+        == scheduled_minutes
+    )
+    request = CurrentRawPriceContextInputV1(
+        "d" * 64,
+        _FIXTURE_SELECTION,
+        _FIXTURE_SELECTION + timedelta(minutes=20),
+        schedule_digest(schedule),
+        fixture_members(1),
+    )
+    root = tmp_path / "retained"
+    seed_root(
+        root, retained_action=True, schedule_value=schedule, request_value=request
+    )
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    wire = RecordedWire([WireReply(body=historical_body(schedule.sessions))])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request,
+        root,
+        control=CurrentRawInvocationControlV1(
+            _Clock(request.data_selection_time),
+            selection=request.data_selection_time,
+            deadline=request.admission_deadline,
+        ),
+    )
+
+    assert (
+        result.provider_calls
+        == wire.attempts
+        == FixtureTokenProvider.calls
+        == expected_calls
+    )
+    if scheduled_minutes == 10_000:
+        assert result.outcome != "CALENDAR_PREREQUISITE_MISSING"
+        assert result.plan is not None
+    else:
+        assert result.outcome == "CALENDAR_PREREQUISITE_MISSING"
+        assert {
+            path.relative_to(root): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        } == before
+
+
+@pytest.mark.parametrize(
+    ("failure", "reply", "completed_calls"),
+    (
+        ("opener", url_error(), 0),
+        (
+            "body-timeout",
+            WireReply(
+                body=historical_body(),
+                on_read=lambda: (_ for _ in ()).throw(TimeoutError("fixture")),
+            ),
+            0,
+        ),
+        (
+            "incomplete-body",
+            WireReply(
+                body=historical_body(),
+                on_read=lambda: (_ for _ in ()).throw(IncompleteRead(b"partial", 10)),
+            ),
+            0,
+        ),
+        ("terminal-status", WireReply(status=404), 1),
+        ("parser-refusal", WireReply(body=b"{}"), 1),
+    ),
+)
+def test_current_acquisition_ledger_counts_only_settled_transport_responses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    reply: WireReply,
+    completed_calls: int,
+) -> None:
+    root = tmp_path / "retained"
+    request, _schedule = _current_root(root, completed_today=False)
+    wire = RecordedWire([reply])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=_current_control(request)
+    )
+
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert result.accounting is not None
+    history = result.accounting.members[0][0]
+    assert (history.attempts, int(history.completed)) == (1, completed_calls)
+    assert result.accounting.completed_calls == completed_calls, failure
+    assert result.accounting.members[0][-1].attempts == 0
+
+
+@pytest.mark.parametrize("after_success", ("cancellation", "publication-refusal"))
+def test_current_acquisition_ledger_counts_post_response_refusals_as_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_success: str
+) -> None:
+    root = tmp_path / "retained"
+    request, _schedule = _current_root(root, completed_today=False)
+    cancellation = MutableCancellation()
+    reply = WireReply(body=historical_body())
+    control = _current_control(request, cancellation)
+    if after_success == "cancellation":
+        reply.on_read = lambda: setattr(cancellation, "cancelled", True)
+    else:
+
+        def refuse_publication(*_: object, **__: object) -> object:
+            raise acquisition_module.PartitionPublicationError("fixture")
+
+        monkeypatch.setattr(
+            acquisition_module,
+            "publish_provisional_partition_under_lease",
+            refuse_publication,
+        )
+    wire = RecordedWire([reply])
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(request, root, control=control)
+
+    assert result.provider_calls == wire.attempts == FixtureTokenProvider.calls == 1
+    assert result.accounting is not None
+    history = result.accounting.members[0][0]
+    assert (history.attempts, history.completed) == (1, True)
+    assert result.accounting.completed_calls == 1
+
+
 def test_missing_calendar_prerequisite_is_zero_effect(tmp_path: Path) -> None:
     now = datetime(2026, 9, 15, 9, tzinfo=UTC)
     result = acquire_missing_current_raw_evidence_v1(
@@ -597,8 +780,14 @@ def test_closed_month_shared_provider_stops_preserve_opened_slot_accounting(
     assert result.provider_calls == wire.attempts == 1
     assert result.accounting is not None
     closed = result.accounting.members[0][0]
-    assert (closed.attempts, closed.disposition.value, closed.reason) == (
+    assert (
+        closed.attempts,
+        closed.completed,
+        closed.disposition.value,
+        closed.reason,
+    ) == (
         1,
+        True,
         "FAILED",
         reason,
     )
@@ -1101,6 +1290,15 @@ def test_interrupted_action_retry_reuses_valid_raw_without_restamping_or_admitti
 
     assert stopped.outcome == "STOPPED"
     assert stopped.provider_calls == interrupted_wire.attempts == 1
+    assert stopped.accounting is not None
+    attempted_slot = next(
+        slot
+        for member in stopped.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert attempted_slot.completed is True
+    assert stopped.accounting.completed_calls == 1
     assert tuple(path.read_bytes() for path in root.rglob("*.parquet")) == raw_bytes
     assert {
         path.relative_to(root): path.read_bytes()
@@ -1309,6 +1507,14 @@ def test_two_members_deadline_or_cancellation_stops_before_every_later_opener(
     assert result.outcome == "STOPPED"
     assert result.provider_calls == wire.attempts == 1
     assert result.accounting is not None
+    first_attempt = next(
+        slot
+        for member in result.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert first_attempt.completed is True
+    assert result.accounting.completed_calls == 1
     assert all(
         slot.attempts == 0
         for member in result.accounting.members[1:]
@@ -1405,6 +1611,85 @@ def test_action_provider_data_defects_stay_local_but_parser_defects_propagate(
             control=fixture_control(defect_request),
         )
     assert defect_wire.attempts == 1
+
+
+def test_settlement_failure_preserves_shared_raised_http_status_and_stops_later_openers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Settlement uncertainty cannot replace an authenticated shared stop."""
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    error = HTTPError(
+        "https://api.upstox.com/v3/historical-candle/fixture",
+        401,
+        "fixture",
+        Message(),
+        BytesIO(),
+    )
+    wire = RecordedWire([WireReply(error=error)])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+
+    class BrokenAccountingClock:
+        def now(self) -> datetime:
+            raise RuntimeError("settlement clock failed")
+
+    control = CurrentRawInvocationControlV1(
+        _Clock(request.data_selection_time),
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+        accounting_clock=BrokenAccountingClock(),
+    )
+    result = acquire_missing_current_raw_evidence_v1(request, root, control=control)
+
+    assert result.outcome == "STOPPED"
+    assert result.provider_calls == wire.attempts == 1
+    assert result.accounting is not None
+    opened = next(
+        slot
+        for member in result.accounting.members
+        for slot in member
+        if slot.attempts == 1
+    )
+    assert opened.reason == "AUTHENTICATION_FAILED"
+    assert opened.settled_at is None
+    assert all(
+        slot.attempts == 0
+        for member in result.accounting.members[1:]
+        for slot in member
+    )
+
+
+def test_settlement_failure_preserves_deadline_primary_error() -> None:
+    """A broken settlement clock must not convert deadline exhaustion to local data."""
+    selection = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    plan = acquisition_module._plan_physical_slots_v1(  # pyright: ignore[reportPrivateUsage]
+        _request(selection), _sessions(date(2026, 9, 10)), mapping_reusable=False
+    )
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    ledger.before_open("mapping", selection)
+
+    class DeadlineTransport:
+        def get(self, _url: str, _headers: dict[str, str]) -> object:
+            raise transport_module.CurrentRawDeadlineError("fixture deadline")
+
+    class BrokenGuard:
+        def accounting_now(self) -> datetime:
+            raise RuntimeError("settlement clock failed")
+
+    wrapped = acquisition_module._CompletedResponseTransportV1(  # pyright: ignore[reportPrivateUsage]
+        cast(acquisition_module.StrictCurrentRawHttpTransportV1, DeadlineTransport()),
+        cast(acquisition_module._EffectGuardV1, BrokenGuard()),  # pyright: ignore[reportPrivateUsage]
+        ledger,
+        "mapping",
+    )
+    with pytest.raises(transport_module.CurrentRawDeadlineError) as raised:
+        wrapped.get("https://api.upstox.com/v3/historical-candle/fixture", {})
+    assert raised.value.accounting_callback_failed is True
+    with pytest.raises(RuntimeError, match="DEADLINE_EXCEEDED"):
+        acquisition_module._local_effect_reason(raised.value)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_strict_action_parser_classifies_unknown_kind_and_missing_details_as_provider_data() -> (

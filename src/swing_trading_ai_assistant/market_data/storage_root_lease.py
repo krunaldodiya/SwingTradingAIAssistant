@@ -10,7 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 _LOCK_NAME: Final = ".ingestion.lock"
 _LOCK_MODE: Final = 0o600
@@ -23,6 +23,31 @@ _CONTENTION_ERRNOS: Final = frozenset({errno.EACCES, errno.EAGAIN})
 
 class StorageRootLeaseError(RuntimeError):
     """An expected loss, rejection, or cleanup failure of storage authority."""
+
+
+@dataclass(frozen=True, slots=True)
+class RootAuthorityV1:
+    """One invocation-owned root authority: ABSENT or one exact directory."""
+
+    state: Literal["ABSENT", "PRESENT"]
+    identity: tuple[int, int] | None
+
+    def __post_init__(self) -> None:
+        if (
+            (self.state == "ABSENT" and self.identity is not None)
+            or (
+                self.state == "PRESENT"
+                and (
+                    type(self.identity) is not tuple
+                    or len(self.identity) != 2
+                    or any(
+                        type(value) is not int or value < 0 for value in self.identity
+                    )
+                )
+            )
+            or self.state not in {"ABSENT", "PRESENT"}
+        ):
+            raise ValueError("invalid root authority")
 
 
 class LeaseOutcome(StrEnum):
@@ -151,6 +176,70 @@ class StorageRootLease:
         )
 
     @classmethod
+    def capture_root_authority(cls, root: object) -> RootAuthorityV1:
+        """Capture absence or a private root identity without following links."""
+        if not isinstance(root, Path):
+            raise StorageRootLeaseError("storage root authority unavailable")
+        descriptor: int | None = None
+        authority: RootAuthorityV1 | None = None
+        primary_error: BaseException | None = None
+        try:
+            descriptor = _open_directory_without_symlink_components_or_absent(root)
+            if descriptor is None:
+                authority = RootAuthorityV1("ABSENT", None)
+            else:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o700
+                ):
+                    raise StorageRootLeaseError("storage root authority unavailable")
+                authority = RootAuthorityV1(
+                    "PRESENT", (metadata.st_dev, metadata.st_ino)
+                )
+        except (OSError, StorageRootLeaseError):
+            raise StorageRootLeaseError("storage root authority unavailable") from None
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            try:
+                if not _close_descriptor(descriptor):
+                    authority = None
+            except BaseException:
+                if primary_error is None:
+                    raise
+        if authority is None:
+            raise StorageRootLeaseError("storage root authority unavailable")
+        return authority
+
+    @classmethod
+    def ensure_root_authority(cls, root: object, authority: RootAuthorityV1) -> None:
+        """Refuse every late creation, removal, replacement, or unsafe path."""
+        if (
+            type(authority) is not RootAuthorityV1
+            or cls.capture_root_authority(root) != authority
+        ):
+            raise StorageRootLeaseError("storage root authority unavailable")
+
+    @classmethod
+    def admit_read_authority(
+        cls, root: object, authority: RootAuthorityV1
+    ) -> StorageRootLease | None:
+        """Read only through one captured authority; ABSENT never opens a root."""
+        cls.ensure_root_authority(root, authority)
+        if authority.state == "ABSENT":
+            return None
+        identity = authority.identity
+        if identity is None:
+            raise StorageRootLeaseError("storage root authority unavailable")
+        admitted = cls.try_admit_read_existing(root, identity)
+        if admitted.lease is None:
+            raise StorageRootLeaseError("storage root authority unavailable")
+        return admitted.lease
+
+    @classmethod
     def admit_existing_private_identity(cls, root: object) -> tuple[int, int] | None:
         """Inspect an existing owner-private root without following path links."""
         if not isinstance(root, Path):
@@ -183,14 +272,26 @@ class StorageRootLease:
         return identity
 
     @classmethod
-    def try_admit_read_existing(cls, root: object) -> LeaseResult:
+    def try_admit_read_existing(
+        cls, root: object, expected_root_identity: tuple[int, int] | None = None
+    ) -> LeaseResult:
         """Pin an existing safe root for reads without waiting on its writer.
 
         The returned authority cannot authorize a mutating ``root_operation``.
         Immutable objects and a private catalog snapshot remain readable while
         an exclusive writer prepares an atomic replacement.
         """
-        if not isinstance(root, Path):
+        if not isinstance(root, Path) or (
+            expected_root_identity is not None
+            and (
+                type(expected_root_identity) is not tuple
+                or len(expected_root_identity) != 2
+                or any(
+                    type(value) is not int or value < 0
+                    for value in expected_root_identity
+                )
+            )
+        ):
             return _failed(LeaseFailureCode.STORAGE_UNSAFE)
         root_descriptor: int | None = None
         lock_descriptor: int | None = None
@@ -199,7 +300,11 @@ class StorageRootLease:
         try:
             root_descriptor = _open_directory_without_symlink_components(root)
             root_descriptor_stat = os.fstat(root_descriptor)
-            if not stat.S_ISDIR(root_descriptor_stat.st_mode):
+            if not stat.S_ISDIR(root_descriptor_stat.st_mode) or (
+                expected_root_identity is not None
+                and (root_descriptor_stat.st_dev, root_descriptor_stat.st_ino)
+                != expected_root_identity
+            ):
                 raise StorageRootLeaseError
             lock_descriptor = os.open(
                 _LOCK_NAME,
@@ -533,12 +638,28 @@ def _acquire_lock(
 
 
 def _open_directory_without_symlink_components(root: Path) -> int:
+    descriptor = _open_directory_without_symlink_components_or_absent(root)
+    if descriptor is None:
+        raise FileNotFoundError(errno.ENOENT, "storage root is absent")
+    return descriptor
+
+
+def _open_directory_without_symlink_components_or_absent(root: Path) -> int | None:
+    """Traverse only safe components and distinguish genuine ENOENT from unsafe."""
     if not root.is_absolute() or any(part in {".", ".."} for part in root.parts):
         raise StorageRootLeaseError
-    descriptor = os.open(os.sep, _ROOT_FLAGS)
+    descriptor: int | None = os.open(os.sep, _ROOT_FLAGS)
     try:
         for component in root.parts[1:]:
-            opened = os.open(component, _ROOT_FLAGS, dir_fd=descriptor)
+            try:
+                opened = os.open(component, _ROOT_FLAGS, dir_fd=descriptor)
+            except OSError as error:
+                if error.errno == errno.ENOENT:
+                    if not _close_descriptor(descriptor):
+                        raise StorageRootLeaseError from None
+                    descriptor = None
+                    return None
+                raise
             previous = descriptor
             descriptor = None
             try:

@@ -1352,6 +1352,82 @@ class DuckDBCatalog:
             raise CatalogPersistenceError("catalog read failed") from None
         return None if row is None else _provisional_metadata_from_row(row)
 
+    def latest_provisional_partition_for_security_id(
+        self,
+        *,
+        segment: str,
+        security_id: str,
+        year: int,
+        month: int,
+        cutoff_lte: datetime,
+        published_at_lte: datetime,
+        schedule_digest_sha256: str | None = None,
+    ) -> ProvisionalPartitionMetadataV1 | None:
+        """Resolve one canonical equity identity across admitted symbol aliases."""
+        if (
+            type(segment) is not str
+            or not 1 <= len(segment) <= 128
+            or not segment.isascii()
+            or not segment.isprintable()
+            or type(security_id) is not str
+            or not 1 <= len(security_id) <= 128
+            or not security_id.isascii()
+            or not security_id.isprintable()
+            or type(year) is not int
+            or not 2022 <= year <= date.max.year
+            or type(month) is not int
+            or not 1 <= month <= 12
+            or (
+                schedule_digest_sha256 is not None
+                and (
+                    type(schedule_digest_sha256) is not str
+                    or len(schedule_digest_sha256) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in schedule_digest_sha256
+                    )
+                )
+            )
+            or any(
+                type(value) is not datetime
+                or value.tzinfo is None
+                or value.utcoffset() is None
+                for value in (cutoff_lte, published_at_lte)
+            )
+        ):
+            raise CatalogConflictError("invalid provisional partition query")
+        try:
+            row = self.connection.execute(
+                _PROVISIONAL_SELECT + " WHERE provider = 'upstox' AND exchange = 'NSE' "
+                "AND instrument_type = 'EQ' AND interval = '1m' "
+                "AND segment = ? AND security_id = ? AND year = ? AND month = ? "
+                "AND cutoff <= ? AND published_at <= ? "
+                + (
+                    "AND schedule_digest_sha256 = ? "
+                    if schedule_digest_sha256 is not None
+                    else ""
+                )
+                + "ORDER BY cutoff DESC, published_at DESC, "
+                "schedule_digest_sha256 ASC, checksum_sha256 ASC, "
+                "symbol ASC, instrument_key ASC, relative_path ASC LIMIT 1",
+                (
+                    segment,
+                    security_id,
+                    year,
+                    month,
+                    cutoff_lte,
+                    published_at_lte,
+                    *(
+                        (schedule_digest_sha256,)
+                        if schedule_digest_sha256 is not None
+                        else ()
+                    ),
+                ),
+            ).fetchone()
+        except (*_OPERATIONAL_DUCKDB_ERRORS, CatalogStorageError):
+            raise CatalogPersistenceError("catalog read failed") from None
+        return None if row is None else _provisional_metadata_from_row(row)
+
     def _after_history_insert(self) -> None:
         """Fault-injection seam used to prove transaction rollback."""
 

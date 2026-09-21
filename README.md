@@ -142,6 +142,41 @@ missing or unsupported retained Industry evidence does not suppress independent
 raw facts. The command emits research facts, never an analytic recommendation,
 live/provider proof, or a claim that missing evidence is neutral.
 
+## Bounded current price-context refresh (Issue #189 review candidate)
+
+The additive, unreleased `current-price-context@v2` boundary is selected only by
+`--contract-version v2`; V1 remains the CLI default. V2 is still exactly one
+bounded request/response pass—not polling, streaming, subscription, background
+refresh, or a service. Its closed request owns one of `RETAINED_ONLY`,
+`ACQUIRE_MISSING`, or `REFRESH_ONCE` and whether separately labelled
+current-session evidence is included:
+
+```bash
+market-data price-context-current \
+  --input-file /absolute/private/current-price-context-v2-request.json \
+  --storage-root /absolute/private/research-root \
+  --contract-version v2 --output json
+```
+
+The SDK is
+`research_current_price_context_v2(request, storage_root, clock=None,
+cancellation=None)`. `RETAINED_ONLY` has zero provider effects;
+`ACQUIRE_MISSING` fills only admissible missing evidence; and `REFRESH_ONCE`
+adds at most one requested Intraday V3 current-session pass per member after
+missing completed evidence is handled. It does not force-refresh reusable
+Calendar, Mapping, historical, corporate-action, or Industry evidence. The
+result preserves an exact V1 completed-session result, keeps provisional
+current-session observations separate, and publishes a bounded sanitized
+per-source freshness ledger with immutable digests, closed states and exact
+provider-call accounting. V1 schemas, canonical bytes, retained evidence, and
+the default CLI remain compatible. The only V1 reader change is narrow and
+additive: current-month provisional lookup uses canonical security ID so an old
+alias can be read, but still requires the current mapping's exact provider
+instrument key and the existing data/knowledge cutoffs. It performs no migration
+or dual write. See
+[Plan 36](docs/plans/36-bounded-current-price-context-refresh-contract.md) for
+temporal, cancellation, conflict, and correction rules.
+
 The repository contains the Nifty 50 market-data foundation and the first two
 provider-free research cores. Delivered behavior includes:
 

@@ -3,7 +3,7 @@
 from typing import Final
 
 HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/catalog.py": "52a5b5cfe6a04c5a6fe781f09236f867e7cff095c8dba3132556cd30d093a28a",
+    "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3dbb44af9ba07efc1e6306890269c005ce36947bd471b1e0db8b68f611abc13d",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "03e2674ae8e931d1d78c37ecb51903a2006338a5ff940af0ad352a0306859071",
@@ -18,5 +18,5 @@ HISTORICAL_UPSTOX_RAW_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "src/swing_trading_ai_assistant/market_data/schemas.py": "157ef71c7b0e04e0a5038ded4ca486a2b42391ec2219679d1a5cd766a96e6397",
-    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "809939131dbddcdf8524be86663003c0f2dada59eb4bd3461def2125f4f14ae4",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "c1a11745e5800561cbee17063142ee72f534b4d3f7f6ccda028441d762256612",
 }

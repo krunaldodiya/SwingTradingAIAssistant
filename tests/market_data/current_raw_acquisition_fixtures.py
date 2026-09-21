@@ -257,6 +257,29 @@ def control(
     )
 
 
+def mapping_body(
+    value: tuple[CurrentPriceContextMemberV1, ...],
+) -> bytes:
+    return gzip.compress(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "name": f"{member.effective_symbol} Limited",
+                    "exchange": "NSE",
+                    "isin": member.isin,
+                    "instrument_type": "EQ",
+                    "instrument_key": f"NSE_EQ|{member.isin}",
+                    "trading_symbol": member.effective_symbol,
+                }
+                for member in value
+            ],
+            separators=(",", ":"),
+        ).encode(),
+        mtime=0,
+    )
+
+
 def historical_body(
     value: tuple[ScheduleSession, ...] | None = None,
     *,
@@ -311,6 +334,8 @@ def seed_root(
     action_in_window: bool = False,
     schedule_value: ExpectedSessionSchedule | None = None,
     request_value: CurrentRawPriceContextInputV1 | None = None,
+    mapping_members: tuple[CurrentPriceContextMemberV1, ...] | None = None,
+    retain_mapping: bool = True,
 ) -> CurrentRawPriceContextInputV1:
     root.mkdir(mode=0o700)
     acquired = StorageRootLease.try_acquire(root)
@@ -322,28 +347,18 @@ def seed_root(
     try:
         ScheduleEvidenceStore(root, lease).retain(value)
         with DuckDBCatalog(root, lease=lease) as catalog:
-            mapping_payload = gzip.compress(
-                json.dumps(
-                    [
-                        {
-                            "segment": "NSE_EQ",
-                            "name": f"{member.effective_symbol} Limited",
-                            "exchange": "NSE",
-                            "isin": member.isin,
-                            "instrument_type": "EQ",
-                            "instrument_key": f"NSE_EQ|{member.isin}",
-                            "trading_symbol": member.effective_symbol,
-                        }
-                        for member in request_value.members
-                    ],
-                    separators=(",", ":"),
-                ).encode(),
-                mtime=0,
-            )
-            snapshot = InstrumentSnapshotClientV1(
-                StaticTransport(mapping_payload), clock=clock.now
-            ).fetch()
-            InstrumentSnapshotStoreV1(root, lease, catalog).retain(snapshot)
+            if retain_mapping:
+                snapshot = InstrumentSnapshotClientV1(
+                    StaticTransport(
+                        mapping_body(
+                            request_value.members
+                            if mapping_members is None
+                            else mapping_members
+                        )
+                    ),
+                    clock=clock.now,
+                ).fetch()
+                InstrumentSnapshotStoreV1(root, lease, catalog).retain(snapshot)
             if retained_action:
                 for member in request_value.members:
                     action = UpstoxCorporateActionsClientV1(

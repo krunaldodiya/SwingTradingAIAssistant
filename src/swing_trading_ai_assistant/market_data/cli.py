@@ -27,6 +27,10 @@ from swing_trading_ai_assistant.research_packet.current_price_context import (
     current_price_context_request_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
 )
+from swing_trading_ai_assistant.research_packet.current_price_context_v2 import (
+    current_price_context_request_from_canonical_json_bytes_v2,
+    research_current_price_context_v2,
+)
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .bounded_nifty50_workflow import (
@@ -479,6 +483,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     price_context_current.add_argument("--acquire-missing", action="store_true")
+    price_context_current.add_argument(
+        "--contract-version", choices=("v1", "v2"), default="v1"
+    )
     price_context_current.add_argument("--output", choices=("json",), required=True)
     historical_upstox_raw = commands.add_parser(
         "historical-ohlcv-upstox-raw",
@@ -889,12 +896,14 @@ def _run_current_packet_command(args: argparse.Namespace, clock: _ClockV1) -> in
 def _run_price_context_current_command(
     args: argparse.Namespace, clock: _ClockV1
 ) -> int:
-    """Run the closed #188 request without exposing input or private paths.
+    """Run the closed price-context request without exposing private paths.
 
     Only the descriptor-relative request-file admission is a request-invalid
     boundary.  A valid request that encounters storage, runtime, or provider
     faults must reach ``main``'s fixed #145 ``internal_error`` boundary.
     """
+    request_v1 = None
+    request_v2 = None
     try:
         input_file = args.input_file
         root = args.storage_root
@@ -904,17 +913,39 @@ def _run_price_context_current_command(
             or type(root) is not type(Path())
             or not root.is_absolute()
             or type(args.acquire_missing) is not bool
+            or args.contract_version not in ("v1", "v2")
+            or (args.contract_version == "v2" and args.acquire_missing)
         ):
             raise _RequestInvalid
         raw = _read_current_regime_input(input_file)
-        request = current_price_context_request_from_canonical_json_bytes_v1(raw)
+        if args.contract_version == "v1":
+            request_v1 = current_price_context_request_from_canonical_json_bytes_v1(raw)
+        else:
+            request_v2 = current_price_context_request_from_canonical_json_bytes_v2(raw)
     except (OSError, ValueError, _RequestInvalid):
         raise _RequestInvalid from None
-    result = research_current_price_context_v1(
-        request, root, acquire_missing=args.acquire_missing, clock=clock
+    if args.contract_version == "v1":
+        if request_v1 is None:
+            raise RuntimeError("V1 price-context request was not decoded")
+        result_v1 = research_current_price_context_v1(
+            request_v1, root, acquire_missing=args.acquire_missing, clock=clock
+        )
+        sys.stdout.write(result_v1.canonical_json_bytes().decode("utf-8"))
+        return (
+            0 if all(item.state == "OBSERVED" for item in result_v1.features[:3]) else 1
+        )
+    if request_v2 is None:
+        raise RuntimeError("V2 price-context request was not decoded")
+    result_v2 = research_current_price_context_v2(request_v2, root, clock=clock)
+    sys.stdout.write(result_v2.canonical_json_bytes().decode("utf-8"))
+    return (
+        0
+        if all(
+            item.state == "OBSERVED"
+            for item in result_v2.completed_context.features[:3]
+        )
+        else 1
     )
-    sys.stdout.write(result.canonical_json_bytes().decode("utf-8"))
-    return 0 if all(item.state == "OBSERVED" for item in result.features[:3]) else 1
 
 
 def _run_current_regime_command(args: argparse.Namespace) -> int:
