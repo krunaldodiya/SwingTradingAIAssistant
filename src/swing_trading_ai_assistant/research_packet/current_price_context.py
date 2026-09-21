@@ -38,6 +38,7 @@ from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    RootAuthorityV1,
     StorageRootLease,
     StorageRootLeaseError,
 )
@@ -1273,8 +1274,7 @@ def research_current_price_context_v1(
         storage_root,
         acquire_missing=acquire_missing,
         clock=clock,
-        expected_root_identity=None,
-        root_identity_is_pinned=False,
+        root_authority=None,
     )
 
 
@@ -1284,8 +1284,7 @@ def _research_current_price_context_v1(  # noqa: C901 -- one bounded composition
     *,
     acquire_missing: bool,
     clock: CurrentPriceContextClockV1 | None,
-    expected_root_identity: tuple[int, int] | None,
-    root_identity_is_pinned: bool,
+    root_authority: RootAuthorityV1 | None,
 ) -> CurrentPriceContextResultV1:
     if type(request) is not CurrentPriceContextRequestV1:
         raise ValueError("current price context input is invalid")
@@ -1373,16 +1372,25 @@ def _research_current_price_context_v1(  # noqa: C901 -- one bounded composition
     ) = None
     admitted = (
         None
-        if root_identity_is_pinned and expected_root_identity is None
+        if root_authority is not None and root_authority.state == "ABSENT"
         else StorageRootLease.try_admit_read_existing(
             storage_root,
-            expected_root_identity if root_identity_is_pinned else None,
+            (
+                root_authority.identity
+                if root_authority is not None and root_authority.state == "PRESENT"
+                else None
+            ),
         )
     )
-    if root_identity_is_pinned:
-        if (expected_root_identity is None and storage_root.exists()) or (
-            expected_root_identity is not None
-            and (admitted is None or admitted.lease is None)
+    if root_authority is not None:
+        try:
+            StorageRootLease.ensure_root_authority(storage_root, root_authority)
+        except StorageRootLeaseError:
+            raise StorageRootLeaseError(
+                "current price context root authority unavailable"
+            ) from None
+        if root_authority.state == "PRESENT" and (
+            admitted is None or admitted.lease is None
         ):
             raise StorageRootLeaseError(
                 "current price context root authority unavailable"

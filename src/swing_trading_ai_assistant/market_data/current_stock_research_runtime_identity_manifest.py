@@ -5,7 +5,7 @@ from typing import Final
 CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bharatstock.py": "4f43a61d44f9a907cc9274ab3ca3403854049b1c39f379b5730ca3d044bc78a1",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "a7ee71ba62218ef40546e2ba421ba6b048b624ca9f8eaec70f38065b2b5383e4",
-    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "69f265b0ca66f75f5a179418d7b615c858b4828726b519ef24e54fb8d03306c1",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "b048fa8053beb17c1fa7cd2164bf6a1c1e2d76a1774d129a5266139e06a4e231",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/cli.py": "e4183cba8f8f080553ca2ceaa4d66bfb50e38ea23d68eb0911afca02ad2e7f5b",
@@ -24,7 +24,7 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/provisional_metadata.py": "e95075fd960cca0aa5594688db9bd9dcec656e1c976b657ac98ce180750a81c4",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
-    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "201b36042130dd8a25dc2a50cb7fae3dcee98c80a8b44f30deb02522e1c646dd",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "c1a11745e5800561cbee17063142ee72f534b4d3f7f6ccda028441d762256612",
     "src/swing_trading_ai_assistant/market_data/universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",
     "src/swing_trading_ai_assistant/market_structure/current_live.py": "592cecf888eee4347cf9ff6c45f03705df27c557a3d6d21df51b8ea7fdf73c31",
     "src/swing_trading_ai_assistant/research_packet/bharatstock.py": "3c069177245684811588e3a8cb8a77b3835d8823073ede6b0de5f97a93a59abc",

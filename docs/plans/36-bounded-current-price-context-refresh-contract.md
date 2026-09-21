@@ -52,7 +52,11 @@ entry carries only the requested member identity where applicable, an immutable
 physical digest when available, a closed state (`REUSED`, `ACQUIRED`,
 `REFRESHED`, `APPENDED`, `CONFLICTED`, `UNAVAILABLE`, or `NOT_REQUESTED`),
 source/publication/knowledge clocks, bounded attempted/completed call counts,
-and its closed correction rule. Counts are exactly zero or one except that a
+and its closed correction rule. A `CURRENT_SESSION` entry also carries a
+nullable `prior_source_cutoff`: it is present only for an observed retained
+prefix, equals the final cutoff for `REUSED` and `REFRESHED`, and is strictly
+less than the final cutoff for `APPENDED`; `ACQUIRED` and all non-observed or
+non-current entries leave it null. Counts are exactly zero or one except that a
 `CURRENT_HISTORY` entry may aggregate zero, one, or two completed-context
 provider calls when the retained schedule proves that the 21-session window
 ends on the completed selection-day session. This narrow exception represents
@@ -167,6 +171,18 @@ The existing `5N+1` budget, hard-capped at 251, includes V2 current-session
 effects and is checked before every opener; aggregating the two authorized
 exact-close completed-context calls does not increase this budget or the public
 ledger cardinality. The implementation makes no cross-process quota claim.
+
+### Accepted response-only authenticity boundary (Issue #189 owner decision)
+
+On 2026-09-20, the repository owner accepted the response-only boundary identified
+in Issue #189 review. The canonical V2 decoder enforces canonical encoding,
+supported values, request/cross-field consistency, finite state/accounting, and
+runtime identity. It does not authenticate a wholly self-consistent price/volume
+reseal against retained partition bytes. The SDK runtime derives and validates
+retained-row price and cumulative-volume values under captured storage-root
+authority; that runtime binding is the accepted protection. No response-only
+anti-substitution claim is made without an authenticated value-to-partition
+attestation.
 
 ### Accepted exact-close accounting amendment
 

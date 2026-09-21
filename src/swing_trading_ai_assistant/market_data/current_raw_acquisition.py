@@ -152,7 +152,11 @@ from .schedule_evidence import (
     exact_nse_schedule_source_release_pair_v1,
     schedule_covers_full_calendar_range,
 )
-from .storage_root_lease import StorageRootLease, StorageRootLeaseError
+from .storage_root_lease import (
+    RootAuthorityV1,
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from .upstox_canonical import canonicalize_upstox_equity_candles
 from .validation import EQUITY_MONTH_VALIDATION_POLICY_V1
 
@@ -566,6 +570,7 @@ def inspect_current_raw_evidence_v1(
     control: CurrentRawInvocationControlV1,
     include_current_session: bool = False,
     expected_root_identity: tuple[int, int] | None = None,
+    root_authority: RootAuthorityV1 | None = None,
 ) -> CurrentRawAcquisitionResultV1:
     """Return the finite safe retained-evidence plan without opening a provider."""
     if (
@@ -583,20 +588,31 @@ def inspect_current_raw_evidence_v1(
                 )
             )
         )
+        or (root_authority is not None and type(root_authority) is not RootAuthorityV1)
+        or (root_authority is not None and expected_root_identity is not None)
     ):
         raise ValueError("current raw acquisition inspection input is invalid")
     try:
         control.ensure_live()
     except CurrentRawInvocationStoppedV1:
         return CurrentRawAcquisitionResultV1("STOPPED", 0)
-    root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
-    if root_identity is None or (
-        expected_root_identity is not None and root_identity != expected_root_identity
-    ):
-        return CurrentRawAcquisitionResultV1(
-            "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING",
-            0,
-        )
+    if root_authority is not None:
+        StorageRootLease.ensure_root_authority(storage_root, root_authority)
+        if root_authority.state == "ABSENT":
+            return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
+        root_identity = root_authority.identity
+        if root_identity is None:
+            raise StorageRootLeaseError("current raw acquisition root authority lost")
+    else:
+        root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
+        if root_identity is None or (
+            expected_root_identity is not None
+            and root_identity != expected_root_identity
+        ):
+            return CurrentRawAcquisitionResultV1(
+                "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING",
+                0,
+            )
     plan = _read_plan(
         storage_root,
         request,
@@ -631,6 +647,7 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
     current_session_only: bool = False,
     provider_call_budget: int | None = None,
     expected_root_identity: tuple[int, int] | None = None,
+    root_authority: RootAuthorityV1 | None = None,
 ) -> CurrentRawAcquisitionResultV1:
     """Execute only the finite inspection-admitted mapping/raw/action effects."""
     if (
@@ -658,19 +675,31 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 or not 0 <= provider_call_budget <= 251
             )
         )
+        or (root_authority is not None and type(root_authority) is not RootAuthorityV1)
+        or (root_authority is not None and expected_root_identity is not None)
     ):
         raise ValueError("current raw acquisition input is invalid")
     try:
         control.ensure_live()
     except CurrentRawInvocationStoppedV1:
         return CurrentRawAcquisitionResultV1("STOPPED", 0)
-    root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
-    if root_identity is None or (
-        expected_root_identity is not None and root_identity != expected_root_identity
-    ):
-        return CurrentRawAcquisitionResultV1(
-            "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING", 0
-        )
+    if root_authority is not None:
+        StorageRootLease.ensure_root_authority(storage_root, root_authority)
+        if root_authority.state == "ABSENT":
+            return CurrentRawAcquisitionResultV1("CALENDAR_PREREQUISITE_MISSING", 0)
+        root_identity = root_authority.identity
+        if root_identity is None:
+            raise StorageRootLeaseError("current raw acquisition root authority lost")
+    else:
+        root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
+        if root_identity is None or (
+            expected_root_identity is not None
+            and root_identity != expected_root_identity
+        ):
+            return CurrentRawAcquisitionResultV1(
+                "STOPPED" if storage_root.exists() else "CALENDAR_PREREQUISITE_MISSING",
+                0,
+            )
     plan = _read_plan(
         storage_root,
         request,

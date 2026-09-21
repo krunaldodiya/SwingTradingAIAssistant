@@ -53,6 +53,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
+    RootAuthorityV1,
     StorageRootLease,
     StorageRootLeaseError,
 )
@@ -344,6 +345,123 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
             _reseal_result(moved_mapping_call)
         )
+
+
+def test_v2_decoder_rejects_reused_admitted_mapping_reseal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed admitted member requires its zero-call Mapping reuse state."""
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    members = raw_members(1)
+    request_value = raw_request(schedule_value, selection=selected_at, members=members)
+    root = tmp_path / "root"
+    seed_root(
+        root,
+        schedule_value=schedule_value,
+        request_value=request_value,
+        retain_mapping=False,
+    )
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    monkeypatch.setattr(
+        transport_module,
+        "build_opener",
+        RecordedWire(
+            [
+                WireReply(
+                    body=mapping_body(members),
+                    headers=(("Content-Type", "application/gzip"),),
+                ),
+                WireReply(body=historical_body()),
+                WireReply(body=action_body()),
+            ]
+        ).build_opener,
+    )
+    packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"), root, clock=_Clock(selected_at)
+    )
+    retained = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
+    )
+    assert retained.completed_context.members[0].state == "OBSERVED"
+    resealed = json.loads(retained.canonical_json_bytes())
+    mapping = next(
+        item for item in resealed["freshness_ledger"] if item["source"] == "MAPPING"
+    )
+    assert (
+        mapping["state"],
+        mapping["provider_calls_attempted"],
+        mapping["provider_calls_completed"],
+    ) == ("REUSED", 0, 0)
+    mapping["state"] = "UNAVAILABLE"
+    resealed["reused_physical_objects"] -= 1
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(resealed)
+        )
+
+
+def test_v2_decoder_rejects_reused_mapping_reseal_after_downstream_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retained Mapping remains required after a downstream partition refusal."""
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    monkeypatch.setattr(
+        transport_module,
+        "build_opener",
+        RecordedWire(
+            [WireReply(body=historical_body()), WireReply(body=action_body())]
+        ).build_opener,
+    )
+    admitted = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"), root, clock=_Clock(selected_at)
+    )
+    assert admitted.completed_context.members[0].state == "OBSERVED"
+
+    partition = next(root.rglob("*.parquet"))
+    partition.chmod(0o600)
+    partition.write_bytes(b"corrupt")
+    downstream_failure = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
+    )
+    assert (
+        downstream_failure.completed_context.members[0].state,
+        downstream_failure.completed_context.members[0].reason,
+    ) == ("INSUFFICIENT_EVIDENCE", "RAW_PARTITION_CORRUPT")
+    assert (
+        next(
+            item
+            for item in downstream_failure.freshness_ledger
+            if item.source == "MAPPING"
+        ).state
+    ) == "REUSED"
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(downstream_failure.canonical_json_bytes()) == downstream_failure
+
+    resealed = json.loads(downstream_failure.canonical_json_bytes())
+    mapping = next(
+        item for item in resealed["freshness_ledger"] if item["source"] == "MAPPING"
+    )
+    assert (
+        mapping["state"],
+        mapping["provider_calls_attempted"],
+        mapping["provider_calls_completed"],
+    ) == ("REUSED", 0, 0)
+    mapping["state"] = "UNAVAILABLE"
+    resealed["reused_physical_objects"] -= 1
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
 
 
 def test_v2_result_decoder_rejects_resealed_request_reason_price_and_time_mutations(
@@ -755,14 +873,25 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
     )
     assert refreshed.current_session[0].observed_price == "102.0"
     assert refreshed.current_session[0].cumulative_source_volume == 30
-    assert (
-        next(
-            item
-            for item in refreshed.freshness_ledger
-            if item.source == "CURRENT_SESSION"
-        ).state
-        == "APPENDED"
+    refreshed_entry = next(
+        item for item in refreshed.freshness_ledger if item.source == "CURRENT_SESSION"
     )
+    assert refreshed_entry.state == "APPENDED"
+    prior_cutoff = refreshed_entry.prior_source_cutoff
+    final_cutoff = refreshed_entry.source_cutoff
+    assert prior_cutoff is not None
+    assert final_cutoff is not None
+    assert prior_cutoff < final_cutoff
+    appended_as_refreshed = json.loads(refreshed.canonical_json_bytes())
+    next(
+        item
+        for item in appended_as_refreshed["freshness_ledger"]
+        if item["source"] == "CURRENT_SESSION"
+    )["state"] = "REFRESHED"
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(appended_as_refreshed)
+        )
     retained_checksum = refreshed.current_session[0].partition_checksum_sha256
 
     identical_wire = RecordedWire(
@@ -2073,6 +2202,12 @@ def test_v2_final_v1_read_never_adopts_a_restored_replacement_root(
         ) -> tuple[int, int] | None:
             return real_identity(candidate)
 
+        @staticmethod
+        def ensure_root_authority(
+            candidate: object, authority: RootAuthorityV1
+        ) -> None:
+            real_storage_root_lease.ensure_root_authority(candidate, authority)
+
     def restore_after_recheck(*args: object, **kwargs: object) -> object:
         try:
             return real_recheck(*cast(Any, args), **cast(Any, kwargs))
@@ -2461,3 +2596,351 @@ def test_v2_final_return_rechecks_root_identity_after_witness_reread(
             root,
             clock=_Clock(selected_at),
         )
+
+
+def test_v2_absent_root_never_adopts_a_transient_replacement_at_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ABSENT invocation authority is not an unconstrained read authority."""
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "missing-root"
+    replacement = tmp_path / "replacement"
+    seed_root(replacement, schedule_value=schedule_value, request_value=request_value)
+    original_ensure = StorageRootLease.ensure_root_authority
+    ensured = False
+
+    def replace_before_revalidation(
+        root_arg: object, authority: RootAuthorityV1
+    ) -> None:
+        nonlocal ensured
+        if ensured:
+            return original_ensure(root_arg, authority)
+        ensured = True
+        replacement.rename(root)
+        return original_ensure(root_arg, authority)
+
+    monkeypatch.setattr(
+        StorageRootLease,
+        "ensure_root_authority",
+        replace_before_revalidation,
+    )
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            _v2_from_raw(request_value, "RETAINED_ONLY"),
+            root,
+            clock=_Clock(selected_at),
+        )
+    assert root.is_dir()
+
+
+def test_v2_decoder_rejects_missing_calendar_and_no_evidence_reseals(
+    tmp_path: Path,
+) -> None:
+    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        selected_at,
+        selected_at + timedelta(minutes=30),
+        "a" * 64,
+        (_member(),),
+        _QUESTIONS,
+        None,
+        "RETAINED_ONLY",
+        True,
+    )
+    result = packet_v2.research_current_price_context_v2(
+        request, tmp_path / "missing-root", clock=_Clock(selected_at)
+    )
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert result.current_session[0].reason == "CALENDAR_PREREQUISITE_MISSING"
+
+    resealed = json.loads(result.canonical_json_bytes())
+    resealed["current_session"][0].update(
+        state="NOT_APPLICABLE", reason="CURRENT_SESSION_NOT_APPLICABLE"
+    )
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
+
+    resealed = json.loads(result.canonical_json_bytes())
+    ledger = next(
+        item
+        for item in resealed["freshness_ledger"]
+        if item["source"] == "CURRENT_SESSION"
+    )
+    ledger["state"] = "REUSED"
+    resealed["reused_physical_objects"] = 1
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
+
+    for state, reason, source in (
+        ("UNAVAILABLE", "PROVISIONAL_EVIDENCE_STALE", "CURRENT_SESSION"),
+        ("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE", "CURRENT_SESSION"),
+        ("CONFLICTED", "PROVISIONAL_EVIDENCE_CONFLICTED", "CURRENT_SESSION"),
+        ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING", "MAPPING"),
+        ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING", "CORPORATE_ACTION"),
+    ):
+        resealed = json.loads(result.canonical_json_bytes())
+        if source == "CURRENT_SESSION":
+            resealed["current_session"][0].update(state=state, reason=reason)
+        entry = next(
+            item for item in resealed["freshness_ledger"] if item["source"] == source
+        )
+        entry["state"] = "CONFLICTED"
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(resealed))
+
+
+def test_v2_decoder_rejects_failed_mapping_success_reseals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 10, 1, 10, 1, tzinfo=UTC)
+    schedule_value = current_month_schedule(selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(
+        root,
+        schedule_value=schedule_value,
+        request_value=request_value,
+        retain_mapping=False,
+    )
+    wire = RecordedWire([WireReply(status=404)])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"), root, clock=_Clock(selected_at)
+    )
+    mapping = next(item for item in result.freshness_ledger if item.source == "MAPPING")
+    assert (
+        mapping.state,
+        mapping.provider_calls_attempted,
+        mapping.provider_calls_completed,
+    ) == (
+        "UNAVAILABLE",
+        1,
+        1,
+    )
+
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    for state in ("REUSED", "ACQUIRED", "CONFLICTED"):
+        resealed = json.loads(result.canonical_json_bytes())
+        entry = next(
+            item for item in resealed["freshness_ledger"] if item["source"] == "MAPPING"
+        )
+        entry["state"] = state
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(resealed))
+
+
+def test_v2_decoder_rejects_active_phase_pair_and_mode_reseals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    result = _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+
+    for state, reason, ledger_state in (
+        ("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE", "UNAVAILABLE"),
+        ("UNAVAILABLE", "PROVISIONAL_EVIDENCE_UNAVAILABLE", "CONFLICTED"),
+    ):
+        resealed = json.loads(result.canonical_json_bytes())
+        current = resealed["current_session"][0]
+        for field in (
+            "last_completed_minute",
+            "observed_price",
+            "cumulative_source_volume",
+            "source_version",
+            "partition_checksum_sha256",
+            "source_cutoff",
+            "published_at",
+            "known_at",
+        ):
+            current[field] = None
+        current.update(state=state, label=None, reason=reason)
+        entry = next(
+            item
+            for item in resealed["freshness_ledger"]
+            if item["source"] == "CURRENT_SESSION"
+        )
+        entry.update(
+            state=ledger_state,
+            physical_identity_sha256=None,
+            source_cutoff=None,
+            published_at=None,
+            known_at=None,
+        )
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(resealed))
+
+    for state in ("REFRESHED", "APPENDED"):
+        resealed = json.loads(result.canonical_json_bytes())
+        entry = next(
+            item
+            for item in resealed["freshness_ledger"]
+            if item["source"] == "CURRENT_SESSION"
+        )
+        entry["state"] = state
+        resealed["refreshed_physical_objects"] = 1
+        with pytest.raises(ValueError, match="result is invalid"):
+            decoder(_reseal_result(resealed))
+
+
+def test_v2_response_only_decoder_limit_and_runtime_retained_value_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-consistent price reseal is not attestation; runtime uses verified rows."""
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    result = _retain_active_v2_prefix(root, schedule_value, request_value, monkeypatch)
+
+    assert (
+        result.current_session[0].observed_price,
+        result.current_session[0].cumulative_source_volume,
+    ) == (
+        "101.0",
+        20,
+    )
+    resealed = json.loads(result.canonical_json_bytes())
+    resealed["current_session"][0].update(
+        observed_price="999.0", cumulative_source_volume=999
+    )
+    current = next(
+        item
+        for item in resealed["freshness_ledger"]
+        if item["source"] == "CURRENT_SESSION"
+    )
+    assert (
+        current["physical_identity_sha256"]
+        == result.current_session[0].partition_checksum_sha256
+    )
+    decoded = packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+        _reseal_result(resealed)
+    )
+    assert (
+        decoded.current_session[0].observed_price,
+        decoded.current_session[0].cumulative_source_volume,
+    ) == (
+        "999.0",
+        999,
+    )
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+@pytest.mark.parametrize("include_current", (False, True))
+def test_v2_true_absence_is_zero_effect_missing_calendar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: _Mode, include_current: bool
+) -> None:
+    selected = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    root = tmp_path / "genuinely-absent"
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        selected,
+        selected + timedelta(minutes=30),
+        "a" * 64,
+        (_member(),),
+        _QUESTIONS,
+        None,
+        mode,
+        include_current,
+    )
+    opener_calls = 0
+
+    def forbidden_opener(*args: object, **kwargs: object) -> object:
+        nonlocal opener_calls
+        opener_calls += 1
+        raise AssertionError("absence must not open a provider")
+
+    monkeypatch.setattr(transport_module, "build_opener", forbidden_opener)
+    assert not root.exists() and not root.is_symlink()
+    result = packet_v2.research_current_price_context_v2(
+        request, root, clock=_Clock(selected)
+    )
+    assert result.provider_calls_attempted == result.provider_calls_completed == 0
+    assert opener_calls == 0
+    assert all(
+        item.state == "DEPENDENCY_BLOCKED"
+        and item.reason == "CALENDAR_PREREQUISITE_MISSING"
+        for item in result.completed_context.members
+    )
+    expected = (
+        ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")
+        if include_current
+        else ("NOT_REQUESTED", "NOT_REQUESTED")
+    )
+    assert all((item.state, item.reason) == expected for item in result.current_session)
+    assert all(
+        item.state in {"UNAVAILABLE", "NOT_REQUESTED"}
+        for item in result.freshness_ledger
+    )
+    assert not root.exists() and not root.is_symlink()
+
+
+@pytest.mark.parametrize("kind", ("dangling", "live", "file", "nonprivate"))
+def test_root_authority_rejects_unsafe_named_root(
+    tmp_path: Path, kind: Literal["dangling", "live", "file", "nonprivate"]
+) -> None:
+    root = tmp_path / "unsafe"
+    target = tmp_path / "target"
+    if kind == "dangling":
+        root.symlink_to(tmp_path / "missing-target")
+    elif kind == "live":
+        target.mkdir()
+        (target / "sentinel").write_bytes(b"unchanged")
+        root.symlink_to(target, target_is_directory=True)
+    elif kind == "file":
+        root.write_bytes(b"unchanged")
+    else:
+        root.mkdir(mode=0o755)
+    before = (root.lstat().st_mode, root.readlink() if root.is_symlink() else None)
+    with pytest.raises(
+        StorageRootLeaseError, match="storage root authority unavailable"
+    ):
+        StorageRootLease.capture_root_authority(root)
+    assert (
+        root.lstat().st_mode,
+        root.readlink() if root.is_symlink() else None,
+    ) == before
+    if kind == "live":
+        assert (target / "sentinel").read_bytes() == b"unchanged"
+
+
+@pytest.mark.parametrize("mode", ("ACQUIRE_MISSING", "REFRESH_ONCE"))
+def test_v2_absent_root_late_creation_at_acquisition_is_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: _Mode
+) -> None:
+    selected = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    root = tmp_path / "absent"
+    replacement = tmp_path / "replacement"
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        selected,
+        selected + timedelta(minutes=30),
+        "a" * 64,
+        (_member(),),
+        _QUESTIONS,
+        None,
+        mode,
+        False,
+    )
+    original = packet_v2.acquire_missing_current_raw_evidence_v1
+
+    def create_then_admit(*args: object, **kwargs: object) -> object:
+        replacement.mkdir(mode=0o700)
+        replacement.rename(root)
+        return original(*cast(Any, args), **cast(Any, kwargs))
+
+    monkeypatch.setattr(
+        packet_v2, "acquire_missing_current_raw_evidence_v1", create_then_admit
+    )
+    with pytest.raises(StorageRootLeaseError, match="root authority"):
+        packet_v2.research_current_price_context_v2(
+            request, root, clock=_Clock(selected)
+        )
+    assert root.is_dir() and tuple(root.iterdir()) == ()

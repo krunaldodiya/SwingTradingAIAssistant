@@ -46,6 +46,7 @@ from swing_trading_ai_assistant.market_data.schedule_evidence import (
     schedule_covers_full_calendar_range,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    RootAuthorityV1,
     StorageRootLease,
     StorageRootLeaseError,
 )
@@ -88,6 +89,18 @@ _PROVISIONAL_REASONS = {
     ),
     "CONFLICTED": frozenset({"PROVISIONAL_EVIDENCE_CONFLICTED"}),
 }
+# V1 clears Mapping receipt fields after these downstream failures, but each proves
+# that Mapping admission succeeded and therefore binds its shared ledger state.
+_MAPPING_ADMITTED_DOWNSTREAM_REASONS = frozenset(
+    {
+        "RAW_PARTITION_CORRUPT",
+        "RAW_BAR_MISSING",
+        "RAW_BAR_CONFLICTED",
+        "RAW_BAR_INVALID",
+        "SCREEN_UNAVAILABLE",
+        "ACTION_IN_WINDOW",
+    }
+)
 _LEDGER_SOURCES = frozenset(
     {
         "CALENDAR",
@@ -479,6 +492,7 @@ class CurrentPriceContextFreshnessEntryV2:
         "NOT_REQUESTED",
     ]
     source_cutoff: datetime | None
+    prior_source_cutoff: datetime | None
     published_at: datetime | None
     known_at: datetime | None
     provider_calls_attempted: int
@@ -495,7 +509,12 @@ class CurrentPriceContextFreshnessEntryV2:
 
     def __post_init__(self) -> None:
         member_scoped = self.source not in {"CALENDAR", "MAPPING", "INDUSTRY"}
-        clocks = (self.source_cutoff, self.published_at, self.known_at)
+        clocks = (
+            self.prior_source_cutoff,
+            self.source_cutoff,
+            self.published_at,
+            self.known_at,
+        )
         present_clocks = tuple(item for item in clocks if item is not None)
         if (
             self.source not in _LEDGER_SOURCES
@@ -513,6 +532,14 @@ class CurrentPriceContextFreshnessEntryV2:
             )
             or self.state not in _LEDGER_STATES
             or any(not _utc(item) for item in present_clocks)
+            or (
+                self.prior_source_cutoff is not None
+                and (
+                    self.source != "CURRENT_SESSION"
+                    or self.source_cutoff is None
+                    or self.prior_source_cutoff > self.source_cutoff
+                )
+            )
             or any(
                 left > right
                 for left, right in zip(present_clocks, present_clocks[1:], strict=False)
@@ -596,6 +623,7 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
             else "UNAVAILABLE"
         )
         or calendar.source_cutoff != value.completed_context.schedule_as_of
+        or calendar.prior_source_cutoff is not None
         or calendar.published_at is not None
         or calendar.known_at is not None
         or calendar.provider_calls_attempted != 0
@@ -613,16 +641,23 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         or mapping.effective_symbol is not None
         or mapping.physical_identity_sha256 is not None
         or mapping.source_cutoff is not None
+        or mapping.prior_source_cutoff is not None
         or mapping.published_at is not None
         or mapping.known_at is not None
         or mapping.provider_calls_completed > mapping.provider_calls_attempted
     ):
         return False
-    mapping_evidence_retained = any(
+    mapping_admitted = any(
         item.mapping_observation_sha256 is not None
+        or item.reason in _MAPPING_ADMITTED_DOWNSTREAM_REASONS
         for item in value.completed_context.members
-    )
-    if mapping_evidence_retained and mapping.state != (
+    ) or any(item.state == "OBSERVED" for item in value.current_session)
+    mapping_failed = all(
+        item.state == "DEPENDENCY_BLOCKED"
+        and item.reason in {"RAW_MAPPING_MISSING", "RAW_MAPPING_UNSUPPORTED"}
+        for item in value.completed_context.members
+    ) and not any(item.state == "OBSERVED" for item in value.current_session)
+    expected_mapping_state = (
         "REUSED"
         if (mapping.provider_calls_attempted, mapping.provider_calls_completed)
         == (0, 0)
@@ -630,7 +665,14 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         if (mapping.provider_calls_attempted, mapping.provider_calls_completed)
         == (1, 1)
         else None
-    ):
+    )
+    if mapping_failed:
+        if mapping.state != "UNAVAILABLE":
+            return False
+    elif mapping_admitted:
+        if mapping.state != expected_mapping_state:
+            return False
+    elif mapping.state not in {"UNAVAILABLE", expected_mapping_state}:
         return False
 
     for position, completed_member in enumerate(value.completed_context.members):
@@ -690,7 +732,8 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
                 for item in partitions
             )
             if actual != expected or any(
-                item.published_at is not None
+                item.prior_source_cutoff is not None
+                or item.published_at is not None
                 or item.known_at is not None
                 or item.state not in {"REUSED", "ACQUIRED"}
                 or (item.state == "REUSED" and item.provider_calls_attempted != 0)
@@ -700,9 +743,10 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         elif any(
             item.physical_identity_sha256 is not None
             or item.source_cutoff is not None
+            or item.prior_source_cutoff is not None
             or item.published_at is not None
             or item.known_at is not None
-            or item.state not in {"UNAVAILABLE", "CONFLICTED"}
+            or item.state != "UNAVAILABLE"
             for item in partitions
         ):
             return False
@@ -729,7 +773,14 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
             )
             if action.state != expected_action_state:
                 return False
-        elif action.state not in {"UNAVAILABLE", "CONFLICTED"}:
+        elif (
+            action.state != "UNAVAILABLE"
+            or action.physical_identity_sha256 is not None
+            or action.source_cutoff is not None
+            or action.prior_source_cutoff is not None
+            or action.published_at is not None
+            or action.known_at is not None
+        ):
             return False
     industry = ledger[-1]
     reference = value.industry_archive_reference
@@ -748,6 +799,7 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         != (None if reference is None else reference.retained_identity_sha256)
         or industry.state != expected_industry_state
         or industry.source_cutoff is not None
+        or industry.prior_source_cutoff is not None
         or industry.published_at is not None
         or industry.known_at != value.completed_context.industry_known_at
         or industry.provider_calls_attempted != 0
@@ -874,14 +926,12 @@ def _planning_witness_from_retained(
     raw_request: CurrentRawPriceContextInputV1,
     storage_root: Path,
     control: CurrentRawInvocationControlV1,
-    expected_root_identity: tuple[int, int] | None,
+    root_authority: RootAuthorityV1,
 ) -> CurrentPriceContextPlanningWitnessV2:
-    admitted = StorageRootLease.try_admit_read_existing(
-        storage_root, expected_root_identity
-    )
-    if admitted.lease is None:
+    lease = StorageRootLease.admit_read_authority(storage_root, root_authority)
+    if lease is None:
         return _absent_planning_witness()
-    with admitted.lease as lease:
+    with lease:
         resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
             request.schedule_identity_sha256, deadline=control
         )
@@ -926,7 +976,7 @@ def _planning_witness_from_retained(
                 for year, month in months
             )
         ):
-            return _absent_planning_witness()
+            return _absent_planning_witness(resolved.schedule.as_of)
         completed = tuple(_planning_session(item) for item in selected)
         selection_day = request.data_selection_time.astimezone(_IST).date()
         selection = next(
@@ -952,7 +1002,13 @@ def _witness_is_bound(
     if not sessions:
         return (
             witness.selection_session is None
-            and witness.schedule_as_of == completed.schedule_as_of
+            and (
+                witness.schedule_as_of == completed.schedule_as_of
+                or (
+                    witness.schedule_as_of is not None
+                    and completed.schedule_as_of is None
+                )
+            )
             and all(
                 item.reason in _ABSENT_PLANNING_WITNESS_REASONS
                 for item in completed.members
@@ -1039,35 +1095,155 @@ def _expected_physical_plan(
     return tuple(entries)
 
 
-def _observed_current_session_is_bound(value: CurrentPriceContextResultV2) -> bool:
-    observed = tuple(item for item in value.current_session if item.state == "OBSERVED")
-    if not observed:
-        return True
+def _observed_current_session_is_bound(  # noqa: C901 -- closed provisional phase matrix
+    value: CurrentPriceContextResultV2,
+) -> bool:
+    """Bind every finite provisional phase to its witness, evidence, and ledger."""
     selection = value.planning_witness.selection_session
-    if selection is None or not (
+    has_witness = bool(value.planning_witness.completed_sessions)
+    active = selection is not None and (
         selection.open_at + timedelta(minutes=1)
         <= value.data_selection_time
         < selection.close_at
-    ):
-        return False
-    target = min(
-        value.data_selection_time.replace(second=0, microsecond=0)
-        - timedelta(minutes=1),
-        selection.close_at - timedelta(minutes=1),
     )
-    active_slot = f"{selection.trade_date.year:04d}-{selection.trade_date.month:02d}"
-    for member in observed:
+    target = (
+        None
+        if not active or selection is None
+        else min(
+            value.data_selection_time.replace(second=0, microsecond=0)
+            - timedelta(minutes=1),
+            selection.close_at - timedelta(minutes=1),
+        )
+    )
+    active_slot = (
+        None
+        if selection is None
+        else f"{selection.trade_date.year:04d}-{selection.trade_date.month:02d}"
+    )
+    for member in value.current_session:
         entries = tuple(
             item
             for item in value.freshness_ledger
             if item.source == "CURRENT_SESSION" and item.position == member.position
         )
-        if (
-            len(entries) != 1
-            or entries[0].slot != active_slot
-            or member.last_completed_minute != target
-            or member.source_cutoff != target
-        ):
+        if len(entries) != 1:
+            return False
+        entry = entries[0]
+        if not value.include_current_session:
+            if member.state != "NOT_REQUESTED" or entry.state != "NOT_REQUESTED":
+                return False
+            continue
+        if not has_witness:
+            expected = (
+                ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")
+                if value.planning_witness.schedule_as_of is None
+                else ("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE")
+            )
+            if (
+                member.state,
+                member.reason,
+            ) != expected or entry.state != "UNAVAILABLE":
+                return False
+            continue
+        if selection is None or value.data_selection_time < selection.open_at:
+            if (
+                member.state != "NOT_APPLICABLE"
+                or member.reason != "CURRENT_SESSION_NOT_APPLICABLE"
+                or entry.state != "UNAVAILABLE"
+            ):
+                return False
+            continue
+        if not active:
+            if (
+                member.state != "UNAVAILABLE"
+                or member.reason != "NO_FULLY_COMPLETED_MINUTE"
+                or entry.state != "UNAVAILABLE"
+            ):
+                return False
+            continue
+        if member.state == "OBSERVED":
+            final_source_cutoff = member.source_cutoff
+            if final_source_cutoff is None:
+                return False
+            if (
+                target is None
+                or entry.slot != active_slot
+                or member.last_completed_minute != target
+                or member.source_cutoff != target
+                or entry.state
+                not in {
+                    "REUSED",
+                    "ACQUIRED",
+                    "REFRESHED",
+                    "APPENDED",
+                }
+                or (
+                    entry.state == "REUSED"
+                    and (
+                        (entry.provider_calls_attempted, entry.provider_calls_completed)
+                        != (0, 0)
+                        or entry.prior_source_cutoff != final_source_cutoff
+                    )
+                )
+                or (
+                    entry.state == "ACQUIRED"
+                    and (
+                        (entry.provider_calls_attempted, entry.provider_calls_completed)
+                        != (1, 1)
+                        or entry.prior_source_cutoff is not None
+                    )
+                )
+                or (
+                    entry.state == "REFRESHED"
+                    and (
+                        value.execution_mode != "REFRESH_ONCE"
+                        or (
+                            entry.provider_calls_attempted,
+                            entry.provider_calls_completed,
+                        )
+                        != (1, 1)
+                        or entry.prior_source_cutoff != final_source_cutoff
+                    )
+                )
+                or (
+                    entry.state == "APPENDED"
+                    and (
+                        value.execution_mode != "REFRESH_ONCE"
+                        or (
+                            entry.provider_calls_attempted,
+                            entry.provider_calls_completed,
+                        )
+                        != (1, 1)
+                        or entry.prior_source_cutoff is None
+                        or entry.prior_source_cutoff >= final_source_cutoff
+                    )
+                )
+                or (value.execution_mode == "RETAINED_ONLY" and entry.state != "REUSED")
+                or (
+                    value.execution_mode == "ACQUIRE_MISSING"
+                    and entry.state not in {"REUSED", "ACQUIRED"}
+                )
+            ):
+                return False
+        elif member.state == "UNAVAILABLE":
+            if (
+                member.reason
+                not in {
+                    "PROVISIONAL_EVIDENCE_UNAVAILABLE",
+                    "PROVISIONAL_EVIDENCE_STALE",
+                }
+                or entry.state != "UNAVAILABLE"
+                or entry.prior_source_cutoff is not None
+            ):
+                return False
+        elif member.state == "CONFLICTED":
+            if (
+                member.reason != "PROVISIONAL_EVIDENCE_CONFLICTED"
+                or entry.state != "CONFLICTED"
+                or entry.prior_source_cutoff is not None
+            ):
+                return False
+        else:
             return False
     return True
 
@@ -1242,7 +1418,12 @@ class CurrentPriceContextResultV2:
             or any(
                 clock is not None and clock > self.evidence_cutoff
                 for item in self.freshness_ledger
-                for clock in (item.source_cutoff, item.published_at, item.known_at)
+                for clock in (
+                    item.prior_source_cutoff,
+                    item.source_cutoff,
+                    item.published_at,
+                    item.known_at,
+                )
             )
             or len(
                 {
@@ -1491,18 +1672,16 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
     control: CurrentRawInvocationControlV1,
     evidence_cutoff: datetime,
     inspection: CurrentRawAcquisitionResultV1,
-    expected_root_identity: tuple[int, int] | None = None,
+    root_authority: RootAuthorityV1,
 ) -> tuple[CurrentSessionPriceContextMemberV2, ...]:
     if not request.include_current_session:
         return _uniform_current_session(request, "NOT_REQUESTED", "NOT_REQUESTED")
-    admitted = StorageRootLease.try_admit_read_existing(
-        storage_root, expected_root_identity
-    )
-    if admitted.lease is None:
+    lease = StorageRootLease.admit_read_authority(storage_root, root_authority)
+    if lease is None:
         return _uniform_current_session(
             request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
         )
-    with admitted.lease as lease:
+    with lease:
         resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
             request.schedule_identity_sha256, deadline=control
         )
@@ -1658,7 +1837,7 @@ def _current_session_cutoff_identities(
     control: CurrentRawInvocationControlV1,
     evidence_cutoff: datetime,
     inspection: CurrentRawAcquisitionResultV1,
-    expected_root_identity: tuple[int, int] | None = None,
+    root_authority: RootAuthorityV1,
 ) -> tuple[tuple[datetime, str] | None, ...]:
     """Read validated pre-pass provisional cutoffs without accepting stale rows."""
     unavailable: tuple[tuple[datetime, str] | None, ...] = (None,) * len(
@@ -1666,12 +1845,10 @@ def _current_session_cutoff_identities(
     )
     if not request.include_current_session or inspection.plan is None:
         return unavailable
-    admitted = StorageRootLease.try_admit_read_existing(
-        storage_root, expected_root_identity
-    )
-    if admitted.lease is None:
+    lease = StorageRootLease.admit_read_authority(storage_root, root_authority)
+    if lease is None:
         return unavailable
-    with admitted.lease as lease:
+    with lease:
         resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
             request.schedule_identity_sha256, deadline=control
         )
@@ -1785,17 +1962,18 @@ def _failed_current_positions(
     )
 
 
-def _root_identity_guard(storage_root: Path) -> tuple[int, int] | None:
-    """Capture one invocation-owned root identity; absence cannot become a root."""
-    return StorageRootLease.admit_existing_private_identity(storage_root)
+def _root_identity_guard(storage_root: Path) -> RootAuthorityV1:
+    """Capture exactly one invocation-owned authority, including true absence."""
+    return StorageRootLease.capture_root_authority(storage_root)
 
 
-def _ensure_root_identity(storage_root: Path, expected: tuple[int, int] | None) -> None:
-    actual = StorageRootLease.admit_existing_private_identity(storage_root)
-    if actual != expected or (expected is None and storage_root.exists()):
+def _ensure_root_identity(storage_root: Path, authority: RootAuthorityV1) -> None:
+    try:
+        StorageRootLease.ensure_root_authority(storage_root, authority)
+    except StorageRootLeaseError:
         raise StorageRootLeaseError(
             "current price context V2 root authority unavailable"
-        )
+        ) from None
 
 
 class _CancellationClockV2:
@@ -1878,7 +2056,7 @@ def _acquisition_window(
     )
 
 
-def _ledger_state(
+def _ledger_state(  # noqa: C901 -- closed source-state projection
     slot: Any,
     *,
     source: str,
@@ -1902,15 +2080,18 @@ def _ledger_state(
     if disposition == "REUSED":
         return "REUSED"
     if disposition in {"RETAINED", "RETAINED_INCOMPLETE"}:
-        if source == "CURRENT_SESSION" and execution_mode == "REFRESH_ONCE":
-            if initial_source_cutoff is None:
+        if source == "CURRENT_SESSION":
+            if execution_mode == "ACQUIRE_MISSING":
                 return "ACQUIRED"
-            if (
-                final_source_cutoff is not None
-                and final_source_cutoff > initial_source_cutoff
-            ):
-                return "APPENDED"
-            return "REFRESHED"
+            if execution_mode == "REFRESH_ONCE":
+                if initial_source_cutoff is None:
+                    return "ACQUIRED"
+                if (
+                    final_source_cutoff is not None
+                    and final_source_cutoff > initial_source_cutoff
+                ):
+                    return "APPENDED"
+                return "REFRESHED"
         return "ACQUIRED"
     return "UNAVAILABLE"
 
@@ -1936,6 +2117,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
             request.schedule_identity_sha256,
             "REUSED" if completed.schedule_as_of is not None else "UNAVAILABLE",
             completed.schedule_as_of,
+            None,
             None,
             None,
             0,
@@ -1979,6 +2161,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
             None,
             None,
             cast(Any, mapping_state),
+            None,
             None,
             None,
             None,
@@ -2125,12 +2308,10 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
             if source in {"CLOSED_MONTH", "CURRENT_HISTORY"} and not partition_admitted:
                 physical_identity = None
                 partition_source = None
-                if state != "CONFLICTED":
-                    state = "UNAVAILABLE"
+                state = "UNAVAILABLE"
             if (
                 source == "CORPORATE_ACTION"
                 and completed_member.screen_knowledge_at is None
-                and state != "CONFLICTED"
             ):
                 state = "UNAVAILABLE"
             emitted_sources.add(source)
@@ -2144,6 +2325,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                     physical_identity,
                     cast(Any, state),
                     partition_source,
+                    None,
                     None,
                     (
                         completed_member.screen_knowledge_at
@@ -2188,6 +2370,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                     current.partition_checksum_sha256,
                     cast(Any, state),
                     current.source_cutoff,
+                    initial_cutoff if current.state == "OBSERVED" else None,
                     current.published_at,
                     current.known_at,
                     0 if account is None else account.attempts,
@@ -2228,6 +2411,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                     None,
                     None,
                     None,
+                    None,
                     0,
                     0,
                     cast(Any, correction),
@@ -2251,6 +2435,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
                 if completed.industry_evidence_state == "CONFLICTED"
                 else "UNAVAILABLE"
             ),
+            None,
             None,
             None,
             completed.industry_known_at,
@@ -2329,7 +2514,7 @@ def research_current_price_context_v2(
         raw_request,
         storage_root,
         control=inspection_control,
-        expected_root_identity=root_identity,
+        root_authority=root_identity,
     )
     _ensure_root_identity(storage_root, root_identity)
     current_inspection = (
@@ -2338,7 +2523,7 @@ def research_current_price_context_v2(
             storage_root,
             control=inspection_control,
             include_current_session=True,
-            expected_root_identity=root_identity,
+            root_authority=root_identity,
         )
         if request.include_current_session
         else completed_inspection
@@ -2358,7 +2543,7 @@ def research_current_price_context_v2(
         control=prepass_control,
         evidence_cutoff=prepass_cutoff,
         inspection=current_inspection,
-        expected_root_identity=root_identity,
+        root_authority=root_identity,
     )
     _ensure_root_identity(storage_root, root_identity)
     acquisition_started_at: datetime | None = None
@@ -2380,7 +2565,7 @@ def research_current_price_context_v2(
             raw_request,
             storage_root,
             control=completed_control,
-            expected_root_identity=root_identity,
+            root_authority=root_identity,
         )
         completed_acquisition_calls = completed_acquisition.provider_calls
         if (
@@ -2405,7 +2590,7 @@ def research_current_price_context_v2(
                 current_session_only=True,
                 provider_call_budget=min(5 * len(request.members) + 1, 251)
                 - completed_acquisition_calls,
-                expected_root_identity=root_identity,
+                root_authority=root_identity,
             )
         acquisition_completed_at = trusted_clock.now()
         _ensure_root_identity(storage_root, root_identity)
@@ -2414,8 +2599,7 @@ def research_current_price_context_v2(
         storage_root,
         acquire_missing=False,
         clock=trusted_clock,
-        expected_root_identity=root_identity,
-        root_identity_is_pinned=True,
+        root_authority=root_identity,
     )
     _ensure_root_identity(storage_root, root_identity)
     evidence_cutoff = trusted_clock.now()
@@ -2439,7 +2623,7 @@ def research_current_price_context_v2(
         control=control,
         evidence_cutoff=evidence_cutoff,
         inspection=final_current_inspection,
-        expected_root_identity=root_identity,
+        root_authority=root_identity,
     )
     _ensure_root_identity(storage_root, root_identity)
     conflicted = _conflicted_positions(current_acquisition)
@@ -2610,6 +2794,7 @@ def _freshness_entry_from_value(
         cast(str | None, item["physical_identity_sha256"]),
         cast(Any, item["state"]),
         optional_instant("source_cutoff"),
+        optional_instant("prior_source_cutoff"),
         optional_instant("published_at"),
         optional_instant("known_at"),
         cast(int, item["provider_calls_attempted"]),
