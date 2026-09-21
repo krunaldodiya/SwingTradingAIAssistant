@@ -17,11 +17,11 @@ The linked sequence is:
 
 | Child | Observable outcome | Current boundary |
 | --- | --- | --- |
-| #186 | One single-stock command from empty private storage to independent completed-bar Price Action | First implementation slice; no release or live-stock result claimed yet |
-| #187 | Versioned integrated, independently available feature/member results | After the first usable command; reuse delivered #183 isolation |
-| #188 | Independent supported price-based context | Preserve basis/comparability and exact cohort requirements |
-| #189 | Bounded refresh, safe incremental reuse and truthful provisional states | No undocumented stream or suffix-only claim |
-| #190 | Measured acquisition efficiency | Baseline and budgets before optimization |
+| #186 | One single-stock command from empty private storage to independent completed-bar Price Action | Delivered through PR #191; closed; PNB observation limited to its recorded scope |
+| #187 | Versioned integrated, independently available feature/member results | Delivered through PR #196; closed; reuses delivered #183 isolation |
+| #188 | Independent supported price-based context | Delivered through PR #197; closed; basis/comparability and exact-cohort requirements preserved |
+| #189 | Bounded refresh, safe incremental reuse and truthful provisional states | Delivered through PR #200; closed; bounded one-shot behavior, no live-provider proof claimed |
+| #190 | Measured acquisition efficiency | Open; baseline and budgets before optimization |
 
 The governing [acceptance allocation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5631137469)
 preserves every remaining parent criterion. Applicable compatibility, reviews

@@ -949,6 +949,85 @@ def test_public_industry_failures_never_suppress_retained_raw_facts(
     assert missing.members[0].structure is not None
 
 
+@pytest.mark.parametrize(
+    ("delay_from_deadline", "returns_result"),
+    [
+        (timedelta(microseconds=-1), True),
+        (timedelta(0), False),
+        (timedelta(microseconds=1), False),
+    ],
+    ids=("within-shared-deadline", "at-shared-deadline", "over-shared-deadline"),
+)
+def test_slow_optional_industry_is_local_only_within_shared_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delay_from_deadline: timedelta,
+    returns_result: bool,
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request)
+    request = _public_request(raw_request, reference)
+    clock = _Clock(raw_request.data_selection_time)
+    industry_reads = 0
+    raw_rechecks = 0
+    original_recheck = packet_module.recheck_retained_current_raw_context_v1
+
+    def delayed_local_failure(
+        *_args: object, **_kwargs: object
+    ) -> reader_module.CurrentIndustryReadFailureV1:
+        nonlocal industry_reads
+        industry_reads += 1
+        clock.value = raw_request.admission_deadline + delay_from_deadline
+        return reader_module.CurrentIndustryReadFailureV1(
+            "INSUFFICIENT_EVIDENCE", "CLASSIFICATION_ARCHIVE_MISSING"
+        )
+
+    def count_final_raw_recheck(*args: object, **kwargs: object) -> None:
+        nonlocal raw_rechecks
+        raw_rechecks += 1
+        original_recheck(*args, **kwargs)
+
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        packet_module, "read_current_industry_archive_exact_v1", delayed_local_failure
+    )
+    monkeypatch.setattr(
+        packet_module,
+        "recheck_retained_current_raw_context_v1",
+        count_final_raw_recheck,
+    )
+
+    if returns_result:
+        result = research_current_price_context_v1(request, root, clock=clock)
+        industry = next(
+            feature
+            for feature in result.features
+            if feature.question == "RAW_INDUSTRY_PARTICIPATION"
+        )
+        assert (
+            result.industry_evidence_state,
+            industry.reasons,
+            result.members[0].state,
+            result.members[0].direction,
+        ) == (
+            "INSUFFICIENT_EVIDENCE",
+            ("CLASSIFICATION_ARCHIVE_MISSING",),
+            "OBSERVED",
+            "UNCHANGED",
+        )
+        assert result.members[0].structure is not None
+    else:
+        with pytest.raises(CurrentRawInvocationStoppedV1) as raised:
+            research_current_price_context_v1(request, root, clock=clock)
+        assert raised.value.reason == "DEADLINE_EXCEEDED"
+
+    assert industry_reads == 1
+    assert raw_rechecks == 1
+    assert wire.attempts == 0
+
+
 def test_public_mixed_two_member_results_preserve_order_and_breadth_denominator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,0 +1,139 @@
+{
+  "status": "N1/N2 budgets passed; N50/reviews/gates pending",
+  "source_identity_record": "source-identities.json",
+  "N1": {
+    "cohort": 1,
+    "status": "complete small-cohort evidence only; overall acceptance pending",
+    "modes": {
+      "ACQUIRE_MISSING": {
+        "seconds": [
+          9.407066484003735,
+          9.326130870002089,
+          9.791414138002438
+        ],
+        "median_seconds": 9.407066484003735,
+        "max_seconds": 9.791414138002438,
+        "ceiling_seconds": 12,
+        "sampled_peak_rss_bytes": 163414016,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      },
+      "RETAINED_ONLY": {
+        "seconds": [
+          2.8476755730007426,
+          2.8372622179958853,
+          2.903820250001445
+        ],
+        "median_seconds": 2.8476755730007426,
+        "max_seconds": 2.903820250001445,
+        "ceiling_seconds": 4,
+        "sampled_peak_rss_bytes": 157773824,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      },
+      "REFRESH_ONCE": {
+        "seconds": [
+          8.28832244699879,
+          8.182879673004209,
+          8.350832591000653
+        ],
+        "median_seconds": 8.28832244699879,
+        "max_seconds": 8.350832591000653,
+        "ceiling_seconds": 10.5,
+        "sampled_peak_rss_bytes": 159936512,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      }
+    }
+  },
+  "N2": {
+    "cohort": 2,
+    "status": "small-cohort evidence only; full-cohort and release pending",
+    "modes": {
+      "ACQUIRE_MISSING": {
+        "seconds": [
+          17.503049013001146,
+          17.50743424000393,
+          17.193170016995282
+        ],
+        "median_seconds": 17.503049013001146,
+        "max_seconds": 17.50743424000393,
+        "range_over_median_percent": 1.7954827343236948,
+        "baseline_pooled_median_seconds": 22.054749184000684,
+        "median_reduction_percent": 20.638186057003573,
+        "ceiling_seconds": 19,
+        "sampled_peak_rss_bytes": 168906752,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      },
+      "RETAINED_ONLY": {
+        "seconds": [
+          5.023690806003287,
+          5.272380442998838,
+          5.266914389998419
+        ],
+        "median_seconds": 5.266914389998419,
+        "max_seconds": 5.272380442998838,
+        "range_over_median_percent": 4.72173304103439,
+        "baseline_pooled_median_seconds": 5.200989322001988,
+        "median_reduction_percent": -1.2675486126753954,
+        "ceiling_seconds": 6.5,
+        "sampled_peak_rss_bytes": 165023744,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      },
+      "REFRESH_ONCE": {
+        "seconds": [
+          15.481670279994432,
+          15.746157326000684,
+          16.542744970000058
+        ],
+        "median_seconds": 15.746157326000684,
+        "max_seconds": 16.542744970000058,
+        "range_over_median_percent": 6.738626244090275,
+        "baseline_pooled_median_seconds": 19.516783751500043,
+        "median_reduction_percent": 19.319917018650944,
+        "ceiling_seconds": 17,
+        "sampled_peak_rss_bytes": 168562688,
+        "budget_pass": true,
+        "full_result_difference_paths": [
+          "/completed_context/result_identity_sha256",
+          "/completed_context/runtime_code_identity_sha256",
+          "/result_identity_sha256",
+          "/runtime_code_identity_sha256"
+        ],
+        "other_fields_exactly_equal_to_baseline": true
+      }
+    }
+  }
+}

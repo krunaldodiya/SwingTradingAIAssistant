@@ -1,6 +1,6 @@
 # Current supplied-cohort market-data contract
 
-Status: **LOCAL IMPLEMENTATION — exact-revision review and publication pending for GitHub Issue #121**
+Status: **DELIVERED — Issue #121 closed through [PR #123](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/123), merged 2026-08-17 at `640f523ce084467bdbf0d925bdd95b4da9031b33`. The versioned contract below is preserved.**
 Contract revision: `current-supplied-cohort-market-data@v1`
 Risk: **R3** — current market-data integrity, provider effects, and research boundary
 

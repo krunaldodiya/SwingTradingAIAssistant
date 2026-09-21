@@ -9,9 +9,10 @@ storage or backtest qualification. Nothing in the accepted roadmap is removed.
 
 The current ordered implementation programme is
 [#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172):
-first the usable single-stock command (#186), then integrated independent
-results (#187), independent price context (#188), bounded refresh (#189) and
-measured acquisition efficiency (#190). These are working slices, not a new
+the single-stock command (#186), integrated independent results (#187),
+independent price context (#188) and bounded refresh (#189) are delivered through
+merged PRs #191, #196, #197 and #200. Measured acquisition efficiency (#190) is
+the remaining ordered slice. These are working slices, not a new
 analytical catalogue. Reuse #183/#184's delivered capture and member isolation.
 Historical fixed-cohort storage, validation and stronger claim-specific gates
 remain intact; current knowledge is never projected backward.
@@ -900,9 +901,9 @@ Before any result can be treated as decision support, require:
 - traceable evidence for every recommendation; and
 - paper-trading observation before real-money use.
 
-### Issue #187 current-research successor
+### Delivered Issue #187 current-research successor
 
-The additive V2 current-stock command acquires calendar, mapping and BharatStock
+The additive V2 current-stock command delivered through PR #196 acquires calendar, mapping and BharatStock
 price evidence for a closed question. It does not acquire fresh regime, Industry
 or event context; V5 composes only independently validated retained context.
 Independent price facts remain available when unrelated context is unavailable.

@@ -375,6 +375,67 @@ class _AcquisitionLedgerV1:
                 slot.key, terminal, 0, False, slot.reason
             )
 
+    def replan_member(
+        self,
+        selected: tuple[ScheduleSession, ...],
+        inspection_cutoff: datetime,
+        member: _MemberPlanV1,
+    ) -> _AcquisitionPlanV1:
+        """Replace one freshly inspected member without disturbing settled peers."""
+        position = member.position
+        if (
+            not 0 <= position < len(self._plan.members)
+            or member.member != self._plan.members[position].member
+        ):
+            raise ValueError("acquisition member replan identity changed")
+        refreshed = replace(
+            self._plan,
+            selected=selected,
+            inspection_cutoff=inspection_cutoff,
+            members=(
+                *self._plan.members[:position],
+                member,
+                *self._plan.members[position + 1 :],
+            ),
+        )
+        fresh_slots = {
+            slot.key: slot
+            for slot in (
+                *member.closed,
+                member.current_history,
+                member.intraday,
+                member.action,
+            )
+            if slot is not None
+        }
+        existing_keys = self._member_keys[position]
+        if not set(fresh_slots).issubset(existing_keys):
+            raise ValueError("acquisition member replan added physical slots")
+        for key in existing_keys:
+            old = self._slots[key]
+            if key not in fresh_slots and old.attempts == 0:
+                self._eligible[key] = PlannedSlotDispositionV1.UNVERIFIED
+                self._slots[key] = replace(
+                    old,
+                    disposition=LedgerSlotDispositionV1.NOT_REQUIRED,
+                    reason="NOT_PHYSICALLY_REQUIRED_AFTER_REPLAN",
+                )
+        for slot in fresh_slots.values():
+            old = self._slots[slot.key]
+            if old.attempts:
+                continue
+            self._eligible[slot.key] = slot.disposition
+            terminal = (
+                LedgerSlotDispositionV1.REUSED
+                if slot.disposition is PlannedSlotDispositionV1.REUSABLE
+                else LedgerSlotDispositionV1.NOT_ATTEMPTED_BLOCKED
+            )
+            self._slots[slot.key] = _LedgerSlotV1(
+                slot.key, terminal, 0, False, slot.reason
+            )
+        self._plan = refreshed
+        return refreshed
+
     def before_open(self, key: str, attempted_at: datetime | None = None) -> None:
         slot = self._slots.get(key)
         if self._shared_stop is not None:
@@ -740,8 +801,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                 ledger.retained("mapping")
 
         for position in range(len(plan.members)):
-            plan = _reinspect_after_effect(
-                storage_root, root_identity, request, control, ledger
+            plan = _reinspect_member_after_effect(
+                storage_root, root_identity, request, control, ledger, position
             )
             member = plan.members[position]
             if member.mapping_disposition is not PlannedSlotDispositionV1.REUSABLE:
@@ -782,8 +843,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                         token,
                     )
                     ledger.retained(slot.key)
-                    plan = _reinspect_after_effect(
-                        storage_root, root_identity, request, control, ledger
+                    plan = _reinspect_member_after_effect(
+                        storage_root, root_identity, request, control, ledger, position
                     )
                 except BaseException as error:
                     _record_effect_failure(ledger, slot.key, error, control)
@@ -827,8 +888,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                         member,
                         token,
                     )
-                    plan = _reinspect_after_effect(
-                        storage_root, root_identity, request, control, ledger
+                    plan = _reinspect_member_after_effect(
+                        storage_root, root_identity, request, control, ledger, position
                     )
                 except BaseException as error:
                     try:
@@ -842,8 +903,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                     continue
 
         for position in range(len(plan.members)):
-            plan = _reinspect_after_effect(
-                storage_root, root_identity, request, control, ledger
+            plan = _reinspect_member_after_effect(
+                storage_root, root_identity, request, control, ledger, position
             )
             member = plan.members[position]
             if current_session_only:
@@ -861,8 +922,8 @@ def acquire_missing_current_raw_evidence_v1(  # noqa: C901
                     storage_root, root_identity, request, control, ledger, member, token
                 )
                 ledger.retained(member.action.key)
-                plan = _reinspect_after_effect(
-                    storage_root, root_identity, request, control, ledger
+                plan = _reinspect_member_after_effect(
+                    storage_root, root_identity, request, control, ledger, position
                 )
             except BaseException as error:
                 _record_effect_failure(ledger, member.action.key, error, control)
@@ -1133,6 +1194,62 @@ def _reinspect_after_effect(
         raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
     ledger.replan(plan)
     return plan
+
+
+def _reinspect_member_after_effect(
+    root: Path,
+    root_identity: tuple[int, int],
+    request: CurrentRawPriceContextInputV1,
+    control: CurrentRawInvocationControlV1,
+    ledger: _AcquisitionLedgerV1,
+    position: int,
+) -> _AcquisitionPlanV1:
+    """Freshly inspect one member while retaining full initial and final checks."""
+    admitted = StorageRootLease.try_admit_read_existing(root, root_identity)
+    if admitted.lease is None:
+        raise _SharedAcquisitionStop("ROOT_OR_CATALOG_UNAVAILABLE")
+    with admitted.lease as lease:
+        if StorageRootLease.admit_existing_private_identity(root) != root_identity:
+            raise _SharedAcquisitionStop("ROOT_OR_CATALOG_UNAVAILABLE")
+        control.ensure_live()
+        resolved = ScheduleEvidenceStore(root, lease).resolve(
+            request.schedule_identity_sha256, deadline=control
+        )
+        if resolved.outcome is ScheduleOutcome.FAILED or resolved.schedule is None:
+            raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
+        schedule = resolved.schedule
+        active_provisional = (
+            ledger.include_current_session
+            and _active_provisional_session(schedule, request.data_selection_time)
+            is not None
+        )
+        selected = _selected_sessions(
+            schedule, request, include_current_session=active_provisional
+        )
+        if not _physical_calendar_prerequisite_is_proven(schedule, selected, control):
+            raise _SharedAcquisitionStop("CALENDAR_PREREQUISITE_MISSING")
+        cutoff = control.now()
+        with DuckDBCatalog(root, read_only=True, lease=lease) as catalog:
+            snapshots = InstrumentSnapshotStoreV1(root, lease, catalog)
+            member = _inspect_member(
+                root,
+                request,
+                request.members[position],
+                position,
+                selected,
+                schedule,
+                cutoff,
+                lease,
+                catalog,
+                snapshots,
+                control,
+                active_provisional=active_provisional,
+                include_current_session=ledger.include_current_session,
+                refresh_once=ledger.refresh_once,
+            )
+            catalog.ensure_read_identity()
+        control.ensure_live()
+    return ledger.replan_member(selected, cutoff, member)
 
 
 def _write_lease(root: Path, identity: tuple[int, int]) -> StorageRootLease:
