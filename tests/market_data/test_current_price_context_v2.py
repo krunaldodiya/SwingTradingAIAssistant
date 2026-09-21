@@ -310,6 +310,22 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
         )
         for item in mapping_entries
     ) == ((None, None, None, 1, 1),)
+    assert all(
+        (
+            item.physical_identity_sha256,
+            item.source_cutoff,
+            item.prior_source_cutoff,
+            item.published_at,
+            item.known_at,
+        )
+        == (None, None, None, None, None)
+        for item in mapping_entries
+    )
+    assert all(
+        member.mapping_observation_sha256 is not None
+        and member.mapping_retrieved_at is not None
+        for member in result.completed_context.members
+    )
     assert (
         sum(item.provider_calls_attempted for item in result.freshness_ledger)
         == result.provider_calls_attempted
@@ -319,6 +335,8 @@ def test_v2_acquire_missing_shares_one_mapping_call_for_two_members(
         == result.provider_calls_completed
     )
     assert all(item.state == "OBSERVED" for item in result.completed_context.members)
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
 
     contradicted_mapping = json.loads(result.canonical_json_bytes())
     contradicted_entry = next(
@@ -387,6 +405,8 @@ def test_v2_decoder_rejects_reused_admitted_mapping_reseal(
         _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
     )
     assert retained.completed_context.members[0].state == "OBSERVED"
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(retained.canonical_json_bytes()) == retained
     resealed = json.loads(retained.canonical_json_bytes())
     mapping = next(
         item for item in resealed["freshness_ledger"] if item["source"] == "MAPPING"
@@ -892,6 +912,34 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
             _reseal_result(appended_as_refreshed)
         )
+
+    # The runtime derived APPENDED from the captured retained prefix.  At the
+    # response boundary, a self-consistent history reseal is deliberately not
+    # authenticated against those retained bytes.
+    response_only_reseal = json.loads(refreshed.canonical_json_bytes())
+    response_entry = next(
+        item
+        for item in response_only_reseal["freshness_ledger"]
+        if item["source"] == "CURRENT_SESSION"
+    )
+    response_entry["state"] = "REFRESHED"
+    response_entry["prior_source_cutoff"] = response_entry["source_cutoff"]
+    response_decoded = (
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(response_only_reseal)
+        )
+    )
+    response_decoded_entry = next(
+        item
+        for item in response_decoded.freshness_ledger
+        if item.source == "CURRENT_SESSION"
+    )
+    assert refreshed_entry.state == "APPENDED"
+    assert prior_cutoff < final_cutoff
+    assert (
+        response_decoded_entry.state,
+        response_decoded_entry.prior_source_cutoff,
+    ) == ("REFRESHED", response_decoded_entry.source_cutoff)
     retained_checksum = refreshed.current_session[0].partition_checksum_sha256
 
     identical_wire = RecordedWire(
@@ -1151,6 +1199,70 @@ def test_v2_action_non_admission_preserves_provisional_and_truthful_ledger(
         packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
             _reseal_result(contradicted_action)
         )
+
+
+@pytest.mark.parametrize(
+    ("calendar_kind", "completed_reason"),
+    (
+        ("twenty-completed", "COMPLETED_SESSION_WINDOW_UNAVAILABLE"),
+        ("future-known", "CALENDAR_FUTURE_KNOWN"),
+    ),
+)
+def test_v2_calendar_insufficiency_returns_typed_refusals_without_provider_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    calendar_kind: Literal["twenty-completed", "future-known"],
+    completed_reason: str,
+) -> None:
+    """V2 must not turn retained-calendar refusal into a constructor failure."""
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    schedule_value = _active_schedule(selected_at)
+    if calendar_kind == "twenty-completed":
+        removed = schedule_value.sessions[0]
+        schedule_value = replace(
+            schedule_value,
+            sessions=schedule_value.sessions[1:],
+            closures=tuple(
+                sorted(
+                    (
+                        *schedule_value.closures,
+                        ScheduleClosure(removed.trade_date, "HOLIDAY"),
+                    ),
+                    key=lambda item: item.trade_date,
+                )
+            ),
+        )
+    else:
+        schedule_value = replace(
+            schedule_value, as_of=selected_at + timedelta(minutes=1)
+        )
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+
+    result = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "RETAINED_ONLY"), root, clock=_Clock(selected_at)
+    )
+
+    assert wire.attempts == 0
+    assert result.provider_calls_attempted == result.provider_calls_completed == 0
+    assert all(
+        (item.state, item.reason) == ("INSUFFICIENT_EVIDENCE", completed_reason)
+        for item in result.completed_context.members
+    )
+    assert all(
+        (item.state, item.reason) == ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")
+        for item in result.current_session
+    )
+    assert tuple(
+        item.state
+        for item in result.freshness_ledger
+        if item.source in {"CALENDAR", "MAPPING"}
+    ) == ("UNAVAILABLE", "UNAVAILABLE")
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
 
 
 @pytest.mark.parametrize(
@@ -2655,6 +2767,22 @@ def test_v2_decoder_rejects_missing_calendar_and_no_evidence_reseals(
     )
     decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
     assert result.current_session[0].reason == "CALENDAR_PREREQUISITE_MISSING"
+    assert decoder(result.canonical_json_bytes()) == result
+    mapping = next(item for item in result.freshness_ledger if item.source == "MAPPING")
+    assert (
+        mapping.state,
+        mapping.provider_calls_attempted,
+        mapping.provider_calls_completed,
+    ) == ("UNAVAILABLE", 0, 0)
+
+    resealed = json.loads(result.canonical_json_bytes())
+    mapping = next(
+        item for item in resealed["freshness_ledger"] if item["source"] == "MAPPING"
+    )
+    mapping["state"] = "REUSED"
+    resealed["reused_physical_objects"] += 1
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
 
     resealed = json.loads(result.canonical_json_bytes())
     resealed["current_session"][0].update(

@@ -52,11 +52,15 @@ entry carries only the requested member identity where applicable, an immutable
 physical digest when available, a closed state (`REUSED`, `ACQUIRED`,
 `REFRESHED`, `APPENDED`, `CONFLICTED`, `UNAVAILABLE`, or `NOT_REQUESTED`),
 source/publication/knowledge clocks, bounded attempted/completed call counts,
-and its closed correction rule. A `CURRENT_SESSION` entry also carries a
-nullable `prior_source_cutoff`: it is present only for an observed retained
-prefix, equals the final cutoff for `REUSED` and `REFRESHED`, and is strictly
-less than the final cutoff for `APPENDED`; `ACQUIRED` and all non-observed or
-non-current entries leave it null. Counts are exactly zero or one except that a
+and its closed correction rule. The single global `MAPPING` entry is
+accounting-only: its state and call counts are truthful, while its physical
+digest and all provenance/time fields are null. Available per-member mapping
+identity and retrieval time remain in the embedded V1 member evidence. A
+`CURRENT_SESSION` entry also carries a nullable `prior_source_cutoff`: it is
+present only for an observed retained prefix, equals the final cutoff for
+`REUSED` and `REFRESHED`, and is strictly less than the final cutoff for
+`APPENDED`; `ACQUIRED` and all non-observed or non-current entries leave it
+null. Counts are exactly zero or one except that a
 `CURRENT_HISTORY` entry may aggregate zero, one, or two completed-context
 provider calls when the retained schedule proves that the 21-session window
 ends on the completed selection-day session. This narrow exception represents
@@ -184,6 +188,14 @@ authority; that runtime binding is the accepted protection. No response-only
 anti-substitution claim is made without an authenticated value-to-partition
 attestation.
 
+On 2026-09-21, the repository owner additionally accepted the equally narrow
+V2 response-only limitation for a self-consistent `CURRENT_SESSION`
+`APPENDED`→`REFRESHED` reseal whose `prior_source_cutoff` is changed to the
+final cutoff. Direct runtime truth remains derived from captured pre-pass
+retained evidence; the decoder enforces canonical/internal consistency, not
+authentication of that exact retained-history transition. This is not a
+broader waiver, signing scheme, dependency adoption, or trusted-input redesign.
+
 ### Accepted exact-close accounting amendment
 
 On 2026-09-19 the repository owner authorized the narrow exception above after
@@ -236,9 +248,9 @@ executed provider claim.
 | Retained exact 1 and 50 members | Exact V1 completed context, order and denominator; zero provider effects in retained-only; no truncation/restamp | `test_v2_retained_only_preserves_completed_result_and_never_opens_provider`; V1 `test_public_n50_success_and_n51_request_rejection_are_effect_bounded`, `test_public_retained_member_fact_is_immutable_deterministic_and_private` | DIRECT PASS + INHERITED |
 | Cohort 0/51; session 20/22; day 64/65; minute 10,000/10,001; budget exact/+1; request/result size exact/+1 | Accept exact bounds and reject limit-plus-one before widened work; no clipping or padding | V1 `test_public_request_is_closed_bounded_and_preserves_order`, `test_public_n50_success_and_n51_request_rejection_are_effect_bounded`, `test_n50_has_exact_three_month_251_bound_and_n51_is_rejected_before_effects`, `test_four_month_64_day_schedule_stops_before_credentials_or_provider_effects`, `test_public_request_decoder_rejects_malformed_oversize_nested_and_enum_values`; Plan-06 `test_inputs_are_bounded_and_exact_typed`; strict V2 request/result constructors | INHERITED + INSPECTION |
 | Unknown/duplicate fields, unsupported mode/version, malformed enums/reasons/decimals/clocks/counters/nested values | Closed pre-effect rejection normalized to `ValueError`; no root/provider access | `test_v2_request_decoder_is_closed_and_publicly_exported`, `test_v2_request_accepts_only_the_three_one_shot_modes`, `test_v2_result_decoder_rejects_resealed_request_reason_price_and_time_mutations`; V1 decoder limit tests | DIRECT PASS |
-| Strict result rebinding and canonical round trip | Exact request identity, schedule, ordered canonical members/aliases, questions, mode, inclusion, deadline, embedded V1 result, Calendar/Industry identity and state, ordered partition digests/clocks, freshness accounting, and result identity rebind; no substituted/resealed member, reason, price, time, duplicate, omission, or reorder | `test_v2_result_decoder_rejects_resealed_request_reason_price_and_time_mutations`, `test_v2_cross_month_ledger_uses_completed_plan_partition_order`, `test_v2_retained_only_preserves_completed_result_and_never_opens_provider`; V1 `test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations` | DIRECT PASS + INHERITED |
+| Strict result rebinding and canonical round trip | Exact request identity, schedule, ordered canonical members/aliases, questions, mode, inclusion, deadline, embedded V1 result, Calendar/Industry identity and state, ordered partition digests/clocks, freshness accounting, and result identity rebind; no unsupported member/reason/price/time mutation, duplicate, omission, or reorder. The decoder does not authenticate a wholly self-consistent provisional value or `CURRENT_SESSION` correction-history reseal against retained bytes. | `test_v2_result_decoder_rejects_resealed_request_reason_price_and_time_mutations`, `test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap`, `test_v2_cross_month_ledger_uses_completed_plan_partition_order`, `test_v2_retained_only_preserves_completed_result_and_never_opens_provider`; V1 `test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violations` | DIRECT PASS + INHERITED |
 | Missing completed evidence | Only V1-planned missing physical slots are acquired serially and revalidated; no V2 parallel/fallback fetch or force-refresh of reusable completed slots | `test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap`; V1 `test_acquire_missing_establishes_cutoff_only_after_effects`, acquisition planner/accounting tests | DIRECT PASS + INHERITED |
-| Public freshness/accounting disclosure | Entries are typed, bounded, request ordered, partition-order paired, additive, and total completed responses never exceed calls; one shared Mapping acquisition is counted once and later mapped members are reuse; exact `5N+1` budget remains; no private root/header/token | `test_v2_retained_only_preserves_completed_result_and_never_opens_provider`, `test_v2_acquire_missing_shares_one_mapping_call_for_two_members`, `test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap`, `test_v2_cross_month_ledger_uses_completed_plan_partition_order` | DIRECT PASS |
+| Public freshness/accounting disclosure | Entries are typed, bounded, request ordered, partition-order paired, additive, and total completed responses never exceed calls. The one shared global Mapping row is accounting-only: its truthful state/calls are public and its provenance/time fields are null; available identity/time remain in embedded V1 member evidence. Later mapped members reuse it; exact `5N+1` budget remains; no private root/header/token. | `test_v2_retained_only_preserves_completed_result_and_never_opens_provider`, `test_v2_acquire_missing_shares_one_mapping_call_for_two_members`, `test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap`, `test_v2_cross_month_ledger_uses_completed_plan_partition_order` | DIRECT PASS |
 | Pre-open | Prior completed context remains the embedded V1 result; provisional `NOT_APPLICABLE`; zero Intraday calls | `test_v2_retained_schedule_boundaries_never_open_intraday[pre-open]` | DIRECT PASS |
 | In-session before first full minute | Completed context remains separate; provisional has no open candle and no Intraday effect | `test_v2_retained_schedule_boundaries_never_open_intraday[before-first-full-minute]` | DIRECT PASS |
 | In-session after completed minutes | Last emitted minute is fully completed; one current-session pass at most; no in-progress minute or suffix-only claim | `test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap`; Plan-06 `test_in_progress_provider_candle_after_target_is_discarded` | DIRECT PASS |

@@ -666,7 +666,7 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
         == (1, 1)
         else None
     )
-    if mapping_failed:
+    if not value.planning_witness.completed_sessions or mapping_failed:
         if mapping.state != "UNAVAILABLE":
             return False
     elif mapping_admitted:
@@ -1134,15 +1134,13 @@ def _observed_current_session_is_bound(  # noqa: C901 -- closed provisional phas
                 return False
             continue
         if not has_witness:
-            expected = (
-                ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")
-                if value.planning_witness.schedule_as_of is None
-                else ("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE")
-            )
+            expected = {("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")}
+            if value.planning_witness.schedule_as_of is not None:
+                expected.add(("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE"))
             if (
                 member.state,
                 member.reason,
-            ) != expected or entry.state != "UNAVAILABLE":
+            ) not in expected or entry.state != "UNAVAILABLE":
                 return False
             continue
         if selection is None or value.data_selection_time < selection.open_at:
@@ -1672,6 +1670,7 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
     control: CurrentRawInvocationControlV1,
     evidence_cutoff: datetime,
     inspection: CurrentRawAcquisitionResultV1,
+    planning_witness: CurrentPriceContextPlanningWitnessV2,
     root_authority: RootAuthorityV1,
 ) -> tuple[CurrentSessionPriceContextMemberV2, ...]:
     if not request.include_current_session:
@@ -1703,6 +1702,10 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
         if active is None:
             return _uniform_current_session(
                 request, "NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE"
+            )
+        if not planning_witness.completed_sessions:
+            return _uniform_current_session(
+                request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
             )
         target = min(
             request.data_selection_time.replace(second=0, microsecond=0)
@@ -2144,7 +2147,9 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
     )
     mapping = accounts.get("mapping")
     mapping_state = (
-        _ledger_state(
+        "UNAVAILABLE"
+        if not planning_witness.completed_sessions
+        else _ledger_state(
             mapping,
             source="MAPPING",
             execution_mode=request.execution_mode,
@@ -2339,7 +2344,7 @@ def _freshness_ledger(  # noqa: C901 -- finite source-by-source projection
             )
 
         current_member_plan = None
-        if current_plan_result.plan is not None:
+        if planning_witness.completed_sessions and current_plan_result.plan is not None:
             current_member_plan = cast(Any, current_plan_result.plan).members[position]
         intraday = None if current_member_plan is None else current_member_plan.intraday
         if intraday is not None:
@@ -2623,6 +2628,7 @@ def research_current_price_context_v2(
         control=control,
         evidence_cutoff=evidence_cutoff,
         inspection=final_current_inspection,
+        planning_witness=planning_witness,
         root_authority=root_identity,
     )
     _ensure_root_identity(storage_root, root_identity)
