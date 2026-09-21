@@ -942,6 +942,84 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
     ) == ("REFRESHED", response_decoded_entry.source_cutoff)
     retained_checksum = refreshed.current_session[0].partition_checksum_sha256
 
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            appended_metadata = catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id=refresh_raw.members[0].isin,
+                year=2026,
+                month=9,
+                cutoff_lte=refresh_raw.admission_deadline,
+                published_at_lte=refresh_raw.admission_deadline,
+                schedule_digest_sha256=schedule_digest(schedule_value),
+            )
+            assert appended_metadata is not None
+            appended_bytes = (root / appended_metadata.relative_path).read_bytes()
+    finally:
+        acquired.lease.close()
+
+    later_selection = refresh_selection + timedelta(seconds=20)
+    later_raw = _active_raw_request(schedule_value, later_selection)
+    later_wire = RecordedWire(
+        [
+            WireReply(
+                body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0, 102.0, 103.0))
+            )
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", later_wire.build_opener)
+    later = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(later_raw, "REFRESH_ONCE"),
+        root,
+        clock=_Clock(later_selection),
+    )
+
+    assert later_wire.attempts == 1
+    assert later.provider_calls_attempted == later.provider_calls_completed == 1
+    assert (
+        tuple(
+            replace(
+                member,
+                screen_identity_sha256=refreshed.completed_context.members[
+                    index
+                ].screen_identity_sha256,
+            )
+            for index, member in enumerate(later.completed_context.members)
+        )
+        == refreshed.completed_context.members
+    )
+    assert later.current_session[0].state == "OBSERVED"
+    assert later.current_session[0].partition_checksum_sha256 == retained_checksum
+    later_entry = next(
+        item for item in later.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert later_entry.state == "REFRESHED"
+    assert later_entry.prior_source_cutoff == later_entry.source_cutoff
+
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            later_metadata = catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id=later_raw.members[0].isin,
+                year=2026,
+                month=9,
+                cutoff_lte=later_raw.admission_deadline,
+                published_at_lte=later_raw.admission_deadline,
+                schedule_digest_sha256=schedule_digest(schedule_value),
+            )
+            assert later_metadata == appended_metadata
+            assert (root / later_metadata.relative_path).read_bytes() == appended_bytes
+    finally:
+        acquired.lease.close()
+
     identical_wire = RecordedWire(
         [
             WireReply(
@@ -1009,6 +1087,94 @@ def test_v2_refresh_once_appends_full_minutes_and_refuses_changed_overlap(
     assert retained.current_session[0].state == "OBSERVED"
     assert retained.current_session[0].partition_checksum_sha256 == retained_checksum
     assert schedule_digest(schedule_value) == refresh_raw.schedule_identity_sha256
+
+
+def test_v2_refresh_once_reuses_unchanged_prefix_with_later_invocation_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_at = datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    later_invocation = selected_at + timedelta(minutes=1)
+    schedule_value = _active_schedule(selected_at)
+    request_value = _active_raw_request(schedule_value, selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    FixtureTokenProvider.calls = 0
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    initial_wire = RecordedWire(
+        [
+            WireReply(
+                body=current_history_body(schedule_value, through=date(2026, 9, 29))
+            ),
+            WireReply(body=action_body()),
+            WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0))),
+        ]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", initial_wire.build_opener)
+    initial = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "ACQUIRE_MISSING"),
+        root,
+        clock=_Clock(selected_at),
+    )
+    initial_checksum = initial.current_session[0].partition_checksum_sha256
+
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            before = catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id=request_value.members[0].isin,
+                year=2026,
+                month=9,
+                cutoff_lte=request_value.admission_deadline,
+                published_at_lte=request_value.admission_deadline,
+                schedule_digest_sha256=schedule_digest(schedule_value),
+            )
+            assert before is not None
+    finally:
+        acquired.lease.close()
+
+    refresh_wire = RecordedWire(
+        [WireReply(body=_intraday_payload(date(2026, 9, 30), (100.0, 101.0)))]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", refresh_wire.build_opener)
+    refreshed = packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, "REFRESH_ONCE"),
+        root,
+        clock=_Clock(later_invocation),
+    )
+
+    assert refresh_wire.attempts == 1
+    assert refreshed.current_session[0].state == "OBSERVED"
+    assert refreshed.current_session[0].partition_checksum_sha256 == initial_checksum
+    entry = next(
+        item for item in refreshed.freshness_ledger if item.source == "CURRENT_SESSION"
+    )
+    assert entry.state == "REFRESHED"
+    assert entry.prior_source_cutoff == entry.source_cutoff
+
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+    acquired = StorageRootLease.try_acquire_existing_identity(root, identity)
+    assert acquired.outcome is LeaseOutcome.ACQUIRED and acquired.lease is not None
+    try:
+        with DuckDBCatalog(root, lease=acquired.lease) as catalog:
+            after = catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id=request_value.members[0].isin,
+                year=2026,
+                month=9,
+                cutoff_lte=request_value.admission_deadline,
+                published_at_lte=request_value.admission_deadline,
+                schedule_digest_sha256=schedule_digest(schedule_value),
+            )
+            assert after == before
+    finally:
+        acquired.lease.close()
 
 
 def test_v2_advancing_clock_keeps_current_session_target_selection_owned(

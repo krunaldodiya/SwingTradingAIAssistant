@@ -118,7 +118,10 @@ from .partition_recovery import (
     PartitionRecoveryOutcome,
     PartitionRecoveryResult,
 )
-from .provisional_metadata import metadata_from_publication
+from .provisional_metadata import (
+    ProvisionalPartitionMetadataV1,
+    metadata_from_publication,
+)
 from .provisional_store import (
     ProvisionalPartitionUnavailableV1,
     load_provisional_partition,
@@ -126,6 +129,7 @@ from .provisional_store import (
 from .provisional_validation import (
     ProvisionalValidationCodeV1,
     ProvisionalValidationFailureV1,
+    ProvisionalValidationV1,
     validate_provisional_advance,
 )
 from .public_contract import CoverageStateV1
@@ -152,6 +156,7 @@ from .schedule_evidence import (
     exact_nse_schedule_source_release_pair_v1,
     schedule_covers_full_calendar_range,
 )
+from .schemas import CanonicalCandle
 from .storage_root_lease import (
     RootAuthorityV1,
     StorageRootLease,
@@ -1417,38 +1422,17 @@ def _advance_current_month_once(
             )
             if not validation.candles or validation.actual_cutoff is None:
                 raise _MemberEffectFailure("CURRENT_MONTH_VALIDATION_FAILED")
-            guard.ensure_live()
-            published = publish_provisional_partition_under_lease(
-                root,
-                lease,
-                physical,
-                validation.actual_cutoff,
-                validation.schedule_digest,
-                validation.candles,
-            )
-            mapping = InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
-                source="upstox-bod-nse",
-                segment="NSE_EQ",
-                symbol=member.member.effective_symbol,
-                as_of=control.now(),
-                deadline=control,
-            )
-            metadata_value = metadata_from_publication(
-                plan=published.plan,
-                schedule_digest_sha256=published.schedule_digest,
-                cutoff=published.cutoff,
-                session_complete=validation.session_complete,
-                actual_from_ts=published.actual_from_ts,
-                actual_to_ts=published.actual_to_ts,
-                row_count=published.row_count,
-                checksum_sha256=published.checksum_sha256,
-                byte_size=published.byte_size,
-                relative_path=published.canonical_path,
-                instrument_snapshot_digest_sha256=mapping.metadata.observation_sha256,
-                instrument_snapshot_retrieved_at=mapping.metadata.retrieved_at,
-                published_at=max(
-                    guard.now(), published.cutoff, mapping.metadata.retrieved_at
-                ),
+            _publish_provisional_validation(
+                root=root,
+                lease=lease,
+                catalog=catalog,
+                physical=physical,
+                metadata=metadata,
+                existing=existing,
+                validation=validation,
+                member=member,
+                control=control,
+                guard=guard,
                 historical_attempt_count=int(history.key in attempted)
                 if history
                 else 0,
@@ -1457,10 +1441,80 @@ def _advance_current_month_once(
                 else 0,
             )
             guard.ensure_live()
-            catalog.save_provisional_partition(metadata_value)
-            guard.ensure_live()
     for key in attempted:
         ledger.retained(key, incomplete=not validation.complete_to_target)
+
+
+def _unchanged_provisional_metadata(
+    metadata: ProvisionalPartitionMetadataV1 | None,
+    existing: tuple[CanonicalCandle, ...],
+    validation: ProvisionalValidationV1,
+) -> bool:
+    """Reuse catalog provenance only for an exactly revalidated immutable prefix."""
+    return (
+        metadata is not None
+        and validation.candles == existing
+        and validation.actual_cutoff == metadata.cutoff
+        and validation.schedule_digest == metadata.schedule_digest_sha256
+        and validation.session_complete == metadata.session_complete
+    )
+
+
+def _publish_provisional_validation(
+    *,
+    root: Path,
+    lease: StorageRootLease,
+    catalog: DuckDBCatalog,
+    physical: PlannedInstrumentMonth,
+    metadata: ProvisionalPartitionMetadataV1 | None,
+    existing: tuple[CanonicalCandle, ...],
+    validation: ProvisionalValidationV1,
+    member: _MemberPlanV1,
+    control: CurrentRawInvocationControlV1,
+    guard: _EffectGuardV1,
+    historical_attempt_count: int,
+    intraday_attempt_count: int,
+) -> None:
+    """Publish a changed validated generation with its fresh catalog provenance."""
+    if _unchanged_provisional_metadata(metadata, existing, validation):
+        return
+    if validation.actual_cutoff is None:
+        raise _MemberEffectFailure("CURRENT_MONTH_VALIDATION_FAILED")
+    guard.ensure_live()
+    published = publish_provisional_partition_under_lease(
+        root,
+        lease,
+        physical,
+        validation.actual_cutoff,
+        validation.schedule_digest,
+        validation.candles,
+    )
+    mapping = InstrumentSnapshotStoreV1(root, lease, catalog).resolve_equity(
+        source="upstox-bod-nse",
+        segment="NSE_EQ",
+        symbol=member.member.effective_symbol,
+        as_of=control.now(),
+        deadline=control,
+    )
+    metadata_value = metadata_from_publication(
+        plan=published.plan,
+        schedule_digest_sha256=published.schedule_digest,
+        cutoff=published.cutoff,
+        session_complete=validation.session_complete,
+        actual_from_ts=published.actual_from_ts,
+        actual_to_ts=published.actual_to_ts,
+        row_count=published.row_count,
+        checksum_sha256=published.checksum_sha256,
+        byte_size=published.byte_size,
+        relative_path=published.canonical_path,
+        instrument_snapshot_digest_sha256=mapping.metadata.observation_sha256,
+        instrument_snapshot_retrieved_at=mapping.metadata.retrieved_at,
+        published_at=max(guard.now(), published.cutoff, mapping.metadata.retrieved_at),
+        historical_attempt_count=historical_attempt_count,
+        intraday_attempt_count=intraday_attempt_count,
+    )
+    guard.ensure_live()
+    catalog.save_provisional_partition(metadata_value)
 
 
 def member_slot_selected(
