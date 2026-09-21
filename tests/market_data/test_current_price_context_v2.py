@@ -1293,21 +1293,50 @@ def test_v2_retained_schedule_boundaries_never_open_intraday(
     expected_state: str,
     expected_reason: str,
 ) -> None:
-    full_schedule = current_month_schedule(
-        max(selected_at, datetime(2026, 9, 30, 3, 45, tzinfo=UTC))
-    )
     selection_date = selected_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
-    schedule_value = replace(
-        full_schedule,
-        as_of=selected_at,
-        covered_to=selection_date,
-        sessions=tuple(
-            item for item in full_schedule.sessions if item.trade_date <= selection_date
-        ),
-        closures=tuple(
-            item for item in full_schedule.closures if item.trade_date <= selection_date
-        ),
-    )
+    if expected_state == "NOT_APPLICABLE" and selection_date.weekday() >= 5:
+        days = tuple(date(2026, 8, 1) + timedelta(days=index) for index in range(57))
+        schedule_value = ExpectedSessionSchedule(
+            SCHEDULE_SCHEMA_VERSION_V3,
+            "nse-authoritative-calendar",
+            "sha256:" + "a" * 64,
+            selected_at,
+            "Asia/Kolkata",
+            days[0],
+            days[-1],
+            tuple(
+                ScheduleSession(
+                    day,
+                    datetime(day.year, day.month, day.day, 3, 45, tzinfo=UTC),
+                    datetime(day.year, day.month, day.day, 3, 46, tzinfo=UTC),
+                    "REGULAR",
+                )
+                for day in days
+                if day.weekday() < 5
+            ),
+            tuple(
+                ScheduleClosure(day, "WEEKEND") for day in days if day.weekday() >= 5
+            ),
+        )
+    else:
+        full_schedule = current_month_schedule(
+            max(selected_at, datetime(2026, 9, 30, 3, 45, tzinfo=UTC))
+        )
+        schedule_value = replace(
+            full_schedule,
+            as_of=selected_at,
+            covered_to=selection_date,
+            sessions=tuple(
+                item
+                for item in full_schedule.sessions
+                if item.trade_date <= selection_date
+            ),
+            closures=tuple(
+                item
+                for item in full_schedule.closures
+                if item.trade_date <= selection_date
+            ),
+        )
     request_value = raw_request(schedule_value, selection=selected_at)
     root = tmp_path / "root"
     seed_root(root, schedule_value=schedule_value, request_value=request_value)
@@ -1325,6 +1354,22 @@ def test_v2_retained_schedule_boundaries_never_open_intraday(
     assert result.current_session[0].state == expected_state
     assert result.current_session[0].reason == expected_reason
     assert result.current_session[0].last_completed_minute is None
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+
+    resealed = json.loads(result.canonical_json_bytes())
+    resealed["current_session"][0].update(
+        state=(
+            "UNAVAILABLE" if expected_state == "NOT_APPLICABLE" else "NOT_APPLICABLE"
+        ),
+        reason=(
+            "CALENDAR_PREREQUISITE_MISSING"
+            if expected_state == "NOT_APPLICABLE"
+            else "CURRENT_SESSION_NOT_APPLICABLE"
+        ),
+    )
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
 
 
 @pytest.mark.parametrize(
@@ -1383,6 +1428,14 @@ def test_v2_exact_close_uses_only_v1_completed_session_admission(
     assert result.current_session[0].state == "NOT_APPLICABLE"
     assert result.current_session[0].reason == "CURRENT_SESSION_NOT_APPLICABLE"
     assert result.provider_calls_attempted == 0
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+    resealed = json.loads(result.canonical_json_bytes())
+    resealed["current_session"][0].update(
+        state="UNAVAILABLE", reason="CALENDAR_PREREQUISITE_MISSING"
+    )
+    with pytest.raises(ValueError, match="result is invalid"):
+        decoder(_reseal_result(resealed))
 
 
 def test_v2_fresh_exact_close_projects_completed_history_calls_without_provisional_claim(
@@ -2818,6 +2871,284 @@ def test_v2_decoder_rejects_missing_calendar_and_no_evidence_reseals(
         entry["state"] = "CONFLICTED"
         with pytest.raises(ValueError, match="result is invalid"):
             decoder(_reseal_result(resealed))
+
+
+def _no_witness_schedule(
+    calendar_kind: Literal["twenty-active", "future-active", "pre-open", "weekend"],
+    selected_at: datetime,
+) -> ExpectedSessionSchedule:
+    if calendar_kind == "weekend":
+        full_schedule = current_month_schedule(datetime(2026, 9, 30, 3, 45, tzinfo=UTC))
+        selection_date = selected_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        return replace(
+            full_schedule,
+            as_of=selected_at,
+            covered_to=selection_date,
+            sessions=tuple(
+                item
+                for item in full_schedule.sessions
+                if item.trade_date <= selection_date
+            ),
+            closures=tuple(
+                item
+                for item in full_schedule.closures
+                if item.trade_date <= selection_date
+            ),
+        )
+    schedule_value = _active_schedule(selected_at)
+    if calendar_kind == "future-active":
+        return replace(schedule_value, as_of=selected_at + timedelta(minutes=1))
+    removed = schedule_value.sessions[0]
+    return replace(
+        schedule_value,
+        sessions=schedule_value.sessions[1:],
+        closures=tuple(
+            sorted(
+                (
+                    *schedule_value.closures,
+                    ScheduleClosure(removed.trade_date, "HOLIDAY"),
+                ),
+                key=lambda item: item.trade_date,
+            )
+        ),
+    )
+
+
+def _unexpected_token_provider(*_: object, **__: object) -> object:
+    raise AssertionError("Calendar-prerequisite refusal accessed a token")
+
+
+def _no_witness_runtime_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    calendar_kind: Literal["twenty-active", "future-active", "pre-open", "weekend"],
+    mode: _Mode,
+) -> packet_v2.CurrentPriceContextResultV2:
+    selected_at = (
+        datetime(2026, 9, 26, 9, tzinfo=UTC)
+        if calendar_kind == "weekend"
+        else datetime(
+            2026,
+            9,
+            30,
+            3,
+            44,
+            59,
+            tzinfo=UTC,
+        )
+        if calendar_kind == "pre-open"
+        else datetime(2026, 9, 30, 3, 47, 30, tzinfo=UTC)
+    )
+    schedule_value = _no_witness_schedule(calendar_kind, selected_at)
+    request_value = raw_request(schedule_value, selection=selected_at)
+    root = tmp_path / "root"
+    seed_root(root, schedule_value=schedule_value, request_value=request_value)
+    monkeypatch.setattr(transport_module, "build_opener", _unexpected_token_provider)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", _unexpected_token_provider
+    )
+    return packet_v2.research_current_price_context_v2(
+        _v2_from_raw(request_value, mode), root, clock=_Clock(selected_at)
+    )
+
+
+def _missing_no_witness_runtime_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mode: _Mode
+) -> packet_v2.CurrentPriceContextResultV2:
+    selected_at = datetime(2026, 9, 15, 9, tzinfo=UTC)
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        selected_at,
+        selected_at + timedelta(minutes=30),
+        "a" * 64,
+        (_member(),),
+        _QUESTIONS,
+        None,
+        mode,
+        True,
+    )
+    monkeypatch.setattr(transport_module, "build_opener", _unexpected_token_provider)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", _unexpected_token_provider
+    )
+    return packet_v2.research_current_price_context_v2(
+        request, tmp_path / "missing-root", clock=_Clock(selected_at)
+    )
+
+
+def _assert_no_witness_zero_effects(
+    result: packet_v2.CurrentPriceContextResultV2,
+) -> None:
+    assert result.provider_calls_attempted == result.provider_calls_completed == 0
+    assert result.acquisition_started_at is result.acquisition_completed_at is None
+    assert all(
+        (item.state, item.reason) == ("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")
+        for item in result.current_session
+    )
+    assert all(
+        (item.provider_calls_attempted, item.provider_calls_completed) == (0, 0)
+        for item in result.freshness_ledger
+        if item.source not in {"CALENDAR", "INDUSTRY"}
+    )
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+@pytest.mark.parametrize("calendar_kind", ("twenty-active", "future-active"))
+def test_v2_active_no_witness_refusals_round_trip_without_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: _Mode,
+    calendar_kind: Literal["twenty-active", "future-active"],
+) -> None:
+    """Active no-witness results must be conservative in every one-shot mode."""
+    result = _no_witness_runtime_result(
+        tmp_path, monkeypatch, calendar_kind=calendar_kind, mode=mode
+    )
+
+    _assert_no_witness_zero_effects(result)
+    assert all(
+        (member.state, member.reason)
+        == (
+            "INSUFFICIENT_EVIDENCE",
+            {
+                "twenty-active": "COMPLETED_SESSION_WINDOW_UNAVAILABLE",
+                "future-active": "CALENDAR_FUTURE_KNOWN",
+            }[calendar_kind],
+        )
+        for member in result.completed_context.members
+    )
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+def test_v2_missing_calendar_no_witness_refuses_in_every_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: _Mode
+) -> None:
+    result = _missing_no_witness_runtime_result(tmp_path, monkeypatch, mode=mode)
+
+    _assert_no_witness_zero_effects(result)
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+@pytest.mark.parametrize("calendar_kind", ("pre-open", "weekend"))
+def test_v2_inactive_no_witness_refuses_without_inferring_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: _Mode,
+    calendar_kind: Literal["pre-open", "weekend"],
+) -> None:
+    """No witness means the runtime cannot claim an inactive market phase."""
+    result = _no_witness_runtime_result(
+        tmp_path, monkeypatch, calendar_kind=calendar_kind, mode=mode
+    )
+
+    _assert_no_witness_zero_effects(result)
+    decoder = packet_v2.current_price_context_result_from_canonical_json_bytes_v2
+    assert decoder(result.canonical_json_bytes()) == result
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+@pytest.mark.parametrize("calendar_kind", ("missing", "twenty-active", "future-active"))
+def test_v2_decoder_rejects_no_witness_not_applicable_reseals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: _Mode,
+    calendar_kind: Literal["missing", "twenty-active", "future-active"],
+) -> None:
+    """A freshness timestamp cannot substitute for a validated phase witness."""
+    result = (
+        _missing_no_witness_runtime_result(tmp_path, monkeypatch, mode=mode)
+        if calendar_kind == "missing"
+        else _no_witness_runtime_result(
+            tmp_path,
+            monkeypatch,
+            calendar_kind=calendar_kind,
+            mode=mode,
+        )
+    )
+    resealed = json.loads(result.canonical_json_bytes())
+    resealed["current_session"][0].update(
+        state="NOT_APPLICABLE", reason="CURRENT_SESSION_NOT_APPLICABLE"
+    )
+
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(resealed)
+        )
+
+
+@pytest.mark.parametrize("calls", ((1, 1), (1, 0)), ids=("completed", "attempted"))
+@pytest.mark.parametrize("source", ("MAPPING", "CORPORATE_ACTION", "CURRENT_SESSION"))
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+@pytest.mark.parametrize("calendar_kind", ("missing", "twenty-active", "future-active"))
+def test_v2_decoder_rejects_no_witness_downstream_call_reseals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    calls: tuple[int, int],
+    source: Literal["MAPPING", "CORPORATE_ACTION", "CURRENT_SESSION"],
+    mode: _Mode,
+    calendar_kind: Literal["missing", "twenty-active", "future-active"],
+) -> None:
+    """Calendar-prerequisite bytes cannot claim later provider effects."""
+    result = (
+        _missing_no_witness_runtime_result(tmp_path, monkeypatch, mode=mode)
+        if calendar_kind == "missing"
+        else _no_witness_runtime_result(
+            tmp_path,
+            monkeypatch,
+            calendar_kind=calendar_kind,
+            mode=mode,
+        )
+    )
+    resealed = json.loads(result.canonical_json_bytes())
+    entry = next(
+        item for item in resealed["freshness_ledger"] if item["source"] == source
+    )
+    entry["provider_calls_attempted"], entry["provider_calls_completed"] = calls
+    resealed["provider_calls_attempted"], resealed["provider_calls_completed"] = calls
+    resealed["acquisition_started_at"] = resealed["inspection_time"]
+    resealed["acquisition_completed_at"] = resealed["evidence_cutoff"]
+
+    with pytest.raises(ValueError, match="result is invalid"):
+        packet_v2.current_price_context_result_from_canonical_json_bytes_v2(
+            _reseal_result(resealed)
+        )
+
+
+@pytest.mark.parametrize("mode", ("RETAINED_ONLY", "ACQUIRE_MISSING", "REFRESH_ONCE"))
+def test_v2_no_witness_not_requested_current_session_remains_zero_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: _Mode
+) -> None:
+    """The optional-current-session false path remains a truthful no-effect result."""
+    result = _no_witness_runtime_result(
+        tmp_path, monkeypatch, calendar_kind="twenty-active", mode=mode
+    )
+    request = packet_v2.CurrentPriceContextRequestV2(
+        "current-price-context-request@v2",
+        result.data_selection_time,
+        result.admission_deadline,
+        result.schedule_identity_sha256,
+        result.request_members,
+        result.questions,
+        result.industry_archive_reference,
+        mode,
+        False,
+    )
+    # Reuse the exact retained root, but keep provider/token sentinels installed.
+    root = tmp_path / "root"
+    result = packet_v2.research_current_price_context_v2(
+        request, root, clock=_Clock(result.data_selection_time)
+    )
+
+    assert all(
+        item.state == item.reason == "NOT_REQUESTED" for item in result.current_session
+    )
+    assert result.provider_calls_attempted == result.provider_calls_completed == 0
+    assert result.acquisition_started_at is result.acquisition_completed_at is None
 
 
 def test_v2_decoder_rejects_failed_mapping_success_reseals(

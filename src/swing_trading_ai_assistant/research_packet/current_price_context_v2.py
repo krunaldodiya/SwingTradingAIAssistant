@@ -631,6 +631,13 @@ def _freshness_ledger_is_bound(  # noqa: C901 -- closed ledger provenance matrix
     ):
         return False
 
+    if not value.planning_witness.completed_sessions and any(
+        (item.provider_calls_attempted, item.provider_calls_completed) != (0, 0)
+        for item in ledger
+        if item.source not in {"CALENDAR", "INDUSTRY"}
+    ):
+        return False
+
     mapping_entries = tuple(item for item in ledger if item.source == "MAPPING")
     mapping = None if len(mapping_entries) != 1 else mapping_entries[0]
     if (
@@ -1134,13 +1141,10 @@ def _observed_current_session_is_bound(  # noqa: C901 -- closed provisional phas
                 return False
             continue
         if not has_witness:
-            expected = {("UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING")}
-            if value.planning_witness.schedule_as_of is not None:
-                expected.add(("NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE"))
-            if (
-                member.state,
-                member.reason,
-            ) not in expected or entry.state != "UNAVAILABLE":
+            if (member.state, member.reason) != (
+                "UNAVAILABLE",
+                "CALENDAR_PREREQUISITE_MISSING",
+            ) or entry.state != "UNAVAILABLE":
                 return False
             continue
         if selection is None or value.data_selection_time < selection.open_at:
@@ -1689,6 +1693,10 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
                 request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
             )
         schedule = resolved.schedule
+        if not planning_witness.completed_sessions:
+            return _uniform_current_session(
+                request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
+            )
         active = next(
             (
                 item
@@ -1702,10 +1710,6 @@ def _read_current_session(  # noqa: C901 -- one bounded read/admission pass
         if active is None:
             return _uniform_current_session(
                 request, "NOT_APPLICABLE", "CURRENT_SESSION_NOT_APPLICABLE"
-            )
-        if not planning_witness.completed_sessions:
-            return _uniform_current_session(
-                request, "UNAVAILABLE", "CALENDAR_PREREQUISITE_MISSING"
             )
         target = min(
             request.data_selection_time.replace(second=0, microsecond=0)
