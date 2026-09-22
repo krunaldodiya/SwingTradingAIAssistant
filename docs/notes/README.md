@@ -38,6 +38,8 @@ update those documents as well as the note.
 
 ## Notes index
 
+- [2026-09-22 — Next research-assistant priorities and Linux handoff](2026-09-22-next-sprint-and-linux-handoff.md)
+
 - [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
 - [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
 - [2026-08-04 — Data foundation and agent-tool boundary](2026-08-04-data-foundation-and-agent-tool-boundary.md)

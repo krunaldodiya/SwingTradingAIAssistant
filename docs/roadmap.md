@@ -1,5 +1,16 @@
 # Initial Roadmap
 
+## September 22 planning decision
+
+Parent #172 and all five slices are closed. The next product priority is a
+single-stock, evidence-backed research experience through an external AI,
+followed by watchlist comparison and only demonstrably needed capabilities.
+See the [accepted planning decision and Linux handoff](notes/2026-09-22-next-sprint-and-linux-handoff.md)
+for scope, sequencing and the six future issues' intended sprint homes.
+This dated checkpoint supersedes older immediate-priority/status wording below;
+it does not remove accepted capabilities or authorize implementation. Dates,
+sprint numbers and GitHub milestone assignments remain unset.
+
 ## Current delivery priority
 
 All phases and module outcomes below remain planned. Only their delivery

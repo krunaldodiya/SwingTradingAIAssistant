@@ -1,5 +1,15 @@
 # Upcoming Sprints Overview
 
+## Next planning checkpoint — September 22, 2026
+
+The owner has chosen to retain the next-sprint discussion before migrating to
+Linux. The [planning decision and handoff](notes/2026-09-22-next-sprint-and-linux-handoff.md)
+records the single-stock AI research priority, subsequent product sequence, and
+intended named sprint homes for #177, #139, #144, #178, #167 and #126.
+These associations are documented only; the issues remain future work and no
+GitHub milestone assignment, sprint number or date is claimed. Parent #172 and
+#186–#190 are closed; earlier pending statements below are historical checkpoints.
+
 This document records the owner-level **current/live/realtime first** dependency
 status and remaining sequence. Completed lifecycle claims below are tied to
 their linked Issues and pull requests; future rows are a minimum dependency
